@@ -18,6 +18,37 @@ export const MEMORY_EMBEDDING_CACHE_TABLE = "memory_embedding_cache";
 export const MEMORY_INDEX_STATE_TABLE = "memory_index_state";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
 
+export const MEMORY_INDEX_CHUNKS_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_CHUNKS_TABLE} (
+    chunk_rowid INTEGER PRIMARY KEY,
+    id TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'memory',
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    text TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) STRICT;
+`;
+
+export function buildMemoryEmbeddingCacheSchema(table: string): string {
+  return `
+    CREATE TABLE IF NOT EXISTS ${table} (
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      provider_key TEXT NOT NULL,
+      hash TEXT NOT NULL,
+      embedding BLOB NOT NULL,
+      dims INTEGER,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (provider, model, provider_key, hash)
+    ) STRICT;
+  `;
+}
+
 // Only rebuildable index state belongs here, in child-before-parent drop order.
 // Origins, tombstones, and canonical sessions are durable owners, not index data.
 export const MEMORY_INDEX_DERIVED_TABLES = [
@@ -38,18 +69,7 @@ export function buildMemoryIndexStrictSchema(params: {
   includeEmbeddingCache: boolean;
 }): string {
   const embeddingCacheSql = params.includeEmbeddingCache
-    ? `
-      CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
-        provider TEXT NOT NULL,
-        model TEXT NOT NULL,
-        provider_key TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        embedding TEXT NOT NULL,
-        dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (provider, model, provider_key, hash)
-      ) STRICT;
-    `
+    ? buildMemoryEmbeddingCacheSchema(params.embeddingCacheTable)
     : "";
   return `
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_META_TABLE} (
@@ -65,18 +85,7 @@ export function buildMemoryIndexStrictSchema(params: {
       size INTEGER NOT NULL,
       UNIQUE (path, source)
     ) STRICT;
-    CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_CHUNKS_TABLE} (
-      id TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'memory',
-      start_line INTEGER NOT NULL,
-      end_line INTEGER NOT NULL,
-      hash TEXT NOT NULL,
-      model TEXT NOT NULL,
-      text TEXT NOT NULL,
-      embedding TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
+    ${MEMORY_INDEX_CHUNKS_SCHEMA_SQL}
     ${MEMORY_INDEX_CHUNK_RECALL_METADATA_SCHEMA_SQL}
     ${MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL}
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_STATE_TABLE} (

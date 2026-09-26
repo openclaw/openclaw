@@ -6,34 +6,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import { startTranscripts } from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
-  TranscriptStopRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
-  getTranscriptSourceProviderMock: vi.fn(),
-  listTranscriptSourceProvidersMock: vi.fn(() => []),
-}));
+type StartCapture = NonNullable<TranscriptSourceProvider["start"]>;
+type StopCapture = NonNullable<TranscriptSourceProvider["stop"]>;
 
-vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../transcripts/provider-registry.js")>();
-  return {
-    ...actual,
-    getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-    listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
-  };
-});
+const startCapture: StartCapture = async ({ session }) => ({ ok: true, session });
+const stopCapture: StopCapture = async ({ sessionId }) => ({ ok: true, sessionId });
+const liveProvider: TranscriptSourceProvider = {
+  id: "proof-live",
+  name: "Proof Live",
+  sourceKinds: ["live-caption"],
+};
+
+const plugins = { allow: ["transcript-test-fixture"] };
 const tempDirs = createTempDirTracker();
+
+function registerProvider(provider: TranscriptSourceProvider): void {
+  const registry = createEmptyPluginRegistry();
+  registry.transcriptSourceProviders.push({
+    pluginId: "transcript-test-fixture",
+    provider,
+    source: import.meta.url,
+  });
+  setActivePluginRegistry(registry);
+}
 
 function currentDateDir(): string {
   return new Date().toISOString().slice(0, 10);
@@ -45,7 +56,7 @@ async function createHarness(
   agentId?: string,
   origin?: { channel: string; accountId: string },
 ) {
-  const config = { transcripts: { enabled: true, ...pluginConfig } };
+  const config = { plugins, transcripts: { enabled: true, ...pluginConfig } };
   const logger = { warn: vi.fn() };
   return {
     logger,
@@ -93,6 +104,8 @@ function discordAccountOwnership(
 
 describe("transcripts tool", () => {
   afterEach(async () => {
+    await clearTranscriptCapturesForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -100,20 +113,12 @@ describe("transcripts tool", () => {
   });
 
   beforeEach(() => {
-    getTranscriptSourceProviderMock.mockReset();
-    listTranscriptSourceProvidersMock.mockClear();
-  });
-
-  it("creates the core transcripts tool", async () => {
-    const stateDir = tempDirs.make("openclaw-transcripts-");
-    const { tool } = await createHarness(stateDir);
-
-    expect(tool.name).toBe("transcripts");
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("adds the trusted tool agent to live source ownership metadata", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       expect(request.session).toMatchObject({
         source: {
           agentId: "research",
@@ -124,26 +129,21 @@ describe("transcripts tool", () => {
       });
       return { ok: false as const, error: "ownership checked" };
     });
-    getTranscriptSourceProviderMock.mockReturnValue({
-      id: "proof-live",
-      name: "Proof Live",
+    registerProvider({
+      id: "zoom",
+      name: "Zoom Meetings",
       sourceKinds: ["live-caption"],
       start,
     });
     const { tool } = await createHarness(stateDir, {}, "research");
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          action: "start",
-          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
-          providerId: "zoom",
-          sessionId: "owned-meeting",
-        },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-1", {
+        action: "start",
+        meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
+        providerId: "zoom",
+        sessionId: "owned-meeting",
+      }),
     ).rejects.toThrow("ownership checked");
 
     expect(start).toHaveBeenCalledOnce();
@@ -154,9 +154,9 @@ describe("transcripts tool", () => {
 
   it("lets a channel-less tool without an agent id manage its account-bound capture", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn(startCapture);
+    const stop = vi.fn(stopCapture);
+    registerProvider({
       id: "discord-voice",
       accessControl: discordAccountOwnership(),
       name: "Discord Voice",
@@ -166,28 +166,16 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    await tool.execute(
-      "start-local",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        accountId: "account-a",
-        sessionId: "local-account-bound",
-      },
-      undefined,
-      vi.fn(),
-    );
-    await expect(
-      tool.execute("status-local", { action: "status" }, undefined, vi.fn()),
-    ).resolves.toMatchObject({
+    await tool.execute("start-local", {
+      action: "start",
+      providerId: "discord-voice",
+      accountId: "account-a",
+      sessionId: "local-account-bound",
+    });
+    await expect(tool.execute("status-local", { action: "status" })).resolves.toMatchObject({
       details: { active: [expect.objectContaining({ sessionId: "local-account-bound" })] },
     });
-    await tool.execute(
-      "stop-local",
-      { action: "stop", sessionId: "local-account-bound" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("stop-local", { action: "stop", sessionId: "local-account-bound" });
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
     );
@@ -197,7 +185,7 @@ describe("transcripts tool", () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir, { enabled: false });
 
-    await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
+    await expect(tool.execute("call-1", { action: "status" })).rejects.toThrow(
       "transcripts are disabled",
     );
   });
@@ -205,18 +193,19 @@ describe("transcripts tool", () => {
   it("cancels a pending live capture when the agent run is aborted", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
-    const stop = vi.fn(async () => ({ ok: true, sessionId: "cancelled-meeting" }));
-    const start = vi.fn(async (request) => {
+    const stop = vi.fn<StopCapture>(async () => ({
+      ok: true,
+      sessionId: "cancelled-meeting",
+    }));
+    const start = vi.fn<StartCapture>(async (request) => {
       expect(request.abortSignal).not.toBe(controller.signal);
       expect(request.abortSignal?.aborted).toBe(false);
       controller.abort();
       expect(request.abortSignal?.aborted).toBe(true);
       return { ok: true, session: request.session };
     });
-    getTranscriptSourceProviderMock.mockReturnValue({
-      id: "proof-live",
-      name: "Proof Live",
-      sourceKinds: ["live-caption"],
+    registerProvider({
+      ...liveProvider,
       start,
       stop,
     });
@@ -231,7 +220,6 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow("transcripts start aborted");
 
@@ -249,7 +237,7 @@ describe("transcripts tool", () => {
     const controller = new AbortController();
     let emitAfterStart: (() => Promise<void>) | undefined;
     let startupSignal: AbortSignal | undefined;
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       startupSignal = request.abortSignal;
       emitAfterStart = async () => {
         await request.onUtterance({
@@ -259,11 +247,12 @@ describe("transcripts tool", () => {
       };
       return { ok: true, session: request.session };
     });
-    const stop = vi.fn(async () => ({ ok: true, sessionId: "ongoing-meeting" }));
-    getTranscriptSourceProviderMock.mockReturnValue({
-      id: "proof-live",
-      name: "Proof Live",
-      sourceKinds: ["live-caption"],
+    const stop = vi.fn<StopCapture>(async () => ({
+      ok: true,
+      sessionId: "ongoing-meeting",
+    }));
+    registerProvider({
+      ...liveProvider,
       start,
       stop,
     });
@@ -277,7 +266,6 @@ describe("transcripts tool", () => {
         sessionId: "ongoing-meeting",
       },
       controller.signal,
-      vi.fn(),
     );
     expect(startupSignal).not.toBe(controller.signal);
     controller.abort();
@@ -292,12 +280,7 @@ describe("transcripts tool", () => {
         text: "captured after the start action completed\nsecond\tcolumn",
       }),
     ]);
-    await tool.execute(
-      "call-2",
-      { action: "stop", sessionId: "ongoing-meeting" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-2", { action: "stop", sessionId: "ongoing-meeting" });
     await expect(
       fs.readFile(
         path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "summary.md"),
@@ -310,12 +293,12 @@ describe("transcripts tool", () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let cleanupFailuresRemaining = 2;
-    const stop = vi.fn(async () =>
+    const stop = vi.fn<StopCapture>(async () =>
       cleanupFailuresRemaining-- > 0
         ? { ok: false, error: "voice cleanup failed" }
         : { ok: true, sessionId: "cancelled-meeting-retry" },
     );
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       controller.abort();
       await request.onUtterance({
         text: "captured after agent cancellation",
@@ -323,10 +306,8 @@ describe("transcripts tool", () => {
       });
       return { ok: true, session: request.session };
     });
-    getTranscriptSourceProviderMock.mockReturnValue({
-      id: "proof-live",
-      name: "Proof Live",
-      sourceKinds: ["live-caption"],
+    registerProvider({
+      ...liveProvider,
       start,
       stop,
     });
@@ -341,7 +322,6 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting-retry",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup failed");
 
@@ -352,35 +332,20 @@ describe("transcripts tool", () => {
     expect(stop).toHaveBeenCalledOnce();
 
     await expect(
-      tool.execute(
-        "call-retry-start",
-        {
-          action: "start",
-          providerId: "proof-live",
-          sessionId: "cancelled-meeting-retry",
-        },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-retry-start", {
+        action: "start",
+        providerId: "proof-live",
+        sessionId: "cancelled-meeting-retry",
+      }),
     ).rejects.toThrow("transcripts session already active: cancelled-meeting-retry");
     expect(start).toHaveBeenCalledOnce();
 
     await expect(
-      tool.execute(
-        "call-2",
-        { action: "stop", sessionId: "cancelled-meeting-retry" },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-2", { action: "stop", sessionId: "cancelled-meeting-retry" }),
     ).rejects.toThrow("transcripts provider cleanup failed: voice cleanup failed");
     expect(stop).toHaveBeenCalledTimes(2);
 
-    await tool.execute(
-      "call-3",
-      { action: "stop", sessionId: "cancelled-meeting-retry" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-3", { action: "stop", sessionId: "cancelled-meeting-retry" });
     expect(stop).toHaveBeenCalledTimes(3);
   });
 
@@ -388,36 +353,35 @@ describe("transcripts tool", () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const started = createDeferred();
     const startGate = createDeferred();
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       started.resolve();
       await startGate.promise;
       return { ok: true as const, session: request.session };
     });
-    const stop = vi.fn(async () => ({ ok: true as const, sessionId: "shared-session" }));
-    getTranscriptSourceProviderMock.mockReturnValue({
-      id: "proof-live",
-      name: "Proof Live",
-      sourceKinds: ["live-caption"],
+    const stop = vi.fn<StopCapture>(async () => ({
+      ok: true,
+      sessionId: "shared-session",
+    }));
+    registerProvider({
+      ...liveProvider,
       start,
       stop,
     });
     const { tool } = await createHarness(stateDir);
 
-    const firstStart = tool.execute(
-      "call-1",
-      { action: "start", providerId: "proof-live", sessionId: "shared-session" },
-      undefined,
-      vi.fn(),
-    );
+    const firstStart = tool.execute("call-1", {
+      action: "start",
+      providerId: "proof-live",
+      sessionId: "shared-session",
+    });
     await started.promise;
     try {
       await expect(
-        tool.execute(
-          "call-2",
-          { action: "start", providerId: "proof-live", sessionId: "shared-session" },
-          undefined,
-          vi.fn(),
-        ),
+        tool.execute("call-2", {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "shared-session",
+        }),
       ).rejects.toThrow("transcripts session already active: shared-session");
       await expect(
         tool.execute("stop-pending", { action: "stop", sessionId: "shared-session" }),
@@ -426,12 +390,7 @@ describe("transcripts tool", () => {
     } finally {
       startGate.resolve();
       await firstStart;
-      await tool.execute(
-        "call-3",
-        { action: "stop", sessionId: "shared-session" },
-        undefined,
-        vi.fn(),
-      );
+      await tool.execute("call-3", { action: "stop", sessionId: "shared-session" });
     }
 
     expect(start).toHaveBeenCalledOnce();
@@ -442,22 +401,20 @@ describe("transcripts tool", () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let stopAttempts = 0;
-    const stop = vi.fn(async (_request: TranscriptStopRequest) => {
+    const stop = vi.fn<StopCapture>(async (_request) => {
       stopAttempts += 1;
       if (stopAttempts === 1) {
         throw new Error("voice cleanup threw");
       }
       return { ok: true as const, sessionId: "cancelled-meeting-thrown" };
     });
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       await request.onUtterance({ text: "captured before abort", final: true });
       controller.abort();
       return { ok: true as const, session: request.session };
     });
-    getTranscriptSourceProviderMock.mockReturnValue({
-      id: "proof-live",
-      name: "Proof Live",
-      sourceKinds: ["live-caption"],
+    registerProvider({
+      ...liveProvider,
       start,
       stop,
     });
@@ -472,15 +429,9 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting-thrown",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup threw");
-    await tool.execute(
-      "call-2",
-      { action: "stop", sessionId: "cancelled-meeting-thrown" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-2", { action: "stop", sessionId: "cancelled-meeting-thrown" });
 
     expect(stop).toHaveBeenCalledTimes(2);
     expect(stop.mock.calls.map(([request]) => request.reason)).toEqual([
@@ -492,17 +443,15 @@ describe("transcripts tool", () => {
   it("keeps missing abort cleanup hooks visible until the provider can stop", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       controller.abort();
       return { ok: true as const, session: request.session };
     });
     const provider: TranscriptSourceProvider = {
-      id: "proof-live",
-      name: "Proof Live",
-      sourceKinds: ["live-caption"],
+      ...liveProvider,
       start,
     };
-    getTranscriptSourceProviderMock.mockReturnValue(provider);
+    registerProvider(provider);
     const { tool } = await createHarness(stateDir);
 
     await expect(
@@ -514,33 +463,22 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting-no-stop",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow(
       "transcripts start aborted; provider cleanup failed: transcripts provider proof-live cannot stop live capture",
     );
 
     await expect(
-      tool.execute(
-        "call-2",
-        { action: "stop", sessionId: "cancelled-meeting-no-stop" },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-2", { action: "stop", sessionId: "cancelled-meeting-no-stop" }),
     ).rejects.toThrow(
       "transcripts provider cleanup failed: transcripts provider proof-live cannot stop live capture",
     );
-    const stop = vi.fn(async () => ({
-      ok: true as const,
+    const stop = vi.fn<StopCapture>(async () => ({
+      ok: true,
       sessionId: "cancelled-meeting-no-stop",
     }));
     provider.stop = stop;
-    await tool.execute(
-      "call-3",
-      { action: "stop", sessionId: "cancelled-meeting-no-stop" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-3", { action: "stop", sessionId: "cancelled-meeting-no-stop" });
     expect(stop).toHaveBeenCalledOnce();
   });
 
@@ -548,14 +486,14 @@ describe("transcripts tool", () => {
     // Date-qualified selectors disambiguate storage paths; providers still own
     // the original session id.
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       await request.onUtterance({
         text: "Sam: Decision: use date-qualified selectors for repeated names.",
       });
       return { ok: true, session: request.session };
     });
-    const stop = vi.fn(async () => ({ ok: true }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const stop = vi.fn(stopCapture);
+    registerProvider({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -564,26 +502,16 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    await tool.execute(
-      "call-1",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        sessionId: "standup",
-        title: "Standup",
-      },
-      undefined,
-      vi.fn(),
-    );
-    const result = await tool.execute(
-      "call-2",
-      {
-        action: "stop",
-        sessionId: `${currentDateDir()}/standup`,
-      },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-1", {
+      action: "start",
+      providerId: "discord-voice",
+      sessionId: "standup",
+      title: "Standup",
+    });
+    const result = await tool.execute("call-2", {
+      action: "stop",
+      sessionId: `${currentDateDir()}/standup`,
+    });
 
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -605,15 +533,15 @@ describe("transcripts tool", () => {
 
   it("retains failed provider cleanup until retry succeeds before writing notes", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const start = vi.fn(async (request) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       await request.onUtterance({ text: "Alex: Publish notes after voice cleanup completes." });
       return { ok: true, session: request.session };
     });
     const stop = vi
-      .fn<NonNullable<TranscriptSourceProvider["stop"]>>()
+      .fn<StopCapture>()
       .mockResolvedValueOnce({ ok: false, error: "Discord voice manager is unavailable" })
       .mockResolvedValue({ ok: true, sessionId: "standup" });
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -658,9 +586,9 @@ describe("transcripts tool", () => {
     await store.appendUtteranceForSession(olderSession, {
       text: "Sam: Decision: preserve historical dated notes.",
     });
-    const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
-    const stop = vi.fn(async () => ({ ok: true }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn(startCapture);
+    const stop = vi.fn(stopCapture);
+    registerProvider({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -669,26 +597,16 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    await tool.execute(
-      "call-1",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        sessionId: "standup",
-        title: "Current standup",
-      },
-      undefined,
-      vi.fn(),
-    );
-    await tool.execute(
-      "call-2",
-      {
-        action: "stop",
-        sessionId: "2026-05-21/standup",
-      },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-1", {
+      action: "start",
+      providerId: "discord-voice",
+      sessionId: "standup",
+      title: "Current standup",
+    });
+    await tool.execute("call-2", {
+      action: "stop",
+      sessionId: "2026-05-21/standup",
+    });
 
     expect(stop).not.toHaveBeenCalled();
     await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
@@ -701,15 +619,10 @@ describe("transcripts tool", () => {
       ),
     ).resolves.toContain("preserve historical dated notes");
 
-    await tool.execute(
-      "call-3",
-      {
-        action: "stop",
-        sessionId: "standup",
-      },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-3", {
+      action: "stop",
+      sessionId: "standup",
+    });
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "standup",
@@ -720,12 +633,15 @@ describe("transcripts tool", () => {
   it("auto-starts configured live meeting sources", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const entered = createDeferred<TranscriptStartRequest>();
-    const start = vi.fn(async (request: TranscriptStartRequest) => {
+    const start = vi.fn<StartCapture>(async (request) => {
       entered.resolve(request);
       return { ok: true, session: request.session };
     });
-    const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const stop = vi.fn<StopCapture>(async () => ({
+      ok: true,
+      sessionId: "standup",
+    }));
+    registerProvider({
       id: "discord-voice",
       accessControl: discordAccountOwnership(),
       name: "Discord Voice",
@@ -753,10 +669,6 @@ describe("transcripts tool", () => {
     service.start();
     try {
       const request = await entered.promise;
-      expect(getTranscriptSourceProviderMock).toHaveBeenCalledWith(
-        "discord-voice",
-        expect.objectContaining({ transcripts: expect.any(Object) }),
-      );
       expect(start).toHaveBeenCalledOnce();
       expect(request.session).toMatchObject({
         sessionId: "standup",
@@ -798,6 +710,7 @@ describe("transcripts tool", () => {
     async (accountId) => {
       const stateDir = tempDirs.make("openclaw-transcripts-routed-");
       const config: OpenClawConfig = {
+        plugins,
         agents: { entries: { main: {}, research: {} } },
         bindings: [
           {
@@ -821,19 +734,21 @@ describe("transcripts tool", () => {
           ],
         },
       };
-      const start = vi.fn(async (request: TranscriptStartRequest) => {
+      const entered = createDeferred<TranscriptStartRequest>();
+      const start = vi.fn<StartCapture>(async (request) => {
         await request.onUtterance({
           text: "Decision: keep meeting notes with their routed agent.",
         });
+        entered.resolve(request);
         return { ok: true as const, session: request.session };
       });
-      getTranscriptSourceProviderMock.mockReturnValue({
+      registerProvider({
         id: "room-audio",
         name: "Room Audio",
         sourceKinds: ["live-audio"],
         accessControl: discordAccountOwnership(() => ({ ok: true, value: "account-a" })),
         start,
-        stop: async (request: TranscriptStopRequest) => ({
+        stop: async (request) => ({
           ok: true as const,
           sessionId: request.sessionId,
         }),
@@ -850,8 +765,9 @@ describe("transcripts tool", () => {
 
       service.start();
       try {
-        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
-        const sessionId = start.mock.calls[0]![0].session.sessionId;
+        const request = await entered.promise;
+        expect(start).toHaveBeenCalledOnce();
+        const sessionId = request.session.sessionId;
         await expect(storeFor(stateDir).readSession(sessionId)).resolves.toMatchObject({
           metadata: { agentId: "research" },
           source: { agentId: "research", accountId: "account-a" },
@@ -883,8 +799,8 @@ describe("transcripts tool", () => {
 
   it("does not retain an explicit account when provider resolution returns undefined", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    getTranscriptSourceProviderMock.mockReturnValue({
+    const start = vi.fn(startCapture);
+    registerProvider({
       id: "discord-voice",
       accessControl: discordAccountOwnership(() => ({
         ok: true as const,
@@ -899,7 +815,7 @@ describe("transcripts tool", () => {
     await expect(
       startTranscripts({
         ctx: {
-          config: { transcripts: { enabled: true } },
+          config: { plugins, transcripts: { enabled: true } },
           stateDir,
           logger: { warn: vi.fn() },
         },
@@ -919,19 +835,18 @@ describe("transcripts tool", () => {
   });
 
   it("keeps a session reserved while an overlapping stop is in flight", async () => {
-    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
-    let resolveFirstStop: ((result: { ok: true; sessionId: string }) => void) | undefined;
-    const firstStop = new Promise<{ ok: true; sessionId: string }>((resolve) => {
-      resolveFirstStop = resolve;
-    });
+    const start = vi.fn(startCapture);
+    const firstStop = createDeferred<{ ok: true; sessionId: string }>();
+    const stopEntered = createDeferred();
     let stopCount = 0;
-    const stop = vi.fn(async (request: TranscriptStopRequest) => {
+    const stop = vi.fn<StopCapture>(async (request) => {
       stopCount += 1;
+      stopEntered.resolve();
       return stopCount === 1
-        ? await firstStop
+        ? await firstStop.promise
         : { ok: true as const, sessionId: request.sessionId };
     });
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -952,59 +867,50 @@ describe("transcripts tool", () => {
       undefined,
       vi.fn(),
     );
-    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+    await stopEntered.promise;
     try {
       await expect(
-        tool.execute(
-          "stop-overlap",
-          { action: "stop", sessionId: "reused-id" },
-          undefined,
-          vi.fn(),
-        ),
+        tool.execute("stop-overlap", { action: "stop", sessionId: "reused-id" }),
       ).resolves.toMatchObject({ details: { sessionId: "reused-id", skipped: true } });
       expect(stop).toHaveBeenCalledOnce();
       await expect(
-        tool.execute(
-          "start-replacement-too-early",
-          { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
-          undefined,
-          vi.fn(),
-        ),
+        tool.execute("start-replacement-too-early", {
+          action: "start",
+          providerId: "discord-voice",
+          sessionId: "reused-id",
+        }),
       ).rejects.toThrow("transcripts session already active: reused-id");
     } finally {
-      resolveFirstStop?.({ ok: true, sessionId: "reused-id" });
+      firstStop.resolve({ ok: true, sessionId: "reused-id" });
       await firstStopCall;
     }
 
     const { tool: replacementTool } = await createHarness(
       tempDirs.make("openclaw-transcripts-replacement-"),
     );
-    await replacementTool.execute(
-      "start-replacement",
-      { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
-      undefined,
-      vi.fn(),
-    );
+    await replacementTool.execute("start-replacement", {
+      action: "start",
+      providerId: "discord-voice",
+      sessionId: "reused-id",
+    });
     await expect(
-      replacementTool.execute("replacement-status", { action: "status" }, undefined, vi.fn()),
+      replacementTool.execute("replacement-status", { action: "status" }),
     ).resolves.toMatchObject({
       details: { active: [expect.objectContaining({ sessionId: "reused-id" })] },
     });
-    await replacementTool.execute(
-      "stop-replacement",
-      { action: "stop", sessionId: "reused-id" },
-      undefined,
-      vi.fn(),
-    );
+    await replacementTool.execute("stop-replacement", { action: "stop", sessionId: "reused-id" });
   });
 
   it("aborts pending auto-starts when the service stops", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const stop = vi.fn(async () => ({ ok: true, sessionId: "standup" }));
+    const stop = vi.fn<StopCapture>(async () => ({
+      ok: true,
+      sessionId: "standup",
+    }));
     const entered = createDeferred<TranscriptStartRequest>();
-    const start = vi.fn(
-      async (request: TranscriptStartRequest) =>
-        await new Promise((resolve) => {
+    const start = vi.fn<StartCapture>(
+      async (request) =>
+        await new Promise<{ ok: false; error: string }>((resolve) => {
           request.abortSignal?.addEventListener(
             "abort",
             () => resolve({ ok: false, error: "aborted" }),
@@ -1013,7 +919,7 @@ describe("transcripts tool", () => {
           entered.resolve(request);
         }),
     );
-    getTranscriptSourceProviderMock.mockReturnValue({
+    registerProvider({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],

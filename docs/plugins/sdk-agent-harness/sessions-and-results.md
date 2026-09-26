@@ -47,6 +47,15 @@ session reset and `withSessionDeletion(params, run)` for removal of a session
 key, including expiry and maintenance. A physical session ID changing at the
 same key is a transfer, not deletion; preserve any compaction adoption path.
 
+Core logs reset-hook failures once per harness ID per process, including across
+plugin reloads. Later resets still invoke the hook so it can recover.
+
+ACPX automatically migrates sessions from its former `<workspace>/state` default
+to `<OPENCLAW_STATE_DIR>/acpx` when the new default is empty. Set
+`plugins.entries.acpx.config.stateDir` only to keep a different location; explicit
+values are never relocated. Failed adoption warns and retains the old location
+for the process so an update does not silently hide existing sessions.
+
 `withSessionDeletion` acquires the native owner's lease before calling
 `run({ commit, rollback })`. Core invokes the synchronous `commit()` at the
 session row deletion boundary and `rollback()` if the transaction fails.
@@ -58,6 +67,76 @@ Recheck `params.assertCurrent()` after awaited work and immediately before
 mutating native state. The callback belongs to one registered harness lifetime;
 retaining it after the operation closes does not retain authority. Post-delete
 hooks are notifications, not the owner of durable binding removal.
+
+Implement `withSessionContextReset(params, run)` when a native binding must be
+invalidated by a successful same-key rewind or branch switch. This optional hook
+uses the same prepared `commit`/`rollback` contract, but keeps the session key and
+retained history. Core commits invalidation only after validating the requested
+cut and restores it if the transcript transaction fails. Release subscriptions
+after the committed mutation settles. The optional `previousSessionId` is the
+recorded predecessor, allowing retirement of a binding not yet transferred after
+compaction without adopting it during preparation. Ordinary compaction does not
+invoke this hook and continues to preserve native thread continuity.
+
+## Shared native binding lifecycle
+
+Official harnesses use the JavaScript-only private
+`openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
+Plugin SDK contract. Binding mutations use action-bound plugin-state observations
+and conditional writes in the shared-state worker. Synchronous reads still serve
+native lease assertions, and synchronous deletion/rollback remains part of the
+host's existing transaction contract.
+`createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
+renewal, mutation fences, and transactional deletion/rollback. The backend
+supplies matching synchronous and asynchronous views of the same plugin-state
+namespace, its record codec, acquisition/retention policy, errors, and timing.
+Pass host authority through `assertCurrent` and validate the expected generation
+in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
+authority. Keep native cleanup after the host transaction commits.
+
+Inside `withLease`, call `captureLeaseAssertion(key)` to capture the exact owner
+and recheck its live, unexpired lease before native requests or transcript writes.
+Combine it with host authority for normal work. Cleanup may use retained lease
+ownership after host retirement, but must reject an expired, replaced, or closed
+lease even while the harness remains alive.
+
+`captureNativeSessionGenerationAuthority`, `reclaimNativeSessionGeneration`,
+and `resolveNativeSessionBinding` preserve the host generation and predecessor
+across waits, adopting a verified predecessor before stale reclamation. A missing
+host entry permits an ephemeral session; a failed read cannot authorize a binding.
+
+`createNativeSessionInitializationOwner` associates binding and upstream-link
+writes with the exact host creation handle. Rollback requires the matching
+store, identity, binding, and live authority, removes only the exact upstream
+link, then invokes backend cleanup. Queue selection, native protocol/policy,
+and resource cleanup remain with the backend; core owns host session lifecycle.
+
+## Background command tasks
+
+Official harnesses can use `createAgentHarnessCommandTask` from the existing
+private `openclaw/plugin-sdk/agent-harness-task-runtime` entrypoint to expose a
+native command in Tasks after its foreground turn ends. Pass the host-issued
+task scope and retain the original native connection and source authority. The
+helper creates a worker-persisted CLI task and binds cancellation to that exact
+task run; it does not take custody of the native process.
+
+The cancellation callback receives `assertTaskCurrent`; call it after awaited
+preparation and immediately before stopping work, alongside the retained source
+and concrete command checks. Publish the native terminal outcome with `finish`.
+It returns `"published"` after terminal publication or `"retired"` when the original
+task was replaced. Retirement releases the old binding without changing its
+successor; both results let the harness release its native observation leases.
+A successful stop requires the original task to settle as cancelled; natural
+completion racing Stop remains success. Failed publication retains the run owner;
+the harness must either own a subsequent settlement attempt or release the binding
+so normal task recovery can reconcile the row. A one-shot terminal notification
+must not leave a finished command holding live ownership indefinitely. Release
+the binding when the native owner closes and cannot publish an outcome. Restored
+rows do not recreate native process authority.
+
+Command previews use the shared redacted exec formatter, and Incognito content
+stays private. These tasks are silent: recording completion does not schedule a
+new model turn.
 
 ## Subagent task history
 
@@ -94,6 +173,12 @@ the child, create another transcript store, or change cancellation and recovery.
 
 ## Tool and media results
 
+`inferToolMetaFromArgs` from `openclaw/plugin-sdk/agent-harness-runtime` returns
+compact, lossy display metadata. Array values deeper than 64 levels are omitted;
+shallower siblings still contribute to the preview. The helper can return
+`undefined`. Keep the original arguments for validation and execution: display
+metadata is neither an argument replacement nor a general-purpose traversal limit.
+
 Core constructs the OpenClaw tool list and passes it into the prepared
 attempt. When a harness executes a dynamic tool call, return the tool result
 back through the harness result shape instead of sending channel media
@@ -101,6 +186,35 @@ yourself.
 
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
+
+For messaging tools, read the original result's `details.messageDelivery` with
+`readEmbeddedMessageDeliveryFact` from `openclaw/plugin-sdk/agent-harness-runtime`.
+Only settled delivery counts as a sent message; successful dry runs and suppressed
+sends must not suppress a later reply. Preserve partial delivery evidence when a
+tool also reports an error. Messaging tool results without a delivery fact use
+`isDeliveredMessagingToolResult`, which owns tool eligibility and receipt interpretation.
+For core conversation tools, it reads the original Gateway result's `details.status`:
+`sent` confirms delivery, as do `replied` and `timeout` for `conversations_turn`.
+A peer-reply timeout or correlation error does not undo the channel send or change
+the tool's error status. `queued`, `suppressed`, and `unknown` do not confirm delivery,
+even when they include a prepared message ID. Session coordination results are not
+external delivery receipts.
+Use `requirePluginDeliveryId: true` when legacy plugin results need a concrete
+message ID; authoritative core conversation statuses do not require one.
+`projectPluginMessageDeliveryFact` reads legacy result envelopes into the shared
+delivery shape, retaining partial-delivery status for attachment handling.
+For legacy message sends, an error takes precedence over a message ID unless
+the result confirms partial delivery.
+Use `isDeliveredMessagingToolSendToCurrentSource` for source-route comparisons and
+`extractMessagingToolSourceReplyPayload` to retain attachment metadata and the
+transcript owner's confirmation. Presentation middleware cannot establish new
+delivery facts.
+
+The same runtime entrypoint exports `sanitizeToolArgs` for diagnostic tool
+arguments and event payloads. It redacts nested fields without mutating the input
+and preserves own JSON keys, including `__proto__`; repeated references become
+`"[Circular]"`. Use `sanitizeToolResult` for result presentation, which also applies
+the shared result-size and image-storage rules.
 
 For successful `sessions_spawn` results, use `normalizeAcceptedSessionSpawnResult`
 from `openclaw/plugin-sdk/agent-harness-tool-runtime` and retain its

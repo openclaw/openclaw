@@ -126,10 +126,6 @@ function collectCliSuppliedQaRunFlags(
     .map((option) => option.flag);
 }
 
-function formatFlagList(flags: readonly string[]): string {
-  return flags.join(", ");
-}
-
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
   const hasQaProfile = Boolean(opts.qaProfile?.trim());
   if (command.getOptionValueSource("qaProfile") === "cli" && !hasQaProfile) {
@@ -140,7 +136,7 @@ function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
     const selfCheckFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_SELF_CHECK_ONLY_OPTIONS);
     if (selfCheckFlags.length > 0) {
       throw new Error(
-        `qa run ${formatFlagList(selfCheckFlags)} is only valid for the self-check mode without --qa-profile.`,
+        `qa run ${selfCheckFlags.join(", ")} is only valid for the self-check mode without --qa-profile.`,
       );
     }
     return;
@@ -149,7 +145,7 @@ function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
   const profileFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_PROFILE_ONLY_OPTIONS);
   if (profileFlags.length > 0) {
     throw new Error(
-      `qa run ${formatFlagList(profileFlags)} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
+      `qa run ${profileFlags.join(", ")} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
     );
   }
 }

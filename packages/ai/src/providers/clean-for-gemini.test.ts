@@ -1,9 +1,37 @@
 // Gemini schema cleaner tests cover OpenAPI-compatible tool schema cleanup for
 // Gemini-backed providers before schemas are sent upstream.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { cleanForGeminiEntrypoint } from "./clean-for-gemini-runtime.test-support.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 
+const execFileAsync = promisify(execFile);
+
 describe("cleanSchemaForGemini", () => {
+  it("normalizes deep nullable schemas in a cold process", async () => {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        "--max-old-space-size=192",
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cleanForGeminiEntrypoint)),
+      ],
+      { cwd: process.cwd(), encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 20_000 },
+    );
+    expect(JSON.parse(stdout)).toEqual({
+      normalized: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+      },
+      leaf: { type: "string" },
+    });
+  }, 30_000);
+
   it("strips serialized optional markers without changing required fields or the input", () => {
     const schema = {
       type: "object",
@@ -353,5 +381,29 @@ describe("cleanSchemaForGemini", () => {
     }) as { enum?: unknown };
 
     expect(cleaned.enum).toBeUndefined();
+  });
+
+  it("preserves shared definitions across inline and reference traversal", () => {
+    const node = {
+      type: "object",
+      properties: { next: { $ref: "#/$defs/Node" } },
+    };
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { Node: node },
+        properties: { head: node },
+        required: ["head"],
+      }),
+    ).toStrictEqual({
+      type: "object",
+      properties: {
+        head: {
+          type: "object",
+          properties: { next: { type: "object", properties: { next: {} } } },
+        },
+      },
+      required: ["head"],
+    });
   });
 });

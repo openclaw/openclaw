@@ -2,12 +2,17 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
@@ -17,6 +22,7 @@ import {
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
+import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -74,6 +80,59 @@ function read(
   });
 }
 
+it("keeps prepared auth source reads and cleanup off the host SQLite thread", async () => {
+  const { source, store, state } = createAuthDatabase();
+  const before = fs.readFileSync(source);
+  const coordinatorDirectory = tempDirs.make("openclaw-auth-source-coordinator-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(source) };
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  let childClosed = false;
+  vi.mocked(spawn).mockImplementationOnce((...args) => {
+    const child = actual.spawn(...args);
+    child.once("close", () => {
+      childClosed = true;
+    });
+    return child;
+  });
+  const sql = [
+    ...(["exec", "prepare", "close"] as const).map((method) =>
+      vi.spyOn(DatabaseSync.prototype, method),
+    ),
+    ...(["all", "get", "run", "iterate"] as const).map((method) =>
+      vi.spyOn(StatementSync.prototype, method),
+    ),
+  ];
+  await withStateDatabaseCoordinatorRuntimeDirectory(coordinatorDirectory, async () => {
+    const absentPath = path.join(path.dirname(source), "absent.sqlite");
+    const absent = prepareAgentAuthProfileRowsRead({
+      databasePath: absentPath,
+      agentId: "main",
+      env,
+    });
+    const reader = prepareAgentAuthProfileRowsRead({ databasePath: source, agentId: "main", env });
+    try {
+      await expect(absent.read()).resolves.toEqual({
+        store: { status: "missing", reason: "database" },
+        state: { status: "missing", reason: "database" },
+        cacheable: false,
+      });
+      expect(fs.existsSync(absentPath)).toBe(false);
+      await expect(reader.read()).resolves.toEqual({
+        store: { status: "readable", raw: store },
+        state: { status: "readable", raw: state },
+        cacheable: true,
+      });
+      expect(childClosed).toBe(true);
+    } finally {
+      await Promise.all([absent.dispose(), reader.dispose()]);
+    }
+  });
+  for (const operation of sql) {
+    expect(operation).not.toHaveBeenCalled();
+  }
+  expect(fs.readFileSync(source)).toEqual(before);
+});
+
 describe.each([
   { label: "native", broker: false, sourceKind: "canonical" },
   { label: "broker", broker: true, sourceKind: "canonical" },
@@ -110,6 +169,25 @@ describe.each([
               status: "readable",
               raw: { lastGood: {} },
             });
+            const connection = new GatewayConnectionWork();
+            const scheduled = createScheduledGatewayRunner();
+            try {
+              for (const enter of [
+                <T>(run: () => Promise<T>) => connection.track(run),
+                scheduled,
+              ]) {
+                const detachedRows = await runInDetachedAsyncContext(() =>
+                  enter(() => read(source, transport.sourceKind)),
+                );
+                expect(detachedRows).toEqual({
+                  store: { status: "readable", raw: store },
+                  state: { status: "readable", raw: { lastGood: {} } },
+                  cacheable: true,
+                });
+              }
+            } finally {
+              await connection.drain();
+            }
             const child =
               transport.label === "broker"
                 ? brokerSpawn?.mock.results[0]?.value

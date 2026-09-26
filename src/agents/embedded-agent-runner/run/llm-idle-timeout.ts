@@ -15,11 +15,11 @@ import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable } from "./abortable.js";
-import type { EmbeddedRunTrigger } from "./params.js";
 import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 /**
@@ -170,18 +170,21 @@ function hasConfiguredLocalProviderSignal(params: {
 
 type RuntimeModelLocality = {
   isLocalRuntimeModel: boolean;
-  isExplicitLocalHostnameRuntimeModel: boolean;
-  isSelfHostedHostnameRuntimeModel: boolean;
+  isSelfHostedRuntimeModel: boolean;
+};
+
+type LlmTimeoutParams = {
+  cfg?: OpenClawConfig;
+  runTimeoutMs?: number;
+  modelRequestTimeoutMs?: number;
+  model?: { baseUrl?: string; id?: string; provider?: string };
 };
 
 /**
  * Classifies the model endpoint locality shared by the idle and first-event
  * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy.
  */
-function resolveRuntimeModelLocality(params?: {
-  cfg?: OpenClawConfig;
-  model?: { baseUrl?: string; id?: string; provider?: string };
-}): RuntimeModelLocality {
+function resolveRuntimeModelLocality(params?: LlmTimeoutParams): RuntimeModelLocality {
   const baseUrl = params?.model?.baseUrl;
   let hostname: string | undefined;
   if (typeof baseUrl === "string" && baseUrl.length > 0) {
@@ -191,57 +194,36 @@ function resolveRuntimeModelLocality(params?: {
       hostname = undefined;
     }
   }
-  if (!hostname) {
-    return {
-      isLocalRuntimeModel: false,
-      isExplicitLocalHostnameRuntimeModel: false,
-      isSelfHostedHostnameRuntimeModel: false,
-    };
-  }
   const notCloudModel = !isCloudModelRef(params?.model?.id);
   return {
-    isLocalRuntimeModel: isLocalProviderHostname(hostname) && notCloudModel,
-    isExplicitLocalHostnameRuntimeModel: isExplicitLocalHostname(hostname) && notCloudModel,
-    isSelfHostedHostnameRuntimeModel:
-      isBareProviderHostname(hostname) &&
+    isLocalRuntimeModel: Boolean(hostname && isLocalProviderHostname(hostname) && notCloudModel),
+    isSelfHostedRuntimeModel:
+      notCloudModel &&
       (isSelfHostedProviderId(params?.model?.provider) ||
-        hasConfiguredLocalProviderSignal({
-          cfg: params?.cfg,
-          provider: params?.model?.provider,
-        })) &&
-      notCloudModel,
+        Boolean(
+          hostname &&
+          (isExplicitLocalHostname(hostname) ||
+            (isBareProviderHostname(hostname) &&
+              hasConfiguredLocalProviderSignal({
+                cfg: params?.cfg,
+                provider: params?.model?.provider,
+              }))),
+        )),
   };
 }
 
-/**
- * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
- * provider request timeouts and bounded run/agent timeouts cap the watchdog;
- * local provider base URLs disable the implicit cloud-provider default.
- */
-export function resolveLlmIdleTimeoutMs(params?: {
-  cfg?: OpenClawConfig;
-  trigger?: EmbeddedRunTrigger;
-  runTimeoutMs?: number;
-  modelRequestTimeoutMs?: number;
-  model?: { baseUrl?: string; id?: string; provider?: string };
-}): number {
-  const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
-
+function resolveLlmTimeoutBounds(params?: LlmTimeoutParams) {
   const runTimeoutMs = params?.runTimeoutMs;
-  const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
-  const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(agentTimeoutSeconds);
+  const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(
+    params?.cfg?.agents?.defaults?.timeoutSeconds,
+  );
   const hasExplicitRunTimeout =
     typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
-  const runTimeoutIsNoTimeout = hasExplicitRunTimeout && runTimeoutMs >= MAX_TIMER_TIMEOUT_MS;
-  const {
-    isLocalRuntimeModel,
-    isExplicitLocalHostnameRuntimeModel,
-    isSelfHostedHostnameRuntimeModel,
-  } = resolveRuntimeModelLocality(params);
-  const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
+  // Unlimited runs omit the sentinel but still retain provider liveness defaults.
+  const boundedRunTimeoutMs =
+    hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS ? runTimeoutMs : undefined;
   const timeoutBounds = [
-    runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
+    boundedRunTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
   ].filter(
     (value): value is number =>
@@ -250,6 +232,21 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value > 0 &&
       value < MAX_TIMER_TIMEOUT_MS,
   );
+  return { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds };
+}
+
+const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
+
+/**
+ * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
+ * provider request timeouts and bounded run/agent timeouts cap the watchdog;
+ * local provider base URLs disable the implicit cloud-provider default.
+ */
+export function resolveLlmIdleTimeoutMs(
+  params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
+): number {
+  const { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds } = resolveLlmTimeoutBounds(params);
+  const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
 
   // Run/agent budgets bound idle from below the provider-class ceiling; they
   // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
@@ -259,12 +256,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
     if (isLocalRuntimeModel) {
       return clampTimeoutMs(budgetMs);
     }
-    const classIdleTimeoutMs =
-      isSelfHostedRuntimeModel ||
-      isExplicitLocalHostnameRuntimeModel ||
-      isSelfHostedHostnameRuntimeModel
-        ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
-        : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+    const classIdleTimeoutMs = isSelfHostedRuntimeModel
+      ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
+      : DEFAULT_LLM_IDLE_TIMEOUT_MS;
     return clampTimeoutMs(Math.min(budgetMs, classIdleTimeoutMs));
   };
 
@@ -294,19 +288,14 @@ export function resolveLlmIdleTimeoutMs(params?: {
 
   // Unlimited run budget bounds total cost, not stream liveness. Only finite
   // explicit run budgets cap the idle watchdog.
-  if (hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS) {
+  if (boundedRunTimeoutMs !== undefined) {
     if (params?.trigger === "cron") {
-      if (
-        isLocalRuntimeModel ||
-        isExplicitLocalHostnameRuntimeModel ||
-        isSelfHostedHostnameRuntimeModel ||
-        isSelfHostedRuntimeModel
-      ) {
-        return clampTimeoutMs(runTimeoutMs);
+      if (isLocalRuntimeModel || isSelfHostedRuntimeModel) {
+        return clampTimeoutMs(boundedRunTimeoutMs);
       }
-      return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
+      return clampTimeoutMs(Math.min(boundedRunTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
     }
-    return clampToClassIdleCeiling(runTimeoutMs);
+    return clampToClassIdleCeiling(boundedRunTimeoutMs);
   }
 
   if (agentTimeoutMs !== undefined) {
@@ -324,50 +313,12 @@ export function resolveLlmIdleTimeoutMs(params?: {
     return 0;
   }
 
-  if (
-    isSelfHostedRuntimeModel ||
-    isExplicitLocalHostnameRuntimeModel ||
-    isSelfHostedHostnameRuntimeModel
-  ) {
-    return SELF_HOSTED_LLM_IDLE_TIMEOUT_MS;
-  }
-
-  return DEFAULT_LLM_IDLE_TIMEOUT_MS;
+  return isSelfHostedRuntimeModel ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS : DEFAULT_LLM_IDLE_TIMEOUT_MS;
 }
 
-export function resolveLlmFirstEventTimeoutMs(params?: {
-  cfg?: OpenClawConfig;
-  runTimeoutMs?: number;
-  modelRequestTimeoutMs?: number;
-  model?: { baseUrl?: string; id?: string; provider?: string };
-}): number {
-  const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
-  const runTimeoutMs = params?.runTimeoutMs;
-  const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(
-    params?.cfg?.agents?.defaults?.timeoutSeconds,
-  );
-  const hasExplicitRunTimeout =
-    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
-  const runTimeoutIsBounded = hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS;
-  const {
-    isLocalRuntimeModel,
-    isExplicitLocalHostnameRuntimeModel,
-    isSelfHostedHostnameRuntimeModel,
-  } = resolveRuntimeModelLocality(params);
-  const isSelfHostedRuntimeModel =
-    isSelfHostedProviderId(params?.model?.provider) && !isCloudModelRef(params?.model?.id);
-  const timeoutBounds = [
-    // Unlimited run budget bounds total cost, not first-token liveness. Omit
-    // the sentinel from bounds so provider-class defaults still apply.
-    runTimeoutIsBounded ? runTimeoutMs : undefined,
-    hasExplicitRunTimeout ? undefined : agentTimeoutMs,
-  ].filter(
-    (value): value is number =>
-      typeof value === "number" &&
-      Number.isFinite(value) &&
-      value > 0 &&
-      value < MAX_TIMER_TIMEOUT_MS,
-  );
+export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number {
+  const { timeoutBounds } = resolveLlmTimeoutBounds(params);
+  const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
 
   const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
   if (
@@ -379,10 +330,7 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
   }
 
   const defaultTimeoutMs =
-    isLocalRuntimeModel ||
-    isExplicitLocalHostnameRuntimeModel ||
-    isSelfHostedHostnameRuntimeModel ||
-    isSelfHostedRuntimeModel
+    isLocalRuntimeModel || isSelfHostedRuntimeModel
       ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
       : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
   return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));

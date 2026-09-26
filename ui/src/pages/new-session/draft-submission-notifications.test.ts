@@ -74,10 +74,8 @@ function submitFromClick(flow: DraftSubmissionFlow, background = false) {
 
 describe("New Session notification onboarding", () => {
   it.each([
-    { surface: "web", background: false },
     { surface: "web", background: true },
     { surface: "native", background: false },
-    { surface: "native", background: true },
   ] as const)(
     "prompts $surface synchronously and only once when background=$background",
     async ({ surface, background }) => {

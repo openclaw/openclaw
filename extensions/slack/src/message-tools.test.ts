@@ -24,6 +24,8 @@ function requireSchemaProperty(
   };
 }
 
+const configuredSlack: OpenClawConfig = { channels: { slack: { botToken: "xoxb-test" } } };
+
 describe("Slack message tools", () => {
   it("forwards trusted current-conversation, requester-account, and action authority context", async () => {
     const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
@@ -197,15 +199,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes configured Slack message actions without loading channel runtime", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     expect(Object.keys(discovery).toSorted()).toEqual(["actions", "capabilities", "schema"]);
     expect(discovery.actions).toEqual([
@@ -265,36 +259,6 @@ describe("Slack message tools", () => {
         accountId: "ops",
       }).actions,
     ).not.toContain("upload-file");
-  });
-
-  it("includes file actions when message actions are enabled", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          actions: {
-            messages: true,
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(listSlackMessageActions(cfg)).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "conversation-open",
-      "read",
-      "edit",
-      "delete",
-      "download-file",
-      "upload-file",
-      "pin",
-      "unpin",
-      "list-pins",
-      "member-info",
-      "emoji-list",
-    ]);
   });
 
   it("exposes message actions for a configured user-identity account", () => {
@@ -379,15 +343,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes Slack file ids separately from message ids", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "fileId");
 
@@ -399,15 +355,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes current Slack message id actions without stale aliases", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "messageId");
     const alias = schema.properties.message_id as { description?: string };
@@ -469,15 +417,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes Slack reply broadcasts as send-only thread hints", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "replyBroadcast");
 
@@ -488,15 +428,7 @@ describe("Slack message tools", () => {
   });
 
   it("describes Slack top-level sends as a same-channel thread opt-out", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-          },
-        },
-      },
-    });
+    const discovery = describeSlackMessageTool({ cfg: configuredSlack });
 
     const { schema, property } = requireSchemaProperty(discovery, "topLevel");
 

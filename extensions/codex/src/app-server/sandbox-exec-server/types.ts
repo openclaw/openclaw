@@ -1,9 +1,6 @@
-/**
- * Shared protocol and runtime state types for the Codex sandbox exec-server
- * transport-neutral execution session.
- */
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import type { SandboxChild, SandboxChildOwner } from "./sandbox-child.js";
 
@@ -34,17 +31,14 @@ export type ProcessChunk = {
   chunk: string;
 };
 
-/** Directory entry metadata returned through the sandbox filesystem bridge. */
 export type DirectoryEntry = {
   fileName: string;
   isDirectory: boolean;
   isFile: boolean;
 };
 
-/** Access level granted by resolved sandbox filesystem policy. */
 export type FsAccessMode = "read" | "write" | "none";
 
-/** Normalized filesystem sandbox policy entry, either literal path or glob matcher. */
 export type ResolvedFsSandboxEntry =
   | {
       kind: "path";
@@ -59,19 +53,16 @@ export type ResolvedFsSandboxEntry =
       access: FsAccessMode;
     };
 
-/** Fully resolved filesystem sandbox policy for one exec-server environment. */
 export type ResolvedFsSandboxPolicy = {
   unrestricted: boolean;
   entries: ResolvedFsSandboxEntry[];
 };
 
-/** Header pair accepted by sandboxed HTTP requests. */
 export type HttpHeader = {
   name: string;
   value: string;
 };
 
-/** Runtime state for one process launched through the sandbox exec-server. */
 export type ManagedProcess = {
   processId: string;
   chunks: ProcessChunk[];
@@ -110,6 +101,7 @@ type OpenClawExecServerLease = {
 
 /** Locally interpreted exec-server protocol backed by an OpenClaw sandbox. */
 export type OpenClawExecServer = OpenClawExecServerLease & {
+  processAuthorities?: Map<string, CodexNativeProcessClient>;
   backend: NonNullable<SandboxContext["backend"]>;
   fsBridge: NonNullable<SandboxContext["fsBridge"]>;
   readonly networkIsolated: boolean;

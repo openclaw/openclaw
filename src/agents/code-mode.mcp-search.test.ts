@@ -131,8 +131,6 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
   applyCodeModeCatalog({ tools: [...tools, ...targets], catalogRef, config });
   const limitedTools = createCodeModeTools({ catalogRef, config });
   const result = await expectDefined(limitedTools[0], "exec").execute("metadata-only", {
-    language: "typescript",
-    typecheck: true,
     code: `
       const matches = await catalog.search("overdue invoices", { limit: 50 });
       for (const tool of matches) {

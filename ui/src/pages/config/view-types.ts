@@ -104,7 +104,6 @@ export type ConfigProps = {
   onSave: () => void;
   onRawDiscard: () => void;
   onOpenFile?: () => void;
-  version: string;
   theme: ThemeName;
   themeOverridden: boolean;
   themeProvenance: ServerUiPrefProvenance;
@@ -155,6 +154,8 @@ export type ConfigProps = {
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
+  chatShowTaskProgress: boolean;
+  setChatShowTaskProgress: (enabled: boolean) => void;
   chatCollapseTaskProgress: boolean;
   setChatCollapseTaskProgress: (enabled: boolean) => void;
   showAdvancedSettings: boolean;

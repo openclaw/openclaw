@@ -127,6 +127,8 @@ describe("post-core plugin payload degradation", () => {
     ["optional", true, "warning", "optional-repair-needed", undefined],
     ["optional", false, "warning", "optional-repair-needed", undefined],
     ["invalid-config", true, "error", "core-critical", "invalid-config"],
+    ["config-read-file", true, "error", "core-critical", "config-read-failed"],
+    ["config-read-include", true, "error", "core-critical", "config-read-failed"],
     ["authority", true, undefined, undefined, undefined],
   ] as const)(
     "classifies %s with convergence errored=%s and update status=%s",
@@ -180,11 +182,14 @@ describe("post-core plugin payload degradation", () => {
             : undefined;
         const spy = vi
           .spyOn(convergence, "runPostCorePluginConvergence")
-          .mockImplementationOnce(async () => {
+          .mockImplementationOnce(async ({ cfg }) => {
             if (failure === "authority") {
               throw refusal;
             }
             return {
+              config: cfg,
+              configChanges: [],
+              installedPluginIdRecovery: new Map(),
               changes: [],
               warnings:
                 failure === "unclassified"
@@ -228,14 +233,19 @@ describe("post-core plugin payload degradation", () => {
             };
           });
         try {
+          if (failure === "invalid-config") {
+            await state.writeConfig({ gateway: { port: "invalid" } });
+          } else if (failure === "config-read-file") {
+            await fs.rm(state.configPath);
+            await fs.mkdir(state.configPath);
+          } else if (failure === "config-read-include") {
+            await state.writeConfig({ $include: "./missing-post-core-config.json" });
+          }
           const prepared = await preparePostCorePluginConfig({ requestedChannel: null });
           const params = {
             root: state.root,
             channel: "stable" as const,
             ...prepared,
-            ...(failure === "invalid-config"
-              ? { configSnapshot: { ...prepared.configSnapshot, valid: false } }
-              : {}),
             ...(failure === "unknown-requirement"
               ? {}
               : {
@@ -255,7 +265,29 @@ describe("post-core plugin payload degradation", () => {
               status,
               assessment: { kind, ...(reason ? { reason } : {}) },
             });
-            expect(result.reason).toBe(failure === "invalid-config" ? "invalid-config" : undefined);
+            expect(result.reason).toBe(kind === "core-critical" ? reason : undefined);
+            if (kind === "core-critical") {
+              expect(spy).not.toHaveBeenCalled();
+              expect(result.changed).toBe(false);
+              expect(result.failureFacts).toEqual([
+                expect.objectContaining({
+                  code: failure === "config-read-file" ? "EISDIR" : reason,
+                  ...(failure === "invalid-config" ? { affectedKey: "gateway.port" } : {}),
+                }),
+              ]);
+              expect(result.warnings).toEqual([
+                expect.objectContaining({
+                  reason,
+                  message: expect.stringContaining("refusing to restart"),
+                  guidance: expect.arrayContaining([
+                    expect.stringContaining(
+                      failure === "config-read-file" ? "file access" : "openclaw doctor",
+                    ),
+                    "Once the config loads successfully, rerun `openclaw update repair`.",
+                  ]),
+                }),
+              ]);
+            }
             if (kind === "optional-repair-needed") {
               expect(result.assessment).toMatchObject({ failures: [smokeFailure] });
             }

@@ -35,7 +35,6 @@ import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update
 export function createDoctorPluginMigrationPreparation(params: {
   enabled: boolean;
   env: () => NodeJS.ProcessEnv;
-  beforePersistentEffect: () => void;
   report: (result: MigrationMessages) => void;
   recordReceipt: (receipt: LegacyStateMigrationStepReceipt) => void;
   measure: ConfigSnapshotReadMeasure;
@@ -122,7 +121,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     return [...previousById.values()];
   };
   const reportPending = (plugin: DeferredPluginMigration) => {
-    const warning = formatDeferredPluginMigration(plugin);
+    const warning = formatDeferredPluginMigration(plugin, params.env());
     const previous = reported.get(plugin.pluginId);
     if (previous?.warnings[0] === warning) {
       return;
@@ -155,7 +154,6 @@ export function createDoctorPluginMigrationPreparation(params: {
     pending: readonly DeferredPluginMigration[],
     resolvedPluginIds?: readonly string[],
   ) => {
-    params.beforePersistentEffect();
     try {
       const committed = recordDeferredPluginMigrations({
         env: params.env(),
@@ -297,7 +295,9 @@ export function createDoctorPluginMigrationPreparation(params: {
           unavailableIds.has(plugin.pluginId)
             ? plugin
             : Object.assign(plugin, {
-                reason: "The plugin has not reported completion of its retained state migration.",
+                reason:
+                  "The installed plugin has not confirmed that its saved data and settings are ready for this version. If Doctor cannot finish the upgrade, report this warning to the plugin maintainer.",
+                command: "openclaw doctor --fix",
               }),
         );
       if (resolvedPluginIds.length === 0 && pending.length === 0) {

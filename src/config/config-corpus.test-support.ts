@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type operatorContainer from "../../test/fixtures/config-corpus/operator-container.json";
+import type peanutto from "../../test/fixtures/config-corpus/peanutto.json";
 
 const corpusDir = fileURLToPath(new URL("../../test/fixtures/config-corpus/", import.meta.url));
 
@@ -12,13 +13,113 @@ export function listConfigCorpusFixtureNames(): string[] {
   ].toSorted();
 }
 
-export function readConfigCorpusFixture(name: string): string {
-  if (name !== "hamverbot.json") {
-    return fs.readFileSync(path.join(corpusDir, name), "utf8");
-  }
+function readOperatorContainer() {
   const config: typeof operatorContainer = JSON.parse(
     fs.readFileSync(path.join(corpusDir, "operator-container.json"), "utf8"),
   );
+  config.skills.entries = Object.fromEntries(
+    [
+      "1password",
+      "apple-notes",
+      "apple-reminders",
+      "bear-notes",
+      "blogwatcher",
+      "blucli",
+      "bluebubbles",
+      "camsnap",
+      "clawhub",
+      "coding-agent",
+      "discord",
+      "eightctl",
+      "gemini",
+      "gifgrep",
+      "gog",
+      "goplaces",
+      "himalaya",
+      "imsg",
+      "mcporter",
+      "model-usage",
+      "nano-pdf",
+      "notion",
+      "obsidian",
+      "openai-whisper",
+      "openai-whisper-api",
+      "openhue",
+      "oracle",
+      "ordercli",
+      "peekaboo",
+      "sag",
+      "session-logs",
+      "sherpa-onnx-tts",
+      "slack",
+      "songsee",
+      "sonoscli",
+      "spotify-player",
+      "things-mac",
+      "trello",
+      "video-frames",
+      "voice-call",
+      "wacli",
+      "xurl",
+      "gh-issues",
+      "github",
+      "summarize",
+      "tmux",
+    ].map((name) => [name, { enabled: false }]),
+  );
+  return config;
+}
+
+function readPeanuttoFixture(): string {
+  const config: typeof peanutto = JSON.parse(
+    fs.readFileSync(path.join(corpusDir, "peanutto.json"), "utf8"),
+  );
+  config.models.providers.ollama.models.push(
+    ...[
+      { id: "mistral-large-3:675b", name: "fixture-25" },
+      { id: "nemotron-3-nano:30b", name: "fixture-26" },
+      { id: "glm-5.3-flash", name: "fixture-27" },
+      { id: "gpt-oss:120b", name: "fixture-28" },
+      { id: "gpt-oss:20b", name: "fixture-29" },
+      { id: "deepseek-v4-pro:0813", name: "fixture-30" },
+      { id: "deepseek-v4-flash:0731", name: "fixture-31" },
+      { id: "glm-5.3", name: "fixture-32" },
+      { id: "gemma4:31b", name: "fixture-33" },
+      { id: "kimi-k2.6", name: "fixture-34" },
+      { id: "kimi-k2.7-code", name: "fixture-35" },
+      { id: "qwen3.5:397b", name: "fixture-36" },
+      { id: "nemotron-3-super", name: "fixture-37" },
+      { id: "nemotron-3-ultra", name: "fixture-38" },
+    ].map(({ id, name }) => ({
+      id,
+      name,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+      compat: {
+        supportsTools: true,
+        supportsUsageInStreaming: true,
+        supportsJsonSchemaResponseFormat: true,
+      },
+      params: { num_ctx: 128000 },
+    })),
+  );
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+export function readConfigCorpusFixture(name: string): string {
+  if (name === "operator-container.json") {
+    return `${JSON.stringify(readOperatorContainer(), null, 2)}\n`;
+  }
+  if (name === "peanutto.json") {
+    return readPeanuttoFixture();
+  }
+  if (name !== "hamverbot.json") {
+    return fs.readFileSync(path.join(corpusDir, name), "utf8");
+  }
+  const config = readOperatorContainer();
   config.env.vars.BH_CONFIG_DIR = "/home/fixture/path0-0/path1-0/path2-0/path3-0";
   const models = config.agents.defaults.models;
   models["openai/gpt-5.4-nano"].alias = "fixture-13";

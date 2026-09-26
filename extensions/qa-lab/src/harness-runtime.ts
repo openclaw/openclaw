@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements harness runtime behavior.
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
@@ -6,15 +5,15 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelIngressResolver,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-type SessionRecord = {
-  sessionKey: string;
-  body: string;
-};
-
 export function createQaRunnerRuntime(): PluginRuntime {
-  const sessions = new Map<string, SessionRecord>();
+  const sessions = new Set<string>();
   const dispatchReplyWithBufferedBlockDispatcher: PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"] =
     async ({ ctx, dispatcherOptions }) => {
       await dispatcherOptions.deliver(
@@ -56,17 +55,8 @@ export function createQaRunnerRuntime(): PluginRuntime {
         readSessionUpdatedAt({ sessionKey }: { sessionKey: string }) {
           return sessions.has(sessionKey) ? Date.now() : undefined;
         },
-        recordInboundSession({
-          sessionKey,
-          ctx,
-        }: {
-          sessionKey: string;
-          ctx: { BodyForAgent?: string; Body?: string };
-        }) {
-          sessions.set(sessionKey, {
-            sessionKey,
-            body: ctx.BodyForAgent ?? ctx.Body ?? "",
-          });
+        recordInboundSession({ sessionKey }: { sessionKey: string }) {
+          sessions.add(sessionKey);
         },
       },
       mentions: {
@@ -89,15 +79,17 @@ export function createQaRunnerRuntime(): PluginRuntime {
         dispatchReplyWithBufferedBlockDispatcher,
       },
       inbound: {
+        ingress: {
+          createResolver: createChannelIngressResolver,
+          resolve: resolveChannelMessageIngress,
+          resolveStable: resolveStableChannelMessageIngress,
+        },
         async dispatch(params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) {
           const sessionKey =
             typeof params.ctxPayload.SessionKey === "string"
               ? params.ctxPayload.SessionKey
               : params.route.sessionKey;
-          sessions.set(sessionKey, {
-            sessionKey,
-            body: params.ctxPayload.BodyForAgent ?? params.ctxPayload.Body ?? "",
-          });
+          sessions.add(sessionKey);
           const delivery =
             params.admission?.kind === "observeOnly"
               ? async () => ({ visibleReplySent: false })

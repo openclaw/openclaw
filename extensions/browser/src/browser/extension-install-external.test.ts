@@ -45,6 +45,46 @@ async function setup(platform: NodeJS.Platform = "darwin") {
 }
 
 describe("Chrome Store installation request", () => {
+  it("prepares macOS Chrome before its first launch without creating or approving a profile", async () => {
+    const value = await fixture("darwin");
+    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
+    if (!chrome) {
+      throw new Error("missing Chrome fixture root");
+    }
+    await expect(fs.access(chrome.userDataDir)).rejects.toMatchObject({ code: "ENOENT" });
+    let now = 0;
+    const status = await installChromeExtensionBootstrap({
+      bundledDir: value.bundledDir,
+      pluginRoot: value.pluginRoot,
+      waitMs: 1_000,
+      deps: {
+        ...value.deps,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+    });
+
+    expect(status.registrations.find((entry) => entry.product === "chrome")).toMatchObject({
+      state: "owned",
+      extensionIds: expect.arrayContaining([FOUNDATION_STORE_ID]),
+    });
+    expect(status.storeInstallRequests).toEqual([expect.objectContaining({ state: "requested" })]);
+    expect(status.storeDiscovered).toEqual([]);
+    expect(status.manualSetupRequired).toBe(true);
+    expect(status.issues).toEqual([]);
+    expect((await fs.readdir(chrome.userDataDir)).toSorted()).toEqual([
+      "External Extensions",
+      "NativeMessagingHosts",
+    ]);
+    expect(
+      status.registrations
+        .filter((entry) => entry.product !== "chrome")
+        .every((entry) => entry.state === "missing"),
+    ).toBe(true);
+  });
+
   it("requests the official Store install idempotently without approving Chrome's recorded extension", async () => {
     const value = await setup();
     const preferencesBefore = await fs.readFile(value.preferences, "utf8");

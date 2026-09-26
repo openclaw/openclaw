@@ -1,14 +1,69 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import nodePath from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { gitOutput, resolveBranchLanding } from "./control-ui-session-prs-landing.js";
+import { readGitRefs } from "../infra/git-root.js";
+import {
+  gitOutput,
+  readCheckoutHead,
+  resolveBranchLanding,
+} from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
+  if (!head) {
+    return undefined;
+  }
+  try {
+    const ref = "refs/remotes/origin/HEAD";
+    if (
+      fs.lstatSync(nodePath.join(head.refsBase, ref), { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      return undefined;
+    }
+    const raw = readGitRefs(head.refsBase, [ref]).get(ref);
+    if (raw === null) {
+      return null;
+    }
+    const match = /^ref:\s+(refs\/remotes\/(origin\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*))$/u.exec(
+      raw ?? "",
+    );
+    if (!match) {
+      return undefined;
+    }
+    const target = match[1]!;
+    const short = match[2]!;
+    const aliases = [
+      `refs/${short}`,
+      `refs/tags/${short}`,
+      `refs/heads/${short}`,
+      `refs/remotes/${short}/HEAD`,
+    ];
+    const values = readGitRefs(head.refsBase, [target, ...aliases]);
+    const value = values.get(target);
+    // Symbolic chains and ambiguous names retain Git's resolution/shortening semantics.
+    return (value === null || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(value ?? "")) &&
+      !fs
+        .lstatSync(nodePath.join(head.refsBase, target), { throwIfNoEntry: false })
+        ?.isSymbolicLink() &&
+      !fs.existsSync(nodePath.join(head.refsBase, short)) &&
+      aliases.every((alias) => values.get(alias) === null)
+      ? short
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function readCheckoutGitContext(
   root: string,
 ): Promise<GitReadOperations["checkout.context"]["output"]> {
-  const branch = await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const head = readCheckoutHead(root);
+  const branch =
+    head?.branch === null
+      ? "HEAD"
+      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
   if (!branch) {
     return null;
   }
@@ -17,7 +72,11 @@ export async function readCheckoutGitContext(
   if (!remote) {
     return null;
   }
-  const defaultRef = await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  const preparedDefaultRef = readDefaultRef(head);
+  const defaultRef =
+    preparedDefaultRef === undefined
+      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      : preparedDefaultRef;
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   return {
     ...remote,
@@ -37,23 +96,15 @@ const MAX_UNTRACKED_STAT_FILES = 100;
 // stats are an approximation, not a patch surface.
 const MAX_UNTRACKED_STAT_BYTES = 512 * 1024;
 
-/**
- * Line count for one untracked file, computed in-process: this runs on the
- * chat view's poll, so it must not spawn one git subprocess per path. lstat
- * gates on regular files so FIFOs/sockets can never block the RPC and symlinks
- * never resolve outside the checkout; only a line count is exposed, so
- * sessions-diff's hardlink content guard is unnecessary here.
- */
+/** Count lines without a subprocess per file; hardlinked content only exposes a count. */
 async function untrackedFileAdditions(root: string, filePath: string): Promise<number> {
   try {
-    const abs = nodePath.resolve(root, filePath);
-    const info = await fs.lstat(abs);
-    if (!info.isFile() || info.size === 0 || info.size > MAX_UNTRACKED_STAT_BYTES) {
-      return 0;
-    }
-    const body = await fs.readFile(abs);
+    const { buffer: body } = await readRegularFile({
+      filePath: nodePath.resolve(root, filePath),
+      maxBytes: MAX_UNTRACKED_STAT_BYTES,
+    });
     // Binary files count 0 lines, mirroring git's shortstat behavior.
-    if (body.subarray(0, 8192).includes(0)) {
+    if (body.length === 0 || body.subarray(0, 8192).includes(0)) {
       return 0;
     }
     let lines = 0;

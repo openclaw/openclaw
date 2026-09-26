@@ -41,16 +41,18 @@ import type {
 import type { ExecSessionDefaults } from "../../exec-defaults.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { ReplyDeliveryObserver, ReplyExpectation } from "../../reply-completion.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
-
-export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 
 export type ResolvedToolPromptFinalizer = (params: {
   prompt: string;
@@ -62,16 +64,6 @@ type ReasoningStreamPayload = Pick<
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
-};
-
-export type CurrentInboundPromptContext = {
-  text: string;
-  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
-  fragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
-  resumableText?: string;
-  promptJoiner?: "\n\n" | "\n" | " ";
-  /** Generated goal blocks owned by inbound-context assembly, never user text. */
-  injectedGoalContexts?: string[];
 };
 
 export type RunEmbeddedAgentParams = {
@@ -227,7 +219,7 @@ export type RunEmbeddedAgentParams = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -251,6 +243,8 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
+  /** Source-owned final receipt/custody for this input, never mere callback or preview acceptance. */
+  resolveReplyDelivery?: ReplyDeliveryObserver;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
@@ -280,16 +274,15 @@ export type RunEmbeddedAgentParams = {
   /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
   suppressLiveStreamOutput?: boolean;
   /**
-   * Treat a clean empty assistant stop as an intentional silent reply.
-   * Only set when the caller's prompt policy already allows an exact NO_REPLY
-   * final answer for silence.
+   * Legacy default for callers without terminalReplyExpectation.
+   * An explicit required reply cannot be waived by this flag or model output.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
   /**
-   * Whether this run still owes a visible reply after settled non-reporting tools.
-   * Exact configured silence and committed delivery remain terminal outcomes.
+   * Host-owned reply requirement for this input, independent of model output.
+   * Confirmed source delivery and pending custody prevent duplicate recovery.
    */
-  terminalReplyExpectation?: "required" | "optional";
+  terminalReplyExpectation?: ReplyExpectation;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * One-shot helper runs may opt in to executing through the provider's CLI

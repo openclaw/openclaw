@@ -52,9 +52,11 @@ credentials are reported as stored evidence; the active login remains
 unverified during detection. Stored credentials do not
 receive verified-subscription priority over environment API keys.
 
-Pi and OpenCode CLIs may also be reported for context when they cannot serve as
-the reusable inference route for guided setup. Gemini CLI and Antigravity are
-not offered as detected setup routes.
+In the Control UI, Model Setup can also select models from installed native
+agents through the shared model picker. **Use** saves that model and its runtime
+without running the setup test; authentication and tools stay with the native
+agent. Provider **Test & use** still requires a verified tool-free reply.
+Gemini CLI and Antigravity are not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
@@ -124,10 +126,20 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding. It accepts `--workspace` and harmless output controls, but
+running onboarding. It accepts `--workspace`, `--skip-bootstrap`, and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
 it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
+
+Use `openclaw setup --baseline --skip-bootstrap` to create the directories without
+generating workspace bootstrap files. This persists `agents.defaults.skipBootstrap: true`
+as a local config override, preserves existing workspace files and included config files,
+and remains enabled on later baseline runs that omit the flag.
+If the `skipBootstrap` value itself comes from an `$include`, edit that included
+file directly instead of replacing its pointer through baseline setup.
+When also changing `--workspace`, update an included per-agent workspace or an
+exact workspace-file include first; baseline setup rejects that combined change
+before writing either config or workspace files.
 
 ## Examples
 

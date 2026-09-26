@@ -22,6 +22,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createInMemoryTaskFlowRegistryStore,
   createInMemoryTaskRegistryStore,
@@ -31,11 +32,16 @@ import {
   createTaskProgressContinuation,
   withTaskProgressRequesterContinuation,
 } from "./task-progress-requester.js";
+import type { sendMessage as SendMessage } from "./task-registry-delivery-runtime.js";
+import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
+import {
+  registerTaskProgressAuthorityTests,
+  type TaskProgressTestChild as Child,
+} from "./task-registry-progress-authority.test-utils.js";
 import type * as ProgressRuntime from "./task-registry-progress-runtime.js";
 import type { TaskProgressPublication } from "./task-registry-progress-runtime.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
-import type { TaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
-import { resetTaskRegistryListenerState } from "./task-registry-state.js";
+import { runTaskRegistryWorkerMutation, tasks } from "./task-registry-state.js";
 import {
   createTaskRecord,
   getTaskById,
@@ -43,13 +49,11 @@ import {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
-import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
+import type { TaskNotifyPolicy } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -61,6 +65,7 @@ const runtime = vi.hoisted(() => ({
   adoptTaskProgressMessage: vi.fn<typeof ProgressRuntime.adoptTaskProgressMessage>(),
   readTaskProgressSnapshot: vi.fn<typeof ProgressRuntime.readTaskProgressSnapshot>(),
   publishTaskProgressMessage: vi.fn<typeof ProgressRuntime.publishTaskProgressMessage>(),
+  deleteTaskProgressMessage: vi.fn<typeof ProgressRuntime.deleteTaskProgressMessage>(),
   startTaskProgressTyping: vi.fn(() => false),
 }));
 vi.mock("./task-registry-progress-runtime.js", () => runtime);
@@ -75,8 +80,12 @@ const origin = {
 };
 const receipts = new Map<string, ProgressContinuationReceipt>();
 const publications: Array<TaskProgressPublication & { messageId: string }> = [];
-const sendMessage = vi.fn<TaskRegistryDeliveryRuntime["sendMessage"]>();
-const notifications: Array<Parameters<TaskRegistryDeliveryRuntime["sendMessage"]>[0]> = [];
+const sendMessage = vi.hoisted(() => vi.fn<typeof SendMessage>());
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
+}));
+const notifications: Array<Parameters<typeof SendMessage>[0]> = [];
 const runContextClaims: Array<{ runId: string; claim: string }> = [];
 
 function receipt(messageId = "existing-parent-card"): ProgressContinuationReceipt {
@@ -152,8 +161,6 @@ function child(
   return { entry, task, claim };
 }
 
-type Child = { entry: SubagentRunRecord; task: TaskRecord; claim: string };
-
 function accepted(items: readonly Child[]) {
   return items.map(({ entry }) => ({
     runId: entry.runId,
@@ -191,7 +198,7 @@ function continuation(items: readonly Child[]) {
 }
 
 async function adopt(items: readonly Child[], card = receipt()) {
-  const capability = continuation(items);
+  const capability = await continuation(items);
   if (!capability) {
     throw new Error("Expected current requester handoff capability");
   }
@@ -239,7 +246,6 @@ beforeEach(async () => {
       deliveryStatus: "sent",
     };
   });
-  setTaskRegistryDeliveryRuntimeForTests({ sendMessage });
   runtime.adoptTaskProgressMessage.mockReset().mockImplementation(async (params) => {
     params.assertCurrent();
     receipts.set(params.operationId, structuredClone(params.receipt));
@@ -265,6 +271,11 @@ beforeEach(async () => {
     card.text = params.content;
     return "sent";
   });
+  runtime.deleteTaskProgressMessage.mockReset().mockImplementation(async (params) => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    return receipts.delete(params.operationId) ? "sent" : "unknown";
+  });
   // Await real module readiness, not timer ticks, before exercising the lazy coordinator.
   await Promise.all([
     import("./task-progress-presentation.js"),
@@ -275,7 +286,6 @@ beforeEach(async () => {
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  resetTaskRegistryDeliveryRuntimeForTests();
   for (const { runId, claim } of runContextClaims) {
     releaseAgentRunContext(runId, claim);
   }
@@ -381,6 +391,59 @@ describe("adopted requester progress", () => {
     expect(publications[1]?.content).toContain("Publish the release");
   });
 
+  it.each(["generation", "run binding"] as const)(
+    "excludes activity captured after a committed %s replacement awaiting publication",
+    async (replacement) => {
+      const first = child("Replaced");
+      const second = child("Current");
+      await adopt([first, second]);
+      const store = getTaskRegistryStore();
+      const context = captureOpenClawStateWorkerContext();
+      const replaced = {
+        ...first.task,
+        ...(replacement === "generation"
+          ? { detail: createSubagentTaskBackingDetail(2) }
+          : { runId: "replacement-run" }),
+      };
+      const release = createDeferred();
+      const pending = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: first.task.taskId, runId: replaced.runId! },
+          publicationRecords: () => new Map([[first.task.taskId, replaced]]),
+        },
+        async () => {
+          store.upsertTaskWithDeliveryState({
+            task: replaced,
+            deliveryState: store.loadSnapshot().deliveryStates.get(first.task.taskId),
+          });
+          await release.promise;
+        },
+        async () => store.loadSnapshot(),
+      );
+      try {
+        expect(tasks.get(first.task.taskId)?.runId).toBe(first.entry.runId);
+        emitAgentEvent({
+          runId: first.entry.runId,
+          sessionKey: first.entry.childSessionKey,
+          stream: "tool",
+          data: { phase: "start", name: "read" },
+        });
+        tool(first.entry, 99);
+        tool(second.entry, 2);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(publications).toHaveLength(1);
+        expect(publications[0]?.content).toContain("Current");
+        expect(publications[0]?.content).toContain("public-notes-2.txt");
+        expect(publications[0]?.content).not.toContain("public-notes-99.txt");
+        expect(store.loadSnapshot().tasks.get(first.task.taskId)).toMatchObject(replaced);
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    },
+  );
+
   it("resumes the existing card when tasks restore before listeners attach", async () => {
     const item = child("Worker");
     await adopt([item]);
@@ -437,7 +500,7 @@ describe("adopted requester progress", () => {
       const second = child("Second");
       if (state === "adoption refused") {
         runtime.adoptTaskProgressMessage.mockResolvedValueOnce(false);
-        const capability = continuation([first, second])!;
+        const capability = (await continuation([first, second]))!;
         expect(await capability.adopt(receipt())).toBe(false);
         expect(await capability.adopt(receipt("retry-card"))).toBe(false);
         capability.close();
@@ -574,7 +637,7 @@ describe("adopted requester progress", () => {
 
   it("keeps silent children silent and allows done-only children to continue an adopted card", async () => {
     const quiet = child("Quiet", { notifyPolicy: "silent" });
-    expect(continuation([quiet])).toBeUndefined();
+    expect(await continuation([quiet])).toBeUndefined();
     expect(settle([quiet])).toBe(true);
     tool(quiet.entry);
     const doneOnly = child("Done only", { notifyPolicy: "done_only", turn: "quiet-turn" });
@@ -593,10 +656,10 @@ describe("adopted requester progress", () => {
 
   it("rejects a retained capability after close and a second adoption after use", async () => {
     const item = child("Worker");
-    const closed = continuation([item])!;
+    const closed = (await continuation([item]))!;
     closed.close();
     expect(await closed.adopt(receipt("closed-card"))).toBe(false);
-    const used = continuation([item])!;
+    const used = (await continuation([item]))!;
     expect(await used.adopt(receipt())).toBe(true);
     expect(await used.adopt(receipt("replacement-card"))).toBe(false);
     used.close();
@@ -615,7 +678,7 @@ describe("adopted requester progress", () => {
         entered.resolve();
         return finished.promise;
       });
-      const capability = continuation([item])!;
+      const capability = (await continuation([item]))!;
       const pending = capability.adopt(receipt());
       await entered.promise;
       expect(await capability.adopt(receipt("concurrent-replacement"))).toBe(false);
@@ -742,6 +805,7 @@ describe("adopted requester progress", () => {
             progressText: "The verified results are ready.",
           },
         });
+        return { delivered: true, path: "direct" };
       },
     );
     const final = publications.at(-1)!;
@@ -767,6 +831,7 @@ describe("adopted requester progress", () => {
         const next = child("Next", { turn: "resumed-requester" });
         expect(settle([next])).toBe(true);
         tool(next.entry, 2);
+        return { delivered: true, path: "direct", requesterVisibleFinalDelivered: true };
       },
     );
     first.entry.requesterSettleWake = undefined;
@@ -862,7 +927,7 @@ describe("adopted requester progress", () => {
       throw new Error("Replacement execution did not acquire its own claim");
     }
     runContextClaims.push({ runId: item.entry.runId, claim });
-    const capability = createTaskProgressContinuation({
+    const capability = await createTaskProgressContinuation({
       requesterSessionKey: PARENT,
       requesterAgentId: "main",
       requesterTurnRunId: TURN,
@@ -906,7 +971,7 @@ describe("adopted requester progress", () => {
     const large = Array.from({ length: 33 }, (_, index) =>
       child(`Batch ${index}`, { turn: "large-turn" }),
     );
-    expect(continuation(large)).toBeUndefined();
+    expect(await continuation(large)).toBeUndefined();
     expect(settle(large)).toBe(true);
     tool(large[0]!.entry);
     await vi.advanceTimersByTimeAsync(15_000);
@@ -927,40 +992,23 @@ describe("adopted requester progress", () => {
     expect(publications[0]!.content).toContain("public-notes-32.txt");
   });
 
-  it("rejects missing or cross-audience accepted members rather than adopting a partial batch", () => {
+  it("rejects missing or cross-audience accepted members rather than adopting a partial batch", async () => {
     const first = child("First");
     const second = child("Second");
     second.entry.completionRequesterSessionId = "different-requester-window";
-    expect(continuation([first, second])).toBeUndefined();
+    expect(await continuation([first, second])).toBeUndefined();
     subagentRuns.delete(second.entry.runId);
-    expect(continuation([first, second])).toBeUndefined();
+    expect(await continuation([first, second])).toBeUndefined();
   });
 
-  it("rechecks authority at publication and preserves newer activity arriving during transport", async () => {
-    const first = child("First");
-    await adopt([first]);
-    const publish = runtime.publishTaskProgressMessage.getMockImplementation()!;
-    runtime.publishTaskProgressMessage.mockImplementationOnce(async (params) => {
-      first.entry.killIntent = { requestedAt: Date.now(), reason: "cancelled at handoff" };
-      return publish(params);
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toEqual([]);
-    const second = child("Second", { turn: "second-turn" });
-    await adopt([second]);
-    runtime.publishTaskProgressMessage.mockImplementationOnce(async (params) => {
-      tool(second.entry, 2);
-      return publish(params);
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toHaveLength(2);
-    expect(publications[1]!.content).toContain("public-notes-2.txt");
-    expect(publications[1]!.content).toContain("Check release gates");
-    expect(publications.every((display) => display.messageId === "existing-parent-card")).toBe(
-      true,
-    );
-    expect(publications.map((display) => display.origin)).toEqual([origin, origin]);
+  registerTaskProgressAuthorityTests({
+    requesterSessionKey: PARENT,
+    origin,
+    child,
+    adopt,
+    runtime,
+    publications,
+    receipts,
+    tool,
   });
 });

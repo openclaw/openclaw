@@ -1,10 +1,6 @@
-import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type AdmittedRunContext,
-} from "../admitted-run-context.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import type { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
+import type { AdmittedRunContext } from "../admitted-run-context.js";
+import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
@@ -19,7 +15,13 @@ type AdmittedHostCapabilityTestFixture = Readonly<{
 /** Creates the same admitted authority and closure-bound host used by a real harness attempt. */
 export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
+  options: { nativeModelPolicySupport?: "exact" } = {},
 ): Promise<AdmittedHostCapabilityTestFixture> {
+  const { createAgentHarnessTaskRuntimeScope } =
+    await import("../../tasks/agent-harness-task-runtime-scope.js");
+  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
+    await import("../admitted-run-context.js");
+  const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
   const admission = prepareAgentRunAdmission({
     cfg: attempt.config ?? {},
     facts: {
@@ -33,6 +35,7 @@ export async function createAdmittedHostCapabilityTestFixture(
   const host = createAgentHarnessHostCapabilities({
     attempt: { ...attempt, admittedRunContext },
     pluginId: "codex",
+    nativeModelPolicySupport: options.nativeModelPolicySupport,
   });
   return {
     admittedRunContext,

@@ -59,9 +59,7 @@ function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
 
 function normalizeXiaomiTtsFormat(value: unknown): XiaomiTtsFormat | undefined {
   const normalized = trimToUndefined(value)?.toLowerCase();
-  return XIAOMI_TTS_FORMATS.includes(normalized as XiaomiTtsFormat)
-    ? (normalized as XiaomiTtsFormat)
-    : undefined;
+  return XIAOMI_TTS_FORMATS.find((format) => format === normalized);
 }
 
 function resolveXiaomiTtsConfigRecord(
@@ -107,29 +105,8 @@ function normalizeXiaomiTtsProviderConfig(
   };
 }
 
-function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
-  const normalized = normalizeXiaomiTtsProviderConfig({});
-  return {
-    apiKey:
-      normalizeResolvedSecretInputString({
-        value: config.apiKey,
-        path: "tts.providers.xiaomi.apiKey",
-      }) ?? normalized.apiKey,
-    baseUrl: normalizeXiaomiTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
-    model: trimToUndefined(config.model) ?? trimToUndefined(config.modelId) ?? normalized.model,
-    voice:
-      trimToUndefined(config.speakerVoice) ??
-      trimToUndefined(config.speakerVoiceId) ??
-      trimToUndefined(config.voice) ??
-      trimToUndefined(config.voiceId) ??
-      normalized.voice,
-    format: normalizeXiaomiTtsFormat(config.format) ?? normalized.format,
-    style: trimToUndefined(config.style) ?? normalized.style,
-  };
-}
-
 function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
-  const providerConfig = readXiaomiTtsProviderConfig(config);
+  const providerConfig = normalizeXiaomiTtsProviderConfig({ xiaomi: config });
   const resolvedKey = resolveSpeechProviderApiKey(
     providerConfig.apiKey,
     process.env.XIAOMI_API_KEY,
@@ -242,7 +219,7 @@ async function xiaomiTTS(params: {
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, format, style, timeoutMs } = params;
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/media-runtime");
+  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/blob-runtime");
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =

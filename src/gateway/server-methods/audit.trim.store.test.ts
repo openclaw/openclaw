@@ -3,18 +3,20 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { listAuditEvents, recordAuditEvent } from "../../audit/audit-event-store.js";
+import { listAuditEvents, recordAuditEventInDatabase } from "../../audit/audit-event-store.js";
 import {
   configureExecutionIdentityAdmissionSink,
   enqueueExecutionIdentityContextAtAdmission,
 } from "../../audit/execution-identity-admission.js";
-import { processExecutionIdentityAdmissionWork } from "../../audit/execution-identity-context.js";
+import { processExecutionIdentityAdmissionWorkInDatabase } from "../../audit/execution-identity-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { auditHandlers } from "./audit.js";
 
 const tempDirs: string[] = [];
@@ -41,7 +43,10 @@ describe("audit methods against a real audit store", () => {
       const database = createDatabaseOptions();
       process.env.OPENCLAW_STATE_DIR = database.env!.OPENCLAW_STATE_DIR;
       const clear = configureExecutionIdentityAdmissionSink((work) => {
-        processExecutionIdentityAdmissionWork(work, database);
+        processExecutionIdentityAdmissionWorkInDatabase(work, {
+          ...database,
+          database: openOpenClawStateDatabase(database),
+        });
         return true;
       });
       try {
@@ -63,15 +68,8 @@ describe("audit methods against a real audit store", () => {
       if (warmActor) {
         await listAuditEvents({ database, limit: 1 });
       }
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        vi.spyOn(native.DatabaseSync.prototype, "close"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
+      requireNodeSqlite();
+      const counters = observeMainThreadSql({ includeClose: true });
       const respond = vi.fn();
       await expectDefined(
         auditHandlers["audit.run.inspect"],
@@ -91,7 +89,7 @@ describe("audit methods against a real audit store", () => {
         }),
       );
       expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("decisions");
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     },
   );
 
@@ -137,11 +135,11 @@ describe("audit methods against a real audit store", () => {
         sessionKey: "agent:main:main",
         runId: "run-trim-1",
       };
-      recordAuditEvent(
+      recordAuditEventInDatabase(
         { ...input, sourceSequence: 1, action: "agent.run.started", status: "started" },
-        database,
+        { ...database, database: openOpenClawStateDatabase(database) },
       );
-      const finished = recordAuditEvent(
+      const finished = recordAuditEventInDatabase(
         {
           ...input,
           sourceId: "audit-trim-finished",
@@ -149,7 +147,7 @@ describe("audit methods against a real audit store", () => {
           action: "agent.run.finished",
           status: "succeeded",
         },
-        database,
+        { ...database, database: openOpenClawStateDatabase(database) },
       );
 
       // Negative control: untrimmed filter values miss the planted row at the store.
@@ -164,14 +162,8 @@ describe("audit methods against a real audit store", () => {
       ).toEqual([]);
 
       await closeOpenClawStateDatabaseAsync();
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
+      requireNodeSqlite();
+      const counters = observeMainThreadSql();
       const respond = vi.fn();
       await expectDefined(
         auditHandlers[method],
@@ -186,7 +178,7 @@ describe("audit methods against a real audit store", () => {
         respond,
       } as never);
 
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -211,7 +203,7 @@ describe("audit methods against a real audit store", () => {
       expect(respond).toHaveBeenCalledWith(true, {
         events: [expect.objectContaining({ action: "agent.run.started" })],
       });
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     },
   );
 });

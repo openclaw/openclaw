@@ -1,4 +1,5 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
+import { promoteFollowupYield } from "../../../tasks/task-followup-completion.js";
 import { captureTaskProgressContinuationForRequesterTurn } from "../../../tasks/task-progress-requester.js";
 import { scheduleYieldedSubagentRunProgress } from "../../../tasks/task-registry-progress.js";
 /** Settles durable child ownership when the spawning requester turn ends. */
@@ -11,7 +12,104 @@ import { promoteRequesterFinalAttachment } from "../requester-final-attachment.j
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  recordLatestSubagentRun,
+} from "./subagent-run-generation.js";
+import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
+
+/** A requester child whose completion is still owed to the requester session. */
+export type UnsettledRequesterChild = {
+  runId: string;
+  childSessionKey: string;
+  label?: string;
+  startedAt?: number;
+  /**
+   * Running children have not ended; completing children ended and still owe
+   * delivery; paused children yielded for an incoming continuation and will
+   * not complete until one arrives.
+   */
+  state: "running" | "completing" | "paused";
+  /** True when an earlier requester yield already armed a settle wake for this child. */
+  wakeArmed: boolean;
+};
+
+/**
+ * Lists this requester session's announcing children whose completion has not
+ * reached the requester yet, regardless of which requester turn spawned them.
+ * Children still bound to `excludeRequesterTurnRunId` belong to that turn's own
+ * claim and are omitted.
+ */
+export function listUnsettledRequesterChildrenInRuns(params: {
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  excludeRequesterTurnRunId?: string;
+  runs: Map<string, SubagentRunRecord>;
+  now?: number;
+}): UnsettledRequesterChild[] {
+  const requesterSessionKey = params.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return [];
+  }
+  const excludedTurnRunId = params.excludeRequesterTurnRunId?.trim() || undefined;
+  // Select each child session's latest generation before judging eligibility,
+  // so a superseded generation cannot stand in for a killed or collected successor.
+  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  for (const entry of params.runs.values()) {
+    if (
+      entry.requesterSessionKey === requesterSessionKey &&
+      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId)
+    ) {
+      recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
+    }
+  }
+  const now = params.now ?? Date.now();
+  const children: UnsettledRequesterChild[] = [];
+  for (const entry of latestByChildSessionKey.values()) {
+    if (
+      entry.collect === true ||
+      entry.expectsCompletionMessage !== true ||
+      (excludedTurnRunId !== undefined && entry.requesterTurnRunId === excludedTurnRunId) ||
+      entry.killIntent ||
+      entry.killReconciliation ||
+      entry.suppressCompletionDelivery === true
+    ) {
+      continue;
+    }
+    const wake = entry.requesterSettleWake;
+    const wakeArmed = wake?.status === "pending" || wake?.status === "dispatching";
+    let state: UnsettledRequesterChild["state"];
+    if (!hasSubagentRunEnded(entry)) {
+      if (!isRetainedUnendedSubagentRun(entry, now)) {
+        continue;
+      }
+      state = "running";
+    } else if (entry.pauseReason === "sessions_yield") {
+      // markSubagentRunPausedAfterYield records a pause as an ended execution
+      // without an outcome; the child resumes only through a continuation.
+      state = "paused";
+    } else if (
+      wakeArmed ||
+      entry.delivery?.status === "pending" ||
+      entry.delivery?.status === "in_progress"
+    ) {
+      state = "completing";
+    } else {
+      continue;
+    }
+    const startedAt = getSubagentSessionStartedAt(entry);
+    children.push({
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+      ...(entry.label ? { label: entry.label } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      state,
+      wakeArmed,
+    });
+  }
+  return children.toSorted((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+}
 
 /** Persists explicit yield intent before the requester run is aborted. */
 export function markRequesterTurnYieldedInRuns(params: {
@@ -256,6 +354,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     throw error;
   }
 
+  promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
   promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
   if (rearmGeneration !== undefined && params.requesterAgentId) {
     promoteRequesterFinalAttachment({

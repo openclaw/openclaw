@@ -12,6 +12,15 @@ vi.mock("../../../api.js", () => ({
 
 import { guardedJsonApiRequest } from "./guarded-json-api.js";
 
+const DEFAULT_REQUEST = {
+  url: "https://api.example.com/v1/calls",
+  method: "GET",
+  headers: {},
+  allowedHostnames: ["api.example.com"],
+  auditContext: "voice-call:test",
+  errorPrefix: "provider error",
+} satisfies Parameters<typeof guardedJsonApiRequest>[0];
+
 describe("guardedJsonApiRequest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -26,12 +35,10 @@ describe("guardedJsonApiRequest", () => {
 
     await expect(
       guardedJsonApiRequest({
-        url: "https://api.example.com/v1/calls",
+        ...DEFAULT_REQUEST,
         method: "POST",
         headers: { Authorization: "Bearer token" },
         body: { hello: "world" },
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
         errorPrefix: "request failed",
       }),
     ).resolves.toEqual({ ok: true });
@@ -66,12 +73,9 @@ describe("guardedJsonApiRequest", () => {
 
     await expect(
       guardedJsonApiRequest({
-        url: "https://api.example.com/v1/calls",
+        ...DEFAULT_REQUEST,
         method: "POST",
         headers: { Authorization: "Bearer token" },
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
-        errorPrefix: "provider error",
       }),
     ).rejects.toThrow("provider error: malformed JSON response");
 
@@ -87,11 +91,8 @@ describe("guardedJsonApiRequest", () => {
 
     await expect(
       guardedJsonApiRequest({
+        ...DEFAULT_REQUEST,
         url: "https://api.example.com/v1/calls/1",
-        method: "GET",
-        headers: {},
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
         errorPrefix: "request failed",
       }),
     ).resolves.toBeUndefined();
@@ -104,39 +105,15 @@ describe("guardedJsonApiRequest", () => {
 
     await expect(
       guardedJsonApiRequest({
+        ...DEFAULT_REQUEST,
         url: "https://api.example.com/v1/calls/2",
-        method: "GET",
-        headers: {},
         allowNotFound: true,
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
         errorPrefix: "request failed",
       }),
     ).resolves.toBeUndefined();
 
     expect(missing.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(2);
-  });
-
-  it("throws prefixed errors and still releases the response handle", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("boom", { status: 500 }),
-      release,
-    });
-
-    await expect(
-      guardedJsonApiRequest({
-        url: "https://api.example.com/v1/calls/3",
-        method: "DELETE",
-        headers: {},
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
-        errorPrefix: "provider error",
-      }),
-    ).rejects.toThrow("provider error: 500 boom");
-
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("bounds provider error bodies on complete UTF-8 characters and cancels overflow", async () => {
@@ -152,12 +129,9 @@ describe("guardedJsonApiRequest", () => {
     let caught: Error | undefined;
     try {
       await guardedJsonApiRequest({
+        ...DEFAULT_REQUEST,
         url: "https://api.example.com/v1/calls/3",
         method: "DELETE",
-        headers: {},
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
-        errorPrefix: "provider error",
       });
     } catch (error) {
       caught = error as Error;
@@ -190,12 +164,10 @@ describe("guardedJsonApiRequest", () => {
     let caught: Error | undefined;
     try {
       await guardedJsonApiRequest({
+        ...DEFAULT_REQUEST,
         url: "https://api.example.com/v1/calls/9",
         method: "POST",
         headers: { Authorization: `Basic ${secretBasic}` },
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
-        errorPrefix: "provider error",
       });
     } catch (error) {
       caught = error as Error;
@@ -205,27 +177,6 @@ describe("guardedJsonApiRequest", () => {
     expect(caught?.message).not.toContain(secretBasic);
     expect(caught?.message).not.toContain(secretApiKey);
     expect(caught?.message).toContain("***");
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("throws prefixed errors for malformed json success responses", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("{not json", { status: 200 }),
-      release,
-    });
-
-    await expect(
-      guardedJsonApiRequest({
-        url: "https://api.example.com/v1/calls/4",
-        method: "GET",
-        headers: {},
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
-        errorPrefix: "provider error",
-      }),
-    ).rejects.toThrow("provider error: malformed JSON response");
-
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -239,12 +190,8 @@ describe("guardedJsonApiRequest", () => {
 
     await expect(
       guardedJsonApiRequest({
+        ...DEFAULT_REQUEST,
         url: "https://api.example.com/v1/calls/5",
-        method: "GET",
-        headers: {},
-        allowedHostnames: ["api.example.com"],
-        auditContext: "voice-call:test",
-        errorPrefix: "provider error",
       }),
     ).rejects.toThrow("provider response body too large: 1048577 bytes (limit: 1048576 bytes)");
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { SessionProgressCardController } from "../components/session-progress-card-controller.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -50,6 +51,154 @@ async function expectInsideProgressBody(item: Locator): Promise<void> {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("coalesces overlapping reads and rejects a late stale dismissal in Chromium", async () => {
+    const sessionKey = "agent:main:progress-overlap-proof";
+    const cardFor = (revision: number, label: string) => ({
+      revision,
+      sessionKey,
+      steps: [{ status: "completed" as const, step: label }],
+      updatedAt: Date.now() + revision,
+    });
+
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 800, width: 1100 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get", "progressCard.put"],
+          methodResponses: {
+            "progressCard.get": { card: cardFor(1, "Revision one") },
+            "progressCard.put": { card: null },
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sessionKey,
+                kind: "direct",
+                label: "Progress overlap",
+                updatedAt: Date.now(),
+              },
+            ]),
+          },
+          sessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const card = page.locator('[data-progress-card-placement="composer"]');
+        await expect.poll(() => card.textContent()).toContain("Revision one");
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
+
+        await gateway.deferNext("progressCard.get");
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 2, sessionKey });
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(2);
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 3, sessionKey });
+        // Mock WebSocket events dispatch synchronously, before the deferred reply.
+        // Its rendered revision below is the completion barrier for the burst.
+        await gateway.resolveDeferred("progressCard.get", {
+          card: cardFor(3, "Revision three"),
+        });
+        await expect.poll(() => card.textContent()).toContain("Revision three");
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
+
+        // An overtaken absence must not end the card or its disclosure choice.
+        if ((await card.getAttribute("open")) !== null) {
+          await card.locator("summary").click();
+        }
+        await expect.poll(() => card.getAttribute("open")).toBeNull();
+        await gateway.deferNext("progressCard.get");
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 4, sessionKey });
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(3);
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 5, sessionKey });
+        await gateway.deferNext("progressCard.get");
+        await gateway.resolveDeferred("progressCard.get", { card: null });
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(4);
+        expect(await card.isVisible()).toBe(true);
+        expect(await card.textContent()).toContain("Revision three");
+        expect(await card.getAttribute("open")).toBeNull();
+        await gateway.resolveDeferred("progressCard.get", { card: cardFor(5, "Revision five") });
+        await expect.poll(() => card.textContent()).toContain("Revision five");
+        expect(await card.getAttribute("open")).toBeNull();
+
+        await gateway.deferNext("progressCard.put");
+        if ((await card.getAttribute("open")) === null) {
+          await card.locator("summary").click();
+        }
+        await expect.poll(() => card.getAttribute("open")).not.toBeNull();
+        // A conditional mismatch resolves false without a toast. Observe the actual
+        // click's controller promise, without substituting its result or store work.
+        const dismissal = await card.evaluateHandle((element) => {
+          const { progressCard } = element.closest("openclaw-chat-pane")! as unknown as {
+            progressCard: SessionProgressCardController;
+          };
+          const dismiss = progressCard.dismiss;
+          let resolve!: (dismissed: boolean) => void;
+          let reject!: (error: unknown) => void;
+          const completed = new Promise<boolean>((onResolve, onReject) => {
+            resolve = onResolve;
+            reject = onReject;
+          });
+          progressCard.dismiss = (displayedCard) => {
+            progressCard.dismiss = dismiss;
+            const result = dismiss(displayedCard);
+            void result.then(resolve, reject);
+            return result;
+          };
+          return { completed };
+        });
+        await card.getByRole("button", { name: "Dismiss progress card" }).click();
+        await expect.poll(() => gateway.getRequests("progressCard.put")).toHaveLength(1);
+
+        await gateway.deferNext("progressCard.get");
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 6, sessionKey });
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(5);
+        await gateway.resolveDeferred("progressCard.get", {
+          card: cardFor(6, "Revision six"),
+        });
+        await expect.poll(() => card.textContent()).toContain("Revision six");
+
+        await gateway.resolveDeferred("progressCard.put", {
+          card: cardFor(5, "Stale dismissal"),
+        });
+        expect(await dismissal.evaluate(({ completed }) => completed)).toBe(false);
+        await dismissal.dispose();
+        await expect.poll(() => card.textContent()).toContain("Revision six");
+        expect(await card.textContent()).not.toContain("Stale dismissal");
+
+        // Conversely, a pre-clear GET must not restore a successfully dismissed card.
+        await gateway.deferNext("progressCard.get");
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 7, sessionKey });
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(6);
+        await gateway.deferNext("progressCard.put");
+        await card.getByRole("button", { name: "Dismiss progress card" }).click();
+        await expect.poll(() => gateway.getRequests("progressCard.put")).toHaveLength(2);
+        await gateway.deferNext("progressCard.get");
+        await gateway.resolveDeferred("progressCard.put", { card: null });
+        await expect.poll(() => card.count()).toBe(0);
+        // Delivery may trail the committed reply; the earlier read is already retired.
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: null, sessionKey });
+        await gateway.resolveDeferred("progressCard.get", { card: cardFor(6, "Before clear") });
+        await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(7);
+        expect(await card.count()).toBe(0);
+        await gateway.resolveDeferred("progressCard.get", { card: null });
+        expect(await card.count()).toBe(0);
+
+        console.info(
+          "progress-overlap-proof",
+          JSON.stringify({
+            convergedRevision: 6,
+            overtakenNullPreservedCardAndDisclosure: true,
+            preClearReadDidNotRestoreCard: true,
+            getRequests: (await gateway.getRequests("progressCard.get")).length,
+            lateDismissalRejected: true,
+            overlappingRevisionThreeRequests: 1,
+          }),
+        );
+      },
+    );
+  });
+
   it("collapses enabled runs and preserves manual disclosure through finals", async () => {
     const sessionKey = "agent:main:progress-final-expand";
     const proofDir = captureUiProofEnabled
@@ -133,7 +282,7 @@ suite.define(() => {
         .locator(".settings-row")
         .filter({
           has: page.locator(".settings-row__title", {
-            hasText: "Collapse task progress by default",
+            hasText: "Collapse task progress by default on desktop",
           }),
         })
         .first();

@@ -1,26 +1,35 @@
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { convertResponsesToolPayload } from "../../../packages/ai/src/providers/openai-responses-tools.js";
+import { validateToolArguments } from "../../../packages/llm-core/src/validation.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import {
+  expectRegisteredSubagentRun,
+  supportedSpawnModelChoice,
+} from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const hoisted = vi.hoisted(() => ({
   spawnSubagentDirectMock: vi.fn(),
+  spawnAcpDirectMock: vi.fn(),
   prepareModelChoiceMock: vi.fn<typeof supportedSpawnModelChoice>(),
   runSubagentProgressMock: vi.fn(async () => {}),
 }));
-vi.mock("../subagents/spawn/subagent-spawn-deps.js", () => ({
-  getSubagentSpawnDeps: () => ({ prepareModelChoice: hoisted.prepareModelChoiceMock }),
+vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
+  prepareModelChoice: hoisted.prepareModelChoiceMock,
 }));
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
-vi.mock("../subagents/spawn/acp-spawn.js", () => ({ spawnAcpDirect: vi.fn() }));
+vi.mock("../subagents/spawn/acp-spawn.js", () => ({
+  spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
+}));
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   registerSubagentRun: vi.fn(),
 }));
@@ -52,8 +61,10 @@ describe("visible session placement and authority", () => {
     acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
     hoisted.spawnSubagentDirectMock.mockReset();
+    hoisted.spawnAcpDirectMock.mockReset();
     hoisted.runSubagentProgressMock.mockClear();
   });
+  afterEach(() => acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests());
 
   function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
     const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
@@ -66,6 +77,113 @@ describe("visible session placement and authority", () => {
     }
     return requireRecord(call[argIndex], `${label} call ${callIndex + 1} arg ${argIndex + 1}`);
   }
+
+  it.each(
+    [undefined, false].flatMap((visible) => [
+      { visible, placement: undefined },
+      { visible, placement: { kind: "local" } },
+    ]),
+  )(
+    "uses local execution through Responses conversion and hidden dispatch: %j",
+    async ({ visible, placement }) => {
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:dashboard:parent",
+        workspaceDir: "/workspace/parent",
+        callGateway,
+      });
+      const [wireTool] = convertResponsesToolPayload([tool], { strict: true });
+      expect(wireTool?.strict).toBe(false);
+      const parameters = requireRecord(wireTool?.parameters, "Responses parameters");
+      expect(parameters.required).not.toContain("placement");
+      const request = {
+        task: "Review the local worktree",
+        runtime: "subagent",
+        ...(visible === undefined ? {} : { visible }),
+        ...(placement === undefined ? {} : { placement }),
+        worktree: false,
+        mode: "run",
+        cwd: "/workspace/review",
+        completionTarget: "parent",
+      };
+      expect(Value.Check(parameters, request)).toBe(true);
+      expect(
+        Value.Check(parameters, {
+          ...request,
+          placement: { kind: "local", profileId: "ignored" },
+        }),
+      ).toBe(false);
+      const args = validateToolArguments(tool, {
+        type: "toolCall",
+        id: "local-review",
+        name: tool.name,
+        arguments: request,
+      });
+      expect(args).toEqual(request);
+      hoisted.spawnSubagentDirectMock.mockResolvedValue({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:review",
+        runId: "local-review-run",
+      });
+
+      const result = await tool.execute("local-review", args);
+
+      expect(result.details).toMatchObject({ status: "accepted", runId: "local-review-run" });
+      expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
+      expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: request.task,
+          cwd: request.cwd,
+          mode: "run",
+          completionTarget: "parent",
+          expectsCompletionMessage: true,
+        }),
+        expect.objectContaining({
+          agentSessionKey: "agent:main:dashboard:parent",
+          workspaceDir: "/workspace/parent",
+        }),
+      );
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it("routes explicit local placement to ACP without creating a cloud session", async () => {
+    acpRuntimeRegistry.registerAcpRuntimeBackend({
+      id: "placement-test",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:reviewer:acp:local",
+          backend: "placement-test",
+          runtimeSessionName: "reviewer",
+        })),
+        async *runTurn() {},
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      },
+    });
+    hoisted.spawnAcpDirectMock.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:reviewer:acp:local",
+      runId: "local-acp-run",
+    });
+    const callGateway = vi.fn();
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
+    const result = await tool.execute("local-acp", {
+      task: "Review locally",
+      runtime: "acp",
+      agentId: "reviewer",
+      cwd: "/workspace/review",
+      mode: "run",
+      placement: { kind: "local" },
+    });
+    expect(result.details).toMatchObject({ status: "accepted", runId: "local-acp-run" });
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ task: "Review locally", cwd: "/workspace/review", mode: "run" }),
+      expect.anything(),
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])(
     "rejects cloud creation outside a hosted Gateway (embedded: %s)",
@@ -170,12 +288,10 @@ describe("visible session placement and authority", () => {
           runId: "cloud-run",
           placement,
         });
-        expect(registerRun).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: "cloud-run",
-            childSessionKey: key,
-          }),
-        );
+        expectRegisteredSubagentRun(registerRun, {
+          runId: "cloud-run",
+          childSessionKey: key,
+        });
       });
     },
   );
@@ -185,11 +301,26 @@ describe("visible session placement and authority", () => {
     { placement: { kind: "profile", profileId: "build" }, visible: true, worktree: false },
     { placement: { kind: "profile", profileId: "build", os: "" }, visible: true, worktree: true },
     { placement: { kind: "device", deviceId: "other" }, visible: true, worktree: true },
-  ])("rejects invalid cloud placement before creating a child: %j", async (args) => {
+    ...[
+      null,
+      {},
+      { kind: "local", profileId: "placeholder" },
+      { kind: "local", os: "linux" },
+      { kind: "local", machineClass: "tiny" },
+    ].map((placement) => ({ placement, visible: true, worktree: true })),
+    {
+      visible: false,
+      worktree: false,
+      placement: { kind: "profile", profileId: "ignored", os: "ignored", machineClass: "ignored" },
+    },
+  ])("rejects invalid placement before creating a child: %j", async (args) => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({ callGateway, countActiveRuns: () => 0 });
-    await expect(tool.execute("invalid-cloud", { task: "inspect", ...args })).rejects.toThrow();
+    await expect(tool.execute("invalid-cloud", { task: "inspect", ...args })).rejects.toThrow(
+      /Omit placement for local.*configured cloud profile/,
+    );
     expect(callGateway).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -291,40 +422,4 @@ describe("visible session placement and authority", () => {
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     });
   });
-  // This shared creation policy remains the capability ceiling for cloud placement.
-  it.each([
-    { label: "default", mode: undefined },
-    { label: "read-only", mode: "read-only" },
-    { label: "guarded", mode: "guarded" },
-    { label: "workspace", mode: "workspace" },
-    { label: "full", mode: "full" },
-  ] as const)(
-    "inherits the parent's $label permission mode in a visible child",
-    async ({ mode }) => {
-      const callGateway = vi.fn(async () => ({
-        key: "agent:main:dashboard:child",
-        runStarted: true,
-        runId: "run-visible",
-      }));
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        ...(mode ? { sessionPermissionPolicy: { mode, root: "/workspace/main" } } : {}),
-        config: { agents: { list: [{ id: "main" }] } },
-        callGateway: callGateway as never,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
-
-      await tool.execute("visible-permissions", { task: "inspect", visible: true, worktree: true });
-
-      const createParams = mockCallArg(callGateway, 0, 1, "sessions.create");
-      expect(createParams.worktree).toBe(true);
-      expect(createParams).not.toHaveProperty("sessionRoot");
-      if (mode) {
-        expect(createParams.permissionMode).toBe(mode);
-      } else {
-        expect(createParams).not.toHaveProperty("permissionMode");
-      }
-    },
-  );
 });

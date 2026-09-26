@@ -17,6 +17,7 @@ type FrameSample = {
   rowKeys: string[];
   imageCount: number;
   loadedImageCount: number;
+  enteringBubbleCount: number;
 };
 
 type SamplerWindow = Window & {
@@ -58,6 +59,10 @@ async function startFrameSampler(currentPage: Page, probeText = PROBE_TEXT): Pro
         loadedImageCount: images.filter(
           (image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
         ).length,
+        enteringBubbleCount: rows.reduce(
+          (count, row) => count + row.querySelectorAll(".chat-bubble--enter").length,
+          0,
+        ),
       });
       requestAnimationFrame(sample);
     };
@@ -123,7 +128,10 @@ async function openChatAndSubmitProbe(
 ): Promise<{ runId: string; sendParams: ChatSendParams }> {
   const probeText = opts.probeText ?? PROBE_TEXT;
   await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-  await currentPage.getByText("Ready.").waitFor({ timeout: 10_000 });
+  await currentPage
+    .locator(".chat-thread")
+    .getByText("Ready.", { exact: true })
+    .waitFor({ timeout: 10_000 });
   await gateway.waitForRequest("sessions.list");
   if (opts.attachImage) {
     await currentPage.locator(".agent-chat__file-input").setInputFiles({
@@ -646,8 +654,6 @@ suite.define(() => {
           content: ONE_PIXEL_PNG_B64,
           mimeType: "image/png",
         });
-        // A locally submitted turn plays the composer entry animation exactly once.
-        expect(await currentPage.locator(".chat-bubble--enter").count()).toBe(1);
         await expect
           .poll(() =>
             currentPage.evaluate(() =>
@@ -660,6 +666,14 @@ suite.define(() => {
             ),
           )
           .toBe(true);
+        // A locally submitted turn plays the composer entry animation exactly once.
+        expect(
+          await currentPage.evaluate(() =>
+            ((window as SamplerWindow).openclawSendFrameSamples ?? []).some(
+              (frame) => frame.enteringBubbleCount === 1,
+            ),
+          ),
+        ).toBe(true);
         await gateway.resolveDeferred("chat.send");
 
         const frames = await finishRunAndSettle(currentPage, gateway, runId, {

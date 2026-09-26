@@ -1,10 +1,12 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 const assetBody = Buffer.from('console.log("conditional fixture");\n');
 const modifiedAt = new Date("2024-01-01T00:00:00.000Z");
@@ -150,6 +152,8 @@ describe.each([
     await fs.mkdir(path.dirname(assetPath));
     await fs.writeFile(assetPath, assetBody);
     await fs.writeFile(`${assetPath}.gz`, gzipSync(assetBody));
+    await fs.writeFile(`${assetPath}.br`, brotliCompressSync(assetBody));
+    await fs.writeFile(path.join(root, "assets", "cold.js"), assetBody);
     await fs.utimes(assetPath, modifiedAt, modifiedAt);
     for (const asset of [beforeLeapSecondAsset, afterLeapSecondAsset]) {
       const target = path.join(root, "assets", asset.filename);
@@ -161,6 +165,7 @@ describe.each([
       "fonts/test.css",
       "fonts/test.woff2",
       "provider-icons/ProviderIcon-test.svg",
+      "cloud-provider-icons/aws.svg",
       "file-icons/compact/dark/pdf.svg",
       "file-icons/large/shell-dark.svg",
       "file-icons/overlays/pdf.svg",
@@ -177,6 +182,12 @@ describe.each([
       path.join(root, "index.html"),
       `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
+    const rootState: ControlUiRootState = {
+      kind,
+      path: root,
+      realPath: root,
+      ...(kind === "bundled" ? { publicAssetBuildId: "fixture-build" } : {}),
+    };
     server = createServer((req, res) => {
       res.setHeader(
         "X-Test-If-Modified-Since-Count",
@@ -185,12 +196,7 @@ describe.each([
       void handleControlUiHttpRequest(req, res, {
         basePath,
         config: {},
-        root: {
-          kind,
-          path: root,
-          realPath: root,
-          ...(kind === "bundled" ? { publicAssetBuildId: "fixture-build" } : {}),
-        },
+        root: rootState,
       }).catch((error: unknown) => {
         res.statusCode = 500;
         res.end(error instanceof Error ? error.message : String(error));
@@ -208,6 +214,49 @@ describe.each([
     baseUrl = `http://127.0.0.1:${address.port}${basePath}`;
     assetUrl = `${baseUrl}/assets/app-fixture.js`;
   });
+
+  if (kind === "bundled" && basePath === "") {
+    it("serves warm representations and admits cold files without main-thread filesystem work", async () => {
+      await requestAsset(assetUrl, "GET", {});
+      const operations = [
+        "openSync",
+        "readSync",
+        "readFileSync",
+        "lstatSync",
+        "statSync",
+        "fstatSync",
+        "realpathSync",
+      ] as const;
+      const spies = operations.map((operation) => vi.spyOn(fsSync, operation));
+      try {
+        for (const encoding of ["br", "gzip"] as const) {
+          const response = await requestAsset(assetUrl, "GET", { "Accept-Encoding": encoding });
+          expect(response.response.headers["content-encoding"]).toBe(encoding);
+          expect((encoding === "br" ? brotliDecompressSync : gunzipSync)(response.body)).toEqual(
+            assetBody,
+          );
+          const head = await requestAsset(assetUrl, "HEAD", { "Accept-Encoding": encoding });
+          expect(head.body.byteLength).toBe(0);
+          expect(head.response.headers["content-length"]).toBe(String(response.body.byteLength));
+          const unchanged = await requestAsset(assetUrl, "GET", {
+            "Accept-Encoding": encoding,
+            "If-Modified-Since": lastModified,
+          });
+          expect(unchanged.response.statusCode).toBe(304);
+        }
+        expect((await requestAsset(`${baseUrl}/assets/cold.js`, "GET", {})).body).toEqual(
+          assetBody,
+        );
+        for (const spy of spies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const spy of spies) {
+          spy.mockRestore();
+        }
+      }
+    });
+  }
 
   afterAll(async () => {
     try {
@@ -228,6 +277,7 @@ describe.each([
       "fonts/test.css",
       "fonts/test.woff2",
       "provider-icons/ProviderIcon-test.svg",
+      "cloud-provider-icons/aws.svg",
       "file-icons/compact/dark/pdf.svg",
       "file-icons/large/shell-dark.svg",
       "file-icons/overlays/pdf.svg",

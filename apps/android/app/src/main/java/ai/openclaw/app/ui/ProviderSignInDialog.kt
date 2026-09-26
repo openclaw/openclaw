@@ -14,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
@@ -80,7 +79,7 @@ internal fun ProviderSignInDialog(
         ?.jsonPrimitive
         ?.booleanOrNull == true
 
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(nativeString("Sign in")) },
     text = {
@@ -152,7 +151,7 @@ internal fun ProviderSignInDialog(
           if (it["executor"]?.jsonPrimitive?.content == "gateway") {
             CircularProgressIndicator()
           } else {
-            ProviderSignInAnswer(it, enabled = controlsEnabled && !state.cancelling, onAnswer = controller::answer)
+            ProviderSignInAnswer(it, enabled = controlsEnabled, onAnswer = controller::answer)
           }
         }
       }

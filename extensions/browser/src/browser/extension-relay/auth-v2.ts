@@ -1,3 +1,4 @@
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_RELAY_AUTH_VERSION,
   createRelayProof,
@@ -65,11 +66,7 @@ type BrowserRelayHttpChallengeRequest = {
   flow: "cdp" | "json-list";
 };
 
-type BrowserRelayHttpCompleteRequest = {
-  v: 2;
-  sessionId: string;
-  clientProof: string;
-};
+type BrowserRelayHttpCompleteRequest = Omit<BrowserRelayAuthResponse, "type">;
 
 type BrowserRelayBinding = Pick<
   BrowserRelayProofFields,
@@ -82,17 +79,15 @@ type ChallengeState = {
 };
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).toSorted();
-  const expected = [...keys].toSorted();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
 }
 
 export function parseRelayAuthHello(value: unknown): BrowserRelayAuthHello | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asNullableRecord(value);
   if (
+    !record ||
     !hasExactKeys(record, ["type", "v", "keyId", "clientNonce"]) ||
     record.type !== "auth.hello" ||
     record.v !== BROWSER_RELAY_AUTH_VERSION ||
@@ -107,11 +102,9 @@ export function parseRelayAuthHello(value: unknown): BrowserRelayAuthHello | nul
 }
 
 export function parseRelayAuthResponse(value: unknown): BrowserRelayAuthResponse | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asNullableRecord(value);
   if (
+    !record ||
     !hasExactKeys(record, ["type", "v", "sessionId", "clientProof"]) ||
     record.type !== "auth.response" ||
     record.v !== BROWSER_RELAY_AUTH_VERSION ||
@@ -126,11 +119,9 @@ export function parseRelayAuthResponse(value: unknown): BrowserRelayAuthResponse
 export function parseRelayHttpChallengeRequest(
   value: unknown,
 ): BrowserRelayHttpChallengeRequest | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asNullableRecord(value);
   if (
+    !record ||
     !hasExactKeys(record, [
       "v",
       "keyId",
@@ -163,11 +154,9 @@ export function parseRelayHttpChallengeRequest(
 export function parseRelayHttpCompleteRequest(
   value: unknown,
 ): BrowserRelayHttpCompleteRequest | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asNullableRecord(value);
   if (
+    !record ||
     !hasExactKeys(record, ["v", "sessionId", "clientProof"]) ||
     record.v !== BROWSER_RELAY_AUTH_VERSION ||
     !isCanonicalBase64UrlBytes(record.sessionId, 16) ||
@@ -197,85 +186,6 @@ export function parseExtensionRelayResource(rawUrl: string, expectedPath: string
     return null;
   }
   return profile === null ? expectedPath : `${expectedPath}?profile=${encodeURIComponent(profile)}`;
-}
-
-/** Reject duplicate object keys before JSON.parse can silently keep the last value. */
-function hasDuplicateJsonObjectKeys(text: string): boolean {
-  const stack: Array<Set<string> | null> = [];
-  let expectingKey = false;
-  let index = 0;
-  const skipWhitespace = () => {
-    while (/\s/u.test(text[index] ?? "")) {
-      index += 1;
-    }
-  };
-  while (index < text.length) {
-    const char = text[index];
-    if (char === '"') {
-      const start = index;
-      index += 1;
-      let escaped = false;
-      while (index < text.length) {
-        const next = text[index++];
-        if (escaped) {
-          escaped = false;
-        } else if (next === "\\") {
-          escaped = true;
-        } else if (next === '"') {
-          break;
-        }
-      }
-      if (expectingKey && stack.at(-1)) {
-        let key: unknown;
-        try {
-          key = JSON.parse(text.slice(start, index));
-        } catch {
-          return false;
-        }
-        skipWhitespace();
-        if (text[index] === ":" && typeof key === "string") {
-          const keys = stack.at(-1) as Set<string>;
-          if (keys.has(key)) {
-            return true;
-          }
-          keys.add(key);
-          expectingKey = false;
-        }
-      }
-      continue;
-    }
-    if (char === "{") {
-      stack.push(new Set());
-      expectingKey = true;
-    } else if (char === "[") {
-      stack.push(null);
-      expectingKey = false;
-    } else if (char === "}") {
-      stack.pop();
-      expectingKey = false;
-    } else if (char === "]") {
-      stack.pop();
-      expectingKey = false;
-    } else if (char === ",") {
-      expectingKey = stack.at(-1) instanceof Set;
-    }
-    index += 1;
-  }
-  return false;
-}
-
-export function parseStrictJsonObject(text: string): Record<string, unknown> | null {
-  if (hasDuplicateJsonObjectKeys(text)) {
-    return null;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 class BoundedReplayCache {

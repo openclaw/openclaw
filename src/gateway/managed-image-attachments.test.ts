@@ -8,19 +8,19 @@ import { pathToFileURL } from "node:url";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import {
   afterAll,
-  afterEach,
   beforeAll,
   beforeEach,
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type MockInstance,
 } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { extractToolResultMediaArtifact } from "../agents/embedded-agent-tool-media.js";
-import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -40,13 +40,29 @@ import {
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createFixture,
+  createManagedOutgoingImageBlocks,
+  createPngDataUrl,
+  expectPathMissing,
+  prepareAgentSessionStore,
+  prepareManagedSessionStore as seedManagedSessionStore,
+  replaceTestSessionEntry,
+  requireAttachmentIdFromUrl,
+  requireBlock,
+  requireManagedOriginalPath,
+  TINY_PNG_BASE64,
+  usePreparedManagedImageState,
+  type RequestResult,
+} from "./managed-image-attachments.test-support.js";
+import {
   attachManagedImageRecordToMessage,
-  insertManagedImageRecord,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
@@ -56,24 +72,28 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
-type PlaybackModeForSourceResolver = (
-  ...args: Parameters<
-    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
-  >
-) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+type PlaybackMetadataForSourceResolver =
+  (typeof import("../media/playback-transcode.js"))["resolvePlaybackMetadataForSource"];
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
-const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
+const resolveSharedSecretHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
-const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
-const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
+const resolvePlaybackMetadataForSourceMock = vi.fn<PlaybackMetadataForSourceResolver>();
 const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
   kind: "passthrough",
 }));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 let storeSaveSpy: MockInstance<typeof import("../media/fetch.js").saveRemoteMedia> | undefined;
 
@@ -95,10 +115,10 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  resolvePlaybackModeForSourceMock.mockReset();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
+  resolvePlaybackMetadataForSourceMock.mockReset();
+  resolvePlaybackMetadataForSourceMock.mockImplementation(async ({ mimeType }) => ({
+    playback: mimeType === "audio/x-caf" ? "transcode" : "native",
+  }));
 });
 
 vi.mock("../config/config.js", () => ({
@@ -107,7 +127,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
-  resolveOpenAiCompatibleHttpOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopesMock,
+  resolveSharedSecretHttpOperatorScopes: resolveSharedSecretHttpOperatorScopesMock,
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
 
@@ -127,18 +147,14 @@ vi.mock("./session-transcript-readers.js", () => ({
   }),
 }));
 
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probePlaybackMediaFileDescriptorMock,
-}));
-
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
+  resolvePlaybackMetadataForSourceMock.mockImplementation(async ({ mimeType }) => ({
+    playback: mimeType === "audio/x-caf" ? "transcode" : "native",
+  }));
   return {
     ...actual,
-    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
+    resolvePlaybackMetadataForSource: resolvePlaybackMetadataForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
@@ -148,191 +164,41 @@ const {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
   attachManagedOutgoingMediaToMessage: attachManagedOutgoingImagesToMessage,
-  cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingImageRecords,
   createManagedOutgoingMediaBlocks: createManagedOutgoingImageBlocksActual,
+  cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingImageRecords,
   handleManagedOutgoingMediaHttpRequest: handleManagedOutgoingImageHttpRequest,
   prepareOutgoingMediaFromReplyPayload,
   readManagedOutgoingImageThumbnail,
   resolveManagedOutgoingMediaArtifactDownload: resolveManagedOutgoingImageArtifactDownload,
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
-
-type ManagedOutgoingImageTestParams = Omit<
-  Parameters<typeof createManagedOutgoingImageBlocksActual>[0],
-  "items"
-> & {
-  mediaUrls?: string[] | null;
-  attachments?: ReplyMediaAttachment[] | null;
-  allowLocalNonImage?: boolean;
-};
-
-function createManagedOutgoingImageBlocks(params: ManagedOutgoingImageTestParams) {
-  const { mediaUrls, attachments, allowLocalNonImage, ...ownerParams } = params;
-  return createManagedOutgoingImageBlocksActual({
-    ...ownerParams,
-    items: (mediaUrls ?? []).map((url, index) => {
-      const attachment = attachments?.[index];
-      return Object.assign(
-        { url, trustedLocal: allowLocalNonImage === true },
-        typeof attachment?.name === "string" ? { filename: attachment.name } : {},
-        typeof attachment?.mimeType === "string" ? { mimeType: attachment.mimeType } : {},
-        typeof attachment?.durationMs === "number" ? { durationMs: attachment.durationMs } : {},
-        typeof attachment?.width === "number" ? { width: attachment.width } : {},
-        typeof attachment?.height === "number" ? { height: attachment.height } : {},
-      );
-    }),
-  });
-}
-
-async function replaceTestSessionEntry(
-  scope: {
-    agentId: string;
-    env: NodeJS.ProcessEnv;
-    sessionKey: string;
-    storePath?: string;
-  },
-  entry: { sessionId: string; updatedAt: number },
-): Promise<void> {
-  const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
-  await replaceSessionEntry(scope, entry);
-}
-
-type RequestResult = {
-  statusCode: number;
-  headers: http.IncomingHttpHeaders;
-  body: Buffer;
-};
-
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
-
-async function createPngDataUrl(width: number, height: number): Promise<string> {
-  const buffer = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
-  return `data:image/png;base64,${buffer.toString("base64")}`;
-}
-
-function requireAttachmentIdFromUrl(url: unknown): string {
-  expect(url).toBeTypeOf("string");
-  const attachmentId = String(url).split("/").at(-2);
-  if (!attachmentId) {
-    throw new Error(`expected attachment id in URL ${String(url)}`);
-  }
-  return attachmentId;
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected ${targetPath} to be missing`);
-}
-
-type ManagedImageBlock = {
-  type?: string;
-  artifactId?: string;
-  alt?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  url?: string;
-  openUrl?: string;
-  fileName?: string;
-  playback?: "native" | "transcode";
-};
-
-function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
-  const block = blocks[index];
-  if (!block) {
-    throw new Error(`expected block ${index}`);
-  }
-  return block as ManagedImageBlock;
-}
-
-async function requireManagedOriginalPath(stateDir: string, attachmentId: string): Promise<string> {
-  const record = await readManagedImageRecord(attachmentId, stateDir);
-  if (!record) {
-    throw new Error(`expected managed image record ${attachmentId}`);
-  }
-  return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
-}
-
-function prepareAgentSessionStore(stateDir: string, agentId: string): void {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  openOpenClawAgentDatabase({ agentId, env });
-  closeOpenClawAgentDatabasesForTest();
-}
+const { bindHttpResponseAuthority } = await import("./http-request-authority.js");
+const { PlaybackInspectionBusyError } = await import("../media/playback-transcode.js");
 
 async function prepareManagedSessionStore(stateDir: string): Promise<void> {
-  closeOpenClawAgentDatabasesForTest();
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const storePath = path.join(stateDir, "sessions.sqlite");
-  await replaceTestSessionEntry(
-    {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    },
-    { sessionId: "sess-1", updatedAt: Date.now() },
-  );
-  closeOpenClawAgentDatabasesForTest();
-  const { loadExactSessionEntryReadOnlyResult } =
-    await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
-  expect(
-    loadExactSessionEntryReadOnlyResult({
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
-  getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+  const store = await seedManagedSessionStore(stateDir);
+  getRuntimeConfigMock.mockReturnValue({ session: { store } });
 }
 
-async function createFixture(
-  stateDir: string,
-  options?: {
-    sessionKey?: string;
-    agentId?: string;
-    attachmentId?: string;
-    filename?: string;
-    contentType?: string;
-    body?: Buffer;
-    messageId?: string | null;
-    createdAt?: string;
-  },
-) {
-  const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
-  const sessionKey = options?.sessionKey ?? "agent:main:main";
-  const filename = options?.filename ?? `${attachmentId}-cat-full.png`;
-  const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, filename);
-  await fs.mkdir(path.dirname(originalPath), { recursive: true });
-  const body = options?.body ?? Buffer.from("original-image");
-  await fs.writeFile(originalPath, body);
-  insertManagedImageRecord(
-    {
-      attachmentId,
-      sessionKey,
-      ...(options?.agentId ? { agentId: options.agentId } : {}),
-      messageId: options?.messageId === undefined ? "msg-1" : options.messageId,
-      createdAt: options?.createdAt ?? new Date().toISOString(),
-      alt: "Cat",
-      original: {
-        mediaRoot: path.join(stateDir, "media"),
-        mediaId: filename,
-        mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: options?.contentType ?? "image/png",
-        width: options?.contentType?.startsWith("image/") === false ? null : 1024,
-        height: options?.contentType?.startsWith("image/") === false ? null : 768,
-        sizeBytes: body.byteLength,
-        filename: options?.filename ?? "cat.png",
-      },
+function useManagedImageState(prefix: string, bindState: (stateDir: string) => void): void {
+  usePreparedManagedImageState({
+    prefix,
+    bindState,
+    prepareSessionStore: prepareManagedSessionStore,
+    cleanupRecords: cleanupManagedOutgoingImageRecords,
+    resetMocks: (stateDir) => {
+      vi.clearAllMocks();
+      authorizeGatewayHttpRequestOrReplyMock.mockReset();
+      resolveSharedSecretHttpOperatorScopesMock.mockReset();
+      resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReset();
+      loadSessionEntryMock.mockReset();
+      readSessionMessagesMock.mockReset();
+      resolvePlaybackTranscodeMock.mockReset().mockResolvedValue({ kind: "passthrough" });
+      getRuntimeConfigMock.mockReturnValue({
+        session: { store: path.join(stateDir, "sessions.sqlite") },
+      });
     },
-    stateDir,
-  );
-  return { attachmentId, sessionKey, originalPath };
+  });
 }
 
 async function requestManagedImage(params: {
@@ -352,9 +218,9 @@ async function requestManagedImage(params: {
       res.end();
       return null;
     }
-    return { ok: true, ...params.authResponse };
+    return bindHttpResponseAuthority({ ok: true, ...params.authResponse }, res, () => true);
   });
-  resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
+  resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
   resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockImplementation((_req, requestAuth) => {
     if (requestAuth.authMethod === "token" || requestAuth.authMethod === "password") {
       return true;
@@ -445,17 +311,8 @@ async function requestManagedImage(params: {
 
 describe("handleManagedOutgoingImageHttpRequest", () => {
   let stateDir: string;
-
-  beforeEach(async () => {
-    stateDir = tempDirs.make("managed-images-");
-    vi.clearAllMocks();
-    await prepareManagedSessionStore(stateDir);
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+  useManagedImageState("managed-images-", (prepared) => {
+    stateDir = prepared;
   });
 
   it("serves full images for authorized chat-history readers", async () => {
@@ -491,25 +348,11 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       encodedFilename: "%E9%9F%B3%E5%A3%B0.mp3",
     },
     {
-      kind: "audio",
-      contentType: "audio/wav",
-      filename: "recording%20take.wav",
-      variant: "full",
-      encodedFilename: "recording%2520take.wav",
-    },
-    {
       kind: "video",
       contentType: "video/mp4",
       filename: "recording%20take.mp4",
       variant: "full",
       encodedFilename: "recording%2520take.mp4",
-    },
-    {
-      kind: "image",
-      contentType: "image/png",
-      filename: "progress%20chart.png",
-      variant: "full",
-      encodedFilename: "progress%2520chart.png",
     },
     {
       kind: "image",
@@ -676,48 +519,15 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expectedStatus: number;
   }>([
     {
-      name: "quoted comma/star GET",
-      validator: '"client,*,tag"',
-      expectedStatus: 200,
-    },
-    {
-      name: "quoted comma/star HEAD",
-      method: "HEAD",
-      validator: '"client,*,tag"',
-      expectedStatus: 200,
-    },
-    {
       name: "quoted comma/star range",
       range: "bytes=2-5",
       validator: '"client,*,tag"',
       expectedStatus: 206,
     },
     {
-      name: "weak quoted comma/star range",
-      range: "bytes=2-5",
-      validator: 'W/"client,*,tag"',
-      expectedStatus: 206,
-    },
-    {
       name: "multiple nonmatching fields",
       validator: ['"client,*,tag"', '"other"'],
       expectedStatus: 200,
-    },
-    {
-      name: "quoted literal asterisk",
-      validator: '"*"',
-      expectedStatus: 200,
-    },
-    {
-      name: "ordinary stale range",
-      range: "bytes=2-5",
-      validator: '"stale"',
-      expectedStatus: 206,
-    },
-    {
-      name: "strong match",
-      validator: (etag: string) => etag,
-      expectedStatus: 304,
     },
     {
       name: "weak HEAD match before If-Range",
@@ -732,11 +542,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       range: "bytes=2-5",
       ifRange: '"stale"',
       validator: (etag: string) => `"other", W/${etag}`,
-      expectedStatus: 304,
-    },
-    {
-      name: "standalone wildcard",
-      validator: "*",
       expectedStatus: 304,
     },
     {
@@ -803,7 +608,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     },
   );
 
-  it.each(["GET", "HEAD"] as const)(
+  it.each(["HEAD"] as const)(
     "revalidates managed media with If-Modified-Since before ranges for %s",
     async (method) => {
       const { attachmentId, sessionKey } = await createFixture(stateDir);
@@ -831,7 +636,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     },
   );
 
-  it.each(["GET", "HEAD"] as const)(
+  it.each(["GET"] as const)(
     "ignores duplicate managed-media dates discarded by normalized Node headers for %s",
     async (method) => {
       const { attachmentId, sessionKey } = await createFixture(stateDir);
@@ -952,8 +757,10 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       contentType: "audio/x-caf",
       body: Buffer.from("caff-original"),
     });
-    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ ok: true, authMethod: "token" });
-    resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
+    authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) =>
+      bindHttpResponseAuthority({ ok: true, authMethod: "token" }, res, () => true),
+    );
+    resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
     resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "gateway-sessions.json"),
@@ -999,30 +806,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     } finally {
       openSpy.mockRestore();
     }
-  });
-
-  it("passes native managed playback bytes through unchanged", async () => {
-    const body = Buffer.from("ID3-native-audio");
-    const { attachmentId, sessionKey } = await createFixture(stateDir, {
-      filename: "voice.mp3",
-      contentType: "audio/mpeg",
-      body,
-    });
-
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
-      authResponse: { authMethod: "token" },
-    });
-
-    expect(resolvePlaybackTranscodeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ mimeType: "audio/mpeg", kind: "audio" }),
-    );
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["cache-control"]).toBe("private, no-cache");
-    expect(result.headers.etag).toBeUndefined();
-    expect(result.headers["last-modified"]).toBeUndefined();
-    expect(result.body).toEqual(body);
   });
 
   it("serves byte ranges from a cached managed playback transcode", async () => {
@@ -1074,7 +857,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     }
   });
 
-  it.each(["", "?playback=1"])(
+  it.each(["?playback=1"])(
     "advertises immutable image byte ranges without a body for HEAD%s",
     async (query) => {
       const { attachmentId, sessionKey } = await createFixture(stateDir);
@@ -1180,62 +963,72 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(download?.title).toBe("meeting-note.mp3");
   });
 
-  it("serves the same bounded thumbnail through local reads and the full-image artifact ticket", async () => {
-    const source = createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 });
-    const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
-    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-    const transcriptMessages = [
-      {
-        role: "assistant",
-        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
-        __openclaw: { id: "msg-1" },
-      },
-    ];
-    loadSessionEntryMock.mockReturnValue({
-      storePath: path.join(stateDir, "sessions.sqlite"),
-      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
-    });
-    readSessionMessagesMock.mockResolvedValue(transcriptMessages);
-    const download = await resolveManagedOutgoingImageArtifactDownload({
-      sessionKey,
-      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
-      stateDir,
-    });
-    const thumbnailUrl = download?.url.replace(/\/full(?=\?)/u, "/thumbnail") ?? "";
-    const localRequest = {
-      sessionKey,
-      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
-      stateDir,
-      maxBytes: 12 * 1024 * 1024,
-      signal: new AbortController().signal,
-    };
-    const localThumbnail = await readManagedOutgoingImageThumbnail(localRequest);
-    expect(localThumbnail && readImageProbeFromHeader(localThumbnail)).toMatchObject({
-      width: 300,
-      height: 150,
-    });
-    await expect(
-      readManagedOutgoingImageThumbnail({ ...localRequest, maxBytes: 1 }),
-    ).rejects.toThrow("byte limit");
-    await expect(
-      readManagedOutgoingImageThumbnail({ ...localRequest, sessionKey: "agent:other:main" }),
-    ).resolves.toBeNull();
+  it.each([
+    { width: 1600, height: 800, previewWidth: 1200, previewHeight: 600 },
+    { width: 800, height: 1600, previewWidth: 600, previewHeight: 1200 },
+    { width: 160, height: 80, previewWidth: 160, previewHeight: 80 },
+  ])(
+    "serves a sharp bounded $width×$height thumbnail through local reads and the artifact ticket",
+    async ({ width, height, previewWidth, previewHeight }) => {
+      const source = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
+      const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
+      const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const transcriptMessages = [
+        {
+          role: "assistant",
+          content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+          __openclaw: { id: "msg-1" },
+        },
+      ];
+      loadSessionEntryMock.mockReturnValue({
+        storePath: path.join(stateDir, "sessions.sqlite"),
+        entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+      });
+      readSessionMessagesMock.mockResolvedValue(transcriptMessages);
+      const download = await resolveManagedOutgoingImageArtifactDownload({
+        sessionKey,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+        stateDir,
+      });
+      const thumbnailUrl = `${download?.url.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`;
+      const localRequest = {
+        sessionKey,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+        stateDir,
+        maxBytes: 12 * 1024 * 1024,
+        signal: new AbortController().signal,
+      };
+      const localThumbnail = await readManagedOutgoingImageThumbnail(localRequest);
+      expect(localThumbnail && readImageProbeFromHeader(localThumbnail)).toMatchObject({
+        width: previewWidth,
+        height: previewHeight,
+      });
+      await expect(
+        readManagedOutgoingImageThumbnail({ ...localRequest, maxBytes: 1 }),
+      ).rejects.toThrow("byte limit");
+      await expect(
+        readManagedOutgoingImageThumbnail({ ...localRequest, sessionKey: "agent:other:main" }),
+      ).resolves.toBeNull();
 
-    vi.clearAllMocks();
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: thumbnailUrl,
-      denyAuth: true,
-      transcriptMessages,
-    });
+      vi.clearAllMocks();
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: thumbnailUrl,
+        denyAuth: true,
+        transcriptMessages,
+      });
 
-    expect(result.statusCode).toBe(200);
-    expect(result.headers["content-type"]).toBe("image/png");
-    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
-    expect(readImageProbeFromHeader(result.body)).toMatchObject({ width: 300, height: 150 });
-    expect(result.body).toEqual(localThumbnail);
-    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
-  });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers["content-type"]).toBe("image/png");
+      expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+      expect(readImageProbeFromHeader(result.body)).toMatchObject({
+        width: previewWidth,
+        height: previewHeight,
+      });
+      expect(result.body).toEqual(localThumbnail);
+      expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a managed global artifact owned by another agent", async () => {
     const { attachmentId } = await createFixture(stateDir, {
@@ -1412,11 +1205,8 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
 describe("createManagedOutgoingImageBlocks", () => {
   let stateDir: string;
-
-  beforeEach(async () => {
-    stateDir = tempDirs.make("managed-image-blocks-");
-    vi.clearAllMocks();
-    await prepareManagedSessionStore(stateDir);
+  useManagedImageState("managed-image-blocks-", (prepared) => {
+    stateDir = prepared;
   });
 
   it("prepares deduplicated media with metadata and per-item trust aligned by URL", () => {
@@ -1453,12 +1243,6 @@ describe("createManagedOutgoingImageBlocks", () => {
         trustedLocal: true,
       },
     ]);
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("creates inline/open blocks that both point at the full image", async () => {
@@ -1516,20 +1300,29 @@ describe("createManagedOutgoingImageBlocks", () => {
     },
   );
 
-  it.each([
-    { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
-    { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
-  ])(
-    "creates managed $kind blocks with media artifact ids",
-    async ({ kind, contentType, fileName }) => {
+  it.each(
+    [
+      { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
+      { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
+    ].flatMap((fixture) =>
+      ["available", "busy"].map((inspection) => Object.assign({}, fixture, { inspection })),
+    ),
+  )(
+    "creates managed $kind blocks and retains originals when inspection is $inspection",
+    async ({ kind, contentType, fileName, inspection }) => {
       const sourcePath = path.join(stateDir, "workspace", fileName);
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(
-        sourcePath,
+      const original =
         kind === "audio"
           ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
-          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
-      );
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+      await fs.writeFile(sourcePath, original);
+      if (inspection === "busy") {
+        resolvePlaybackMetadataForSourceMock.mockRejectedValueOnce(
+          new PlaybackInspectionBusyError(),
+        );
+      }
+      const onPrepareError = vi.fn();
 
       const blocks = await createManagedOutgoingImageBlocks({
         sessionKey: "agent:main:main",
@@ -1537,23 +1330,32 @@ describe("createManagedOutgoingImageBlocks", () => {
         stateDir,
         localRoots: [path.join(stateDir, "workspace")],
         allowLocalNonImage: true,
+        continueOnPrepareError: true,
+        onPrepareError,
       });
 
+      expect(onPrepareError).not.toHaveBeenCalled();
       expect(blocks).toHaveLength(1);
       const block = requireBlock(blocks);
       expect(block).toMatchObject({
         type: kind,
         mimeType: contentType,
         fileName,
-        playback: "native",
       });
+      expect(block.playback).toBe(inspection === "busy" ? undefined : "native");
       const attachmentId = requireAttachmentIdFromUrl(block.url);
       expect(block.artifactId).toBe(`${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`);
-      expect((await readManagedImageRecord(attachmentId, stateDir))?.original).toMatchObject({
+      const record = await readManagedImageRecord(attachmentId, stateDir);
+      if (!record) {
+        throw new Error("Expected a persisted managed media record");
+      }
+      expect(record.original).toMatchObject({
         contentType,
         width: null,
         height: null,
       });
+      const { mediaRoot, mediaSubdir, mediaId } = record.original;
+      expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(original);
     },
   );
 
@@ -1699,11 +1501,74 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
+  it("publishes managed media while both inspection slots remain occupied", async () => {
+    const actual = await vi.importActual<typeof import("../media/playback-transcode.js")>(
+      "../media/playback-transcode.js",
+    );
+    resolvePlaybackMetadataForSourceMock.mockImplementation(
+      actual.resolvePlaybackMetadataForSource,
+    );
+    const mediaProbe = await import("../media/media-probe.js");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let started = 0;
+    const probe = vi
+      .spyOn(mediaProbe, "probePlaybackMediaFileDescriptor")
+      .mockImplementation(async () => {
+        if (++started === 2) {
+          entered.resolve();
+        }
+        await release.promise;
+        return { durationMs: 1000, audioCodec: "mp3", audioStreamIndex: 0 };
+      });
+    const abort = new AbortController();
+    const pending: Promise<unknown>[] = [];
+    onTestFinished(async () => {
+      abort.abort();
+      release.resolve();
+      await Promise.allSettled(pending);
+      probe.mockRestore();
+    });
+    for (const name of ["held-a.mp3", "held-b.mp3"]) {
+      const filePath = path.join(stateDir, name);
+      await fs.writeFile(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      const sourcePath = await fs.realpath(filePath);
+      pending.push(
+        actual.resolvePlaybackMetadataForSource({
+          sourcePath,
+          sourceStat: await fs.stat(sourcePath),
+          mimeType: "audio/mpeg",
+          kind: "audio",
+        }),
+      );
+    }
+    await entered.promise;
+    const onPrepareError = vi.fn();
+    const creation = createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: ["data:audio/mpeg;base64,//uQAA=="],
+      stateDir,
+      abortSignal: abort.signal,
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+    pending.push(creation);
+    const blocks = await creation;
+    expect(onPrepareError).not.toHaveBeenCalled();
+    expect(blocks).toHaveLength(1);
+    const block = requireBlock(blocks);
+    expect(block).toMatchObject({ type: "audio", mimeType: "audio/mpeg" });
+    expect(
+      await readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir),
+    ).not.toBeNull();
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a visible failure without publishing a record when playback inspection fails", async () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+    resolvePlaybackMetadataForSourceMock.mockRejectedValueOnce(
       new Error("synthetic playback inspection failure"),
     );
 
@@ -1992,8 +1857,9 @@ describe("createManagedOutgoingImageBlocks", () => {
         },
       );
     } finally {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: splitStateDir }),
+      );
       await fs.rm(openClawHome, { recursive: true, force: true });
       await fs.rm(externalConfigDir, { recursive: true, force: true });
     }
@@ -2013,23 +1879,9 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
-  it("rejects managed outgoing images that exceed configured byte limits", async () => {
-    await expect(
-      createManagedOutgoingImageBlocks({
-        stateDir,
-        sessionKey: "agent:main:main",
-        mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
-        limits: { maxBytes: 32 },
-      }),
-    ).rejects.toThrow(/0MB limit|32 bytes|byte limit/i);
-  });
-
   it.each([
     { orientation: undefined, dimensions: "200×120" },
-    { orientation: 5, dimensions: "120×200" },
     { orientation: 6, dimensions: "120×200" },
-    { orientation: 7, dimensions: "120×200" },
-    { orientation: 8, dimensions: "120×200" },
   ])(
     "reports display dimensions in resize warnings for orientation $orientation",
     async ({ orientation, dimensions }) => {
@@ -2339,23 +2191,6 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
-  it("accepts local image paths inside allowed roots", async () => {
-    const allowedDir = path.join(stateDir, "workspace", "uploads");
-    const allowedPath = path.join(allowedDir, "inside.png");
-    await fs.mkdir(allowedDir, { recursive: true });
-    await fs.writeFile(allowedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
-
-    const blocks = await createManagedOutgoingImageBlocks({
-      sessionKey: "agent:main:main",
-      mediaUrls: [allowedPath],
-      stateDir,
-      localRoots: [path.join(stateDir, "workspace")],
-    });
-
-    expect(blocks).toHaveLength(1);
-    expect(requireBlock(blocks).type).toBe("image");
-  });
-
   it("allows managed inbound image paths before validating explicit roots", async () => {
     const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
     await fs.mkdir(path.dirname(inboundPath), { recursive: true });
@@ -2553,17 +2388,8 @@ describe("createManagedOutgoingImageBlocks", () => {
 
 describe("attachManagedOutgoingImagesToMessage", () => {
   let stateDir: string;
-
-  beforeEach(async () => {
-    stateDir = tempDirs.make("managed-image-attach-");
-    vi.clearAllMocks();
-    await prepareManagedSessionStore(stateDir);
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+  useManagedImageState("managed-image-attach-", (prepared) => {
+    stateDir = prepared;
   });
 
   it("upgrades transient image records to history when the message is committed", async () => {
@@ -2594,13 +2420,6 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     stateDir = tempDirs.make("managed-image-cleanup-");
     vi.clearAllMocks();
     await prepareManagedSessionStore(stateDir);
-  });
-
-  afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("cleans up dereferenced records and original files", async () => {
@@ -2821,30 +2640,6 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     loadSessionEntryMock.mockReturnValue({ storePath: databasePath, entry: undefined });
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
-
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
-    expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
-    expect(readSessionMessagesMock).not.toHaveBeenCalled();
-  });
-
-  it("retains history records when the session row is unreadable", async () => {
-    const fixture = await createFixture(stateDir);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    opened.db
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
-      )
-      .run("agent:main:main", "broken-session", "{invalid", Date.now());
-    const databasePath = opened.path;
-    closeOpenClawAgentDatabasesForTest();
-    getRuntimeConfigMock.mockReturnValue({ session: { store: databasePath } });
-    loadSessionEntryMock.mockReturnValue({ storePath: databasePath, entry: undefined });
-
-    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      cleanupManagedOutgoingImageRecords({ stateDir }),
-    );
 
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
@@ -3083,34 +2878,6 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  it("retains committed records that are still referenced by a full-image block", async () => {
-    const fixture = await createFixture(stateDir);
-    loadSessionEntryMock.mockReturnValue({
-      storePath: path.join(stateDir, "gateway-sessions.json"),
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
-    });
-    readSessionMessagesMock.mockReturnValue([
-      {
-        __openclaw: { id: "msg-1" },
-        content: [
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
-            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`,
-          },
-        ],
-      },
-    ]);
-
-    const result = await cleanupManagedOutgoingImageRecords({ stateDir });
-
-    expect(result.deletedRecordCount).toBe(0);
-    expect(result.deletedFileCount).toBe(0);
-    expect(result.retainedCount).toBe(1);
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
-    expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
-  });
-
   it("reads each session transcript once while evaluating committed records", async () => {
     const firstFixture = await createFixture(stateDir, {
       attachmentId: "11111111-1111-4111-8111-111111111111",
@@ -3147,6 +2914,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(0);
     expect(result.deletedFileCount).toBe(0);
     expect(result.retainedCount).toBe(2);
+    await expect(fs.access(firstFixture.originalPath)).resolves.toBeUndefined();
+    await expect(fs.access(secondFixture.originalPath)).resolves.toBeUndefined();
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
   });
 

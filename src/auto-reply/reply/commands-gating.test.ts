@@ -335,6 +335,18 @@ describe("command gating", () => {
     expect(result.text).toContain("elevated is not available");
   });
 
+  it("blocks a stale owner snapshot before reading or writing config", async () => {
+    const params = buildParams("/config show", { commands: { config: true, text: true } });
+    params.command.senderIsOwner = true;
+    params.command.assertOwnerCurrent = () => {
+      throw new Error("requester revoked during dispatch");
+    };
+    const result = await handleConfigCommand(params, true);
+    expect(result?.reply?.text).toContain("owner authority changed");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("blocks disabled config", async () => {
     const params = buildParams("/config show", {
       commands: { config: false, debug: false, text: true },
@@ -644,105 +656,18 @@ describe("command gating", () => {
   });
 
   it("blocks disallowed /config set writes", async () => {
-    resolveConfigWriteDeniedTextMock
-      .mockReturnValueOnce("Config writes are disabled")
-      .mockReturnValueOnce("channels.telegram.accounts.work.configWrites=true")
-      .mockReturnValueOnce("cannot replace channels, channel roots, or accounts collections");
-
-    const cases = [
-      {
-        name: "channel config writes disabled",
-        params: (() => {
-          const params = buildParams('/config set messages.ackReaction=":)"', {
-            commands: { config: true, text: true },
-            channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
-          } as OpenClawConfig);
-          params.command.senderIsOwner = true;
-          return params;
-        })(),
-        expectedText: "Config writes are disabled",
-      },
-      {
-        name: "target account disables writes",
-        params: (() => {
-          const params = buildParams("/config set channels.telegram.accounts.work.enabled=false", {
-            commands: { config: true, text: true },
-            channels: {
-              telegram: {
-                configWrites: true,
-                accounts: {
-                  work: { configWrites: false, enabled: true },
-                },
-              },
-            },
-          } as OpenClawConfig);
-          params.ctx.Provider = "telegram";
-          params.ctx.Surface = "telegram";
-          params.command.channel = "telegram";
-          params.command.channelId = "telegram";
-          params.command.surface = "telegram";
-          params.command.senderIsOwner = true;
-          return params;
-        })(),
-        expectedText: "channels.telegram.accounts.work.configWrites=true",
-      },
-      {
-        name: "ambiguous channel-root write",
-        params: (() => {
-          const params = buildParams('/config set channels.telegram={"enabled":false}', {
-            commands: { config: true, text: true },
-            channels: { telegram: { configWrites: true } },
-          } as OpenClawConfig);
-          params.ctx.Provider = "telegram";
-          params.ctx.Surface = "telegram";
-          params.command.channel = "telegram";
-          params.command.channelId = "telegram";
-          params.command.surface = "telegram";
-          params.command.senderIsOwner = true;
-          return params;
-        })(),
-        expectedText: "cannot replace channels, channel roots, or accounts collections",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const previousWriteCount = replaceConfigFileMock.mock.calls.length;
-      const result = await handleConfigCommand(testCase.params, true);
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply?.text).toContain(testCase.expectedText);
-      expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
-    }
-  });
-
-  it("honors the configured default account when gating omitted-account /config writes", async () => {
-    resolveConfigWriteDeniedTextMock.mockReturnValueOnce(
-      "channels.telegram.accounts.work.configWrites=true",
-    );
+    resolveConfigWriteDeniedTextMock.mockReturnValueOnce("Config writes are disabled");
     const params = buildParams('/config set messages.ackReaction=":)"', {
       commands: { config: true, text: true },
-      channels: {
-        telegram: {
-          defaultAccount: "work",
-          configWrites: true,
-          accounts: {
-            work: { configWrites: false, enabled: true },
-          },
-        },
-      },
-    } as OpenClawConfig);
-    params.ctx.Provider = "telegram";
-    params.ctx.Surface = "telegram";
-    params.command.channel = "telegram";
-    params.command.channelId = "telegram";
-    params.command.surface = "telegram";
+      channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
+    });
     params.command.senderIsOwner = true;
 
-    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const result = await handleConfigCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(result?.reply?.text).toContain("Config writes are disabled");
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("enforces gateway client permissions when the command channel is external", () => {

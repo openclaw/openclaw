@@ -2,6 +2,8 @@ import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type {
   createChannelProgressDraftCompositor,
+  LivePreviewDeliveryResult,
+  LivePreviewLifecycle,
   TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
@@ -13,6 +15,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -54,7 +57,10 @@ export type TelegramDispatchResult =
 
 export type TelegramReasoningLevel = "off" | "on" | "stream";
 export type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
-export type CurrentTurnTranscriptFinal = { messageId?: string; text: string };
+export type CurrentTurnTranscriptFinal = Pick<
+  NonNullable<Awaited<ReturnType<typeof readLatestAssistantTextByIdentity>>>,
+  "text" | "openclawDelivery"
+> & { messageId?: string };
 export type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 
 export type FreshTelegramSessionEntryLoader = ((
@@ -67,7 +73,7 @@ export type FreshTelegramSessionEntryLoader = ((
   clear: () => void;
 };
 
-export type TelegramAnswerBlockDelivery = {
+type TelegramAnswerBlockDelivery = {
   payload: ReplyPayload;
   text: string;
   buttons: import("./button-types.js").TelegramInlineButtons | undefined;
@@ -113,12 +119,12 @@ export type TelegramQueuedAnswerBlockRotation = {
   text?: string;
   shouldRotateBeforeDelivery: boolean;
 };
-export type TelegramBufferedFinalSettlement = {
+type TelegramBufferedFinalSettlement = {
   visibleReplySent: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  resolve: (result: { visibleReplySent: boolean }) => void;
+  resolve: (result: LivePreviewDeliveryResult) => void;
   reject: (error: unknown) => void;
 };
 
@@ -153,9 +159,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  finalAnswerDeliveryStarted: boolean;
-  finalAnswerDelivered: boolean;
   verboseProgressActive: () => boolean;
+  previewLifecycle: LivePreviewLifecycle<ReplyPayload, number>;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;
   progressPreambleEnabled: boolean | undefined;
@@ -184,13 +189,12 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramProgressStateSlice &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
-    queuedFinal: boolean;
+    finalDispatchClaimed: boolean;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
     progressContinuationAdopted?: boolean;
-    finalReplyOutcome?: "failed" | "suppressed";
     dispatchError?: unknown;
   };

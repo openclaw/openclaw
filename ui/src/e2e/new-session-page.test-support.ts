@@ -49,6 +49,12 @@ export async function openEnvironmentPicker(page: Page) {
   await afterShow;
 }
 
+export function checkoutBaseRefInput(scope: Page | Locator): Locator {
+  return scope
+    .getByRole("combobox", { name: "From", exact: true })
+    .or(scope.getByRole("textbox", { name: "From", exact: true }));
+}
+
 export const NEW_SESSION_MODEL_CATALOG = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
@@ -191,7 +197,7 @@ export async function expectPendingNewSessionPresentation(page: Page) {
     const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
     const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
     const text = bubble.classList.contains("chat-bubble--with-images")
-      ? bubble.querySelector<HTMLElement>(".chat-text, .chat-json-collapse")!
+      ? bubble.querySelector<HTMLElement>(".chat-text")!
       : bubble;
     const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
     const userStyle = getComputedStyle(user);

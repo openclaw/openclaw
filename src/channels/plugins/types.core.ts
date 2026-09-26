@@ -362,6 +362,8 @@ type ChannelCrossContextPresentationFactory = (params: {
 
 type ChannelReplyTransport = {
   replyToId?: string | null;
+  /** Mark a channel-inferred target so outbound delivery can consume first-mode replies. */
+  replyToIdSource?: "implicit";
   threadId?: string | number | null;
 };
 
@@ -692,6 +694,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
+  /** Per-account formatting contract for agent turns whose delivery target is this channel. */
   inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;

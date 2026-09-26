@@ -3,7 +3,7 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -61,7 +61,7 @@ async function mount(
     method: string,
     params?: unknown,
     options?: { signal?: AbortSignal },
-  ) => Promise<ControlUiLinkReaderDocument>,
+  ) => Promise<unknown>,
   options: Partial<
     Pick<Panel, "embedded" | "presented" | "sessionKey" | "tabsInHeader" | "onClose">
   > = {},
@@ -110,15 +110,197 @@ describe("Plugin link reader panel", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    ["Merged", "accent", "2026-09-23T12:31:58Z"],
+    ["Closed", "negative", "2026-09-24T09:15:00Z"],
+    ["Open", "positive", undefined],
+    ["Draft", "neutral", undefined],
+  ] as const)("shows the %s event date beside its badge", async (label, tone, timestamp) => {
+    const document = {
+      ...item(),
+      createdAt: "2026-09-23T11:08:47Z",
+      updatedAt: "2026-09-25T01:00:00Z",
+      badge: { label, tone, timestamp },
+    };
+    const panel = await mount(vi.fn().mockResolvedValue(document));
+    open(panel);
+    await expectTitle(panel, document.title);
+    const time = panel.renderRoot.querySelector(".lr-content:not([hidden]) time");
+    const expected = timestamp ?? document.createdAt;
+    expect(time?.getAttribute("datetime")).toBe(expected);
+    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(panel.renderRoot.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
+  });
+
+  it("resolves document images through the reader, deduplicates attachments, and preserves source links", async () => {
+    const url = "https://images.example/attachment.png";
+    const dataUrl = "data:image/png;base64,aW1hZ2U=";
+    const request = vi.fn(async (method: string) =>
+      method === "forge.image"
+        ? { url, dataUrl }
+        : {
+            ...item(),
+            body: `![Screenshot](${url})`,
+            comments: [
+              { id: "comment", url: itemUrl(1), author: "reviewer", body: `![Repeated](${url})` },
+            ],
+          },
+    );
+    const panel = await mount(request);
+    panel.readers = [
+      { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
+    ];
+    await panel.updateComplete;
+    open(panel);
+    await waitForFast(() =>
+      expect([...panel.renderRoot.querySelectorAll("img")].map((image) => image.src)).toEqual([
+        dataUrl,
+        dataUrl,
+      ]),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "forge.image")).toHaveLength(1);
+    expect(panel.renderRoot.querySelector<HTMLAnchorElement>(".lr-image a")?.href).toBe(url);
+  });
+
+  it("cancels retired document image requests and ignores late results after a connection replacement", async () => {
+    const url = "https://images.example/pending.png";
+    let finish!: (value: unknown) => void;
+    let imageSignal: AbortSignal | undefined;
+    const request = vi.fn(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "forge.image") {
+          imageSignal = options?.signal;
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        }
+        return { ...item(), body: `![Pending](${url})` };
+      },
+    );
+    const panel = await mount(request);
+    panel.readers = [
+      { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
+    ];
+    await panel.updateComplete;
+    open(panel);
+    await waitForFast(() => expect(imageSignal).toBeDefined());
+    const oldImage = panel.renderRoot.querySelector("img")!;
+    expect(oldImage.hasAttribute("src")).toBe(false);
+    panel.client = {
+      request: vi.fn().mockResolvedValue(item()),
+    } as unknown as GatewayBrowserClient;
+    await panel.updateComplete;
+    expect(imageSignal?.aborted).toBe(true);
+    finish({ url, dataUrl: "data:image/png;base64,aW1hZ2U=" });
+    await expectTitle(panel, "Item 1");
+    expect(oldImage.hasAttribute("src")).toBe(false);
+    expect(panel.renderRoot.querySelector("img")).toBeNull();
+  });
+
+  it("bounds image fanout and cancels queued work when its tab is removed", async () => {
+    const signals: AbortSignal[] = [];
+    const panel = await mount(async (method, _params, options) => {
+      if (method !== "forge.image") {
+        return {
+          ...item(),
+          body: Array.from(
+            { length: 40 },
+            (_, i) => `![Image ${i}](https://images.example/${i}.png)`,
+          ).join("\n\n"),
+        };
+      }
+      const signal = options!.signal!;
+      signals.push(signal);
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    });
+    panel.readers = [
+      { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
+    ];
+    await panel.updateComplete;
+    open(panel);
+    await waitForFast(() => expect(signals).toHaveLength(4));
+    await panel.closeHostedTab(panel.activeHostedTabId!);
+    await waitForFast(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+    expect(signals).toHaveLength(4);
+  });
+
+  it.each([
+    { url: "https://images.example/wrong.png", dataUrl: "data:image/png;base64,aW1hZ2U=" },
+    { url: "https://images.example/image.png", dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" },
+    { url: "https://images.example/image.png", dataUrl: "https://images.example/credentialed.png" },
+  ])(
+    "falls back only to the original anonymous image URL after an invalid response: $dataUrl",
+    async (response) => {
+      const url = "https://images.example/image.png";
+      const panel = await mount(
+        vi.fn(async (method) =>
+          method === "forge.image" ? response : { ...item(), body: `![Screenshot](${url})` },
+        ),
+      );
+      panel.readers = [
+        { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
+      ];
+      await panel.updateComplete;
+      open(panel);
+      await waitForFast(() => expect(panel.renderRoot.querySelector("img")?.src).toBe(url));
+      expect(panel.renderRoot.querySelector("img")?.crossOrigin).toBe("anonymous");
+      expect(panel.renderRoot.querySelector<HTMLAnchorElement>(".lr-image a")?.href).toBe(url);
+    },
+  );
+
   it("accepts the same document identity when only the requested anchor differs", async () => {
     const panel = await mount(vi.fn().mockResolvedValue(item(1)));
     open(panel, itemUrl(1) + "#comment-4");
     await expectTitle(panel, "Item 1");
   });
 
-  it("uses only the detail contract when an agent is selected", async () => {
+  it.each([false, true])(
+    "preserves typing focus while opening and settling a reader (embedded: %s)",
+    async (embedded) => {
+      const composer = document.createElement("textarea");
+      document.body.append(composer);
+      composer.focus();
+      const pending = deferredDetail();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockRejectedValueOnce(new Error("Request failed"));
+      const panel = await mount(request, { embedded, presented: embedded });
+      expect(document.activeElement).toBe(composer);
+
+      open(panel, itemUrl(1) + "#comment-4");
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(composer);
+      pending.resolve(item());
+      await pending.promise;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector("h1")?.textContent).toBe("Item 1");
+      expect(document.activeElement).toBe(composer);
+
+      open(panel, itemUrl(2));
+      await panel.updateComplete;
+      await panel.updateComplete;
+      expect(panel.renderRoot.querySelector('[role="alert"] h2')?.textContent).toBe(
+        "Could not load item",
+      );
+      expect(document.activeElement).toBe(composer);
+      const address = panel.renderRoot.querySelector<HTMLInputElement>(".lr-url")!;
+      address.focus();
+      address.value = itemUrl(3);
+      address.dispatchEvent(new Event("input", { bubbles: true }));
+      await panel.updateComplete;
+      expect(panel.shadowRoot?.activeElement).toBe(address);
+    },
+  );
+
+  it("passes the selected agent to the detail identity owner", async () => {
     const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (Object.keys(params as object).some((key) => key !== "url" && key !== "refresh")) {
+      if (
+        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
+      ) {
         throw new Error("Unexpected detail parameter");
       }
       return requestedItem(params);
@@ -129,7 +311,7 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(request).toHaveBeenCalledWith(
       "forge.item",
-      { url: itemUrl(1) },
+      { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
   });
@@ -377,6 +559,7 @@ describe("Plugin link reader panel", () => {
     panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.click();
     await panel.updateComplete;
     const input = panel.renderRoot.querySelector<HTMLInputElement>(".lr-url")!;
+    expect(panel.shadowRoot?.activeElement).toBe(input);
     const form = panel.renderRoot.querySelector("form")!;
     input.value = "https://example.com/not-supported";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -509,6 +692,29 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
+    "GitHub authentication failed (HTTP 401). Reconnect the GitHub identity in Settings.",
+    "GitHub access denied (HTTP 403). Check the configured GitHub identity's repository access.",
+    "GitHub item is unavailable or not public (HTTP 404). Open the link on GitHub to check access.",
+    "GitHub request timed out. Retry shortly.",
+  ])("shows the actionable Gateway failure: %s", async (message) => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message }));
+    const panel = await mount(request);
+    open(panel);
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(message),
+    );
+    expect(panel.renderRoot.querySelector('[role="alert"] h2')?.textContent).toBe(
+      "Could not load item",
+    );
+    expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).not.toContain(
+      "This item may be private or deleted",
+    );
+  });
+
   it("keeps failure and disconnect states actionable without displaying stale content", async () => {
     const request = vi
       .fn()
@@ -518,7 +724,7 @@ describe("Plugin link reader panel", () => {
     open(panel);
     await waitForFast(() =>
       expect(panel.renderRoot.querySelector('[role="alert"]')?.textContent).toContain(
-        "rate-limiting",
+        "Try again or open the original",
       ),
     );
     const external = panel.renderRoot.querySelector<HTMLAnchorElement>(

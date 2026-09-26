@@ -8,13 +8,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as agentDatabase from "../state/openclaw-agent-db-readonly.js";
 import { resolveAgentDir } from "./agent-scope.js";
+import { modelCatalogRouteVariantKey } from "./model-catalog-entry.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
   resolvePublishedModelCatalogOwner,
 } from "./prepared-model-catalog-owner.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import * as runtimeFacts from "./prepared-model-runtime.facts.js";
@@ -29,6 +35,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
 const fixture = usePreparedModelRuntimeHarness();
 const { mocks } = fixture;
@@ -493,6 +500,7 @@ describe("prepared build candidate lifetime", () => {
     const candidate = {
       input,
       catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+      retirementSignal: new AbortController().signal,
       ...(generation === undefined ? {} : { isGenerationCurrent: () => generation }),
       ...(build === undefined ? {} : { isBuildCurrent: () => build }),
     };
@@ -523,18 +531,21 @@ describe("prepared build candidate lifetime", () => {
         readOnly: true,
       };
       let current = checkpoint === "after";
+      const retirement = new AbortController();
       const prepareWorkspace = runtimeFacts.prepareWorkspaceBuildGroup;
       const preparation = vi
         .spyOn(runtimeFacts, "prepareWorkspaceBuildGroup")
         .mockImplementationOnce(async (...args) => {
           const prepared = await prepareWorkspace(...args);
           current = false;
+          retirement.abort();
           return prepared;
         });
       const candidate = {
         input,
         catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
         isGenerationCurrent: () => current,
+        retirementSignal: retirement.signal,
         isBuildCurrent: () => current,
       };
       const build = startSerializedSnapshotBuildBatch([candidate], new Map(), 1_000, "static");
@@ -548,4 +559,150 @@ describe("prepared build candidate lifetime", () => {
       }
     },
   );
+});
+
+describe("legacy provider catalog retention", () => {
+  const learned = { provider: "custom", id: "learned", name: "Learned" };
+  const starter = { provider: "custom", id: "starter", name: "Starter" };
+
+  it.each([
+    { name: "nonempty legacy inventory", empty: false, expected: [learned] },
+    { name: "empty legacy inventory", empty: true, expected: [starter] },
+    {
+      name: "profile-specific failure",
+      empty: false,
+      profileId: "custom:account",
+      expected: [starter],
+    },
+    { name: "changed credentials", empty: false, changedKey: true, expected: [starter] },
+    { name: "explicit successful empty inventory", empty: true, ready: true, expected: [] },
+    { name: "previous failed acquisition", empty: false, failed: true, expected: [starter] },
+  ])("preserves the shipped retention boundary for $name", async (scenario) => {
+    const previous: ModelCatalogSnapshot = {
+      entries: scenario.empty ? [] : [learned],
+      routeVariants: scenario.empty ? [] : [learned],
+      ...(scenario.ready
+        ? { providerOutcomes: [{ provider: "custom", status: "ready" as const }] }
+        : scenario.failed
+          ? { providerOutcomes: [{ provider: "custom", status: "unavailable" as const }] }
+          : {}),
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(previous);
+    mocks.catalogHookRows = new Map([
+      [
+        "custom",
+        new Set(
+          previous.entries.map((entry) =>
+            modelCatalogRouteVariantKey(entry, resolveModelCatalogIdentityKey(entry)),
+          ),
+        ),
+      ],
+    ]);
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+      provenance: "standalone",
+    });
+    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    expect(stored.catalogInventory?.providers.has("custom")).not.toBe(true);
+    await owner.loadFullModelCatalog!({ refresh: true });
+    expect(stored.catalogInventory?.providers.has("custom")).toBe(true);
+    if (!scenario.ready && !scenario.failed) {
+      expect(stored.catalogInventory?.catalog.providerOutcomes ?? []).toEqual([]);
+      expect(stored.catalogInventory?.discoveryOrigins).toEqual([]);
+    }
+
+    const failed: ModelCatalogSnapshot = {
+      entries: [],
+      routeVariants: [],
+      staticEntries: [starter],
+      providerOutcomes: [
+        { provider: "custom", profileId: scenario.profileId, status: "unavailable" },
+      ],
+    };
+    if (scenario.changedKey) {
+      setPreparedModelFullCatalogAuth(failed, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: { custom: "api_key" },
+        credentials: { custom: { type: "api_key", key: "replacement-key" } },
+      });
+    }
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(failed);
+    mocks.catalogHookRows = new Map();
+    const result = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(result.entries.map(({ provider, id, name }) => ({ provider, id, name }))).toEqual(
+      scenario.expected,
+    );
+    expect(result.routeVariants.map(({ provider, id, name }) => ({ provider, id, name }))).toEqual(
+      scenario.expected,
+    );
+    expect(result.providerOutcomes).toEqual(failed.providerOutcomes);
+    expect(result.authoritative).toBe(false);
+  });
+
+  it("does not treat native-first configured rows as a completed provider acquisition", async () => {
+    const configured = {
+      id: "configured",
+      name: "Configured",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 4096,
+    };
+    const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
+    mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "fixture",
+        source: "fixture",
+        harness: {
+          id: "fixture",
+          label: "Fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          loadModelCatalog: async () => [native],
+        },
+      });
+      return registry;
+    });
+    const config: OpenClawConfig = {
+      agents: { entries: { pro: { model: "custom/configured" } } },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://catalog.example.invalid/v1",
+            api: "openai-completions",
+            models: [configured],
+          },
+        },
+      },
+    };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+      provenance: "standalone",
+    });
+    await owner.loadNativeModelCatalog!({
+      provider: "custom",
+      modelId: "native",
+      runtime: "fixture",
+    });
+    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+    expect(stored.catalogInventory?.providers.size).toBe(0);
+    expect(stored.catalogInventory?.catalog.entries).toContainEqual(
+      expect.objectContaining({ provider: "custom", id: "configured" }),
+    );
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+      staticEntries: [starter],
+      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+    });
+    const result = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(result.entries).toContainEqual(expect.objectContaining(starter));
+    expect(result.authoritative).toBe(false);
+  });
 });

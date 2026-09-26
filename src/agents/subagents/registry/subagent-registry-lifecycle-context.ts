@@ -29,7 +29,9 @@ export type SubagentLifecycleOptions = {
     matches?: (entry: SubagentRunRecord) => boolean,
   ): SubagentRunRecord | null;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
+  /** Synchronous permission/revocation commits retain their native contract. */
   resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
+  resolveSubagentTaskAsync(entry: SubagentRunRecord): Promise<DetachedTaskFindResult>;
   shouldEmitEndedHookForRun(args: {
     entry: SubagentRunRecord;
     reason: SubagentLifecycleEndedReason;
@@ -65,10 +67,12 @@ export type SubagentLifecycleOptions = {
 export interface SubagentLifecycleCommonContext {
   readonly options: SubagentLifecycleOptions;
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean;
+  shouldSuppressSessionEffects(entry: SubagentRunRecord): boolean;
 }
 
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
+  bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   bumpTerminalGeneration(entry: SubagentRunRecord): number;
   hasProgressEnded(entry: SubagentRunRecord): boolean;
@@ -102,6 +106,14 @@ export type PendingRequesterSettleWakeCommit = {
   commit(entries: readonly SubagentRunRecord[]): boolean;
   failures: number;
   nextAttemptAt: number;
+  /** One sustained-failure report was emitted for this retry episode. */
+  sustainedFailureReported?: boolean;
+  /** Fault last reported for this episode; a different one is not a repeat. */
+  reportedFailureSignature?: string;
+  /** Reports already emitted for the current signature. */
+  reportedFailureLogs?: number;
+  /** Identical failure reports withheld after the reporting budget ran out. */
+  suppressedFailureLogs?: number;
 };
 
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {

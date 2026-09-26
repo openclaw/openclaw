@@ -88,6 +88,7 @@ export async function runCodexAppServerAttempt(
             turnRequest,
           );
           if ("result" in turnStart) {
+            connection.assertModelExecutionCurrent();
             return turnStart.result;
           }
           const activeTurn = activateCodexAttemptTurn(
@@ -95,7 +96,7 @@ export async function runCodexAppServerAttempt(
             turnRuntime,
             lifecycle,
             notifications,
-            turnStart.turn,
+            turnStart,
           );
           activeTurnOwnsCleanup = true;
           let finalizedResult: EmbeddedRunAttemptResult | undefined;
@@ -139,6 +140,7 @@ export async function runCodexAppServerAttempt(
           ) {
             throw resources.state.executionDisconnectError;
           }
+          connection.assertModelExecutionCurrent();
           return finalizedResult;
         } finally {
           turnRuntime.deadlines.dispose();
@@ -155,6 +157,7 @@ export async function runCodexAppServerAttempt(
     }
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
-    params.abortSignal?.removeEventListener("abort", connection.abortFromUpstream);
+    connection.cancellation.dispose();
+    connection.releaseModelExecution();
   }
 }

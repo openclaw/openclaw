@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import nativeFs from "node:fs";
 import fs from "node:fs/promises";
@@ -8,6 +9,12 @@ import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
+import { shouldUseNativeSkillsWatcher } from "./refresh-watch-transport.js";
+import {
+  observeContentWatchers,
+  type ObservedSkillsWatcher,
+} from "./refresh.native.test-support.js";
 
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -123,15 +130,25 @@ it("refreshes skills created beneath an initially missing project skills root", 
   const turnContext = new AsyncLocalStorage<string>();
   const pendingInputContext = new AsyncLocalStorage<string>();
   const inheritedContexts: Array<{ turn?: string; pendingInput?: string }> = [];
-  const originalWatch = nativeFs.watch;
-  const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+  const usePolling = resolveSkillsWatcherUsePolling();
+  const observeRegistration = (watched: nativeFs.PathLike, polling: boolean) => {
     inheritedContexts.push({
       turn: turnContext.getStore(),
       pendingInput: pendingInputContext.getStore(),
     });
-    const watcher = originalWatch(...args);
-    registeredPaths.add(path.resolve(String(args[0])));
-    return watcher;
+    if (polling === usePolling) {
+      registeredPaths.add(path.resolve(String(watched)));
+    }
+  };
+  const originalWatch = nativeFs.watch;
+  const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+    observeRegistration(args[0], false);
+    return originalWatch(...args);
+  });
+  const originalWatchFile = nativeFs.watchFile;
+  const watchFileObserver = vi.spyOn(nativeFs, "watchFile").mockImplementation((...args) => {
+    observeRegistration(args[0], true);
+    return originalWatchFile(...args);
   });
   syncBuiltinESMExports();
   const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
@@ -144,7 +161,7 @@ it("refreshes skills created beneath an initially missing project skills root", 
     }
     if (event.reason === "watch") {
       if (event.changedPath) {
-        changes.push(event.changedPath);
+        changes.push(path.resolve(event.changedPath));
       } else {
         readyEvents += 1;
       }
@@ -196,24 +213,25 @@ it("refreshes skills created beneath an initially missing project skills root", 
     unregister();
     await closeSkillsWatchers();
     watchObserver.mockRestore();
+    watchFileObserver.mockRestore();
     syncBuiltinESMExports();
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
 describe("shared missing skill ancestors", () => {
-  let captureFailure: (() => void) | undefined;
+  let captureFailure: ((stage: "before test teardown" | "afterEach fallback") => void) | undefined;
   const roots = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async ({ task }) => {
-      // onTestFailed runs after afterEach. Freeze the failed operation's state
-      // before closing watches or clearing their pending timers.
+      // afterEach may follow the body's cleanup; retain any earlier snapshot.
       if (task.result?.state === "fail") {
-        captureFailure?.();
+        captureFailure?.("afterEach fallback");
       }
       captureFailure = undefined;
       const { closeSkillsWatchers } = await import("./refresh.js");
       await closeSkillsWatchers(true);
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       cleanup();
     }),
   );
@@ -223,12 +241,69 @@ describe("shared missing skill ancestors", () => {
     async (ancestor) => {
       let phase = "create fixture root";
       let failureSnapshot: string | undefined;
-      const observed: Array<{
-        watcher: ReturnType<typeof chokidar.watch>;
-        ready: boolean;
-        paths: Parameters<typeof chokidar.watch>[0];
-      }> = [];
+      let captureAttempted = false;
+      let sequence = 0;
+      const transitions: Array<Record<string, unknown>> = [];
+      const trace = (kind: string, details: Record<string, unknown> = {}) => {
+        transitions.push({ sequence: ++sequence, at: performance.now(), phase, kind, ...details });
+        if (transitions.length > 512) {
+          transitions.shift();
+        }
+      };
+      const observed: ObservedSkillsWatcher[] = [];
       const watcherErrors: unknown[] = [];
+      let controlledLoss:
+        | { sourceRoot: string; generationStart: number; generationEnd?: number; phase: string }
+        | undefined;
+      const contentErrors: Array<{
+        error: unknown;
+        observation: ObservedSkillsWatcher;
+        loss: typeof controlledLoss;
+        phase: string;
+      }> = [];
+      observeContentWatchers(observed, watcherErrors, undefined, (error, observation) => {
+        contentErrors.push({ error, observation, loss: controlledLoss, phase });
+      });
+      const nativeAncestor = shouldUseNativeSkillsWatcher(resolveSkillsWatcherUsePolling());
+      const nativeHandles: Array<{
+        closed: boolean;
+        watched: string;
+        watcher: ReturnType<typeof nativeFs.watch>;
+      }> = [];
+      const nativeErrors: Array<{
+        error: unknown;
+        handle: (typeof nativeHandles)[number];
+        phase: string;
+      }> = [];
+      let expectedNativeError: (typeof nativeErrors)[number] | undefined;
+      const pooledErrors: Array<{
+        error: unknown;
+        watcher: ReturnType<typeof chokidar.watch>;
+        phase: string;
+      }> = [];
+      let expectedPooledError: (typeof pooledErrors)[number] | undefined;
+      const originalNativeWatch = nativeFs.watch;
+      const nativeWatch = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+        const watcher = originalNativeWatch(...args);
+        const observation = { closed: false, watched: String(args[0]), watcher };
+        const id = nativeHandles.length;
+        nativeHandles.push(observation);
+        trace("native-open", { id, path: String(args[0]) });
+        watcher.on("change", (event, filename) => {
+          trace("native-event", { id, event, filename: filename?.toString() });
+        });
+        watcher.once("close", () => {
+          observation.closed = true;
+          trace("native-close", { id });
+        });
+        watcher.on("error", (error) => {
+          observation.closed = true;
+          nativeErrors.push({ error, handle: observation, phase });
+          watcherErrors.push(error);
+        });
+        return watcher;
+      });
+      syncBuiltinESMExports();
       const pendingTimers = new Map<
         Parameters<typeof clearTimeout>[0],
         {
@@ -239,27 +314,47 @@ describe("shared missing skill ancestors", () => {
           stack: string | undefined;
         }
       >();
-      captureFailure = () => {
-        failureSnapshot = JSON.stringify({
-          ancestor,
-          phase,
-          pendingTimers: Array.from(pendingTimers.values(), ({ delayMs, createdAt, stack }) => ({
-            delayMs,
-            ageMs: Math.round(performance.now() - createdAt),
-            stack,
-          })),
-          watchers: observed.map(({ watcher, ready, paths }) => ({
-            paths,
-            ready,
-            closed: watcher.closed,
-          })),
-          watcherErrors: watcherErrors.map((error) =>
-            error instanceof Error ? error.stack : String(error),
-          ),
-        });
+      captureFailure = (captureStage) => {
+        if (captureAttempted) {
+          return;
+        }
+        captureAttempted = true;
+        try {
+          failureSnapshot = JSON.stringify({
+            captureStage,
+            ancestor,
+            phase,
+            transitions,
+            pendingTimers: Array.from(pendingTimers.values(), ({ delayMs, createdAt, stack }) => ({
+              delayMs,
+              ageMs: Math.round(performance.now() - createdAt),
+              stack,
+            })),
+            watchers: observed.map(({ watcher, ready, paths }) => ({
+              paths,
+              ready,
+              closed: watcher.closed,
+            })),
+            watcherErrors: watcherErrors.map((error) =>
+              error instanceof Error ? error.stack : String(error),
+            ),
+            contentErrors: contentErrors.map(({ observation, loss, phase: errorPhase }) => ({
+              loss,
+              phase: errorPhase,
+              closed: observation.watcher.closed,
+            })),
+            nativeHandles: nativeHandles.map(({ closed, watched }) => ({ closed, watched })),
+            nativeErrors: nativeErrors.map(({ handle, phase: errorPhase }) => ({
+              watched: handle.watched,
+              phase: errorPhase,
+            })),
+          });
+        } catch {
+          // Diagnostics must not replace the assertion or prevent cleanup.
+        }
       };
       onTestFailed(() => {
-        console.error(`[skills ancestor failure before cleanup] ${failureSnapshot}`);
+        console.error(`[skills ancestor failure] ${failureSnapshot}`);
       });
       const root = await fs.realpath(roots.make("skills-shared-ancestor-"));
       const source = (name: string) => {
@@ -277,26 +372,44 @@ describe("shared missing skill ancestors", () => {
         await fs.mkdir(path.join(current.workspaceDir, "skills"), { recursive: true });
       }
       phase = "import refresh owner";
-      const { ensureSkillsWatcher, registerSkillsChangeListener } = await import("./refresh.js");
+      const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
+        await import("./refresh.js");
       phase = "import skill loader";
       const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+      const { getSkillsSourceVersion } = await import("./refresh-state.js");
       const originalWatch = chokidar.watch;
       const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
         const watcher = originalWatch(...args);
         const observation = { watcher, ready: false, paths: args[0] };
+        const id = observed.length;
         observed.push(observation);
+        trace("content-open", { id, paths: args[0] });
+        watcher.on("raw", (event, rawPath, details) => {
+          trace("content-raw", { id, event, rawPath, details });
+        });
+        watcher.on("all", (event, changedPath) => {
+          trace("content-event", { id, event, changedPath });
+        });
         // Attach before returning: promotion can create more watchers during ready.
         watcher.once("ready", () => {
           observation.ready = true;
+          trace("content-ready", { id });
         });
-        watcher.on("error", (error) => watcherErrors.push(error));
+        watcher.on("error", (error) => {
+          pooledErrors.push({ error, watcher, phase });
+          watcherErrors.push(error);
+        });
         return watcher;
       });
       const originalSetTimeout = globalThis.setTimeout;
       const originalClearTimeout = globalThis.clearTimeout;
       vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
         const { promise: settled, resolve: finish } = createDeferredCore();
+        const id = sequence + 1;
+        const stack = new Error("Watcher fixture timer created").stack;
+        trace("timer-start", { id, delay, stack });
         const timer = originalSetTimeout(() => {
+          trace("timer-fire", { id });
           pendingTimers.delete(timer);
           try {
             callback.apply(timer, args);
@@ -309,21 +422,85 @@ describe("shared missing skill ancestors", () => {
           finish,
           delayMs: delay,
           createdAt: performance.now(),
-          stack: new Error("Watcher fixture timer created").stack,
+          stack,
         });
         return timer;
       });
       vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+        const pending = pendingTimers.get(timer);
+        if (pending) {
+          trace("timer-clear", { delayMs: pending.delayMs, stack: pending.stack });
+        }
         originalClearTimeout(timer);
-        pendingTimers.get(timer)?.finish();
+        pending?.finish();
         pendingTimers.delete(timer);
       });
+      // Only the deliberate ancestor error may sit outside the root-loss ledger.
+      // Bind it to the exact handle and injection phase; all other errors still fail.
+      const verifyWatcherErrors = () => {
+        const expected = expectedNativeError;
+        expect(nativeErrors).toHaveLength(expected ? 1 : 0);
+        if (expected) {
+          assert.ok(nativeErrors[0]);
+          expect(nativeErrors[0].error).toBe(expected.error);
+          expect(nativeErrors[0].handle).toBe(expected.handle);
+          expect(nativeErrors[0].phase).toBe(expected.phase);
+          expect(watcherErrors.filter((error) => error === expected.error)).toHaveLength(1);
+        }
+        const pooledExpected = expectedPooledError;
+        expect(pooledErrors).toHaveLength(pooledExpected ? 1 : 0);
+        if (pooledExpected) {
+          assert.ok(pooledErrors[0]);
+          expect(pooledErrors[0].error).toBe(pooledExpected.error);
+          expect(pooledErrors[0].watcher).toBe(pooledExpected.watcher);
+          expect(pooledErrors[0].phase).toBe(pooledExpected.phase);
+          expect(pooledExpected.watcher.closed).toBe(true);
+          expect(watcherErrors.filter((error) => error === pooledExpected.error)).toHaveLength(1);
+        }
+        const actualContentErrors = watcherErrors.filter(
+          (error) => error !== expected?.error && error !== pooledExpected?.error,
+        );
+        expect(actualContentErrors).toHaveLength(contentErrors.length);
+        for (const [
+          index,
+          { error, observation, loss, phase: errorPhase },
+        ] of contentErrors.entries()) {
+          expect(actualContentErrors[index]).toBe(error);
+          assert.ok(loss, errorPhase);
+          assert.ok(error instanceof Error && "code" in error && "path" in error);
+          // Windows may report EPERM while scanning a removed directory. Bind errors
+          // to generations present when the deliberate removal completed.
+          assert.ok(loss.generationEnd !== undefined, loss.phase);
+          expect(observed.slice(0, loss.generationEnd)).toContain(observation);
+          assert.ok(typeof error.path === "string");
+          expect(path.resolve(error.path)).toBe(loss.sourceRoot);
+          expect(observation.watcher.closed).toBe(true);
+        }
+      };
+      const hasRecoveredLoss = () => {
+        const loss = controlledLoss;
+        return (
+          !loss ||
+          observed
+            .slice(loss.generationStart)
+            .some(
+              ({ paths, ready, watcher }) =>
+                ready &&
+                !watcher.closed &&
+                [paths].flat().some((watched) => path.resolve(watched) === loss.sourceRoot),
+            )
+        );
+      };
       const settleWatchers = async (stage: string) => {
         for (;;) {
+          // Native registration is synchronous; its ready/reconciliation callbacks
+          // are microtasks. Finish those before inspecting recursive scan readiness.
+          await Promise.resolve();
           phase = `${stage}: wait for watcher readiness`;
           await vi.waitFor(() => {
-            expect(watcherErrors).toEqual([]);
+            verifyWatcherErrors();
             expect(observed.every(({ watcher, ready }) => ready || watcher.closed)).toBe(true);
+            expect(hasRecoveredLoss()).toBe(true);
           });
           const generationCount = observed.length;
           // Drain actual debounce/stability work, including timers chained by its
@@ -335,11 +512,12 @@ describe("shared missing skill ancestors", () => {
             setImmediate(resolve);
           });
           phase = `${stage}: check settled generation`;
-          expect(watcherErrors).toEqual([]);
+          verifyWatcherErrors();
           if (
             pendingTimers.size === 0 &&
             observed.length === generationCount &&
-            observed.every(({ watcher, ready }) => ready || watcher.closed)
+            observed.every(({ watcher, ready }) => ready || watcher.closed) &&
+            hasRecoveredLoss()
           ) {
             return;
           }
@@ -350,21 +528,46 @@ describe("shared missing skill ancestors", () => {
         ensureSkillsWatcher(current);
       }
       await settleWatchers("initial acquisition");
-      expect(
-        watch.mock.calls.filter(([watched]) => watched === root.replaceAll("\\", "/")),
-      ).toHaveLength(1);
+      if (nativeAncestor) {
+        expect(
+          nativeWatch.mock.calls.filter(([watched]) => path.resolve(String(watched)) === root),
+        ).toHaveLength(1);
+      } else {
+        expect(
+          watch.mock.calls.filter(([watched]) => watched === root.replaceAll("\\", "/")),
+        ).toHaveLength(1);
+      }
       const changes: string[] = [];
+      const available: string[] = [];
       const unregister = registerSkillsChangeListener((event) => {
+        if (event.workspaceDir && event.reason === "watch-available") {
+          available.push(event.workspaceDir);
+        }
         if (event.workspaceDir) {
           changes.push(event.workspaceDir);
+          trace("published", {
+            ...event,
+            sourceVersion: getSkillsSourceVersion(event.workspaceDir),
+          });
         }
       });
-      const read = (current: typeof first) =>
-        loadWorkspaceSkills(current.workspaceDir, {
+      let independentPeer: ReturnType<typeof chokidar.watch> | undefined;
+      const readSkills = (current: typeof first) => {
+        const sourceVersionBefore = getSkillsSourceVersion(current.workspaceDir);
+        const entries = loadWorkspaceSkills(current.workspaceDir, {
           config: current.config,
           bundledSkillsDir: "",
           managedSkillsDir: path.join(root, "unused"),
-        }).map((entry) => entry.skill.name);
+        });
+        trace("read", {
+          workspaceDir: current.workspaceDir,
+          sourceVersionBefore,
+          sourceVersionAfter: getSkillsSourceVersion(current.workspaceDir),
+          names: entries.map((entry) => entry.skill.name),
+        });
+        return entries;
+      };
+      const read = (current: typeof first) => readSkills(current).map((entry) => entry.skill.name);
       const writeSkill = async (current: typeof first, name: string) => {
         const directory = path.join(current.sourceRoot, name);
         phase = `create skill directory: ${name}`;
@@ -379,20 +582,32 @@ describe("shared missing skill ancestors", () => {
         phase = "prime empty discovery";
         expect(read(first)).toEqual([]);
         expect(read(second)).toEqual([]);
-        phase = "write unrelated file";
-        await fs.writeFile(path.join(root, "unrelated.sqlite-wal"), "unrelated");
-        await writeSkill(first, "first-proof");
-        phase = "discover first skill";
-        await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
+        const unrelatedFile = path.join(root, "unrelated.sqlite-wal");
+        const lstat = vi.spyOn(fs, "lstat");
+        syncBuiltinESMExports();
+        try {
+          phase = "write unrelated file";
+          await fs.writeFile(unrelatedFile, "unrelated");
+          await writeSkill(first, "first-proof");
+          phase = "discover first skill";
+          await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
+          await settleWatchers("first discovery");
+          if (nativeAncestor) {
+            expect(lstat.mock.calls.filter(([file]) => file === unrelatedFile)).toEqual([]);
+          }
+        } finally {
+          lstat.mockRestore();
+          syncBuiltinESMExports();
+        }
         expect(changes).not.toContain(second.workspaceDir);
         phase = "wait for root promotion";
         await vi.waitFor(() => {
           expect(
-            watch.mock.calls.some(
-              ([watched], index) =>
-                watched === first.sourceRoot.replaceAll("\\", "/") &&
-                observed[index]?.ready &&
-                !observed[index]?.watcher.closed,
+            observed.some(
+              ({ paths, ready, watcher }) =>
+                [paths].flat().some((watched) => path.resolve(watched) === first.sourceRoot) &&
+                ready &&
+                !watcher.closed,
             ),
           ).toBe(true);
         });
@@ -402,6 +617,11 @@ describe("shared missing skill ancestors", () => {
         expect(read(first)).toContain("first-proof");
         const movedAncestor =
           ancestor === "higher" ? path.join(root, "left") : path.join(root, "left", "nested");
+        controlledLoss = {
+          sourceRoot: first.sourceRoot,
+          generationStart: observed.length,
+          phase: "remove or move watched ancestor",
+        };
         if (process.platform === "win32") {
           // Windows cannot rename an ancestor with live descendant directory watches.
           phase = "remove watched ancestor";
@@ -410,13 +630,148 @@ describe("shared missing skill ancestors", () => {
           phase = "rename watched ancestor";
           await fs.rename(movedAncestor, `${movedAncestor}-away`);
         }
+        controlledLoss.generationEnd = observed.length;
         phase = "discover removed ancestor";
         await expect.poll(() => read(first), { timeout: 3_000 }).toEqual([]);
         await writeSkill(first, "returned-proof");
         phase = "discover returned skill";
         await expect.poll(() => read(first), { timeout: 3_000 }).toEqual(["returned-proof"]);
         await settleWatchers("recreated root");
+        controlledLoss = undefined;
         expect(read(first)).toEqual(["returned-proof"]);
+        // Windows uses the delete/recreate segment above: live descendant
+        // directory handles prohibit this same-turn ancestor rename there.
+        if (!resolveSkillsWatcherUsePolling() && process.platform !== "win32") {
+          phase = "retain independent persistent native peer";
+          independentPeer = originalWatch(first.sourceRoot, {
+            ignoreInitial: true,
+            persistent: true,
+          });
+          await new Promise<void>((resolve, reject) => {
+            independentPeer!.once("ready", resolve);
+            independentPeer!.once("error", reject);
+          });
+          const peerHandle = nativeHandles.findLast(
+            (handle) => handle.watched === first.sourceRoot && !handle.closed,
+          );
+          expect(peerHandle).toBeDefined();
+          const nativeAdmissions = () =>
+            nativeHandles.filter((handle) => handle.watched === first.sourceRoot).length;
+          const beforeRecovery = nativeAdmissions();
+          const originalInode = nativeFs.statSync(first.sourceRoot).ino;
+          const nativeClosed = createDeferredCore();
+          available.length = 0;
+          if (nativeAncestor) {
+            const failedAncestor = nativeHandles.findLast(
+              (handle) => handle.watched === movedAncestor && !handle.closed,
+            );
+            expect(failedAncestor).toBeDefined();
+            const nativeError = Object.assign(new Error("ancestor native handle lost"), {
+              code: "EIO",
+            });
+            phase = "close then fail ancestor native handle";
+            expectedNativeError = { error: nativeError, handle: failedAncestor!, phase };
+            failedAncestor!.watcher.once("close", () => nativeClosed.resolve());
+            // Reproduce Node's close-before-error ownership transition. The new
+            // observer must wait for that owner, while the independent peer stays live.
+            failedAncestor!.watcher.close();
+            failedAncestor!.watcher.emit("error", nativeError);
+          } else {
+            const index = watch.mock.calls.findLastIndex(
+              ([watched, options], candidate) =>
+                watched === movedAncestor.replaceAll("\\", "/") &&
+                options?.depth === 0 &&
+                !watch.mock.results[candidate]?.value.closed,
+            );
+            expect(index).toBeGreaterThanOrEqual(0);
+            const result = watch.mock.results[index];
+            assert.ok(result?.type === "return");
+            const watcher = result.value;
+            const error = Object.assign(new Error("pooled ancestor observation lost"), {
+              code: "EIO",
+            });
+            phase = "fail pooled ancestor observation";
+            expectedPooledError = { error, watcher, phase };
+            watcher.emit("error", error);
+            nativeClosed.resolve();
+          }
+          phase = "replace ancestor at the same path before native delivery";
+          nativeFs.renameSync(movedAncestor, `${movedAncestor}-replaced`);
+          const replacementSkill = path.join(first.sourceRoot, "replacement-proof");
+          nativeFs.mkdirSync(replacementSkill, { recursive: true });
+          nativeFs.writeFileSync(
+            path.join(replacementSkill, "SKILL.md"),
+            "---\nname: replacement-proof\ndescription: Replaced ancestor\n---\n",
+          );
+          expect(nativeFs.statSync(first.sourceRoot).ino).not.toBe(originalInode);
+          await nativeClosed.promise;
+          await expect.poll(() => read(first), { timeout: 3_000 }).toEqual(["replacement-proof"]);
+          await settleWatchers("same-path replacement");
+          expect(independentPeer.closed).toBe(false);
+          expect(peerHandle!.closed).toBe(false);
+          if (nativeAncestor) {
+            expect(nativeAdmissions()).toBeGreaterThan(beforeRecovery);
+          }
+          const description = () =>
+            readSkills(first).find((entry) => entry.skill.name === "replacement-proof")?.skill
+              .description;
+          expect(description()).toBe("Replaced ancestor");
+          if (nativeAncestor) {
+            nativeFs.writeFileSync(
+              path.join(replacementSkill, "SKILL.md"),
+              "---\nname: replacement-proof\ndescription: Deep edit after verified recovery\n---\n",
+            );
+            // No preparation/ensure after priming: a later edit needs the newly
+            // verified Skills observer, not an outage-triggered cache invalidation.
+            await expect
+              .poll(description, { timeout: 3_000 })
+              .toBe("Deep edit after verified recovery");
+          } else {
+            const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
+            const snapshot = (await resolveReusableWorkspaceSkillSnapshot(first)).snapshot;
+            expect(snapshot.prompt).toContain("Replaced ancestor");
+            const admissions = observed.length;
+            nativeFs.writeFileSync(
+              path.join(replacementSkill, "SKILL.md"),
+              "---\nname: replacement-proof\ndescription: Later preparation sees pooled outage edit\n---\n",
+            );
+            const next = await resolveReusableWorkspaceSkillSnapshot({
+              ...first,
+              existingSnapshot: snapshot,
+            });
+            expect(next.snapshot.prompt).toContain("Later preparation sees pooled outage edit");
+            expect(available).not.toContain(first.workspaceDir);
+            expect(independentPeer.closed).toBe(false);
+            expect(peerHandle!.closed).toBe(false);
+            expect(observed).toHaveLength(admissions);
+          }
+        }
+        if (nativeAncestor) {
+          // A one-time cache invalidation is insufficient: subsequent writes must
+          // reach a content watcher registered on the replacement directory.
+          await writeSkill(first, "replacement-later-proof");
+          await expect
+            .poll(() => read(first), { timeout: 3_000 })
+            .toContain("replacement-later-proof");
+          await settleWatchers("replacement skill creation");
+          expect(
+            readSkills(first).find((entry) => entry.skill.name === "replacement-later-proof")?.skill
+              .description,
+          ).toBe("Shared ancestor proof");
+          phase = "edit discovered replacement skill";
+          await fs.writeFile(
+            path.join(first.sourceRoot, "replacement-later-proof", "SKILL.md"),
+            "---\nname: replacement-later-proof\ndescription: Edited replacement skill\n---\n",
+          );
+          await expect
+            .poll(
+              () =>
+                readSkills(first).find((entry) => entry.skill.name === "replacement-later-proof")
+                  ?.skill.description,
+              { timeout: 3_000 },
+            )
+            .toBe("Edited replacement skill");
+        }
         // Retiring one logical workspace must not retire the shared missing-root observer.
         phase = "retire first workspace";
         ensureSkillsWatcher({
@@ -437,73 +792,200 @@ describe("shared missing skill ancestors", () => {
         phase = "discover restored sibling skill";
         await expect.poll(() => read(second), { timeout: 3_000 }).toContain("remaining-proof");
         phase = "remove sibling ancestor";
+        controlledLoss = {
+          sourceRoot: second.sourceRoot,
+          generationStart: observed.length,
+          phase,
+        };
         await fs.rm(path.join(root, "right"), { recursive: true });
+        controlledLoss.generationEnd = observed.length;
         phase = "discover removed sibling ancestor";
         await expect.poll(() => read(second), { timeout: 3_000 }).toEqual([]);
         await writeSkill(second, "recreated-proof");
         phase = "discover recreated sibling skill";
         await expect.poll(() => read(second), { timeout: 3_000 }).toContain("recreated-proof");
+        await settleWatchers("recreated sibling root");
+        controlledLoss = undefined;
+      } catch (error) {
+        try {
+          captureFailure?.("before test teardown");
+        } catch {
+          // Diagnostic failure must not replace the original operation error.
+        }
+        throw error;
       } finally {
         unregister();
+        await independentPeer?.close();
+        await closeSkillsWatchers(true);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (nativeAncestor) {
+          expect(nativeHandles.every(({ closed }) => closed)).toBe(true);
+        }
       }
+      verifyWatcherErrors();
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "does not promote missing roots through newly created ancestor symlinks",
-    async () => {
-      const root = await fs.realpath(roots.make("skills-ancestor-symlink-"));
-      const outside = await fs.realpath(roots.make("skills-ancestor-outside-"));
-      const workspaceDir = path.join(root, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-      const link = path.join(root, "missing");
-      const sourceRoot = path.join(link, "nested", "skills");
-      await fs.mkdir(path.join(outside, "nested", "skills", "outside-proof"), { recursive: true });
-      const config = { skills: { load: { extraDirs: [sourceRoot] } } };
-      const watch = vi.spyOn(chokidar, "watch");
-      const { ensureSkillsWatcher } = await import("./refresh.js");
-      const { getSkillsSourceVersion } = await import("./refresh-state.js");
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-      const read = () =>
-        loadWorkspaceSkills(workspaceDir, {
-          config,
-          bundledSkillsDir: "",
-          managedSkillsDir: path.join(root, "unused"),
-        }).map((entry) => entry.skill.name);
-      ensureSkillsWatcher({ workspaceDir, config });
-      expect(read()).toEqual([]);
-      await Promise.all(
-        watch.mock.results.map((result) => {
-          if (result.type !== "return") {
-            throw new Error("Watcher acquisition failed");
+  it.runIf(process.platform !== "win32").each([
+    {
+      name: "does not promote missing roots through newly created ancestor symlinks",
+      replaceAncestor: false,
+    },
+    {
+      name: "rediscovers ordinary roots after a watched ancestor is replaced by a symlink",
+      replaceAncestor: true,
+    },
+  ])("$name", async ({ replaceAncestor }) => {
+    const root = await fs.realpath(roots.make("skills-ancestor-symlink-"));
+    const outside = await fs.realpath(roots.make("skills-ancestor-outside-"));
+    const workspaceDir = path.join(root, "workspace");
+    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+    const link = path.join(root, "missing");
+    const sourceRoot = path.join(link, "nested", "skills");
+    if (replaceAncestor) {
+      await fs.mkdir(link);
+    }
+    await fs.mkdir(path.join(outside, "nested", "skills", "outside-proof"), { recursive: true });
+    const config = { skills: { load: { extraDirs: [sourceRoot] } } };
+    const observed: ObservedSkillsWatcher[] = [];
+    const watcherErrors: unknown[] = [];
+    observeContentWatchers(observed, watcherErrors);
+    const pollingRawPaths: string[] = [];
+    let pollingRawDeliveries = 0;
+    const unwatchedDuringPollingRaw: string[] = [];
+    const originalUnwatchFile = nativeFs.unwatchFile;
+    vi.spyOn(nativeFs, "unwatchFile").mockImplementation((...args) => {
+      const unwatched = path.resolve(String(args[0]));
+      if (pollingRawPaths.includes(unwatched)) {
+        unwatchedDuringPollingRaw.push(unwatched);
+      }
+      return originalUnwatchFile(...args);
+    });
+    const observedPaths = new Set<string>();
+    const originalWatch = chokidar.watch;
+    const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
+      const watcher = originalWatch(...args);
+      const observation = { watcher, ready: false, paths: args[0] };
+      observed.push(observation);
+      watcher.once("ready", () => {
+        observation.ready = true;
+      });
+      watcher.on("error", (error) => watcherErrors.push(error));
+      watcher.on("all", (_event, changedPath) => {
+        observedPaths.add(changedPath);
+      });
+      if (resolveSkillsWatcherUsePolling()) {
+        const originalEmit = watcher.emit.bind(watcher);
+        vi.spyOn(watcher, "emit").mockImplementation((...emitArgs) => {
+          if (emitArgs[0] !== "raw") {
+            return originalEmit(...emitArgs);
           }
-          return new Promise<void>((resolve, reject) => {
-            result.value.once("ready", resolve);
-            result.value.once("error", reject);
-          });
-        }),
-      );
-      // Ready handlers reconcile synchronously before these promises resolve.
-      // Unchanged empty inventory suppresses public events, but discovery still invalidates.
-      const sourceVersion = getSkillsSourceVersion(workspaceDir);
+          pollingRawPaths.push(path.resolve(String(emitArgs[2])));
+          pollingRawDeliveries += 1;
+          try {
+            return originalEmit(...emitArgs);
+          } finally {
+            pollingRawPaths.pop();
+          }
+        });
+      }
+      return watcher;
+    });
+    const originalNativeWatch = nativeFs.watch;
+    const nativeWatch = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+      const watcher = originalNativeWatch(...args);
+      watcher.on("change", (_event, filename) => {
+        if (typeof args[0] === "string" && filename !== null) {
+          observedPaths.add(path.resolve(args[0], filename.toString()));
+        }
+      });
+      return watcher;
+    });
+    syncBuiltinESMExports();
+    const { ensureSkillsWatcher } = await import("./refresh.js");
+    const { getSkillsSourceVersion } = await import("./refresh-state.js");
+    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+    const read = () =>
+      loadWorkspaceSkills(workspaceDir, {
+        config,
+        bundledSkillsDir: "",
+        managedSkillsDir: path.join(root, "unused"),
+      }).map((entry) => entry.skill.name);
+    ensureSkillsWatcher({ workspaceDir, config });
+    expect(read()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(observed.length).toBeGreaterThan(0);
+      expect(observed.every(({ ready, watcher }) => ready || watcher.closed)).toBe(true);
+      expect(watcherErrors).toEqual([]);
+    });
+    // Ready handlers reconcile synchronously before this readiness check returns.
+    // Unchanged empty inventory suppresses public events, but discovery still invalidates.
+    const sourceVersion = getSkillsSourceVersion(workspaceDir);
+    const chokidarAdmissionStart = replaceAncestor ? watch.mock.calls.length : 0;
+    const nativeAdmissionStart = replaceAncestor ? nativeWatch.mock.calls.length : 0;
+    if (replaceAncestor) {
+      // Finish replacement in this turn so delivery cannot rely on observing
+      // the intermediate absence before the same path becomes a symlink.
+      nativeFs.renameSync(link, `${link}-away`);
+      nativeFs.symlinkSync(outside, link, "dir");
+    } else {
       await fs.symlink(outside, link, "dir");
-      await expect
-        .poll(() => getSkillsSourceVersion(workspaceDir), { timeout: 3_000 })
-        .toBeGreaterThan(sourceVersion);
-      expect(
-        watch.mock.calls.some(
+    }
+    await vi.waitFor(
+      () => {
+        expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(sourceVersion);
+        if (replaceAncestor) {
+          // A late initial-ready event can advance the version before the link
+          // is observed. Keep it in place until observation moves to its parent.
+          expect(
+            watch.mock.calls.slice(chokidarAdmissionStart).some(([watched]) => watched === root) ||
+              nativeWatch.mock.calls
+                .slice(nativeAdmissionStart)
+                .some(([watched]) => watched === root),
+          ).toBe(true);
+        } else {
+          // A late ready event does not prove the new symlink was observed.
+          // Keep it in place until the watcher reports that exact entry.
+          expect(observedPaths.has(link)).toBe(true);
+        }
+      },
+      { timeout: 3_000 },
+    );
+    expect(
+      watch.mock.calls
+        .slice(chokidarAdmissionStart)
+        .some(
           ([watched]) =>
             typeof watched === "string" && (watched === link || watched.startsWith(`${link}/`)),
         ),
+    ).toBe(false);
+    if (shouldUseNativeSkillsWatcher(resolveSkillsWatcherUsePolling())) {
+      expect(
+        nativeWatch.mock.calls.some(([watched]) => watched === (replaceAncestor ? link : root)),
+      ).toBe(true);
+      expect(
+        nativeWatch.mock.calls
+          .slice(nativeAdmissionStart)
+          .some(
+            ([watched]) =>
+              typeof watched === "string" && (watched === link || watched.startsWith(`${link}/`)),
+          ),
       ).toBe(false);
-      await fs.unlink(link);
-      const skillDir = path.join(sourceRoot, "ordinary-proof");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        "---\nname: ordinary-proof\ndescription: Ordinary replacement\n---\n",
-      );
-      await expect.poll(read, { timeout: 3_000 }).toContain("ordinary-proof");
-    },
-  );
+    }
+    await fs.unlink(link);
+    const skillDir = path.join(sourceRoot, "ordinary-proof");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: ordinary-proof\ndescription: Ordinary replacement\n---\n",
+    );
+    await expect.poll(read, { timeout: 3_000 }).toContain("ordinary-proof");
+    if (resolveSkillsWatcherUsePolling()) {
+      // watchFile still reads its listener container after synchronous raw delivery.
+      expect(pollingRawDeliveries).toBeGreaterThan(0);
+      expect(unwatchedDuringPollingRaw).toEqual([]);
+    }
+  });
 });

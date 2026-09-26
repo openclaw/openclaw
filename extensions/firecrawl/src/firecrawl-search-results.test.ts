@@ -1,18 +1,13 @@
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFirecrawlFreeWebSearchProvider } from "./firecrawl-search-provider.js";
 
 const first = { url: "https://example.com/first", title: "First" };
 const second = { url: "https://example.com/second", title: "Second" };
 
-let dnsMock: ReturnType<typeof mockPinnedHostnameResolution>;
-
-beforeEach(() => {
-  dnsMock = mockPinnedHostnameResolution();
-});
+installPinnedHostnameTestHooks();
 
 afterEach(() => {
-  dnsMock.mockRestore();
   vi.restoreAllMocks();
 });
 

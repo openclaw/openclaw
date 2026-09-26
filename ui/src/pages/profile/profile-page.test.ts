@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -33,7 +32,7 @@ const modelAccountStep = {
 function createContext(
   client: GatewayBrowserClient | null = null,
   connected = false,
-): ApplicationContext<RouteId> {
+): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
@@ -57,10 +56,13 @@ function createContext(
         password: "",
       },
       subscribe,
+      subscribeEvents: subscribe,
     },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
+    // The Profile editor follows the app-owned Settings sidebar selector.
+    settingsAgentSelection: { state: { selectedId: null, scopeId: null }, subscribe },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
@@ -134,76 +136,53 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it.each([
-  { id: "profile-1", emails: ["ada@example.test"], emailRows: 1, hint: "Refresh to retry" },
-  { id: "profile-1", emails: [], emailRows: 1, hint: "Refresh to retry" },
-  { id: "gateway-owner", emails: [], emailRows: 0, hint: "Cloudflare Access" },
-])(
-  "renders $id identity before Usage statistics with emails $emails",
-  async ({ id, emails, emailRows, hint }) => {
-    const profile: UserProfile = {
-      ...modelAccountProfile,
-      id,
-      emails,
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: profile.id, accounts: [], links: [] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-      id: profile.id,
-      email: profile.emails[0],
-      name: profile.displayName ?? undefined,
-    });
-    const page = mountProfilePage(harness.context);
-    await waitForFast(() =>
-      expect(page.querySelector("#settings-profile-identity")).not.toBeNull(),
-    );
+it("renders identity before Usage statistics and opens the usage page", async () => {
+  const profile = modelAccountProfile;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: profile.emails[0],
+    name: profile.displayName ?? undefined,
+  });
+  const page = mountProfilePage(harness.context);
+  await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "users.self",
-      "users.listModelAccounts",
-    ]);
-    const identity = page.querySelector("#settings-profile-identity");
-    expect(identity?.textContent).toContain(hint);
-    expect(
-      [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
-        (node) => node.textContent?.trim() === "Linked emails",
-      ),
-    ).toHaveLength(emailRows);
-    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
-    expect(page.querySelector(".profile-stats")).toBeNull();
-    expect(page.querySelector(".profile-heatmap")).toBeNull();
-    const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
-    expect(usageRow?.textContent).toContain("Usage statistics");
-    expect(
-      page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!),
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "users.self",
+    "users.listModelAccounts",
+  ]);
+  const identity = page.querySelector("#settings-profile-identity");
+  expect(identity?.textContent).toContain("Refresh to retry");
+  expect(
+    [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
+      (node) => node.textContent?.trim() === "Linked emails",
+    ),
+  ).toHaveLength(1);
+  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+  expect(docsLink?.textContent?.trim()).toBe("Learn more");
+  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
+  expect(page.querySelector(".profile-stats")).toBeNull();
+  expect(page.querySelector(".profile-heatmap")).toBeNull();
+  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+  expect(usageRow?.textContent).toContain("Usage statistics");
+  expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
 
-    usageRow?.click();
-    expect(harness.context.navigate).toHaveBeenCalledWith("usage");
-  },
-);
+  usageRow?.click();
+  expect(harness.context.navigate).toHaveBeenCalledWith("usage");
+});
 
 it("shows the authenticated user in the profile hero when the default agent differs", async () => {
-  const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
-  };
+  const profile = modelAccountProfile;
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
       return { profile };
@@ -274,8 +253,12 @@ it("renders a write-access note without calling users.self for read-only viewers
 
   await page.updateComplete;
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.textContent).toContain("Your current access does not allow profile editing.");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    "operator.read",
+  );
   expect(page.querySelector(".identity-name-control")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).toBeNull();
 });
 
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {

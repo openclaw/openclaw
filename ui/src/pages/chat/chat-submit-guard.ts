@@ -50,18 +50,25 @@ export async function withChatSubmitHandoff(
     !options.pendingSettings &&
     queued.sendState === "waiting-idle" &&
     (queued.queueMode ||
-      ((options.allowActiveRunSend || (!isChatBusy(host) && !hasDirectSessionRun(host))) &&
+      (options.allowActiveRunSend && !queued.intent) ||
+      (!isChatBusy(host) &&
+        !hasDirectSessionRun(host) &&
         host.chatQueue.find((item) => item.sendState !== "failed" || item.localCommandName)?.id ===
           queued.id));
   // Admission is durable, but delivery has not made a transport attempt yet.
   // Present that handoff inline without flashing the waiting-message tray.
-  const submission = startsImmediately
-    ? chatOutboxOwner(host).beginSubmission(host, queued.id)
-    : undefined;
+  const submission =
+    yieldsToInput && host.connected && options.isCurrent()
+      ? chatOutboxOwner(host).beginSubmission(host, queued.id, {
+          inline: Boolean(startsImmediately),
+          isCurrent: () => host.connected && options.isCurrent(),
+        })
+      : undefined;
   try {
     let current = queued;
     if (yieldsToInput) {
-      // Durable custody lets the browser accept the next input before delivery.
+      // The shared outbox retains foreground custody while the browser accepts
+      // input, including when terminal history settles before this task resumes.
       await yieldChatSubmitToInput();
       const pending =
         options.isCurrent() && visibleSessionMatches(host, queued.sessionKey!, queued.agentId)

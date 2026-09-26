@@ -1,5 +1,6 @@
 /** Detects when secrets runtime preparation can safely use a fast path. */
 import { existsSync } from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
@@ -135,10 +136,10 @@ function hasActiveRuntimeWebFetchProviderSurface(
   fetch: unknown,
   defaults: SecretDefaults | undefined,
 ): boolean {
-  if (!fetch || typeof fetch !== "object" || Array.isArray(fetch)) {
+  if (!isRecord(fetch)) {
     return false;
   }
-  const fetchConfig = fetch as Record<string, unknown>;
+  const fetchConfig = fetch;
   if (fetchConfig.enabled === false) {
     return false;
   }
@@ -152,13 +153,9 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   const web = config.tools?.web;
   const defaults = config.secrets?.defaults;
   const fetchExplicitlyDisabled =
-    web &&
-    typeof web === "object" &&
-    !Array.isArray(web) &&
-    typeof (web as Record<string, unknown>).fetch === "object" &&
-    (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
-  if (web && typeof web === "object" && !Array.isArray(web)) {
-    const webRecord = web as Record<string, unknown>;
+    isRecord(web) && typeof web.fetch === "object" && web.fetch?.enabled === false;
+  if (isRecord(web)) {
+    const webRecord = web;
     if ("search" in webRecord) {
       return true;
     }
@@ -170,26 +167,21 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
     }
   }
   const entries = config.plugins?.entries;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+  if (!isRecord(entries)) {
     return false;
   }
   return Object.values(entries).some((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       return false;
     }
-    const pluginConfig = (entry as { config?: unknown }).config;
+    const pluginConfig = entry.config;
     return (
-      pluginConfig !== null &&
-      typeof pluginConfig === "object" &&
-      !Array.isArray(pluginConfig) &&
+      isRecord(pluginConfig) &&
       ("webSearch" in pluginConfig || (!fetchExplicitlyDisabled && "webFetch" in pluginConfig))
     );
   });
 }
 
-/**
- * Returns whether a snapshot can skip full SecretRef/web-tool resolution.
- */
 /** Returns whether current config/auth/plugin state allows skipping full secret preparation. */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;

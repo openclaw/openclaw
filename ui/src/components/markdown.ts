@@ -14,14 +14,20 @@ import {
   prepareMarkdownHumanMentions,
   restoreMarkdownHumanMentions,
 } from "./markdown-human-mentions.ts";
+import type { MarkdownJson } from "./markdown-json.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
 import {
+  MARKDOWN_PARSE_LIMIT,
   normalizeMarkdownRenderOptions,
   type MarkdownRenderEnv,
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
-import { repairStreamingMarkdownTail, splitStableStreamingMarkdown } from "./markdown-streaming.ts";
+import {
+  repairStreamingMarkdownTail,
+  splitStableStreamingMarkdown,
+  streamingMarkdownState,
+} from "./markdown-streaming.ts";
 import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
 
 const allowedTags = [
@@ -104,7 +110,6 @@ const progressSanitizeOptions = {
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
-const MARKDOWN_PARSE_LIMIT = 40_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
 const MARKDOWN_CACHE_LIMIT = 500;
@@ -351,6 +356,27 @@ function setCachedMarkdown(key: string, value: string) {
   }
 }
 
+function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
+  const source = stripUnsupportedCitationControlMarkers(markdownLocal);
+  const state = streamingMarkdownState(streamKey);
+  const cached = state?.input;
+  let normalized: string;
+  if (cached && source.startsWith(cached.source)) {
+    const appended = source.slice(cached.source.length);
+    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
+    normalized =
+      cached.source.endsWith("\r") && appended.startsWith("\n")
+        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
+        : `${cached.normalized}${normalizedAppend}`;
+  } else {
+    normalized = normalizeMarkdownLineBreaks(source);
+  }
+  if (state) {
+    state.input = source.length <= MARKDOWN_CHAR_LIMIT ? { source, normalized } : undefined;
+  }
+  return normalized;
+}
+
 function isControlUiRoutePath(pathname: string): boolean {
   if (routeIdFromPath(pathname) !== null) {
     return true;
@@ -581,6 +607,20 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   return DOMPurify.sanitize(rendered, activeSanitizeOptions);
 }
 
+// Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
+// Both inputs still use the same code-block renderer and sanitizer boundary.
+export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderOptions): string {
+  installHooks();
+  return DOMPurify.sanitize(
+    // HTML parsing normalizes literal CRs; character references survive both
+    // sanitizer parsing and the final unsafeHTML commit without changing Raw.
+    renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
+      json,
+    }).replaceAll("\r", "&#13;"),
+    sanitizeOptions,
+  ).replaceAll("\r", "&#13;");
+}
+
 export function toSanitizedMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
@@ -604,7 +644,7 @@ export function toSanitizedMarkdownHtml(
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(renderOptions.githubRepositories, renderOptions.githubRepo)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${JSON.stringify(renderOptions.humanMentionTokens)}\0${renderInput}`;
+  const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -612,6 +652,10 @@ export function toSanitizedMarkdownHtml(
   const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
   setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
+}
+
+function markdownRenderKey(options: MarkdownRenderEnv): string {
+  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${JSON.stringify(options.githubRepo ? [options.githubRepo.owner, options.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(options.githubRepositories, options.githubRepo)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
 }
 
 function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
@@ -632,9 +676,7 @@ export function toStreamingMarkdownParts(
   if (renderOptions.humanMentions.length) {
     return [toSanitizedMarkdownHtml(markdownLocal, options), ""];
   }
-  const rawInput = normalizeMarkdownLineBreaks(
-    stripUnsupportedCitationControlMarkers(markdownLocal),
-  );
+  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
   if (isMarkdownBlockArtText(rawInput)) {
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
@@ -652,7 +694,38 @@ export function toStreamingMarkdownParts(
   );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
-  const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
+  const state = streamingMarkdownState(streamKey);
+  const previous = state?.rendered;
+  const renderKey = markdownRenderKey(renderOptions);
+  // Containers and block-art classification can outlive a completed boundary.
+  // The message parse guard also keeps applying to the complete prefix.
+  const incremental =
+    previous?.options === renderKey &&
+    stableMarkdown.startsWith(previous.markdown) &&
+    (previous.markdown === stableMarkdown ||
+      (previous.markdown.endsWith("\n") &&
+        !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
+        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/mu.test(stableMarkdown) &&
+        !stableMarkdown.includes("<") &&
+        !isMarkdownBlockArtText(stableMarkdown) &&
+        !previous.html.includes('class="markdown-block-art"') &&
+        (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
+  let stableHtml = incremental ? previous.html : "";
+  const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
+  if (stableAppend) {
+    const appendedHtml = renderSanitizedMarkdown(stableAppend, { ...renderOptions });
+    // File-label collisions and standalone block art depend on the whole prefix.
+    stableHtml =
+      (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
+      (renderOptions.fileLinks &&
+        stableHtml.includes('class="markdown-file-link"') &&
+        appendedHtml.includes('class="markdown-file-link"'))
+        ? renderSanitizedMarkdown(stableMarkdown, { ...renderOptions })
+        : stableHtml + appendedHtml;
+  }
+  if (state) {
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml };
+  }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }

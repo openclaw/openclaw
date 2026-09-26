@@ -203,7 +203,11 @@ export function renderAppearanceSection(
         : t("configView.appearance.importHint"),
     },
   ];
-  const presentedTheme = themeOptions.find((option) => option.id === props.theme) ?? {
+  const selectedTheme = themeOptions.find((option) => option.id === props.theme);
+  const themeUnavailable =
+    props.themeCatalog?.unavailableId === props.theme ||
+    (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme);
+  const presentedTheme = selectedTheme ?? {
     id: UI_APPEARANCE_DEFAULTS.theme,
     label: t("configView.themes.claw.label"),
   };
@@ -225,25 +229,35 @@ export function renderAppearanceSection(
   // swatch permanently unselectable and its reset click without a visible effect.
   // Accepted cost: an override equal to its reset target reads as inherited
   // until the two diverge, when the swatches correct themselves.
-  const defaultAccentSelected = props.accent === props.accentResetValue;
+  const themeAccentSelected = props.accent === "theme";
+  const accentColor = themeAccentSelected ? undefined : props.accent;
+  const defaultAccentSelected =
+    props.accent === props.accentResetValue ||
+    (themeAccentSelected && props.accentResetValue === undefined);
   // Preview the accent a reset lands on, never var(--accent): the live override
   // would render this swatch as a duplicate of the selected preset.
-  const themeAccentColor = props.accentResetValue ?? "var(--theme-chip-accent)";
+  const themeAccentColor =
+    props.accentResetValue && props.accentResetValue !== "theme"
+      ? props.accentResetValue
+      : "var(--theme-chip-accent)";
   const customAccentSelected = Boolean(
     !defaultAccentSelected &&
+    !themeAccentSelected &&
     props.accent &&
     !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
   );
   const selectedAccentPreset = ACCENT_PRESETS.find(
     (preset) => preset.hex !== undefined && preset.hex === props.accent,
   );
-  const accentSelectionStatus = defaultAccentSelected
-    ? t("configView.appearance.usingInheritedAccent")
-    : t("configView.appearance.usingAccent", {
-        value: selectedAccentPreset
-          ? t(selectedAccentPreset.labelKey)
-          : t("configView.appearance.customAccent"),
-      });
+  const accentSelectionStatus = themeAccentSelected
+    ? t("configView.appearance.usingThemeAccent")
+    : defaultAccentSelected
+      ? null
+      : t("configView.appearance.usingAccent", {
+          value: selectedAccentPreset
+            ? t(selectedAccentPreset.labelKey)
+            : t("configView.appearance.customAccent"),
+        });
   return html`
     <div class="settings-page">
       ${renderLanguageSection(props)}
@@ -257,7 +271,7 @@ export function renderAppearanceSection(
           ${themeProvenance}
         </p>
         ${
-          props.themeCatalog?.unavailableId === props.theme
+          themeUnavailable
             ? html`<p class="settings-section__desc" role="status">
                 ${t("configView.appearance.themeUnavailable", { id: props.theme })}
               </p>`
@@ -480,9 +494,9 @@ export function renderAppearanceSection(
                   customAccentSelected ? "settings-accent-swatch--active" : ""
                 }"
                 style=${styleMap({
-                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
+                  "--settings-accent-swatch": accentColor ?? ACCENT_PRESETS[1].hex,
                   "--settings-accent-swatch-ink": controlUiAccentInk(
-                    props.accent ?? ACCENT_PRESETS[1].hex,
+                    accentColor ?? ACCENT_PRESETS[1].hex,
                   ),
                 })}
               >
@@ -493,7 +507,7 @@ export function renderAppearanceSection(
                   aria-label=${t("configView.appearance.customAccent")}
                   aria-describedby="settings-accent-status"
                   title=${t("configView.appearance.customAccent")}
-                  .value=${props.accent ?? ACCENT_PRESETS[1].hex}
+                  .value=${accentColor ?? ACCENT_PRESETS[1].hex}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     props.setAccent(event.currentTarget.value)}
                 />
@@ -505,7 +519,13 @@ export function renderAppearanceSection(
           </div>
         </div>
         <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
-          <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
+          ${
+            accentSelectionStatus
+              ? html`<span class="settings-accent-status__selection"
+                  >${accentSelectionStatus}</span
+                >`
+              : nothing
+          }
           <span class="settings-accent-status__scope">${accentProvenance}</span>
         </p>
       </section>

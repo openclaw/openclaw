@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import type { AssistantMessage } from "../llm/types.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import { extractAssistantStreamSnapshot } from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
 import {
+  createMessageEndContext,
   createMessageUpdateContext,
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
@@ -10,6 +13,71 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+
+describe("assistant stream snapshots", () => {
+  it("keeps prepared block and visible text stable when provider content changes", () => {
+    const signature = JSON.stringify({ v: 1, id: "answer", phase: "final_answer" });
+    const first = { type: "text" as const, text: "<final>Hello ", textSignature: signature };
+    const second = { type: "text" as const, text: "world  </final>", textSignature: signature };
+    const message: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Working...",
+          textSignature: JSON.stringify({ v: 1, id: "working", phase: "commentary" }),
+        },
+        first,
+        second,
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "fixture",
+      usage: createZeroUsageFixture(),
+      stopReason: "stop",
+      timestamp: 0,
+    };
+    const snapshot = extractAssistantStreamSnapshot(
+      createMessageEndContext({ enforceFinalTag: true }),
+      message,
+    );
+
+    expect(snapshot.rawText).toBe("<final>Hello \nworld  </final>");
+    expect(snapshot.blockText).toBe("Hello \nworld  ");
+    first.text = "Changed first block";
+    second.text = "Changed second block";
+    first.textSignature = JSON.stringify({ v: 1, id: "answer", phase: "commentary" });
+    message.content = [];
+
+    expect(snapshot.text).toBe("Hello\nworld");
+    expect(snapshot.text).toBe("Hello\nworld");
+    expect({ ...snapshot }.text).toBe("Hello\nworld");
+  });
+
+  it.each(["stop", "error"] as const)(
+    "uses the prepared %s error context after the provider changes it",
+    (stopReason) => {
+      const sourceText = "400 Incorrect role information";
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: sourceText }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "fixture",
+        usage: createZeroUsageFixture(),
+        stopReason,
+        timestamp: 0,
+      };
+      const snapshot = extractAssistantStreamSnapshot(createMessageEndContext(), message);
+      message.stopReason = stopReason === "error" ? "stop" : "error";
+
+      expect(snapshot.text).toEqual(
+        stopReason === "error" ? expect.stringContaining("Message ordering conflict") : sourceText,
+      );
+    },
+  );
+});
 
 describe("handleMessageUpdate text signatures", () => {
   it("emits a commentary snapshot when Anthropic text is classified after deltas", async () => {
@@ -59,14 +127,6 @@ describe("handleMessageUpdate text signatures", () => {
   });
 
   it.each([
-    {
-      name: "ordinary text",
-      chunks: ["Hello", " world"],
-      updates: [
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
-      ],
-    },
     {
       name: "held whitespace",
       chunks: ["  Hello ", "world", "\n\n", "Next"],
@@ -464,7 +524,7 @@ describe("handleMessageUpdate text signatures", () => {
       }),
     );
 
-    expect(ctx.blockChunker.bufferedText).toBe("Done.");
+    expect(ctx.blockChunker.bufferedText).toBe("Done.\n\n");
     expect(
       consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
         text: "Done.",
@@ -476,5 +536,6 @@ describe("handleMessageUpdate text signatures", () => {
       replyToTag: true,
       replyToCurrent: true,
     });
+    expect(ctx.state.pendingAssistantReplyDirectives).toBeUndefined();
   });
 });

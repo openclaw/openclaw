@@ -12,102 +12,62 @@ import {
   validateNodePresenceActivityPayload,
 } from "../../packages/gateway-protocol/src/index.js";
 import { DesktopAvailabilitySchema } from "../../packages/gateway-protocol/src/schema/environments.js";
-import { resolveSessionAgentId as defaultResolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
-import { normalizeChannelId as defaultNormalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
-import { getRuntimeConfig as defaultGetRuntimeConfig } from "../config/io.js";
-import { resolveSystemMainSessionTarget as defaultResolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOrCreateProcessDeviceIdentity as defaultLoadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
-import {
-  updatePairedDevicePresence as defaultUpdatePairedDevicePresence,
-  type NodePairingGeneration,
-} from "../infra/device-pairing.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
-import { requestHeartbeat as defaultRequestHeartbeat } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
-  ApnsRegistrationPairingChangedError as DefaultApnsRegistrationPairingChangedError,
-  registerApnsRegistration as defaultRegisterApnsRegistration,
+  ApnsRegistrationPairingChangedError,
+  registerApnsRegistration,
 } from "../infra/push-apns.js";
-import { withSystemEventOwner as defaultWithSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent as defaultEnqueueSystemEvent } from "../infra/system-events.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
-import {
-  isUnscopedSessionKeySentinel,
-  normalizeMainKey as defaultNormalizeMainKey,
-} from "../routing/session-key.js";
+import { isUnscopedSessionKeySentinel, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_HOST_STATS_EVENT } from "../shared/node-host-stats.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
-import { resolveChatAttachmentMaxBytes as defaultResolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import {
-  INLINE_IMAGE_DURABLE_OMISSION_MARKER as DEFAULT_INLINE_IMAGE_DURABLE_OMISSION_MARKER,
-  parseMessageWithAttachments as defaultParseMessageWithAttachments,
-  persistInboundImagesForTranscript as defaultPersistInboundImagesForTranscript,
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
 } from "./chat-attachments.js";
-import { normalizeRpcAttachmentsToChatAttachments as defaultNormalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import { registerNodeApnsEvent } from "./server-node-events-apns.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
-  loadSessionEntry as defaultLoadSessionEntry,
-  resolveGatewayModelSupportsImages as defaultResolveGatewayModelSupportsImages,
-  resolveSessionModelRef as defaultResolveSessionModelRef,
+  loadSessionEntry,
+  resolveGatewayModelSupportsImages,
+  resolveSessionModelRef,
 } from "./session-utils.js";
-import { formatForLog as defaultFormatForLog } from "./ws-log.js";
-
-function resolveDefaultServerNodeEventDependencies() {
-  return {
-    agentCommandFromIngress,
-    ApnsRegistrationPairingChangedError: DefaultApnsRegistrationPairingChangedError,
-    buildOutboundSessionContext,
-    createOutboundSendDeps,
-    defaultRuntime,
-    deleteMediaBuffer,
-    enqueueSystemEvent: defaultEnqueueSystemEvent,
-    formatForLog: defaultFormatForLog,
-    getRuntimeConfig: defaultGetRuntimeConfig,
-    INLINE_IMAGE_DURABLE_OMISSION_MARKER: DEFAULT_INLINE_IMAGE_DURABLE_OMISSION_MARKER,
-    loadOrCreateProcessDeviceIdentity: defaultLoadOrCreateProcessDeviceIdentity,
-    loadSessionEntry: defaultLoadSessionEntry,
-    normalizeChannelId: defaultNormalizeChannelId,
-    normalizeMainKey: defaultNormalizeMainKey,
-    normalizeRpcAttachmentsToChatAttachments: defaultNormalizeRpcAttachmentsToChatAttachments,
-    parseMessageWithAttachments: defaultParseMessageWithAttachments,
-    persistInboundImagesForTranscript: defaultPersistInboundImagesForTranscript,
-    registerApnsRegistration: defaultRegisterApnsRegistration,
-    requestHeartbeat: defaultRequestHeartbeat,
-    resolveChatAttachmentMaxBytes: defaultResolveChatAttachmentMaxBytes,
-    resolveGatewayModelSupportsImages: defaultResolveGatewayModelSupportsImages,
-    resolveOutboundTarget,
-    resolveSessionAgentId: defaultResolveSessionAgentId,
-    resolveSessionModelRef: defaultResolveSessionModelRef,
-    resolveSystemMainSessionTarget: defaultResolveSystemMainSessionTarget,
-    sendDurableMessageBatchCore,
-    updatePairedDevicePresence: defaultUpdatePairedDevicePresence,
-    upsertSessionEntryCore,
-    withSystemEventOwner: defaultWithSystemEventOwner,
-  };
-}
-
-type ServerNodeEventDependencies = ReturnType<typeof resolveDefaultServerNodeEventDependencies>;
+import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -151,7 +111,6 @@ function dispatchNodeAgentCommand(
   ctx: NodeEventContext,
   nodeId: string,
   input: NodeAgentCommandInput,
-  dependencies: ServerNodeEventDependencies,
   isConnectionCurrent?: () => boolean | Promise<boolean>,
   onAdmissionRejected?: () => void | Promise<void>,
 ): void {
@@ -163,9 +122,9 @@ function dispatchNodeAgentCommand(
       await onAdmissionRejected?.();
       return;
     }
-    await dependencies.agentCommandFromIngress(input, dependencies.defaultRuntime, ctx.deps);
+    await agentCommandFromIngress(input, defaultRuntime, ctx.deps);
   }, "node-events:agent-turn").catch((err: unknown) => {
-    ctx.logGateway.warn(`agent failed node=${nodeId}: ${dependencies.formatForLog(err)}`);
+    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
 }
 
@@ -248,19 +207,14 @@ function reserveVoiceTranscript(params: {
 } {
   // Resolve reservations in receipt order so delayed currentness checks cannot
   // change the dedupe window, while rejected connections leave no committed state.
-  let resolveDecision: (admission: VoiceTranscriptReservationAdmission) => void = () => {};
-  let rejectDecision: (reason: unknown) => void = () => {};
-  const decision = new Promise<VoiceTranscriptReservationAdmission>((resolve, reject) => {
-    resolveDecision = resolve;
-    rejectDecision = reject;
-  });
+  const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
   const reservation: VoiceTranscriptReservation = {
     fingerprint: params.fingerprint,
     receivedAt: params.receivedAt,
     status: "pending",
-    resolve: resolveDecision,
-    rejectDecision,
-    decision,
+    resolve: decision.resolve,
+    rejectDecision: decision.reject,
+    decision: decision.promise,
   };
   const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
   queue.push(reservation);
@@ -331,7 +285,6 @@ function dispatchReservedVoiceAgentCommand(params: {
   reservation: ReturnType<typeof reserveVoiceTranscript>;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
   onStart: () => void;
-  dependencies: ServerNodeEventDependencies;
 }): void {
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
@@ -342,11 +295,7 @@ function dispatchReservedVoiceAgentCommand(params: {
       isConnectionCurrent: params.isConnectionCurrent,
       start: () => {
         params.onStart();
-        return params.dependencies.agentCommandFromIngress(
-          params.input,
-          params.dependencies.defaultRuntime,
-          params.ctx.deps,
-        );
+        return agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
       },
     });
     if (!admission) {
@@ -355,9 +304,7 @@ function dispatchReservedVoiceAgentCommand(params: {
     await admission.work;
   }, "node-events:voice-turn").catch((err: unknown) => {
     params.reservation.reject();
-    params.ctx.logGateway.warn(
-      `agent failed node=${params.nodeId}: ${params.dependencies.formatForLog(err)}`,
-    );
+    params.ctx.logGateway.warn(`agent failed node=${params.nodeId}: ${formatForLog(err)}`);
   });
 }
 
@@ -376,18 +323,11 @@ function shouldDropDuplicateExecFinished(params: {
   }
 
   recentExecFinishedRuns.set(fingerprint, params.now);
-  if (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-    const cutoff = params.now - EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS;
-    for (const [key, ts] of recentExecFinishedRuns) {
-      if (ts < cutoff) {
-        recentExecFinishedRuns.delete(key);
-      }
-      if (recentExecFinishedRuns.size <= MAX_RECENT_EXEC_FINISHED_RUNS) {
-        break;
-      }
-    }
-    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
-  }
+  pruneBoundedTimestampMap(recentExecFinishedRuns, {
+    now: params.now,
+    ttlMs: EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS,
+    maxEntries: MAX_RECENT_EXEC_FINISHED_RUNS,
+  });
 
   return false;
 }
@@ -420,7 +360,7 @@ function compactNodeEventText(raw: string, maxChars: number) {
   return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
-type LoadedSessionEntry = ReturnType<typeof defaultLoadSessionEntry>;
+type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
@@ -428,13 +368,12 @@ async function touchSessionStore(params: {
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
-  dependencies: ServerNodeEventDependencies;
 }) {
   const { storePath } = params;
   if (!storePath) {
     return;
   }
-  await params.dependencies.upsertSessionEntryCore(
+  await upsertSessionEntryCore(
     {
       sessionKey: params.canonicalKey,
       storePath,
@@ -461,7 +400,6 @@ function queueSessionStoreTouch(params: {
   sessionId: string;
   now: number;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
-  dependencies: ServerNodeEventDependencies;
 }) {
   // Voice dispatch intentionally does not wait for persistence, but a host
   // snapshot must not race the accepted write after its node RPC returns.
@@ -475,12 +413,9 @@ function queueSessionStoreTouch(params: {
       entry: params.entry,
       sessionId: params.sessionId,
       now: params.now,
-      dependencies: params.dependencies,
     });
   }, "node-events:voice-persist").catch((err: unknown) => {
-    params.ctx.logGateway.warn(
-      "voice session-store update failed: " + params.dependencies.formatForLog(err),
-    );
+    params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
 
@@ -504,11 +439,10 @@ function pairingChangedResult(event: string): NodeEventHandleResult {
 async function cleanupNodeEventMedia(
   ids: Iterable<string>,
   ctx: Pick<NodeEventContext, "logGateway">,
-  dependencies: ServerNodeEventDependencies,
 ): Promise<void> {
   for (const id of ids) {
     try {
-      await dependencies.deleteMediaBuffer(id);
+      await deleteMediaBuffer(id);
     } catch (cleanupErr) {
       ctx.logGateway.warn(
         `Failed to cleanup orphaned media ${id}: ${formatErrorMessage(cleanupErr)}`,
@@ -539,9 +473,8 @@ async function sendReceiptAck(params: {
   channel: string;
   to: string;
   text: string;
-  dependencies: ServerNodeEventDependencies;
 }) {
-  const resolved = params.dependencies.resolveOutboundTarget({
+  const resolved = resolveOutboundTarget({
     channel: params.channel,
     to: params.to,
     cfg: params.cfg,
@@ -550,11 +483,11 @@ async function sendReceiptAck(params: {
   if (!resolved.ok) {
     throw new Error(String(resolved.error));
   }
-  const session = params.dependencies.buildOutboundSessionContext({
+  const session = buildOutboundSessionContext({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  const send = await params.dependencies.sendDurableMessageBatchCore({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
@@ -562,7 +495,7 @@ async function sendReceiptAck(params: {
     session,
     bestEffort: true,
     durability: "best_effort",
-    deps: params.dependencies.createOutboundSendDeps(params.deps),
+    deps: createOutboundSendDeps(params.deps),
   });
   if (send.status === "failed") {
     throw send.error;
@@ -580,32 +513,9 @@ export const handleNodeEvent = async (
     presenceAllowed?: boolean;
     isConnectionCurrent?: () => boolean | Promise<boolean>;
     resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
+    assertApnsRegistrationCurrent?: () => void;
   },
-  dependencies: ServerNodeEventDependencies = resolveDefaultServerNodeEventDependencies(),
 ): Promise<NodeEventHandleResult | undefined> => {
-  const {
-    ApnsRegistrationPairingChangedError,
-    enqueueSystemEvent,
-    formatForLog,
-    getRuntimeConfig,
-    INLINE_IMAGE_DURABLE_OMISSION_MARKER,
-    loadOrCreateProcessDeviceIdentity,
-    loadSessionEntry,
-    normalizeChannelId,
-    normalizeMainKey,
-    normalizeRpcAttachmentsToChatAttachments,
-    parseMessageWithAttachments,
-    persistInboundImagesForTranscript,
-    registerApnsRegistration,
-    requestHeartbeat,
-    resolveChatAttachmentMaxBytes,
-    resolveGatewayModelSupportsImages,
-    resolveSessionAgentId,
-    resolveSessionModelRef,
-    resolveSystemMainSessionTarget,
-    updatePairedDevicePresence,
-    withSystemEventOwner,
-  } = dependencies;
   if (!(await isNodeEventConnectionCurrent(opts))) {
     return pairingChangedResult(evt.event);
   }
@@ -663,7 +573,6 @@ export const handleNodeEvent = async (
       dispatchReservedVoiceAgentCommand({
         ctx,
         nodeId,
-        dependencies,
         input: {
           runId,
           message: text,
@@ -684,7 +593,6 @@ export const handleNodeEvent = async (
         onStart: () => {
           queueSessionStoreTouch({
             ctx,
-            dependencies,
             storePath,
             canonicalKey,
             entry,
@@ -783,7 +691,6 @@ export const handleNodeEvent = async (
             await cleanupNodeEventMedia(
               (parsed.offloadedRefs ?? []).map((ref) => ref.id),
               ctx,
-              dependencies,
             );
             return pairingChangedResult(evt.event);
           }
@@ -799,7 +706,6 @@ export const handleNodeEvent = async (
               await cleanupNodeEventMedia(
                 parsed.offloadedRefs.map((ref) => ref.id),
                 ctx,
-                dependencies,
               );
             }
             return undefined;
@@ -829,7 +735,6 @@ export const handleNodeEvent = async (
         await cleanupNodeEventMedia(
           (offloadedRefs ?? []).map((ref) => ref.id),
           ctx,
-          dependencies,
         );
         return pairingChangedResult(evt.event);
       }
@@ -839,13 +744,11 @@ export const handleNodeEvent = async (
         entry,
         sessionId,
         now,
-        dependencies,
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
         await cleanupNodeEventMedia(
           (offloadedRefs ?? []).map((ref) => ref.id),
           ctx,
-          dependencies,
         );
         return pairingChangedResult(evt.event);
       }
@@ -876,7 +779,6 @@ export const handleNodeEvent = async (
         await cleanupNodeEventMedia(
           (offloadedRefs ?? []).map((ref) => ref.id),
           ctx,
-          dependencies,
         );
         return pairingChangedResult(evt.event);
       }
@@ -890,7 +792,6 @@ export const handleNodeEvent = async (
         await cleanupNodeEventMedia(
           persistedTranscriptMedia.entries.map((media) => media.id),
           ctx,
-          dependencies,
         );
         return pairingChangedResult(evt.event);
       }
@@ -911,7 +812,6 @@ export const handleNodeEvent = async (
           await sendReceiptAck({
             cfg,
             deps: ctx.deps,
-            dependencies,
             sessionKey: canonicalKey,
             channel: deliveryChannel,
             to: deliveryTo,
@@ -949,13 +849,11 @@ export const handleNodeEvent = async (
           messageChannel: "node",
           allowModelOverride: false,
         },
-        dependencies,
         opts?.isConnectionCurrent,
         () =>
           cleanupNodeEventMedia(
             persistedTranscriptMedia.entries.map((media) => media.id),
             ctx,
-            dependencies,
           ),
       );
       return undefined;
@@ -1036,23 +934,19 @@ export const handleNodeEvent = async (
       }
       return undefined;
     }
-    case "chat.subscribe": {
-      const sessionKey = normalizeOptionalString(parsePayloadObject(evt.payloadJSON)?.sessionKey);
-      if (!sessionKey) {
-        return undefined;
-      }
-      const { canonicalKey } = loadSessionEntry(sessionKey);
-      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
-      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
-      return undefined;
-    }
+    case "chat.subscribe":
     case "chat.unsubscribe": {
       const sessionKey = normalizeOptionalString(parsePayloadObject(evt.payloadJSON)?.sessionKey);
       if (!sessionKey) {
         return undefined;
       }
       const { canonicalKey } = loadSessionEntry(sessionKey);
-      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      if (evt.event === "chat.subscribe") {
+        await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
+      } else {
+        await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
+      }
       return undefined;
     }
     case "exec.started":
@@ -1167,59 +1061,13 @@ export const handleNodeEvent = async (
       if (!obj) {
         return undefined;
       }
-      const transport = normalizeLowercaseStringOrEmpty(obj.transport) || "direct";
-      const topic = typeof obj.topic === "string" ? obj.topic : "";
-      const environment = obj.environment;
-      try {
-        const expectedPairingGeneration = await opts?.resolveApnsRegistrationGeneration?.();
-        if (!expectedPairingGeneration) {
-          ctx.logGateway.warn(
-            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
-          );
-          return pairingChangedResult(evt.event);
-        }
-        if (transport === "relay") {
-          const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
-          const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
-          if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
-            ctx.logGateway.warn(
-              `push relay register rejected node=${nodeId}: gateway identity mismatch`,
-            );
-            return undefined;
-          }
-          await registerApnsRegistration({
-            nodeId,
-            transport: "relay",
-            relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
-            sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
-            installationId: typeof obj.installationId === "string" ? obj.installationId : "",
-            topic,
-            environment,
-            distribution: obj.distribution,
-            relayOrigin: obj.relayOrigin,
-            tokenDebugSuffix: obj.tokenDebugSuffix,
-            expectedPairingGeneration,
-          });
-        } else {
-          await registerApnsRegistration({
-            nodeId,
-            transport: "direct",
-            token: typeof obj.token === "string" ? obj.token : "",
-            topic,
-            environment,
-            expectedPairingGeneration,
-          });
-        }
-      } catch (err) {
-        if (err instanceof ApnsRegistrationPairingChangedError) {
-          ctx.logGateway.warn(
-            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
-          );
-          return pairingChangedResult(evt.event);
-        }
-        ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
-      }
-      return undefined;
+      const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts, {
+        ApnsRegistrationPairingChangedError,
+        registerApnsRegistration,
+        loadOrCreateProcessDeviceIdentity,
+        formatForLog,
+      });
+      return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
     }
     case NODE_HOST_STATS_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);
@@ -1257,14 +1105,13 @@ export const handleNodeEvent = async (
           reason: cleared ? "cleared" : "already_clear",
         };
       }
-      if (opts?.presenceAllowed !== true) {
+      if (obj.source !== "app" && opts?.presenceAllowed !== true) {
         return { ok: true, event: evt.event, handled: false, reason: "permission_required" };
       }
       const updated = ctx.updateNodePresenceActivity?.({
         nodeId,
-        connId: opts.connId,
-        idleSeconds: obj.idleSeconds,
-        ...(obj.saturated === true ? { saturated: true } : {}),
+        connId: opts?.connId,
+        ...obj,
       });
       if (!updated) {
         return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };

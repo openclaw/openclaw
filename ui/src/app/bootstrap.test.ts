@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { routeIdFromPath, type RouteId } from "../app-routes.ts";
+import { routeIdFromPath } from "../app-routes.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -230,7 +230,7 @@ describe("bootstrapApplication", () => {
         hello: { snapshot: { sessionDefaults: { mainKey: "main" } } },
       },
       subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext<RouteId>["gateway"];
+    } as unknown as ApplicationContext["gateway"];
     const canonicalLocation = await resolveInitialApplicationLocation({
       location: initialLocation,
       basePath: "",
@@ -245,7 +245,7 @@ describe("bootstrapApplication", () => {
     });
 
     await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as unknown as ApplicationContext<RouteId>,
+      context: { gateway } as unknown as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace },
       initialLocationReady: Promise.resolve(canonicalLocation),
@@ -272,7 +272,7 @@ describe("bootstrapApplication", () => {
       setupComplete: false,
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;
     const subscribe = vi.fn((next: GatewayListener) => {
       listener = next;
@@ -294,7 +294,7 @@ describe("bootstrapApplication", () => {
         subscribe: () => () => undefined,
       },
       replace: replaceRoute,
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
     const canonicalLocation = { pathname: "/chat/main", search: "", hash: "" };
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
@@ -336,7 +336,7 @@ describe("bootstrapApplication", () => {
     const installLocation = vi.fn();
 
     await startModelSetupFirstRunRedirectAfterLocation({
-      context: {} as ApplicationContext<RouteId>,
+      context: {} as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace: vi.fn() },
       initialLocationReady: Promise.resolve({ pathname: "/chat/main", search: "", hash: "" }),
@@ -764,7 +764,7 @@ describe("bootstrapApplication", () => {
       lastActiveSessionKey: "agent:main:main",
     });
     window.history.replaceState({}, "", "/chat?session=agent%3Aresearch%3Aworkspace");
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
     const activeSubscriptions = new Set<GatewayListener>();
     const createGateway = gatewayStore.createApplicationGateway;
     const gatewayFactory = vi

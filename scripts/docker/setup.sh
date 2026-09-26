@@ -147,6 +147,7 @@ read_env_gateway_token() {
 sync_gateway_config() {
   local allowed_origin_json=""
   local current_allowed_origins=""
+  local current_public_origin=""
   local batch_json=""
 
   if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
@@ -155,6 +156,13 @@ sync_gateway_config() {
       run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
     )"
     current_allowed_origins="${current_allowed_origins//$'\r'/}"
+    if [[ -z "$current_allowed_origins" ]]; then
+      current_public_origin="$(run_prestart_cli config get gateway.publicOrigin 2>/dev/null || true)"
+      if [[ -n "${current_public_origin//[[:space:]]/}" ]]; then
+        allowed_origin_json=""
+        echo "Control UI origins inherit gateway.publicOrigin; leaving allowedOrigins unset."
+      fi
+    fi
   fi
 
   batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"

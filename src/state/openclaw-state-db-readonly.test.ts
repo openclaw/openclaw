@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -22,11 +23,11 @@ import {
   acquireOpenClawStateDatabaseFileExclusion,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   isOpenClawStateDatabaseDefinitelyAbsent,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
-  iterateOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -238,7 +239,15 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
     const db = new DatabaseSync(":memory:");
     const pathname = path.join(root, "logical-state.sqlite");
     const rows = iterateOpenClawStateDatabaseReadOnly(
-      { db, path: pathname, walMaintenance: { checkpoint: () => false, close: () => false } },
+      {
+        db,
+        path: pathname,
+        walMaintenance: {
+          checkpoint: () => false,
+          close: () => false,
+          reclaimFreePages: createSqliteWalReclamationResult,
+        },
+      },
       function* () {
         yield "unreachable";
       },
@@ -576,7 +585,7 @@ it("keeps missing and non-missing filesystem failures distinct for async reads",
   });
 });
 
-it("reads under its live mutation owner but refuses an unrelated caller", async () => {
+it("reads under its live source exclusion but refuses an unrelated caller", async () => {
   await withOpenClawTestState({ label: "owned-ledger-read" }, async ({ env }) => {
     const options = { env };
     const initial = openOpenClawStateDatabase(options);
@@ -606,21 +615,12 @@ it("reads under its live mutation owner but refuses an unrelated caller", async 
     let running: Promise<void> | undefined;
     try {
       const before = await family();
-      running = owner.mutate(owner.assertCurrent, async () => {
+      running = owner.runWithSourceReads(async () => {
         expect(await read()).toBe("original");
         expect(await family()).toEqual(before);
         entered.resolve();
         await resume.promise;
         owner.assertCurrent();
-        const opened = openOpenClawStateDatabase(options);
-        opened.db.exec("BEGIN; UPDATE held SET value = 'uncommitted'");
-        try {
-          await expect(read()).rejects.toThrow(/outside a transaction/);
-          expect(opened.db.isTransaction).toBe(true);
-          expect(opened.db.prepare("SELECT value FROM held").get()?.value).toBe("uncommitted");
-        } finally {
-          opened.db.exec("ROLLBACK");
-        }
         expect(await read()).toBe("original");
       });
       await Promise.race([entered.promise, running]);
@@ -689,6 +689,72 @@ it("shares only one synchronous metadata snapshot and refreshes committed WAL ne
     }
   });
 });
+
+it.each(["synchronous", "discovery"] as const)(
+  "reads fresh authority without replacing an inherited %s snapshot",
+  async (inherited) => {
+    await withTempDir("openclaw-current-snapshot-", async (root) => {
+      const options = createOptions(root);
+      openOpenClawStateDatabase(options);
+      closeOpenClawStateDatabaseForTest();
+      const writer = new DatabaseSync(options.path);
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('first');",
+      );
+      const read = () =>
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => db.prepare("SELECT value FROM held").get()?.value,
+          options,
+        );
+      const current = () =>
+        withSynchronousArtifactPreservingStateSnapshot(() => [read(), read()], {
+          current: options,
+        });
+      const artifacts = () =>
+        ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(options.path + suffix));
+      const inspect = () => {
+        expect(read()).toBe("first");
+        writer.exec("UPDATE held SET value='revoked'");
+        const before = artifacts();
+        expect(current()).toEqual(["revoked", "revoked"]);
+        expect(artifacts()).toEqual(before);
+        expect(read()).toBe("first");
+        expect(() =>
+          withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              expect(read()).toBe("revoked");
+              throw new Error("authority consumer failed");
+            },
+            { current: options },
+          ),
+        ).toThrow("authority consumer failed");
+        expect(read()).toBe("first");
+        writer.exec("UPDATE held SET value='later'");
+        expect(current()).toEqual(["later", "later"]);
+        expect(read()).toBe("first");
+      };
+      try {
+        if (inherited === "synchronous") {
+          withArtifactPreservingStateReads(() =>
+            withSynchronousArtifactPreservingStateSnapshot(inspect),
+          );
+        } else {
+          await withArtifactPreservingStateReads(() =>
+            withOpenClawStateDatabaseReadSnapshot(async () => {
+              inspect();
+              await Promise.resolve();
+              writer.exec("UPDATE held SET value='after-await'");
+              expect(current()).toEqual(["after-await", "after-await"]);
+              expect(read()).toBe("first");
+            }, options),
+          );
+        }
+      } finally {
+        writer.close();
+      }
+    });
+  },
+);
 
 it("rechecks a terminal failure before reusing scoped metadata bytes", async () => {
   await withTempDir("openclaw-metadata-refusal-", async (root) => {

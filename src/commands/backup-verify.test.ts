@@ -201,8 +201,8 @@ async function createSqlitePayload(setup: (database: DatabaseSync) => void): Pro
 }
 
 async function createRegisteredAgentPayload(
-  agentId: string,
-  databasePath: string,
+  agentId: string | undefined,
+  databasePath = "",
   stateDir = "/tmp/.openclaw",
 ) {
   return {
@@ -214,9 +214,11 @@ async function createRegisteredAgentPayload(
         INSERT INTO schema_meta VALUES ('primary', 'global');
         CREATE TABLE agent_databases (agent_id TEXT NOT NULL, path TEXT NOT NULL);
       `);
-      database
-        .prepare("INSERT INTO agent_databases (agent_id, path) VALUES (?, ?)")
-        .run(agentId, databasePath);
+      if (agentId !== undefined) {
+        database
+          .prepare("INSERT INTO agent_databases (agent_id, path) VALUES (?, ?)")
+          .run(agentId, databasePath);
+      }
     }),
   };
 }
@@ -573,10 +575,7 @@ describe("backupVerifyCommand", () => {
           },
         },
         payloads: [
-          await createRegisteredAgentPayload(
-            "registered",
-            "agents/registered/agent/openclaw-agent.sqlite",
-          ),
+          await createRegisteredAgentPayload(undefined),
           {
             fileName: "foreign.sqlite",
             contents,
@@ -737,7 +736,6 @@ describe("backupVerifyCommand", () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
     const invalidSqlite = Buffer.from("not a sqlite database", "utf8");
-    expect(invalidSqlite.byteLength).toBe(21);
 
     await withBrokenArchiveFixture(
       {

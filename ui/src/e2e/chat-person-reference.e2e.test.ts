@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
+  chatSessionListResponse,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
@@ -39,6 +42,199 @@ const directory: UsersListResult = {
 };
 
 suite.define(() => {
+  it.each([
+    { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
+    { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
+  ])("keeps mention avatars aligned across image outcomes at $width px", async (viewport) => {
+    await suite.withPage(
+      { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
+      async ({ page }) => {
+        const response = createDeferred();
+        await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+        await page.route("**/api/users/**/avatar*", async (route) => {
+          await response.promise;
+          await route.fulfill(
+            route.request().url().includes("profile-photo")
+              ? { contentType: "image/png", body: readFileSync("ui/public/apple-touch-icon.png") }
+              : { status: 404 },
+          );
+        });
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              ...historyMessages[0],
+              __openclaw: {
+                id: "mention-image-outcomes",
+                humanMentions: [
+                  { profileId: "profile-photo", start: 0, end: label.length },
+                  { profileId: "profile-missing", start: label.length + 4, end: text.length },
+                ],
+              },
+            },
+          ],
+        });
+        try {
+          await page.goto(suite.server.baseUrl + "chat");
+          const references = page.locator(".markdown-person-reference");
+          await expect.poll(() => references.count()).toBe(2);
+          await page.evaluate(async ({ scale, font }) => {
+            document.documentElement.style.setProperty("--control-ui-text-scale", String(scale));
+            document.documentElement.style.setProperty("--font-chat", font);
+            await document.fonts.ready;
+          }, viewport);
+          const geometry = () =>
+            references.evaluateAll((elements) =>
+              elements.map((element) => {
+                const avatar = element.querySelector(".markdown-person-reference__avatar")!;
+                const name = [...element.childNodes].find(
+                  (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+                )!;
+                const range = document.createRange();
+                range.selectNodeContents(name);
+                const textBox = range.getClientRects()[0];
+                if (!textBox) {
+                  throw new Error("Expected a rendered mention label");
+                }
+                const box = avatar.getBoundingClientRect();
+                return {
+                  offset: box.top + box.height / 2 - (textBox.top + textBox.height / 2),
+                  width: box.width,
+                  height: box.height,
+                };
+              }),
+            );
+          await expect
+            .poll(() => references.locator('[data-avatar-state="pending"]').count())
+            .toBe(2);
+          const pending = await geometry();
+          response.resolve();
+          await references.locator('[data-avatar-state="loaded"]').waitFor();
+          await references.locator('[data-avatar-state="failed"]').waitFor();
+          // Images and generated initials must not change the inline box's alignment.
+          expect(await geometry()).toEqual(pending);
+          for (const { offset } of pending) {
+            // Stable image outcomes alone can all be equally misaligned with the name.
+            expect(Math.abs(offset)).toBeLessThanOrEqual(1);
+          }
+          expect(await references.allTextContents()).toEqual([label, label]);
+        } finally {
+          response.resolve();
+        }
+      },
+    );
+  });
+
+  it("shares live person details and visible sessions with the sidebar", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light" },
+      async ({ page }) => {
+        const now = Date.now();
+        await page.clock.setFixedTime(now);
+        const watched = "agent:main:person-watching";
+        const recent = "agent:main:person-recent";
+        const person = {
+          id: "profile-ada",
+          identity: { type: "profile" as const, id: "profile-ada" },
+          name: "Ada Lovelace",
+          onlineSince: now - 900_000,
+          lastActivityAt: now - 60_000,
+          deviceFamily: "Mac",
+          platform: "macOS",
+          timeZone: "Europe/London",
+          watchedSessions: [watched, "agent:private:hidden"],
+        };
+        const gateway = await installMockGateway(page, {
+          historyMessages,
+          presenceUsers: [person],
+          methodResponses: {
+            "users.list": directory,
+            "sessions.list": chatSessionListResponse([
+              { key: "agent:main:main", kind: "direct", label: "Card comparison", updatedAt: now },
+              {
+                key: watched,
+                kind: "direct",
+                label: "Release checklist",
+                updatedAt: now - 60_000,
+                boardFace: "dashboard",
+              },
+              {
+                key: recent,
+                kind: "direct",
+                label: "Review launch notes",
+                updatedAt: now - 120_000,
+                createdActor: { type: "human", id: person.id, identity: person.identity },
+              },
+              {
+                key: "agent:main:raw-id",
+                kind: "direct",
+                label: "Unqualified identity must not match",
+                updatedAt: now,
+                createdActor: { type: "human", id: person.id },
+              },
+            ]),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const sidebarPerson = page.locator('[data-online-user-id="profile-ada"]');
+        await sidebarPerson.hover();
+        const card = page.locator(".person-activity-hovercard[role=dialog]");
+        await card.getByRole("link", { name: /Release checklist/ }).waitFor();
+        const sidebarText = (await card.textContent())?.replace(/\s+/gu, " ");
+        const sidebarLinks = await card
+          .locator("a")
+          .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+        await captureUiProof(suite, page, "person-card-parity", "sidebar.png");
+        await page.keyboard.press("Escape");
+        const reference = page.locator(".markdown-person-reference");
+        await reference.focus();
+        await card.locator("h2").waitFor();
+        await captureUiProof(suite, page, "person-card-parity", "chat.png");
+        expect((await card.textContent())?.replace(/\s+/gu, " ")).toBe(sidebarText);
+        expect(
+          await card
+            .locator("a")
+            .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
+        ).toEqual(sidebarLinks);
+        expect(await card.textContent()).not.toContain("Unqualified identity");
+        expect(await card.textContent()).not.toContain("hidden");
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              user: { id: person.id, identity: person.identity, name: person.name },
+              deviceFamily: "iPad",
+              platform: "iPadOS",
+              timeZone: "Europe/Paris",
+              onlineSince: person.onlineSince,
+              lastActivityAt: now,
+              watchedSessions: [watched],
+            },
+          ],
+        });
+        await expect.poll(() => card.textContent()).toContain("Europe/Paris");
+        expect(await card.textContent()).not.toContain("Europe/London");
+        await card.getByRole("link", { name: /Release checklist/ }).focus();
+        await gateway.emitGatewayEvent("presence", { presence: [] });
+        await expect.poll(() => card.textContent()).toContain("Offline");
+        expect(await card.textContent()).not.toContain("Viewing now");
+        expect(await card.textContent()).toContain("Review launch notes");
+        expect(await reference.evaluate((node) => node === document.activeElement)).toBe(true);
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              user: { id: person.id, identity: person.identity, name: person.name },
+              watchedSessions: [watched],
+            },
+          ],
+        });
+        await card.getByRole("link", { name: /Release checklist/ }).click();
+        await expect
+          .poll(() => new URL(page.url()).pathname)
+          .toBe("/dashboard/main/person-watching");
+        await card.waitFor({ state: "detached" });
+      },
+    );
+  });
+
   it.each(["keyboard", "mouse", "touch"] as const)(
     "opens explicit person cards with %s and keeps the original label",
     async (input) => {

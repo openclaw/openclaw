@@ -200,6 +200,7 @@ describe("processDiscordMessage session routing", () => {
 
     const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dispatchCtx.ReplyToId).toBe("m-hidden");
     expect(dispatchCtx.ReplyToBody).toBeUndefined();
     expect(dispatchCtx.MediaPath).toBeUndefined();
     expect(dispatchCtx.MediaPaths).toBeUndefined();

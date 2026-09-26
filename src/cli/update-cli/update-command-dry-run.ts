@@ -4,7 +4,7 @@ import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -25,7 +25,8 @@ export async function handleDryRunPreflightError(
   if (
     error.reason === "database-schema-preflight" ||
     error.reason === "target-metadata-preflight" ||
-    error.reason === "invalid-config"
+    error.reason === "invalid-config" ||
+    error.reason === "config-read-failed"
   ) {
     // A best-effort preview reports incomplete admission; it never authorizes mutation.
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
@@ -107,7 +108,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   }
 }
 
-export function printUpdateDryRun(params: {
+export async function printUpdateDryRun(params: {
   runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -127,12 +128,13 @@ export function printUpdateDryRun(params: {
   packageAlreadyCurrent: boolean;
   fallbackToLatest: boolean;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  managedServiceRoot?: string;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
   preflightNotes?: readonly string[];
   preflightFailures?: readonly UpdateDryRunFailure[];
   opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
-}): void {
+}): Promise<void> {
   const actions: string[] = [];
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
@@ -166,6 +168,11 @@ export function printUpdateDryRun(params: {
   }
   if (params.fallbackToLatest) {
     notes.push("Beta channel resolves to latest for this run (fallback).");
+  }
+  if (params.managedServiceRoot) {
+    actions.push(
+      `Rebind the managed Gateway from ${params.managedServiceRoot} to ${params.root} after verification.`,
+    );
   }
   if (params.managedServiceRootRedirect) {
     notes.push(
@@ -219,7 +226,7 @@ export function printUpdateDryRun(params: {
     Boolean(params.opts.json),
   );
   if (!params.opts.json) {
-    printResult(
+    await printResult(
       {
         runId: params.runId,
         status: "skipped",

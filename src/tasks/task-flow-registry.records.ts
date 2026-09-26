@@ -150,23 +150,12 @@ export type PreparedTaskMirroredFlowSync = {
   next: TaskFlowRecord;
 };
 
-function cloneStructuredValue<T>(value: T | undefined): T | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return structuredClone(value);
-}
-
 export function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   return {
     ...record,
-    ...(record.requesterOrigin
-      ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
-      : {}),
-    ...(record.stateJson !== undefined
-      ? { stateJson: cloneStructuredValue(record.stateJson)! }
-      : {}),
-    ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
+    ...(record.requesterOrigin ? { requesterOrigin: structuredClone(record.requesterOrigin) } : {}),
+    ...(record.stateJson !== undefined ? { stateJson: structuredClone(record.stateJson) } : {}),
+    ...(record.waitJson !== undefined ? { waitJson: structuredClone(record.waitJson) } : {}),
   };
 }
 
@@ -190,6 +179,7 @@ export function isTaskMirroredFlowSyncUnchanged(prepared: PreparedTaskMirroredFl
   );
 }
 
+/** Normalization keeps payload ownership with its caller; public readers make copies. */
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
   const controllerId =
@@ -200,17 +190,10 @@ export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRec
     ...record,
     syncMode,
     ownerKey: assertFlowOwnerKey(record.ownerKey),
-    ...(record.requesterOrigin
-      ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
-      : {}),
     ...(controllerId ? { controllerId } : {}),
     currentStep: normalizeOptionalString(record.currentStep),
     blockedTaskId: normalizeOptionalString(record.blockedTaskId),
     blockedSummary: normalizeOptionalString(record.blockedSummary),
-    ...(record.stateJson !== undefined
-      ? { stateJson: cloneStructuredValue(record.stateJson)! }
-      : {}),
-    ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
     revision: Math.max(0, record.revision),
     cancelRequestedAt: record.cancelRequestedAt ?? undefined,
     endedAt: record.endedAt ?? undefined,
@@ -233,18 +216,6 @@ export function selectTaskFlowRecords(
   return selected
     .map((flow) => cloneFlowRecord(flow))
     .toSorted((left, right) => right.createdAt - left.createdAt);
-}
-
-export function snapshotFlowRecords(source: ReadonlyMap<string, TaskFlowRecord>): TaskFlowRecord[] {
-  return [...source.values()].map((record) => cloneFlowRecord(record));
-}
-
-function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
-  return notifyPolicy ?? "done_only";
-}
-
-function normalizeJsonBlob(value: JsonValue | null | undefined): JsonValue | undefined {
-  return value === undefined ? undefined : cloneStructuredValue(value);
 }
 
 function assertFlowOwnerKey(ownerKey: string): string {
@@ -364,23 +335,17 @@ export function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord 
     flowId: crypto.randomUUID(),
     syncMode,
     ownerKey: assertFlowOwnerKey(params.ownerKey),
-    ...(params.requesterOrigin
-      ? { requesterOrigin: cloneStructuredValue(params.requesterOrigin)! }
-      : {}),
+    ...(params.requesterOrigin ? { requesterOrigin: structuredClone(params.requesterOrigin) } : {}),
     ...(controllerId ? { controllerId } : {}),
     revision: Math.max(0, params.revision ?? 0),
     status: params.status ?? "queued",
-    notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
+    notifyPolicy: params.notifyPolicy ?? "done_only",
     goal: params.goal,
     currentStep: normalizeOptionalString(params.currentStep),
     blockedTaskId: normalizeOptionalString(params.blockedTaskId),
     blockedSummary: normalizeOptionalString(params.blockedSummary),
-    ...(normalizeJsonBlob(params.stateJson) !== undefined
-      ? { stateJson: normalizeJsonBlob(params.stateJson)! }
-      : {}),
-    ...(normalizeJsonBlob(params.waitJson) !== undefined
-      ? { waitJson: normalizeJsonBlob(params.waitJson)! }
-      : {}),
+    ...(params.stateJson !== undefined ? { stateJson: structuredClone(params.stateJson) } : {}),
+    ...(params.waitJson !== undefined ? { waitJson: structuredClone(params.waitJson) } : {}),
     ...(params.cancelRequestedAt != null ? { cancelRequestedAt: params.cancelRequestedAt } : {}),
     createdAt: now,
     updatedAt: params.updatedAt ?? now,
@@ -414,9 +379,8 @@ export function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch):
       patch.blockedSummary === undefined
         ? current.blockedSummary
         : normalizeOptionalString(patch.blockedSummary),
-    stateJson:
-      patch.stateJson === undefined ? current.stateJson : normalizeJsonBlob(patch.stateJson),
-    waitJson: patch.waitJson === undefined ? current.waitJson : normalizeJsonBlob(patch.waitJson),
+    stateJson: patch.stateJson === undefined ? current.stateJson : structuredClone(patch.stateJson),
+    waitJson: patch.waitJson === undefined ? current.waitJson : structuredClone(patch.waitJson),
     cancelRequestedAt:
       patch.cancelRequestedAt === undefined
         ? current.cancelRequestedAt

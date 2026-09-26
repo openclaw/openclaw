@@ -5,12 +5,13 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 
 it.each([
-  { duration: 1_000, requestsPerMinute: 15 },
-  { duration: 1_500, requestsPerMinute: 10 },
+  { duration: 1_000, requestsPerMinute: 10 },
+  { duration: 2_000, requestsPerMinute: 7 },
 ])(
   "paces continuous Activity invalidations after $duration ms reads settle",
   async ({ duration, requestsPerMinute }) => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.setSystemTime(0);
     const result = {
       ts: 1,
@@ -44,9 +45,12 @@ it.each([
         await vi.advanceTimersByTimeAsync(100);
       }
       expect(starts).toHaveLength(requestsPerMinute);
-      expect(starts[0]).toBe(1_000);
+      expect(starts[0]).toBe(5_000);
       expect(starts.slice(1).map((start, index) => start - starts[index]!)).toEqual(
-        Array.from({ length: requestsPerMinute - 1 }, () => 4 * duration),
+        Array.from(
+          { length: requestsPerMinute - 1 },
+          () => duration + Math.max(5_000, 3 * duration),
+        ),
       );
     } finally {
       controller.hostDisconnected();
@@ -89,7 +93,7 @@ it.each([
     void controller.load(client, filters);
     await vi.advanceTimersByTimeAsync(0);
     controller.invalidate();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     controller.invalidate();
     if (phase === "cooldown") {
       await vi.advanceTimersByTimeAsync(1_000);
@@ -190,11 +194,11 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
     request.mockReturnValueOnce(pending);
     void controller.load(client, filters, "refresh");
     controller.invalidate();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     visibilityState = "hidden";
     documentEvents.dispatchEvent(new Event("visibilitychange"));
     complete(result);
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
     visibilityState = "visible";
     documentEvents.dispatchEvent(new Event("visibilitychange"));
@@ -203,7 +207,7 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
     expect(request).toHaveBeenCalledTimes(3);
     controller.invalidate();
     controller.hostDisconnected();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(3);
   } finally {
     complete(result);

@@ -3,7 +3,7 @@
  * payload fields, and thinking-prefill cleanup around provider stream functions.
  */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { getEnvApiKey, streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveProviderEndpoint,
@@ -49,8 +49,31 @@ const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
 
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
-function isAnthropic1MModel(modelId: string): boolean {
-  return supportsClaude1MContext({ id: modelId });
+/** Publish installed-version evidence; the transport owns the floor and billing snapshot. */
+export function createAnthropicClaudeCodeIdentityWrapper(
+  baseStreamFn: StreamFn | undefined,
+  resolveVersion: () => Promise<string | undefined>,
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.provider !== "anthropic" ||
+      (sourceApi ?? model.api) !== "anthropic-messages" ||
+      !isAnthropicOAuthApiKey(options?.apiKey ?? getEnvApiKey(model.provider))
+    ) {
+      return underlying(model, context, options);
+    }
+    return resolveVersion().then((version) =>
+      underlying(
+        model,
+        context,
+        version
+          ? { ...options, headers: { ...options?.headers, "user-agent": `claude-cli/${version}` } }
+          : options,
+      ),
+    );
+  };
 }
 
 function parseHeaderList(value: unknown): string[] {
@@ -79,10 +102,6 @@ function mergeAnthropicBetaHeader(
 }
 
 export { isAnthropicOAuthApiKey } from "openclaw/plugin-sdk/provider-stream-shared";
-
-function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
-  return enabled ? "auto" : "standard_only";
-}
 
 function applyAnthropicFastModePricing(model: Parameters<StreamFn>[0]): Parameters<StreamFn>[0] {
   const scaleRates = (rates: Parameters<StreamFn>[0]["cost"]) => ({
@@ -123,21 +142,10 @@ export function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   _modelId: string,
 ): string[] | undefined {
-  const betas = new Set<string>();
   const configured = extraParams?.anthropicBeta;
-  if (typeof configured === "string" && configured.trim()) {
-    for (const beta of parseHeaderList(configured)) {
-      betas.add(beta);
-    }
-  } else if (Array.isArray(configured)) {
-    for (const beta of configured) {
-      if (typeof beta === "string" && beta.trim()) {
-        for (const betaValue of parseHeaderList(beta)) {
-          betas.add(betaValue);
-        }
-      }
-    }
-  }
+  const values =
+    typeof configured === "string" ? [configured] : Array.isArray(configured) ? configured : [];
+  const betas = new Set(values.flatMap(parseHeaderList));
 
   // Newer Claude 4.x 1M context is GA. Keep context1m as a context-sizing
   // opt-in, but do not send the retired beta even if it remains in older config.
@@ -157,8 +165,8 @@ export function createAnthropicBetaHeadersWrapper(
     const effectiveBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
 
     const openClawBetas = isOauth
-      ? (OPENCLAW_OAUTH_ANTHROPIC_BETAS as readonly string[])
-      : (OPENCLAW_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
+      ? OPENCLAW_OAUTH_ANTHROPIC_BETAS
+      : OPENCLAW_DEFAULT_ANTHROPIC_BETAS;
     const allBetas = [...new Set([...openClawBetas, ...effectiveBetas])];
     return underlying(model, context, {
       ...options,
@@ -210,7 +218,7 @@ export function createAnthropicFastModeWrapper(
       });
     }
     return plan === "service-tier"
-      ? createAnthropicServiceTierWrapper(underlying, resolveAnthropicFastServiceTier(resolved))(
+      ? createAnthropicServiceTierWrapper(underlying, resolved ? "auto" : "standard_only")(
           model,
           context,
           options,
@@ -315,7 +323,7 @@ export function wrapAnthropicProviderStream(
   const needsAnthropicBetaWrapper =
     anthropicBetas !== undefined ||
     hasConfiguredAnthropicBeta(ctx.extraParams) ||
-    (ctx.extraParams?.context1m === true && isAnthropic1MModel(ctx.modelId));
+    (ctx.extraParams?.context1m === true && supportsClaude1MContext({ id: ctx.modelId }));
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const hasFastModeParam =
     ctx.extraParams !== undefined &&

@@ -1,8 +1,8 @@
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
-  selectWorkerWorkspaceHashMemoEntries,
-  workspaceStatIdentity,
+  MAX_WORKSPACE_HASH_MEMO_ENTRIES,
+  WORKSPACE_HASH_MEMO_JS,
 } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -15,7 +15,6 @@ import {
   REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
   REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
 } from "./workspace-manifest-remote-script.js";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import {
   WORKSPACE_PATH_EXCLUSIONS_JS,
   WORKSPACE_STAGED_INPUT_OWNERSHIP_JS,
@@ -80,9 +79,8 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 ${WORKSPACE_PATH_EXCLUSIONS_JS}
-const workspaceStatIdentity = ${workspaceStatIdentity.toString()};
-const selectWorkerWorkspaceHashMemoEntries = ${selectWorkerWorkspaceHashMemoEntries.toString()};
-const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};
+${WORKSPACE_HASH_MEMO_JS}
+const MAX_WORKSPACE_HASH_MEMO_ENTRIES = ${MAX_WORKSPACE_HASH_MEMO_ENTRIES};
 const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
 const root = fs.realpathSync(process.argv[1]);
 ${WORKSPACE_STAGED_INPUT_OWNERSHIP_JS}
@@ -127,7 +125,7 @@ function readHashMemo() {
   }
   if (
     !Array.isArray(entries) ||
-    entries.length > MAX_RECONCILIATION_ENTRIES
+    entries.length > MAX_WORKSPACE_HASH_MEMO_ENTRIES
   ) {
     fail("invalid workspace hash memo");
   }
@@ -501,7 +499,7 @@ async function main() {
   const manifestRef = "sha256:" + digest;
   if (memoMode) {
     const memo = selectWorkerWorkspaceHashMemoEntries(
-      usedHashMemo, MAX_RECONCILIATION_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
+      usedHashMemo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, MAX_WORKSPACE_HASH_MEMO_BYTES,
     );
     metrics.memoTruncatedCount = usedHashMemo.size - memo.length;
     const measured = { ...metrics, totalDurationMs: performance.now() - startedAt };

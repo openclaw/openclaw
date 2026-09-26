@@ -16,6 +16,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const head = "a".repeat(40);
 const base = "c".repeat(40);
 
+function graphqlResponse(repository: unknown) {
+  return { data: { repository } };
+}
+
+function connectionPage(nodes: unknown[], hasNextPage: boolean) {
+  return {
+    nodes,
+    totalCount: 2,
+    pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
+  };
+}
+
 type Fixture = {
   changedFiles?: number | null;
   files?: unknown;
@@ -23,7 +35,16 @@ type Fixture = {
   finalPatch?: Record<string, unknown>;
   failure?: "empty" | "exit" | "non-json" | "null" | "quota" | "forbidden";
   failureCount?: number;
-  failureTarget?: "pull" | "reread" | "files" | "graphql" | "permission" | "browse" | "checks";
+  failureTarget?:
+    | "pull"
+    | "reread"
+    | "files"
+    | "user"
+    | "permission"
+    | "browse"
+    | "checks"
+    | "repository";
+  cacheUntilRevalidated?: boolean;
   notify?: boolean;
   ghRepo?: string;
   ghHost?: string;
@@ -32,9 +53,18 @@ type Fixture = {
   probeGit?: boolean;
   protectedGh?: boolean;
   cleanupFailure?: boolean;
+  authorSources?: unknown;
+  authorPages?: unknown[];
+  coreQuotaAt?: string[];
+  graphqlResponses?: unknown[];
+  graphqlQuota?: boolean;
 };
 
-function readPrMetadata(fixture: Fixture = {}, command = "pr_meta_json 42") {
+function readPrMetadata(
+  fixture: Fixture = {},
+  command = "pr_meta_json 42",
+  parentEnv: NodeJS.ProcessEnv = process.env,
+) {
   const dir = tempDirs.make("openclaw-pr-metadata-");
   const gh = join(dir, "gh");
   const trace = join(dir, "trace");
@@ -60,7 +90,7 @@ require("node:module").syncBuiltinESMExports();
   if (fixture.probeGit) {
     writeFileSync(
       selectedGit,
-      "#!/bin/sh\ncase \"$*\" in\n  --version) printf 'selected fixture Git\\n' ;;\n  'remote get-url origin') printf 'https://github.com/origin-owner/origin-repo.git\\n' ;;\n  *) exit 79 ;;\nesac\n",
+      "#!/bin/sh\ncase \"$*\" in\n  --version) printf 'selected fixture Git\\n' ;;\n  *) exit 79 ;;\nesac\n",
       { mode: 0o755 },
     );
     writeFileSync(join(dir, "git"), "#!/bin/sh\necho 'poisoned PATH Git' >&2\nexit 79\n", {
@@ -69,6 +99,8 @@ require("node:module").syncBuiltinESMExports();
   }
   writeFileSync(trace, "");
   writeFileSync(join(dir, "count"), "0");
+  writeFileSync(join(dir, "graphql-count"), "0");
+  writeFileSync(join(dir, "graphql-inputs"), "");
   writeFileSync(join(dir, "sleeps"), "");
   writeFileSync(join(dir, "notify"), "");
   writeFileSync(
@@ -82,10 +114,46 @@ const fixture = JSON.parse(process.env.FAKE_GH_FIXTURE);
 fs.appendFileSync(path.join(root, "trace"), JSON.stringify(args) + "\\n");
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const defaultHost = process.env.GH_HOST || fixture.configuredHost || "github.com";
-const qualifyRepository = (repository) => repository.startsWith("https://") ? repository
-  : "https://" + (repository.split("/").length === 3 ? repository : defaultHost + "/" + repository);
-if (args[0] === "browse" && args[1] === "--no-browser") {
-  if (fixture.failure === "quota" && fixture.failureTarget === "browse") {
+const qualifyRepository = (repository) => {
+  repository = repository.replace(/\\.git$/, "");
+  return repository.startsWith("https://") ? repository
+    : "https://" + (repository.split("/").length === 3 ? repository : defaultHost + "/" + repository);
+};
+const operation = args[0] === "browse" ? "browse" : args.find((arg) => arg.startsWith("repos/") || arg === "user");
+if (fixture.coreQuotaAt?.includes(operation) && (operation !== "browse" || args.includes("--no-browser"))) {
+  if (operation === "browse") {
+    console.error("HTTP 403: Forbidden (https://api.github.com/repos/base-owner/base-repo)");
+    process.exit(1);
+  }
+  console.log('HTTP/2 403 Forbidden\\nX-RateLimit-Resource: core\\nX-RateLimit-Remaining: 0\\n\\n'+JSON.stringify({message:"API rate limit exceeded"}));
+  console.error("gh: API rate limit exceeded");
+  process.exit(1);
+}
+if (args[0] === "pr" && args[1] === "view") {
+  throw new Error("Top-level pr view can spend REST quota again; use the GraphQL endpoint");
+}
+if (args[0] === "api" && args.includes("graphql")) {
+  if (args.includes("--input")) fs.appendFileSync(path.join(root,"graphql-inputs"),JSON.stringify(JSON.parse(fs.readFileSync(0,"utf8")))+"\\n");
+  if (fixture.graphqlQuota) {
+    console.error("gh: API rate limit exceeded");
+    process.exit(1);
+  }
+  const count = Number(fs.readFileSync(path.join(root,"graphql-count"),"utf8"));
+  fs.writeFileSync(path.join(root,"graphql-count"),String(count+1));
+  if (!fixture.graphqlResponses || count >= fixture.graphqlResponses.length) throw new Error("Unexpected GraphQL request");
+  if (args.includes("--include")) process.stdout.write("HTTP/2 200 OK\\n\\n");
+  let response = fixture.graphqlResponses[count];
+  if (fixture.cacheUntilRevalidated && !args.includes("Cache-Control: max-age=0") && response.data?.repository?.pullRequest?.headRefOid) {
+    response = fixture.graphqlResponses[0];
+  }
+  out(response);
+  process.exit(0);
+}
+if (args[0] === "browse") {
+  if (!args.includes("--no-browser") && !process.env.GH_BROWSER) {
+    throw new Error("Repository discovery must not open the configured browser");
+  }
+  if (args.includes("--no-browser") && fixture.failure === "quota" && fixture.failureTarget === "browse") {
     console.error("HTTP 403: API rate limit exceeded");
     process.exit(1);
   }
@@ -113,12 +181,19 @@ if (args[0] === "pr" && args[1] === "checks") {
   out([{name:"RATE_LIMIT",bucket:"pending",state:"PENDING"}]);
   process.exit(8);
 }
-const endpoint = args.find((arg) => arg.startsWith("repos/") || ["graphql", "rate_limit"].includes(arg));
-if (args[0] !== "api" || !endpoint) throw new Error("Only explicit REST/GraphQL endpoints are supported");
+const endpoint = args.find((arg) => arg.startsWith("repos/") || ["user", "rate_limit"].includes(arg));
+if (args[0] !== "api" || !endpoint) throw new Error("Only explicit REST endpoints are supported");
 const hostFlag = args.indexOf("--hostname");
 const apiHost = hostFlag >= 0 ? args[hostFlag + 1] : defaultHost;
-const repoURL = "https://" + apiHost + "/base-owner/base-repo";
+const repoURL = "https://" + apiHost.toLowerCase() + "/base-owner/base-repo";
 if (fixture.notify) fs.writeSync(3, endpoint + "\\n");
+if (endpoint.startsWith("repos/base-owner/base-repo/commits?")) {
+  const count = Number(fs.readFileSync(path.join(root, "count"), "utf8"));
+  fs.writeFileSync(path.join(root, "count"), String(count + 1));
+  if (!fixture.authorPages || count >= fixture.authorPages.length) throw new Error("Unexpected author request");
+  out(fixture.authorPages[count]);
+  process.exit(0);
+}
 if (endpoint === "rate_limit") {
   out({resources:{graphql:{remaining:0,limit:5000,reset:1800000000},core:{remaining:4900,limit:5000,reset:1800000300}}});
   process.exit(0);
@@ -127,7 +202,7 @@ const isPull = endpoint === "repos/base-owner/base-repo/pulls/42";
 let count = Number(fs.readFileSync(path.join(root,"count"),"utf8"));
 if (isPull) fs.writeFileSync(path.join(root,"count"), String(++count));
 const failureTarget = fixture.failureTarget || "pull";
-const fail = failureTarget === "pull" ? isPull : failureTarget === "reread" ? isPull && count > 1 : failureTarget === "graphql" ? endpoint === "graphql" : failureTarget === "permission" ? endpoint.includes("/collaborators/") : endpoint.includes("/files?");
+const fail = failureTarget === "pull" ? isPull : failureTarget === "reread" ? isPull && count > 1 : failureTarget === "user" ? endpoint === "user" : failureTarget === "permission" ? endpoint.includes("/collaborators/") : failureTarget === "repository" ? endpoint === "repos/base-owner/base-repo" : endpoint.includes("/files?");
 if (fixture.failure && fail && (fixture.failureCount === undefined || count <= fixture.failureCount)) {
   if (fixture.failure === "forbidden") {
     console.error("HTTP 403: Resource not accessible by integration; secret-response-must-not-escape");
@@ -146,24 +221,24 @@ if (fixture.failure && fail && (fixture.failureCount === undefined || count <= f
   if (fixture.failure === "null") out(null);
   process.exit(0);
 }
-if (endpoint === "repos/base-owner/base-repo") {
-  out({full_name:"base-owner/base-repo",html_url:repoURL,node_id:"R_base"});
+if (endpoint === "user") {
+  process.stdout.write('HTTP/2.0 200 OK\\n\\n');
+  out({login:"contributor"});
+} else if (endpoint === "repos/base-owner/base-repo") {
+  out({id:1,full_name:"base-owner/base-repo",html_url:repoURL,node_id:"R_base"});
 } else if (isPull) {
   const record = {number:42,html_url:repoURL+"/pull/42",state:"open",draft:false,
-    base:{sha:"${base}",ref:"main",repo:{id:1}},
+    base:{sha:"${base}",ref:"main",repo:{id:1,node_id:"R_base",full_name:"base-owner/base-repo",html_url:repoURL}},
     head:{sha:"${head}",ref:"topic",repo:{id:2,name:"fork-repo",full_name:"fork-owner/fork-repo",html_url:"https://"+apiHost+"/fork-owner/fork-repo",owner:{login:"fork-owner"}}},
     user:{login:"contributor"},changed_files:fixture.changedFiles === undefined ? 101 : fixture.changedFiles};
-  out({...record,...(count === 1 ? fixture.initialPatch : fixture.finalPatch)});
+  const stale = fixture.cacheUntilRevalidated && !args.includes("Cache-Control: max-age=0");
+  const patch = (count === 1 || stale ? fixture.initialPatch : fixture.finalPatch) || {};
+  out({...record,...patch,...(patch.base ? {base:{...record.base,...patch.base}} : {})});
 } else if (endpoint.includes("/files?")) {
   if (!args.includes("--paginate") || !args.includes("--slurp")) throw new Error("Files must be paginated");
   const count = fixture.changedFiles === undefined ? 101 : fixture.changedFiles || 0;
   const files = fixture.files === undefined ? Array.from({length:count},(_,i)=>({filename:"src/file-"+i+".ts",additions:1,deletions:0,status:i===count-1?"removed":"modified"})) : fixture.files;
   out(Array.isArray(files) ? [files.slice(0,100), ...(files.length > 100 ? [files.slice(100)] : [])] : [files]);
-} else if (endpoint.includes("/check-runs?")) {
-  if (!args.includes("--paginate") || !args.includes("--slurp")) throw new Error("Checks must be paginated");
-  out([{check_runs:[{name:"ci",status:"completed",conclusion:"success",details_url:"https://example.test/check"}]},{check_runs:[{name:"lint",status:"in_progress",conclusion:null}]}]);
-} else if (endpoint.includes("/status?")) {
-  out([{statuses:[{context:"external",state:"pending",target_url:"https://example.test/status"}]}]);
 } else throw new Error("Unexpected endpoint " + endpoint);
 `,
   );
@@ -190,8 +265,13 @@ if (endpoint === "repos/base-owner/base-repo") {
     {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...parentEnv,
+        // This unsupervised child owns neither the parent's snapshot nor its FD3.
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined,
+        OPENCLAW_PR_LOCK_NOTIFY_FD: undefined,
         FAKE_GH_FIXTURE: JSON.stringify(fixture),
+        PR_GH_WRITER_LOGIN: "untrusted-inherited-login",
+        PR_GH_WRITER_CONTEXT: "untrusted-inherited-context",
         FAKE_GH_NOTIFY: join(dir, "notify"),
         GH_REPO: fixture.ghRepo ?? "base-owner/base-repo",
         GH_HOST: fixture.ghHost,
@@ -219,6 +299,11 @@ if (endpoint === "repos/base-owner/base-repo") {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as string[]),
+    graphqlInputs: readFileSync(join(dir, "graphql-inputs"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { query: string; variables: Record<string, unknown> }),
     delays: readFileSync(join(dir, "sleeps"), "utf8")
       .trim()
       .split("\n")
@@ -228,20 +313,535 @@ if (endpoint === "repos/base-owner/base-repo") {
 }
 
 describe("PR metadata through REST", () => {
+  it("reads real metadata with an unrelated inherited snapshot and closed notify FD", () => {
+    const result = readPrMetadata({}, "pr_meta_json 42", {
+      ...process.env,
+      OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-metadata-snapshot-"),
+      OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, headRefOid: head });
+    expect(
+      result.calls.filter((args) => args.includes("repos/base-owner/base-repo/pulls/42")),
+    ).toHaveLength(2);
+    expect(result.notifications).toBe("");
+  });
+
+  describe("core quota fallback", () => {
+    const repository = {
+      id: "R_base",
+      databaseId: 1,
+      nameWithOwner: "base-owner/base-repo",
+      url: "https://github.com/base-owner/base-repo",
+    };
+
+    it.each(["observation", "repository only"])(
+      "carries authoritative repository identity with one GraphQL PR read (%s)",
+      (selection) => {
+        const pullRequest = {
+          id: "PR_42",
+          number: 42,
+          url: `${repository.url}/pull/42`,
+          title: "Fixture",
+          state: "OPEN",
+          isDraft: false,
+          author: { login: "contributor", __typename: "User" },
+          baseRefName: "main",
+          baseRefOid: base,
+          headRefName: "topic",
+          headRefOid: head,
+          headRepository: {
+            name: "fork-repo",
+            nameWithOwner: "fork-owner/fork-repo",
+            url: "https://github.com/fork-owner/fork-repo",
+          },
+          headRepositoryOwner: { login: "fork-owner", __typename: "User" },
+          isCrossRepository: true,
+        };
+        const result = readPrMetadata(
+          {
+            ghRepo: "https://GITHUB.COM/Base-Owner/Base-Repo",
+            coreQuotaAt: ["repos/Base-Owner/Base-Repo/pulls/42"],
+            graphqlResponses: [{ data: { repository: { ...repository, pullRequest } } }],
+          },
+          selection === "observation"
+            ? 'pr_observe 42; printf "%s\\n" "$PR_OBSERVATION"'
+            : "pr_gh pr view 42 --json baseRepository",
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ baseRepository: repository });
+        if (selection === "observation") {
+          expect(JSON.parse(result.stdout)).toMatchObject({
+            number: 42,
+            headRefOid: head,
+            headRefName: "topic",
+            headRepository: pullRequest.headRepository,
+          });
+        }
+        expect(result.calls).toEqual([
+          [
+            "api",
+            "--hostname",
+            "GITHUB.COM",
+            "repos/Base-Owner/Base-Repo/pulls/42",
+            "-H",
+            "Cache-Control: max-age=0",
+          ],
+          [
+            "api",
+            "--hostname",
+            "GITHUB.COM",
+            "graphql",
+            "--input",
+            "-",
+            "-H",
+            "Cache-Control: max-age=0",
+          ],
+        ]);
+        expect(result.graphqlInputs).toHaveLength(1);
+        expect(result.graphqlInputs[0]?.query).toContain(
+          "repository(owner:$owner,name:$name){id databaseId nameWithOwner url pullRequest(number:$number){",
+        );
+        expect(result.graphqlInputs[0]?.variables).toEqual({
+          owner: "Base-Owner",
+          name: "Base-Repo",
+          number: 42,
+        });
+      },
+    );
+
+    it.each([
+      { nameWithOwner: "other/repo" },
+      { url: "https://other.invalid/base-owner/base-repo" },
+      { id: null },
+      { databaseId: 0 },
+      { pullRequest: null },
+    ])("rejects invalid carried repository or PR authority %j", (patch) => {
+      const result = readPrMetadata(
+        {
+          ghRepo: repository.url,
+          coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
+          graphqlResponses: [
+            { data: { repository: { ...repository, pullRequest: { id: "PR_42" }, ...patch } } },
+          ],
+        },
+        "pr_gh pr view 42 --json baseRepository",
+      );
+      expect(result.status, result.stderr).toBe(65);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toHaveLength(2);
+      expect(result.graphqlInputs).toHaveLength(1);
+    });
+
+    it("verifies the protected writer through GraphQL when REST quota is exhausted", () => {
+      const result = readPrMetadata(
+        {
+          protectedGh: true,
+          coreQuotaAt: ["user"],
+          graphqlResponses: [{ data: { viewer: { login: "fixture-writer" } } }],
+        },
+        "pr_gh_writer_login github.com",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("fixture-writer");
+      expect(result.calls.filter((call) => call.includes("graphql"))).toHaveLength(1);
+    });
+
+    it.each([false, true])(
+      "resolves authoritative repository identity without a quota-blind HEAD (both budgets=%s)",
+      (graphqlQuota) => {
+        const result = readPrMetadata(
+          {
+            coreQuotaAt: ["browse", "repos/base-owner/base-repo"],
+            graphqlResponses: [graphqlResponse(repository)],
+            graphqlQuota,
+          },
+          "pr_gh_plain repo view --json id,nameWithOwner,url",
+        );
+        expect(result.status, result.stderr).toBe(graphqlQuota ? 75 : 0);
+        if (!graphqlQuota) {
+          expect(JSON.parse(result.stdout)).toEqual({
+            id: "R_base",
+            nameWithOwner: repository.nameWithOwner,
+            url: repository.url,
+          });
+        }
+        expect(result.calls.filter((call) => call.includes("graphql"))).toHaveLength(1);
+        expect(result.calls).toContainEqual(["browse"]);
+        expect(
+          result.calls.filter((call) => call.includes("repos/base-owner/base-repo")),
+        ).toHaveLength(1);
+      },
+    );
+
+    it("preserves canonical repository identities for differently cased callers", () => {
+      const result = readPrMetadata(
+        {
+          coreQuotaAt: ["repos/Base-Owner/Base-Repo"],
+          graphqlResponses: [graphqlResponse(repository)],
+        },
+        "pr_gh_plain repo-authority Base-Owner/Base-Repo GitHub.com",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        id: 1,
+        node_id: "R_base",
+        full_name: repository.nameWithOwner,
+        html_url: repository.url,
+      });
+    });
+
+    it.each(["exact", "absent", "unavailable"])(
+      "resolves %s author permission without accepting a fuzzy collaborator match",
+      (mode) => {
+        const page = (login: string, permission: string, hasNextPage: boolean) =>
+          graphqlResponse({
+            collaborators: {
+              totalCount: 2,
+              edges: [{ permission, node: { login } }],
+              pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
+            },
+          });
+        const result = readPrMetadata(
+          {
+            coreQuotaAt: ["repos/base-owner/base-repo/collaborators/human/permission"],
+            graphqlResponses:
+              mode === "unavailable"
+                ? [
+                    {
+                      data: { repository: null },
+                      errors: [{ message: "Unavailable collaborator contract" }],
+                    },
+                  ]
+                : [
+                    page("human-other", "ADMIN", true),
+                    page(mode === "exact" ? "human" : "human-another", "WRITE", false),
+                  ],
+          },
+          "pr_gh author-permission base-owner/base-repo github.com human",
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          permission: mode === "exact" ? "write" : mode === "absent" ? "none" : "unknown",
+        });
+      },
+    );
+
+    it.each(["complete", "partial", "duplicate", "errors"])(
+      "reads %s GraphQL comment evidence after core exhaustion",
+      (mode) => {
+        const node = {
+          id: "IC_1",
+          databaseId: 12,
+          body: "review",
+          url: `${repository.url}/pull/42#issuecomment-12`,
+          createdAt: "2026-09-20T00:00:00Z",
+          updatedAt: "2026-09-20T00:00:00Z",
+          author: { id: "BOT_1", databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
+        };
+        const page = (nodes: unknown[], hasNextPage: boolean) =>
+          graphqlResponse({ pullRequest: { comments: connectionPage(nodes, hasNextPage) } });
+        const result = readPrMetadata(
+          {
+            coreQuotaAt: ["repos/base-owner/base-repo/issues/42/comments?per_page=100"],
+            graphqlResponses:
+              mode === "errors"
+                ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
+                : [
+                    page([node], mode !== "partial"),
+                    page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
+                  ],
+          },
+          "pr_gh_plain issue-comments base-owner/base-repo github.com 42",
+        );
+        expect(result.status, result.stderr).toBe(mode === "complete" ? 0 : 65);
+        if (mode === "complete") {
+          const comments = JSON.parse(result.stdout).flat();
+          expect(comments).toHaveLength(2);
+          expect(comments[0]).toMatchObject({
+            id: 12,
+            body: "review",
+            user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+            html_url: node.url,
+          });
+        } else {
+          expect(result.stdout).toBe("");
+        }
+      },
+    );
+
+    it("preserves pinned author order and human attribution through GraphQL", () => {
+      const first = "1".repeat(40);
+      const second = "2".repeat(40);
+      const result = readPrMetadata(
+        {
+          authorSources: [
+            { oid: first, changesTree: true },
+            { oid: second, changesTree: false },
+          ],
+          coreQuotaAt: [`repos/base-owner/base-repo/commits?sha=${second}&per_page=2`],
+          graphqlResponses: [
+            graphqlResponse({
+              commit0: {
+                oid: first,
+                author: {
+                  name: "Human",
+                  email: "human@example.invalid",
+                  user: { login: "human", __typename: "User" },
+                },
+              },
+              commit1: {
+                oid: second,
+                author: { name: "Unlinked", email: "unlinked@example.invalid", user: null },
+              },
+            }),
+          ],
+        },
+        'printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors base-owner/base-repo github.com',
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([
+        {
+          name: "Human",
+          email: "human@example.invalid",
+          user: { login: "human", type: "User" },
+          changesTree: true,
+        },
+        { name: "Unlinked", email: "unlinked@example.invalid", user: null, changesTree: false },
+      ]);
+    });
+
+    it.each([false, true])(
+      "returns complete PR file metadata through GraphQL (truncated=%s)",
+      (truncated) => {
+        const page = (path: string, hasNextPage: boolean) =>
+          graphqlResponse({
+            pullRequest: {
+              files: connectionPage(
+                [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
+                hasNextPage,
+              ),
+            },
+          });
+        const result = readPrMetadata(
+          {
+            coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
+            graphqlResponses: [
+              graphqlResponse({
+                pullRequest: {
+                  headRefOid: head,
+                  author: null,
+                  headRepository: null,
+                  headRepositoryOwner: null,
+                },
+              }),
+              page("src/a.ts", !truncated),
+              page("src/b.ts", false),
+            ],
+          },
+          "pr_gh pr view 42 --json headRefOid,author,headRepository,headRepositoryOwner,files",
+        );
+        expect(result.status, result.stderr).toBe(truncated ? 65 : 0);
+        if (!truncated) {
+          expect(JSON.parse(result.stdout)).toEqual({
+            headRefOid: head,
+            author: null,
+            headRepository: null,
+            headRepositoryOwner: null,
+            files: ["src/a.ts", "src/b.ts"].map((path) => ({
+              path,
+              additions: 1,
+              deletions: 0,
+              changeType: "MODIFIED",
+            })),
+          });
+        } else {
+          expect(result.stdout).toBe("");
+        }
+        expect(result.calls.some((args) => args[0] === "pr")).toBe(false);
+        expect(
+          result.calls
+            .filter((args) => args.includes("graphql"))
+            .every((args) => args.includes("Cache-Control: max-age=0")),
+        ).toBe(true);
+      },
+    );
+  });
+
+  it("accepts canonical repository casing when adopting an explicit qualified observation", () => {
+    const result = readPrMetadata(
+      { ghRepo: "https://GITHUB.COM/base-owner/base-repo" },
+      'pr_observe 42; printf "%s\\n" "$PR_REPOSITORY_URL"',
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("https://github.com/base-owner/base-repo\n");
+    expect(result.calls).toHaveLength(1);
+  });
+
+  it("authenticates nested worktree entries once without trusting inherited login state", () => {
+    const result = readPrMetadata(
+      {},
+      'ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth; printf "%s\\n" "$PR_GH_WRITER_LOGIN"',
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("contributor\n");
+    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(1);
+  });
+
+  it("revalidates writer identity after explicit credential selection changes", () => {
+    const result = readPrMetadata(
+      {},
+      "ensure_gh_api_auth; GH_TOKEN=synthetic-replacement ensure_gh_api_auth",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(2);
+  });
+
+  it("does not retain a failed authentication probe", () => {
+    const result = readPrMetadata(
+      { failure: "quota", failureTarget: "user" },
+      "ensure_gh_api_auth || true; ensure_gh_api_auth",
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.calls.filter((args) => args.includes("user"))).toHaveLength(2);
+  });
+
+  describe("pinned source authors", () => {
+    const command =
+      'printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors base-owner/base-repo github.enterprise.invalid';
+    const sha = (index: number) => index.toString(16).padStart(40, "0");
+    const source = (index: number) => ({ oid: sha(index), changesTree: index % 2 === 0 });
+    const record = (index: number) => ({
+      sha: sha(index),
+      commit: { author: { name: `Author ${index}`, email: `author${index}@example.com` } },
+      author: { login: `author${index}`, type: "User" },
+    });
+    const requests = (calls: string[][]) =>
+      calls.map((args) => {
+        expect(args.slice(0, 3)).toEqual(["api", "--hostname", "github.enterprise.invalid"]);
+        const endpoint = args[3];
+        if (endpoint === undefined) {
+          throw new Error("Expected a commit-author API endpoint");
+        }
+        const query = new URL(endpoint, "https://github.enterprise.invalid/").searchParams;
+        return { sha: query.get("sha"), limit: Number(query.get("per_page")) };
+      });
+
+    it("does not read GitHub for an empty source selection", () => {
+      const result = readPrMetadata({ authorSources: [] }, command);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([]);
+      expect(result.calls).toEqual([]);
+    });
+
+    it("resolves 101 pinned authors in two requests and retains original source order", () => {
+      const sources = Array.from({ length: 101 }, (_, index) => source(index + 1));
+      const records = Array.from({ length: 101 }, (_, index) => record(index + 1));
+      const result = readPrMetadata(
+        { authorSources: sources, authorPages: [records.slice(1).toReversed(), [records[0]]] },
+        command,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(
+        records.map((commit, index) => ({
+          name: commit.commit.author.name,
+          email: commit.commit.author.email,
+          user: commit.author,
+          changesTree: source(index + 1).changesTree,
+        })),
+      );
+      expect(requests(result.calls)).toEqual([
+        { sha: sha(101), limit: 100 },
+        { sha: sha(1), limit: 1 },
+      ]);
+    });
+
+    it("ignores unrelated ancestry and uses singleton requests for every remaining author", () => {
+      const result = readPrMetadata(
+        {
+          authorSources: [source(1), source(2), source(3), source(4)],
+          authorPages: [
+            [record(4), record(99), record(98), record(97)],
+            [record(3)],
+            [record(2)],
+            [record(1)],
+          ],
+        },
+        command,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout).map((author: { name: string }) => author.name)).toEqual([
+        "Author 1",
+        "Author 2",
+        "Author 3",
+        "Author 4",
+      ]);
+      expect(requests(result.calls)).toEqual([
+        { sha: sha(4), limit: 4 },
+        { sha: sha(3), limit: 1 },
+        { sha: sha(2), limit: 1 },
+        { sha: sha(1), limit: 1 },
+      ]);
+    });
+
+    it.each([
+      null,
+      {},
+      [source(1), source(1)],
+      [{ oid: "main", changesTree: true }],
+      [{ oid: sha(1) }],
+    ])("rejects invalid source selections before reading GitHub: %j", (authorSources) => {
+      const result = readPrMetadata({ authorSources }, command);
+      expect(result.status).toBe(65);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toEqual([]);
+    });
+
+    it.each([
+      null,
+      {},
+      [],
+      [record(2)],
+      [record(1), record(1)],
+      [{ ...record(1), sha: "main" }],
+      [{ ...record(1), author: undefined }],
+      [{ ...record(1), author: { login: "bot", type: null } }],
+      [{ ...record(1), commit: { author: { name: null, email: "author1@example.com" } } }],
+    ])("rejects malformed or unbound author evidence without retrying: %j", (page) => {
+      const result = readPrMetadata({ authorSources: [source(1)], authorPages: [page] }, command);
+      expect(result.status).toBe(65);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toHaveLength(1);
+    });
+
+    it("rejects duplicate authors even when the batch has the requested size and tip", () => {
+      const result = readPrMetadata(
+        {
+          authorSources: [source(1), source(2)],
+          authorPages: [[record(2), record(2)]],
+        },
+        command,
+      );
+      expect(result.status).toBe(65);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toHaveLength(1);
+    });
+  });
+
   it.each([
     {
       name: "qualified repo URL",
       ghRepo: "base-owner/base-repo",
       command:
         "pr_gh_plain repo view --json url --repo https://github.enterprise.invalid/base-owner/base-repo",
-      failureTarget: "browse",
+      failureTarget: "repository",
       host: "github.enterprise.invalid",
     },
     {
       name: "qualified GH_REPO",
       ghRepo: "github.enterprise.invalid/base-owner/base-repo",
       command: "pr_gh_plain repo view --json url",
-      failureTarget: "browse",
+      failureTarget: "repository",
       host: "github.enterprise.invalid",
     },
     {
@@ -288,6 +888,7 @@ describe("PR metadata through REST", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(
       JSON.stringify({
+        id: 1,
         full_name: "base-owner/base-repo",
         html_url: "https://github.com/base-owner/base-repo",
         node_id: "R_base",
@@ -338,12 +939,7 @@ describe("PR metadata through REST", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).url).toBe("https://github.com/base-owner/base-repo/pull/42");
-    expect(result.calls.filter((args) => args[0] === "browse")).toEqual([
-      ["browse", "--no-browser"],
-      ["browse", "--no-browser"],
-      ["browse", "--no-browser"],
-      ["browse", "--no-browser"],
-    ]);
+    expect(result.calls.filter((args) => args[0] === "browse")).toEqual([["browse"], ["browse"]]);
     expect(result.calls).toContainEqual([
       "pr",
       "edit",
@@ -354,23 +950,24 @@ describe("PR metadata through REST", () => {
       "https://github.com/base-owner/base-repo",
     ]);
   });
-  it.each(["environment", "explicit"])(
+  it.each(["environment", "explicit", "explicit-git-suffix"])(
     "preserves the %s repository override before gh's default",
     (mode) => {
-      const explicit = mode === "explicit" ? " --repo=https://github.com/base-owner/base-repo" : "";
+      const explicit =
+        mode === "environment"
+          ? ""
+          : ` --repo=https://github.com/base-owner/base-repo${mode === "explicit-git-suffix" ? ".git" : ""}`;
       const result = readPrMetadata(
         {
-          ghRepo: mode === "explicit" ? "ignored/repo" : "base-owner/base-repo",
+          ghRepo: explicit ? "ignored/repo" : "base-owner/base-repo",
           defaultRepoURL: "https://github.com/ignored/default",
         },
         `pr_gh pr view 42 --json number,headRefOid${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor${explicit}`,
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ number: 42, headRefOid: head });
-      expect(result.calls).toContainEqual(
-        mode === "explicit"
-          ? ["browse", "--no-browser", "--repo", "https://github.com/base-owner/base-repo"]
-          : ["browse", "--no-browser"],
+      expect(result.calls.filter((args) => args[0] === "browse")).toEqual(
+        explicit ? [] : [["browse"], ["browse"]],
       );
     },
   );
@@ -415,9 +1012,7 @@ describe("PR metadata through REST", () => {
         repoURL,
       ]);
       expect(result.calls).toContainEqual(
-        selection === "--repo"
-          ? ["browse", "--no-browser", "--repo", "base-owner/base-repo"]
-          : ["browse", "--no-browser"],
+        selection === "--repo" ? ["browse", "--repo", "base-owner/base-repo"] : ["browse"],
       );
     },
   );
@@ -426,7 +1021,7 @@ describe("PR metadata through REST", () => {
     (failure) => {
       const result = readPrMetadata(
         { failure, failureTarget: "permission" },
-        "source scripts/pr-lib/prepare-core.sh; resolve_pr_author_access_at_prepare contributor",
+        "source scripts/pr-lib/prepare-core.sh; resolve_pr_author_access_at_prepare contributor base-owner/base-repo github.com",
       );
       expect(result.status, result.stderr).toBe(failure === "forbidden" ? 0 : 1);
       expect(result.stdout).toBe(failure === "forbidden" ? "unknown\n" : "");
@@ -434,6 +1029,10 @@ describe("PR metadata through REST", () => {
       expect(result.stderr).toContain(
         "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
       );
+      expect(result.stderr).toContain(
+        "Supplemental quota probe (remaining/limit; not the failing response)",
+      );
+      expect(result.stderr).not.toContain("Wait until");
       expect(result.stderr).not.toContain("secret-response-must-not-escape");
       expect(result.calls.filter((args) => args.includes("rate_limit"))).toHaveLength(1);
     },
@@ -476,16 +1075,16 @@ describe("PR metadata through REST", () => {
     expect(result.notifications).toBe("repos/base-owner/base-repo/pulls/42\nrate_limit\n");
     expect(result.stderr).toContain("resource=core");
   });
-  it("collects complete paginated files and exact-head checks without consuming GraphQL", () => {
+  it("collects complete paginated files without requesting unrelated checks or GraphQL", () => {
     const result = readPrMetadata();
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.attempts).toBe(2);
+    expect(result.calls.filter((args) => args[0] === "api")).toHaveLength(3);
+    expect(result.calls.some((args) => args.includes("repos/base-owner/base-repo"))).toBe(false);
     expect(
       result.calls.every(
-        (args) =>
-          (args[0] === "api" && !args.includes("graphql")) ||
-          (args[0] === "browse" && args[1] === "--no-browser"),
+        (args) => (args[0] === "api" && !args.includes("graphql")) || args[0] === "browse",
       ),
     ).toBe(true);
     const metadata = JSON.parse(result.stdout);
@@ -503,11 +1102,11 @@ describe("PR metadata through REST", () => {
       deletions: 0,
       changeType: "DELETED",
     });
-    expect(metadata.statusCheckRollup).toMatchObject([
-      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
-      { __typename: "CheckRun", name: "lint", status: "IN_PROGRESS" },
-      { __typename: "StatusContext", context: "external", state: "PENDING" },
-    ]);
+    expect(
+      result.calls.some((args) =>
+        args.some((arg) => arg.includes("/check-runs?") || arg.includes("/status?")),
+      ),
+    ).toBe(false);
   });
 
   it("accepts an explicit empty diff", () => {
@@ -614,11 +1213,58 @@ describe("PR metadata through REST", () => {
     );
   });
 
-  it("rejects files collected while the PR head moves", () => {
-    const result = readPrMetadata({ finalPatch: { head: { sha: "b".repeat(40), ref: "topic" } } });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("PR head changed while collecting file metadata");
-  });
+  it.each(["REST", "GraphQL"])(
+    "revalidates both %s observations and rejects files collected while the PR head moves",
+    (transport) => {
+      const metadata = {
+        number: 42,
+        title: "Fixture",
+        state: "OPEN",
+        isDraft: false,
+        author: null,
+        baseRefName: "main",
+        baseRefOid: base,
+        headRefName: "topic",
+        headRefOid: head,
+        isCrossRepository: false,
+        headRepository: null,
+        headRepositoryOwner: null,
+        url: "https://github.com/base-owner/base-repo/pull/42",
+        body: "",
+        changedFiles: 0,
+        additions: 0,
+        deletions: 0,
+      };
+      const response = (pullRequest: unknown) =>
+        graphqlResponse({
+          id: "R_base",
+          databaseId: 1,
+          nameWithOwner: "base-owner/base-repo",
+          url: "https://github.com/base-owner/base-repo",
+          pullRequest,
+        });
+      const emptyPage = { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } };
+      const result = readPrMetadata({
+        cacheUntilRevalidated: true,
+        finalPatch: { head: { sha: "b".repeat(40), ref: "topic" } },
+        ...(transport === "GraphQL"
+          ? {
+              coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
+              graphqlResponses: [
+                response(metadata),
+                response({ labels: emptyPage }),
+                response({ assignees: emptyPage }),
+                response({ files: emptyPage }),
+                response({ ...metadata, headRefOid: "b".repeat(40) }),
+              ],
+            }
+          : {}),
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("PR head changed while collecting file metadata");
+    },
+  );
 
   it("rejects an invalid changed-file count", () => {
     const result = readPrMetadata({ changedFiles: null });
@@ -656,7 +1302,7 @@ describe("PR metadata through REST", () => {
 
   it.each([
     { command: "pr_meta_json 42", failureTarget: "pull", resource: "core", exitCode: 1 },
-    { command: "ensure_gh_api_auth", failureTarget: "graphql", resource: "graphql", exitCode: 1 },
+    { command: "ensure_gh_api_auth", failureTarget: "user", resource: "core", exitCode: 1 },
     {
       command: "pr_gh pr view 42 --json headRefOid --jq .headRefOid",
       failureTarget: "pull",
@@ -670,11 +1316,15 @@ describe("PR metadata through REST", () => {
       exitCode: 75,
     },
   ] as const)(
-    "reports both quotas for a $resource failure without retrying: $command",
+    "labels supplemental quotas for a $resource failure without retrying: $command",
     ({ command, failureTarget, resource, exitCode }) => {
       const result = readPrMetadata({ failure: "quota", failureTarget }, command);
       expect(result.status).toBe(exitCode);
       expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "Supplemental quota probe (remaining/limit; not the failing response)",
+      );
+      expect(result.stderr).not.toContain("Wait until");
       expect(result.stderr).toContain(`resource=${resource}`);
       expect(result.stderr).toContain(
         "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
@@ -734,13 +1384,14 @@ describe("merge outcome API diagnostics", () => {
 });
 
 describe("PR GitHub helper snapshot trust", () => {
-  it.each(["changed source", "redirected import root"])(
+  it.each(["changed source", "redirected import root", "changed response parser"])(
     "rejects %s before loading snapshot code",
     (kind) => {
       const root = tempDirs.make("openclaw-pr-gh-snapshot-");
       for (const file of [
         "pr-lib/github.sh",
         "pr-lib/github.mjs",
+        "pr-lib/gh-api-preflight.mjs",
         "lib/plain-gh.mjs",
         "lib/direct-run.mjs",
       ]) {
@@ -748,8 +1399,12 @@ describe("PR GitHub helper snapshot trust", () => {
         mkdirSync(dirname(target), { recursive: true });
         copyFileSync(join(process.cwd(), "scripts", file), target);
       }
-      const target = join(root, "scripts/pr-lib/github.mjs");
-      if (kind === "changed source") {
+      const target = join(
+        root,
+        "scripts/pr-lib",
+        kind === "changed response parser" ? "gh-api-preflight.mjs" : "github.mjs",
+      );
+      if (kind !== "redirected import root") {
         writeFileSync(target, "throw new Error('unverified source ran');\n");
       } else {
         const outside = join(root, "outside/github.mjs");

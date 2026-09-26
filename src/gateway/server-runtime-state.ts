@@ -1,13 +1,13 @@
 // Gateway HTTP/WebSocket runtime state factory.
 // Builds one server runtime with lazy plugin route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
 import type { WebSocketServer } from "ws";
 import { WebSocketServer as NpmWebSocketServer } from "../../packages/gateway-client/src/websocket.js";
 import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -15,11 +15,9 @@ import type { PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import type { ControlUiRootState } from "./control-ui.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
   createGatewayUnattributableProxyReporter,
   type GatewayIngressTransport,
@@ -30,11 +28,14 @@ import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
+import { startPluginLegacyListeners } from "./server/plugin-legacy-listeners.js";
+import type { PluginHttpRequestHandler, PluginHttpUpgradeHandler } from "./server/plugins-http.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import {
   isPluginAuthenticatedRoutePath,
@@ -48,34 +49,8 @@ import {
 } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
-import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
-
-type GatewayPluginRequestHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: {
-    gatewayAuthSatisfied?: boolean;
-    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-    gatewayRequestOperatorScopes?: readonly string[];
-    gatewayRequestClientIp?: string;
-  },
-) => Promise<boolean>;
-
-type GatewayPluginUpgradeHandler = (
-  req: IncomingMessage,
-  socket: Duplex,
-  head: Buffer,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: {
-    gatewayAuthSatisfied?: boolean;
-    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
-    gatewayRequestOperatorScopes?: readonly string[];
-    gatewayRequestClientIp?: string;
-  },
-) => Promise<boolean>;
 
 const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-http.js");
 
@@ -128,8 +103,8 @@ export async function createGatewayHttpTransport(params: {
   isStartupPending?: () => boolean;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
-  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
+  handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: ArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
@@ -154,6 +129,7 @@ export async function createGatewayHttpTransport(params: {
   ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
 }> {
   const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   if (params.testListener) {
     const address = params.testListener.address();
     if (
@@ -178,13 +154,15 @@ export async function createGatewayHttpTransport(params: {
   const getHookDispatcher = async () => {
     const { createGatewayHookDispatcher } = await import("./server/hooks.js");
     return (loadedHookDispatcher ??= runWithSpawnBroker(spawnBroker, () =>
-      createGatewayHookDispatcher({
-        deps: params.deps,
-        logHooks: params.logHooks,
-        ...(params.getGatewayRequestContext
-          ? { resolveGatewayContext: params.getGatewayRequestContext }
-          : {}),
-      }),
+      runWithReadOnlyWorkers(() =>
+        createGatewayHookDispatcher({
+          deps: params.deps,
+          logHooks: params.logHooks,
+          ...(params.getGatewayRequestContext
+            ? { resolveGatewayContext: params.getGatewayRequestContext }
+            : {}),
+        }),
+      ),
     ));
   };
   const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -227,9 +205,9 @@ export async function createGatewayHttpTransport(params: {
     });
   };
 
-  let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
-  let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
-  const handlePluginRequest: GatewayPluginRequestHandler = async (
+  let loadedPluginRequestHandler: PluginHttpRequestHandler | null = null;
+  let loadedPluginUpgradeHandler: PluginHttpUpgradeHandler | null = null;
+  const handlePluginRequest: PluginHttpRequestHandler = async (
     req,
     res,
     pathContext,
@@ -252,7 +230,7 @@ export async function createGatewayHttpTransport(params: {
     });
     return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
   };
-  const handlePluginUpgrade: GatewayPluginUpgradeHandler = async (
+  const handlePluginUpgrade: PluginHttpUpgradeHandler = async (
     req,
     socket,
     head,
@@ -331,6 +309,12 @@ export async function createGatewayHttpTransport(params: {
   const portalService = createGatewayPortalService({
     httpBindHosts,
     httpServers,
+    ingress: params.cfg.gateway?.portals?.ingress,
+    managedTailscale: Boolean(managedTailscaleMode),
+    gatewayOrigins: [
+      params.cfg.gateway?.publicOrigin,
+      ...(params.cfg.gateway?.controlUi?.allowedOrigins ?? []),
+    ].filter((origin): origin is string => Boolean(origin)),
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
   const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
@@ -571,9 +555,20 @@ export async function createGatewayHttpTransport(params: {
       if (httpBindHosts.length === 0) {
         throw new Error("Gateway HTTP server failed to start");
       }
+      if (!params.updateCanary) {
+        await portalService.startIngress();
+      }
       // Published updaters retain the live sandbox port but already pass --update-canary.
       if (!params.updateCanary && params.cfg.mcp?.apps?.enabled === true) {
         await startSandboxHost();
+      }
+      if (!params.updateCanary) {
+        startPluginLegacyListeners({
+          gatewayServer: httpServer,
+          httpServers,
+          getRegistry: resolvePluginRouteRegistry,
+          warn: (message) => params.logPlugins.warn(message),
+        });
       }
       startListeningComplete = true;
     })();

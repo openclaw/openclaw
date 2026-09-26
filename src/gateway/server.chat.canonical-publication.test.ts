@@ -25,6 +25,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const privateCaption =
   "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nPrivate synthetic instruction.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 const publicCaption = "Public attachment caption. ".repeat(200).trimEnd();
+const dryRunFinal = "The attachment was not sent because this was a dry run.";
+const missingMediaFinal = "The attachment could not be sent because the file was not found.";
 const cases = [
   { name: "ordinary", caption: "Attached proof.", expectedText: ["Attached proof."] },
   { name: "internal", caption: privateCaption, expectedText: [] },
@@ -49,8 +51,18 @@ const cases = [
     caption: `${publicCaption}\n${privateCaption}`,
     expectedText: [publicCaption],
   },
-  { name: "dry-run", caption: privateCaption, expectedText: [] },
-  { name: "missing-media", caption: privateCaption, expectedText: [] },
+  {
+    name: "dry-run",
+    caption: privateCaption,
+    finalText: dryRunFinal,
+    expectedText: [dryRunFinal],
+  },
+  {
+    name: "missing-media",
+    caption: privateCaption,
+    finalText: missingMediaFinal,
+    expectedText: [missingMediaFinal],
+  },
   {
     name: "cancel",
     caption: `Attached proof.\n${privateCaption}`,
@@ -169,7 +181,7 @@ it(
           heldFinalRequest.resolve();
         } else {
           writeOpenAiResponsesText(response, {
-            text: "NO_REPLY",
+            text: "finalText" in selected ? selected.finalText : "NO_REPLY",
             messageId: `msg_${selected.name}`,
             responseId: `final_${selected.name}`,
           });
@@ -221,7 +233,8 @@ it(
               },
             },
           },
-          tools: { profile: "messaging" },
+          // This provider scripts direct message calls to prove publication, not discovery.
+          tools: { profile: "messaging", toolSearch: false },
           plugins: {
             allow: ["openai"],
             slots: { memory: "none" },

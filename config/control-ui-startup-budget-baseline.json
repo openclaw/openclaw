@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 363407,
-  "reason": "Maintainer-approved measured refresh for #152240: the reviewed tooltip repair measured 363407 B startup gzip with Vite 8.3.0/Pako 3.0.1 on Node 26.8.2; a subsequent canonical build measured 363421 B, within the existing 64 B variance allowance. Pristine main 95b8e0335450 measured 363276 B; repaired raw startup JavaScript is 825 B smaller. The 355 KiB committed-baseline cap and existing 512 B growth / 64 B variance allowances are unchanged.",
-  "updatedAt": "2026-09-19"
+  "startupJsGzipBytes": 370756,
+  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
+  "updatedAt": "2026-09-22"
 }

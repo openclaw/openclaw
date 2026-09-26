@@ -132,3 +132,64 @@ describe("chat display tool-result detail projection", () => {
     expect(invalid).not.toHaveProperty("details");
   });
 });
+
+describe("bounded tool output previews", () => {
+  it("caps nested output once, preserves literal text, and removes private media", () => {
+    const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
+    const message = {
+      role: "assistant",
+      __openclaw: {
+        id: "nested-output",
+        toolOutput: { source: "execution", modelInput: "unverified" },
+      },
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: "nested-call",
+          toolName: "exec",
+          isError: true,
+          text,
+          content: [
+            { type: "text", text },
+            { type: "image", data: "PRIVATE_IMAGE", path: "/private/image.png" },
+          ],
+        },
+      ],
+    };
+    const original = structuredClone(message);
+    const [preview] = sanitizeChatHistoryMessages([message], 32) as Array<Record<string, unknown>>;
+    expect(preview).toMatchObject({
+      __openclaw: { ...message["__openclaw"], truncated: true, reason: "display-cap" },
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: "nested-call",
+          toolName: "exec",
+          isError: true,
+          content: [
+            { type: "text", text: text.slice(0, 32) },
+            { type: "image", omitted: true },
+          ],
+        },
+      ],
+    });
+    const [block] = preview!.content as Array<Record<string, unknown>>;
+    expect(block).not.toHaveProperty("text");
+    expect(JSON.stringify(preview)).not.toContain("PRIVATE_IMAGE");
+    expect(JSON.stringify(preview)).not.toContain("/private/image.png");
+    expect(message).toEqual(original);
+  });
+
+  it.each(["toolResult", "tool_result", "tool", "function"])(
+    "keeps %s output whitespace and UTF-16 intact without adding a truncation sentinel",
+    (role) => {
+      const [preview] = sanitizeChatHistoryMessages([{ role, content: " \n😀  \n" }], 3) as Array<
+        Record<string, unknown>
+      >;
+      expect(preview).toMatchObject({
+        content: " \n",
+        __openclaw: { truncated: true, reason: "display-cap" },
+      });
+    },
+  );
+});

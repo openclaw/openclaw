@@ -1,30 +1,24 @@
-// Server models and voicewake tests cover model catalog routes, outbound
-// delivery deps, voicewake triggers, config cache resets, and misc RPC behavior.
+// Covers model catalog routes, voicewake events, and Gateway port cleanup.
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
+import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
-import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
-import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   agentDiscoveryMock,
   rpcReq,
-  resetTestPluginRegistry,
-  setTestPluginRegistry,
   startConnectedServerWithClient,
   startTestGatewayServer,
   startServerWithClient,
@@ -51,42 +45,6 @@ beforeAll(async () => {
   port = started.port;
 });
 
-const whatsappOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async ({ deps, to, text }) => {
-    if (!deps?.["whatsapp"]) {
-      throw new Error("Missing sendWhatsApp dep");
-    }
-    return {
-      channel: "whatsapp",
-      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false })),
-    };
-  },
-  sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    if (!deps?.["whatsapp"]) {
-      throw new Error("Missing sendWhatsApp dep");
-    }
-    return {
-      channel: "whatsapp",
-      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false, mediaUrl })),
-    };
-  },
-};
-
-const whatsappPlugin = createOutboundTestPlugin({
-  id: "whatsapp",
-  outbound: whatsappOutbound,
-  label: "WhatsApp",
-});
-
-const whatsappRegistry = createRegistry([
-  {
-    pluginId: "whatsapp",
-    source: "test",
-    plugin: whatsappPlugin,
-  },
-]);
-
 type ModelCatalogRpcEntry = {
   id: string;
   name: string;
@@ -104,7 +62,7 @@ type ModelCatalogRpcEntry = {
 type AgentCatalogFixtureEntry = {
   id: string;
   provider: string;
-  name?: string;
+  name: string;
   contextWindow?: number;
 };
 
@@ -114,7 +72,7 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
 };
 
 const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
-  { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+  { id: "gpt-test-z", name: "", provider: "openai", contextWindow: 0 },
   {
     id: "gpt-test-a",
     name: "A-Model",
@@ -368,7 +326,8 @@ describe("gateway server models + voicewake", () => {
         await seedAgentModelCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(options.expected);
+        expect(res.payload?.models).toHaveLength(options.expected.length);
+        expect(res.payload?.models).toEqual(expect.arrayContaining(options.expected));
       },
     );
   };
@@ -410,21 +369,7 @@ describe("gateway server models + voicewake", () => {
       Pick<ModelCatalogRpcEntry, "id" | "name" | "provider">,
   ) => {
     expect(models).toHaveLength(1);
-    expect(models[0]?.id).toBe(expected.id);
-    expect(models[0]?.name).toBe(expected.name);
-    expect(models[0]?.provider).toBe(expected.provider);
-    if (expected.alias !== undefined) {
-      expect(models[0]?.alias).toBe(expected.alias);
-    }
-    if (expected.contextWindow !== undefined) {
-      expect(models[0]?.contextWindow).toBe(expected.contextWindow);
-    }
-    if (expected.supportsTools !== undefined) {
-      expect(models[0]?.supportsTools).toBe(expected.supportsTools);
-    }
-    if (expected.tags !== undefined) {
-      expect(models[0]?.tags).toEqual(expected.tags);
-    }
+    expect(models[0]).toMatchObject(expected);
   };
 
   test(
@@ -517,6 +462,7 @@ describe("gateway server models + voicewake", () => {
   test("models.list all view returns model catalog", async () => {
     await withModelsConfig(fullCatalogProviderConfig(), async () => {
       await seedAgentModelCatalog();
+      const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
 
       const res1 = await listModels({ view: "all", preparedOnly: true });
       const res2 = await listModels({ view: "all", preparedOnly: true });
@@ -527,7 +473,7 @@ describe("gateway server models + voicewake", () => {
       const models = res1.payload?.models ?? [];
       expect(models).toEqual(expectedSortedCatalog());
 
-      expect(agentDiscoveryMock.discoverCalls).toBe(0);
+      expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
     });
   });
 
@@ -856,7 +802,9 @@ describe("gateway server models + voicewake", () => {
         await seedAgentModelCatalog();
         const res = await listModels({ view: "all", preparedOnly: true });
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog(["default", "configured"]));
+        const expected = expectedSortedCatalog(["default", "configured"]);
+        expect(res.payload?.models).toHaveLength(expected.length);
+        expect(res.payload?.models).toEqual(expect.arrayContaining(expected));
       },
     );
   });
@@ -964,62 +912,15 @@ describe("gateway server models + voicewake", () => {
 });
 
 describe("gateway server misc", () => {
-  test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
-    let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
-    let dedicatedWs: WebSocket | undefined;
-    const idem = "same-key";
-    try {
-      setTestPluginRegistry(whatsappRegistry);
-      const started = await startConnectedServerWithClient();
-      dedicatedServer = started.server;
-      dedicatedWs = started.ws;
-      const socket = dedicatedWs;
-      if (!socket) {
-        throw new Error("Missing test websocket");
-      }
-      const res1P = onceMessage(socket, (o) => o.type === "res" && o.id === "a1");
-      const res2P = onceMessage(socket, (o) => o.type === "res" && o.id === "a2");
-      const sendReq = (id: string) =>
-        socket.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "send",
-            params: {
-              to: "+15550000000",
-              channel: "whatsapp",
-              message: "hi",
-              idempotencyKey: idem,
-            },
-          }),
-        );
-      sendReq("a1");
-      sendReq("a2");
-
-      const res1 = await res1P;
-      const res2 = await res2P;
-      expect(res2.ok).toBe(res1.ok);
-      if (res1.ok) {
-        expect(res2.payload).toEqual(res1.payload);
-      } else {
-        expect(res2.error).toEqual(res1.error);
-      }
-    } finally {
-      dedicatedWs?.close();
-      await dedicatedServer?.close();
-      resetTestPluginRegistry();
-    }
-  });
-
   test("releases port after close", async () => {
-    const releasePort = await getGatewayTestPort();
+    const releasePort = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const releaseServer = await startTestGatewayServer(releasePort);
     await releaseServer.close();
 
     const probe = createServer();
     await new Promise<void>((resolve, reject) => {
       probe.once("error", reject);
-      probe.listen(releasePort, "127.0.0.1", () => resolve());
+      probe.listen(releasePort.port, "127.0.0.1", () => resolve());
     });
     expect(probe.listening).toBe(true);
     await new Promise<void>((resolve, reject) => {

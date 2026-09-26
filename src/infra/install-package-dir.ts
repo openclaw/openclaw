@@ -4,15 +4,19 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
-import type { MovePathPublicationReceipt } from "@openclaw/fs-safe/atomic";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { FsSafeError, pathExists } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
+import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 type InstallSourceHardlinks = "package-manager" | "reject";
@@ -121,19 +125,6 @@ async function restoreProjectNpmConfigAfterInstall(
   await fs.rm(hiddenConfig.hiddenDir, { recursive: true, force: true });
 }
 
-async function assertInstallBoundaryPaths(params: {
-  installBaseDir: string;
-  candidatePaths: string[];
-}): Promise<void> {
-  for (const candidatePath of params.candidatePaths) {
-    await assertCanonicalPathWithinBase({
-      baseDir: params.installBaseDir,
-      candidatePath,
-      boundaryLabel: "install directory",
-    });
-  }
-}
-
 function isRelativePathInsideBase(relativePath: string): boolean {
   return (
     Boolean(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${path.sep}`)
@@ -142,10 +133,6 @@ function isRelativePathInsideBase(relativePath: string): boolean {
 
 function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
-}
-
-function resolveMoveSourceHardlinks(policy: InstallSourceHardlinks): "allow" | "reject" {
-  return policy === "package-manager" ? "allow" : "reject";
 }
 
 async function assertInstallBaseStable(params: {
@@ -262,7 +249,11 @@ export async function installPackageDir<
   targetDir: string;
   mode: "install" | "update";
   timeoutMs: number;
-  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
+  workTimeoutMs?: number | null;
+  logger?: InstallActivityObserver & {
+    info?: (message: string) => void;
+    warn?: (message: string) => void;
+  };
   copyErrorPrefix: string;
   hasDeps: boolean;
   omitOpenClawHostDependency?: boolean;
@@ -283,9 +274,10 @@ export async function installPackageDir<
   try {
     await fs.mkdir(installBaseDir, { recursive: true });
     initialInstallBaseRealPath = await fs.realpath(installBaseDir);
-    await assertInstallBoundaryPaths({
-      installBaseDir,
-      candidatePaths: [params.targetDir],
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseDir,
+      candidatePath: params.targetDir,
+      boundaryLabel: "install directory",
     });
   } catch (err) {
     return { ok: false, error: `${params.copyErrorPrefix}: ${String(err)}` };
@@ -333,9 +325,10 @@ export async function installPackageDir<
     install: MovePathPublicationReceipt | null;
     restore: MovePathPublicationReceipt | null;
   } = { backup: null, install: null, restore: null };
-  const sourceHardlinks = resolveMoveSourceHardlinks(
-    params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS,
-  );
+  const sourceHardlinks =
+    (params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS) === "package-manager"
+      ? "allow"
+      : "reject";
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
@@ -452,19 +445,22 @@ export async function installPackageDir<
   };
 
   try {
-    await assertInstallBoundaryPaths({
-      installBaseDir: installBaseRealPath,
-      candidatePaths: [canonicalTargetDir],
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseRealPath,
+      candidatePath: canonicalTargetDir,
+      boundaryLabel: "install directory",
     });
     stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".openclaw-install-stage-"));
     if (params.sourceDir !== undefined) {
-      await fs.cp(params.sourceDir, stageDir, {
-        recursive: true,
-        // Keep relative symlinks relative to the staged copy. Node's default
-        // rewrites them toward the source tree, which makes valid vendored
-        // package links look like install-root escapes during post-copy scans.
-        verbatimSymlinks: true,
-      });
+      await withInstallActivity(params.logger, "files", () =>
+        fs.cp(params.sourceDir!, stageDir!, {
+          recursive: true,
+          // Keep relative symlinks relative to the staged copy. Node's default
+          // rewrites them toward the source tree, which makes valid vendored
+          // package links look like install-root escapes during post-copy scans.
+          verbatimSymlinks: true,
+        }),
+      );
     }
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
@@ -477,6 +473,7 @@ export async function installPackageDir<
   }
 
   if (params.hasDeps) {
+    const dependencyDir = stageDir;
     try {
       const restoreManifest = await sanitizeManifestForNpmInstall(
         stageDir,
@@ -486,35 +483,43 @@ export async function installPackageDir<
       try {
         const hiddenProjectNpmConfig = await hideProjectNpmConfigForInstall(stageDir);
         params.logger?.info?.(params.depsLogMessage);
-        const npmRes = await (async () => {
-          try {
-            return await runCommandWithTimeout(
-              // Plugins install into isolated directories, so omitting peer deps can strip
-              // runtime requirements that npm would otherwise materialize for the package.
-              // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
-              // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
-              // stays quiet on success while preserving the actionable npm failure text.
-              [
-                "npm",
-                ...createSafeNpmInstallArgs({
-                  omitDev: true,
-                  loglevel: "error",
-                  ignoreWorkspaces: true,
-                }),
-              ],
-              {
-                timeoutMs: Math.max(params.timeoutMs, 300_000),
-                cwd: stageDir,
-                env: createSafeNpmInstallEnv(process.env, {
-                  npmConfigCwd: stageDir,
-                  ignoreWorkspaces: true,
-                }),
-              },
-            );
-          } finally {
-            await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
-          }
-        })();
+        const npmRes = await withInstallActivity(
+          params.logger,
+          "dependencies",
+          async () => {
+            try {
+              return await runCommandWithTimeout(
+                // Plugins install into isolated directories, so omitting peer deps can strip
+                // runtime requirements that npm would otherwise materialize for the package.
+                // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
+                // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
+                // stays quiet on success while preserving the actionable npm failure text.
+                [
+                  "npm",
+                  ...createSafeNpmInstallArgs({
+                    omitDev: true,
+                    loglevel: "error",
+                    ignoreWorkspaces: true,
+                  }),
+                ],
+                {
+                  timeoutMs: resolveInstallWorkTimeoutMs(
+                    params.workTimeoutMs,
+                    Math.max(params.timeoutMs, 300_000),
+                  ),
+                  cwd: dependencyDir,
+                  env: createSafeNpmInstallEnv(process.env, {
+                    npmConfigCwd: dependencyDir,
+                    ignoreWorkspaces: true,
+                  }),
+                },
+              );
+            } finally {
+              await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
+            }
+          },
+          (result) => result.code === 0,
+        );
         if (npmRes.code !== 0) {
           npmFailure = `npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`;
         }
@@ -549,9 +554,10 @@ export async function installPackageDir<
     );
     try {
       await fs.mkdir(backupRoot, { recursive: true });
-      await assertInstallBoundaryPaths({
-        installBaseDir: installBaseRealPath,
-        candidatePaths: [backupPath],
+      await assertCanonicalPathWithinBase({
+        baseDir: installBaseRealPath,
+        candidatePath: backupPath,
+        boundaryLabel: "install directory",
       });
       await assertInstallBaseStable({
         installBaseDir,
@@ -622,10 +628,6 @@ export async function installPackageDir<
     assertDirectoryIdentity(published.backup.path, published.backup);
     await fs.rm(published.backup.path, { recursive: true, force: true }).catch(() => undefined);
   }
-  if (stageDir) {
-    await cleanupInstallTempDir(stageDir);
-  }
-
   if (!deferCommit) {
     return { ok: true };
   }

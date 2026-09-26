@@ -1,6 +1,6 @@
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
-import type { createCliStatusTextStyles } from "./shared.js";
+import { resolveDaemonServiceInstallGuidance, type createCliStatusTextStyles } from "./shared.js";
 import type { DaemonStatus } from "./status.gather.js";
 
 function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
@@ -17,7 +17,6 @@ export function printDaemonStatusVersions(
     infoText,
     warnText,
   }: Pick<ReturnType<typeof createCliStatusTextStyles>, "label" | "infoText" | "warnText">,
-  reinstallGuidance: string,
 ) {
   const gatewayVersion = status.rpc?.server?.version?.trim() || status.gateway?.version?.trim();
   const cliVersionLine = formatCliVersionLine(status.cli);
@@ -29,10 +28,13 @@ export function printDaemonStatusVersions(
       ? `${serviceInstallVersion} (${shortenHomePath(status.service.layout.packageRoot)})`
       : serviceInstallVersion
     : null;
+  if (!gatewayVersion && !serviceInstallLine) {
+    return;
+  }
+  if (cliVersionLine) {
+    defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+  }
   if (gatewayVersion) {
-    if (cliVersionLine) {
-      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
-    }
     defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
     if (status.cli?.version && status.cli.version !== gatewayVersion) {
       defaultRuntime.error(
@@ -46,13 +48,9 @@ export function printDaemonStatusVersions(
         ),
       );
     }
-    defaultRuntime.log("");
   } else if (serviceInstallLine) {
     // No Gateway version came back (failed or skipped probe). Report the install the
     // service points at so a stale service behind a bare connect error stays visible.
-    if (cliVersionLine) {
-      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
-    }
     defaultRuntime.log(`${label("Gateway service version:")} ${infoText(serviceInstallLine)}`);
     defaultRuntime.log(infoText("The Gateway did not report its own version."));
     if (
@@ -66,8 +64,11 @@ export function printDaemonStatusVersions(
           `Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
         ),
       );
-      defaultRuntime.error(warnText(reinstallGuidance));
+      const guidance = resolveDaemonServiceInstallGuidance(status.service.targetRole);
+      if (guidance) {
+        defaultRuntime.error(warnText(guidance));
+      }
     }
-    defaultRuntime.log("");
   }
+  defaultRuntime.log("");
 }

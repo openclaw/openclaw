@@ -149,13 +149,17 @@ describe("worker placement shutdown replay", () => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const environments = support.createService(support.createProvider());
       const intent = deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`);
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         ...intent,
         providerId: "fake",
         profileId: "development",
         profileSnapshot: { settings: { region: "test" } },
       });
-      const owner = seedProvisioningPlacement(placements, intent.environmentId, "remote-exec");
+      const owner = await seedProvisioningPlacement(
+        placements,
+        intent.environmentId,
+        "remote-exec",
+      );
       if (owner.state !== "provisioning") {
         throw new Error("recovery fixture requires provisioning");
       }
@@ -200,7 +204,7 @@ describe("worker placement shutdown replay", () => {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });
-    const owner = harness.placements.seedProvisioning();
+    const owner = await harness.placements.seedProvisioning();
     if (owner.state !== "provisioning") {
       throw new Error("recovery fixture requires provisioning");
     }
@@ -232,7 +236,7 @@ describe("worker placement shutdown replay", () => {
             .list()
             .find((record) => record.provisionOperationId === operationId)!;
           if (destroyRequested) {
-            support.testState.store.requestDestroy({
+            await support.testState.store.requestDestroy({
               environmentId: environment.environmentId,
               state: environment.state,
             });

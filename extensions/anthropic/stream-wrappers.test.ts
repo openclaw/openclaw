@@ -3,6 +3,7 @@ import { calculateUsageCost } from "@openclaw/llm-core";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +14,8 @@ import {
   resolveAnthropicFastMode,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url));
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const OAUTH_BETA = "oauth-2025-04-20";
@@ -198,12 +201,6 @@ describe("anthropic stream wrappers", () => {
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("strips legacy context-1m betas for API key auth", () => {
-    const headers = runWrapper("sk-ant-api-123");
-    expect(headers?.["anthropic-beta"]).toBeDefined();
-    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-  });
-
   it("skips service_tier for OAuth token in composed stream chain", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
     expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
@@ -348,6 +345,7 @@ describe("anthropic stream wrappers", () => {
 
   it("uses native fast mode and premium pricing for Claude Opus 5", () => {
     const captured = runNativeFastModeWrapper({
+      baseUrl: "https://api.anthropic.com",
       headers: { "anthropic-beta": "files-api-2025-04-14" },
     });
 
@@ -435,11 +433,13 @@ describe("anthropic stream wrappers", () => {
     {
       label: "Vertex",
       params: {
-        provider: "anthropic-vertex",
         baseUrl: "https://us-east5-aiplatform.googleapis.com",
       },
     },
-  ])("does not send native fast mode over $label routes", ({ params }) => {
+  ])("does not send native fast mode over $label routes", ({ label, params }) => {
+    if (label === "Vertex") {
+      expect(resolveProviderEndpoint(params.baseUrl).endpointClass).toBe("google-vertex");
+    }
     const captured = runNativeFastModeWrapper(params);
 
     expect(captured.headers).toBeUndefined();

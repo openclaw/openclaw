@@ -38,31 +38,29 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-test.each([5, 40])(
-  "sessions.list refreshes sharing without rematerializing a %i-row lookup store",
-  async (rows) => {
-    await createSessionStoreDir();
-    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-      main: sessionStoreEntry("sess-main"),
-    };
-    for (let index = 0; index < rows; index++) {
-      entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
-        updatedAt: 1_781_000_000_000 - index * 1_000,
-      });
-    }
-    await writeSessionStore({ entries });
-    // The initial listing uses read-only access; sharing must not reload the full lookup store.
-    const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
-    try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
-      expect(result.ok).toBe(true);
-      expect(result.payload?.sessions).toHaveLength(rows + 1);
-      expect(lookupStoreRead).not.toHaveBeenCalled();
-    } finally {
-      lookupStoreRead.mockRestore();
-    }
-  },
-);
+test("sessions.list refreshes sharing without rematerializing the lookup store", async () => {
+  const rows = 40;
+  await createSessionStoreDir();
+  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+    main: sessionStoreEntry("sess-main"),
+  };
+  for (let index = 0; index < rows; index++) {
+    entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
+      updatedAt: 1_781_000_000_000 - index * 1_000,
+    });
+  }
+  await writeSessionStore({ entries });
+  // The initial listing uses read-only access; sharing must not reload the full lookup store.
+  const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+  try {
+    const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+    expect(result.ok).toBe(true);
+    expect(result.payload?.sessions).toHaveLength(rows + 1);
+    expect(lookupStoreRead).not.toHaveBeenCalled();
+  } finally {
+    lookupStoreRead.mockRestore();
+  }
+});
 
 test("sessions.list reuses prepared store targets for sharing", async () => {
   await createSessionStoreDir();
@@ -330,9 +328,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   try {
     projection = await createSessionRowProjection({ cfg });
-    expect(readonly).toHaveBeenCalledWith(
-      expect.objectContaining({ projection: "list", clone: false }),
-    );
+    expect(readonly.mock.calls[0]?.[0]).toMatchObject({ projection: "list", clone: false });
     expect(readonly.mock.calls.every(([scope]) => scope?.projection === "list")).toBe(true);
     const resident = projection.describe({ agentId: "main", key: stored.session_key });
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();

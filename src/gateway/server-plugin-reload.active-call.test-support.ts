@@ -12,7 +12,6 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
 import {
   createRecoveryChannelManager,
   type RecoveryFixtureFactory,
@@ -54,7 +53,7 @@ export async function verifyLateActiveCallDrainObservation(
     await vi.advanceTimersByTimeAsync(deadlineAtMs - Date.now());
     expect(await reloading).toMatchObject({
       details: { phase: "drain", committed: false, pluginIds: [first.id, sibling.id] },
-      cause: expect.any(PluginAdmittedWorkTimeoutError),
+      cause: { message: expect.stringContaining("admitted work did not settle within 60s") },
     });
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
@@ -99,6 +98,7 @@ export async function verifyActiveCallDrainLease(
 ) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
+  const channelStarted = createDeferredCore();
   const effectsPath = path.join(stateDir, "completed-call.txt");
   await fs.writeFile(effectsPath, "");
   const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -123,6 +123,7 @@ export async function verifyActiveCallDrainLease(
           gateway: {
             startAccount: async ({ abortSignal }) => {
               signals.push(abortSignal);
+              channelStarted.resolve();
               await new Promise<void>((resolve) => {
                 abortSignal.addEventListener("abort", () => resolve(), { once: true });
               });
@@ -148,7 +149,8 @@ export async function verifyActiveCallDrainLease(
   const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   await manager.startChannel("drain-channel");
-  await vi.waitFor(() => expect(signals).toHaveLength(1));
+  await channelStarted.promise;
+  expect(signals).toHaveLength(1);
   const readiness = createReadinessChecker({
     channelManager: manager,
     startedAt: Date.now(),
@@ -158,6 +160,12 @@ export async function verifyActiveCallDrainLease(
   assert(record);
   const instance = getPluginInstance(record);
   assert(instance);
+  const drainStarted = createDeferredCore();
+  const drain = instance.drain.bind(instance);
+  const drainObservation = vi.spyOn(instance, "drain").mockImplementation((options) => {
+    drainStarted.resolve();
+    return drain(options);
+  });
   const handler = fixture.previousRegistry.gatewayHandlers["first.call"];
   assert(handler);
   const invoke = (hold: boolean, respond: GatewayRequestHandlerOptions["respond"]) =>
@@ -169,10 +177,22 @@ export async function verifyActiveCallDrainLease(
       respond,
       context: {} as GatewayRequestHandlerOptions["context"],
     });
+  const reloadOutcome = createDeferredCore<unknown>();
+  const allowNativeCleanup = createDeferredCore();
   const reload = () =>
     withPluginLifecycleLease({ env, waitMs: 0 }, async (lease) => {
       reloadLease = lease;
-      return fixture.reload();
+      try {
+        const result = await fixture.reload();
+        reloadOutcome.resolve(result);
+        return result;
+      } catch (error) {
+        reloadOutcome.resolve(error);
+        throw error;
+      } finally {
+        // The drain uses simulated time; SQLite lease cleanup must run on real timers.
+        await allowNativeCleanup.promise;
+      }
     });
   const response = vi.fn();
   let callSettled = false;
@@ -200,18 +220,17 @@ export async function verifyActiveCallDrainLease(
         return error;
       },
     );
-    await vi.waitFor(() =>
-      expect(fixture.owner.getReloadStatus()).toMatchObject({
-        phase: "reloading",
-        deadlineAtMs: expect.any(Number),
-        reason: expect.stringMatching(/admitted work.*first/),
-      }),
-    );
+    await drainStarted.promise;
+    expect(fixture.owner.getReloadStatus()).toMatchObject({
+      phase: "reloading",
+      deadlineAtMs: expect.any(Number),
+      reason: expect.stringMatching(/admitted work.*first/),
+    });
     const deadlineAtMs = fixture.owner.getReloadStatus()?.deadlineAtMs;
     assert(deadlineAtMs);
     await expect(
       withPluginLifecycleLease({ env, waitMs: 0 }, async () => "competing owner"),
-    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
+    ).rejects.toMatchObject({ outcome: { kind: "held" } });
     await vi.advanceTimersByTimeAsync(
       deadlineAtMs - Date.now() - 60_000 + Math.min(holdMs, 59_999),
     );
@@ -233,11 +252,10 @@ export async function verifyActiveCallDrainLease(
     expect(await fs.readFile(effectsPath, "utf8")).toBe("");
     if (holdMs > 60_000) {
       await vi.advanceTimersByTimeAsync(1);
-      const failure = await reloading;
+      const failure = await reloadOutcome.promise;
       expect(failure).toBeInstanceOf(PluginRuntimeApplicationError);
       expect(failure).toMatchObject({
         details: { phase: "drain", committed: false, pluginIds: ["first"] },
-        cause: expect.any(PluginAdmittedWorkTimeoutError),
         message: expect.stringMatching(
           /plugin first admitted work.*previous plugin generation stays active/,
         ),
@@ -278,7 +296,10 @@ export async function verifyActiveCallDrainLease(
     expect(response).toHaveBeenCalledExactlyOnceWith(true, { generation: 1 }, undefined, undefined);
     expect(await fs.readFile(effectsPath, "utf8")).toBe("completed\n");
     await vi.advanceTimersByTimeAsync(10_000);
+    vi.useRealTimers();
+    allowNativeCleanup.resolve();
     if (holdMs > 60_000) {
+      expect(await reloading).toBe(await reloadOutcome.promise);
       await expect(reload()).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
     } else {
       expect(await reloading).toMatchObject({ runtime: { pluginIds: ["first"] } });
@@ -315,12 +336,11 @@ export async function verifyActiveCallDrainLease(
     release.resolve();
     try {
       await originalCall;
-      await vi.advanceTimersByTimeAsync(10_000);
-      if (reloading && !reloadSettled) {
-        await vi.waitFor(() => expect(reloadSettled).toBe(true));
-      }
+      vi.useRealTimers();
+      allowNativeCleanup.resolve();
       await reloading;
     } finally {
+      drainObservation.mockRestore();
       vi.useRealTimers();
       await manager.stopChannel("drain-channel");
     }

@@ -1,7 +1,11 @@
 import path from "node:path";
 import { isPathStrictlyInside, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import {
+  normalizeMediaReferenceForComparison,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-store";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import {
   isCodexPassThroughMediaSource,
@@ -75,6 +79,17 @@ const MESSAGE_MEDIA_KEYS = [
 const MESSAGE_MEDIA_ARRAY_KEYS = ["mediaUrls", "media_urls", "imageUrls", "image_urls"] as const;
 const ATTACHMENT_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"] as const;
 
+export function collectCodexMessageMediaUrls(record: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  mapMessageMediaValues(record, (value) => {
+    if (value.trim()) {
+      urls.push(value.trim());
+    }
+    return value;
+  });
+  return urls;
+}
+
 type CodexRemoteWorkspaceFileResponse = {
   dataBase64: string;
 };
@@ -112,12 +127,14 @@ export async function readBoundedCodexRemoteWorkspaceFile(params: {
   let offset = 0;
   let expectedSize: number | undefined;
   let expectedRevision: string | undefined;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
 
   do {
     params.signal?.throwIfAborted();
     const timeoutMs =
-      params.timeoutMs === undefined ? undefined : params.timeoutMs - (Date.now() - startedAt);
+      params.timeoutMs === undefined
+        ? undefined
+        : Math.floor(params.timeoutMs - (performance.now() - startedAt));
     if (timeoutMs !== undefined && timeoutMs <= 0) {
       throw new Error("Codex remote workspace file transfer timed out.");
     }
@@ -222,20 +239,24 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBytes?: number;
-}): Promise<Record<string, unknown>> {
+}): Promise<{
+  args: Record<string, unknown>;
+  sourcePathsByStagedPath: ReadonlyMap<string, readonly string[]>;
+}> {
   const { localWorkspaceRoot, remoteWorkspaceRoot } = params;
+  const sourcePathsByStagedPath = new Map<string, readonly string[]>();
   if (!localWorkspaceRoot || !remoteWorkspaceRoot) {
-    return params.args;
+    return { args: params.args, sourcePathsByStagedPath };
   }
 
-  const remotePathsByLocalPath = new Map<string, string>();
+  const remotePathsByLocalPath = new Map<
+    string,
+    { remotePath: string; sourcePaths: Set<string> }
+  >();
   const gatewayManagedPaths = new Set<string>();
   const gatewayMediaRoot = getMediaDir();
   let attachmentEntries = 0;
-  const mapMediaPath = (value: unknown): unknown => {
-    if (typeof value !== "string") {
-      return value;
-    }
+  const mappedArgs = mapMessageMediaValues(params.args, (value) => {
     if (path.isAbsolute(value) && isPathStrictlyInside(gatewayMediaRoot, value)) {
       attachmentEntries += 1;
       gatewayManagedPaths.add(value);
@@ -248,64 +269,18 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     });
     if (value.trim() && !isCodexPassThroughMediaSource(value)) {
       attachmentEntries += 1;
-      remotePathsByLocalPath.set(
-        mapped,
-        mapCodexAppServerRemoteWorkspacePath({
-          value: mapped,
-          localWorkspaceRoot,
-          remoteWorkspaceRoot,
-        }),
-      );
+      const remotePath = mapCodexAppServerRemoteWorkspacePath({
+        value: mapped,
+        localWorkspaceRoot,
+        remoteWorkspaceRoot,
+      });
+      const sourcePaths = remotePathsByLocalPath.get(mapped)?.sourcePaths ?? new Set<string>();
+      sourcePaths.add(value);
+      sourcePaths.add(remotePath);
+      remotePathsByLocalPath.set(mapped, { remotePath, sourcePaths });
     }
     return mapped;
-  };
-
-  let mappedArgs = params.args;
-  const setMappedValue = (key: string, value: unknown) => {
-    if (value === params.args[key]) {
-      return;
-    }
-    if (mappedArgs === params.args) {
-      mappedArgs = { ...params.args };
-    }
-    mappedArgs[key] = value;
-  };
-
-  for (const key of MESSAGE_MEDIA_KEYS) {
-    setMappedValue(key, mapMediaPath(params.args[key]));
-  }
-  for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
-    const value = params.args[key];
-    if (Array.isArray(value)) {
-      const mapped = value.map(mapMediaPath);
-      if (mapped.some((entry, index) => entry !== value[index])) {
-        setMappedValue(key, mapped);
-      }
-    }
-  }
-  if (Array.isArray(params.args.attachments)) {
-    const attachments = params.args.attachments;
-    const mapped = attachments.map((attachment) => {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-        return attachment;
-      }
-      const record = attachment as Record<string, unknown>;
-      let mappedAttachment = record;
-      for (const key of ATTACHMENT_MEDIA_KEYS) {
-        const value = mapMediaPath(record[key]);
-        if (value !== record[key]) {
-          if (mappedAttachment === record) {
-            mappedAttachment = { ...record };
-          }
-          mappedAttachment[key] = value;
-        }
-      }
-      return mappedAttachment;
-    });
-    if (mapped.some((attachment, index) => attachment !== attachments[index])) {
-      setMappedValue("attachments", mapped);
-    }
-  }
+  });
 
   if (attachmentEntries > REMOTE_WORKSPACE_MEDIA_MAX_ATTACHMENTS) {
     throw new Error(
@@ -316,7 +291,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     await assertGatewayManagedMediaPath(managedPath, gatewayMediaRoot);
   }
   if (remotePathsByLocalPath.size === 0) {
-    return mappedArgs;
+    return { args: mappedArgs, sourcePathsByStagedPath };
   }
   const readRemoteFile = params.readRemoteFile;
   if (!readRemoteFile) {
@@ -325,15 +300,15 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
 
   const maxBytes = params.maxBytes ?? REMOTE_WORKSPACE_MEDIA_MAX_BYTES;
   const timeoutMs = params.timeoutMs ?? REMOTE_WORKSPACE_MEDIA_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const stagedPaths = new Map<string, string>();
   let totalBytes = 0;
   // Read the authoritative remote descriptor, not an unverified synchronized
   // path. The native command caps allocation and output before bytes travel.
-  for (const [localPath, remotePath] of remotePathsByLocalPath) {
+  for (const [localPath, { remotePath, sourcePaths }] of remotePathsByLocalPath) {
     params.signal?.throwIfAborted();
     const remainingBytes = maxBytes - totalBytes;
-    const remainingMs = deadline - Date.now();
+    const remainingMs = Math.floor(deadline - performance.now());
     if (remainingMs <= 0) {
       throw new Error("Codex remote workspace attachment batch timed out.");
     }
@@ -370,8 +345,26 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
       path.basename(remotePath),
     );
     stagedPaths.set(localPath, saved.path);
+    sourcePathsByStagedPath.set(normalizeMediaReferenceForComparison(saved.path), [...sourcePaths]);
   }
-  return mapMessageMediaValues(mappedArgs, (value) => stagedPaths.get(value) ?? value);
+  return {
+    args: mapMessageMediaValues(mappedArgs, (value) => stagedPaths.get(value) ?? value),
+    sourcePathsByStagedPath,
+  };
+}
+
+export function resolveCodexMediaSourceUrls(
+  mediaUrls: readonly string[],
+  sourcePathsByStagedPath: ReadonlyMap<string, readonly string[]> | undefined,
+): string[] {
+  return [
+    ...new Set(
+      mediaUrls.flatMap((url) => [
+        url,
+        ...(sourcePathsByStagedPath?.get(normalizeMediaReferenceForComparison(url)) ?? []),
+      ]),
+    ),
+  ];
 }
 
 async function assertGatewayManagedMediaPath(value: string, mediaRoot: string): Promise<void> {
@@ -390,33 +383,45 @@ function mapMessageMediaValues(
   args: Record<string, unknown>,
   mapValue: (value: string) => string,
 ): Record<string, unknown> {
-  const mapped = { ...args };
-  for (const key of MESSAGE_MEDIA_KEYS) {
-    const value = mapped[key];
-    if (typeof value === "string") {
-      mapped[key] = mapValue(value);
-    }
-  }
-  for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
-    const value = mapped[key];
-    if (Array.isArray(value)) {
-      mapped[key] = value.map((entry) => (typeof entry === "string" ? mapValue(entry) : entry));
-    }
-  }
-  if (Array.isArray(mapped.attachments)) {
-    mapped.attachments = mapped.attachments.map((attachment) => {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-        return attachment;
+  const mapString = (value: unknown) => (typeof value === "string" ? mapValue(value) : value);
+  const mapArray = (values: unknown[], map: (value: unknown) => unknown) => {
+    const mapped = values.map(map);
+    return mapped.some((value, index) => value !== values[index]) ? mapped : values;
+  };
+  const mapRecord = (
+    record: Record<string, unknown>,
+    keys: readonly string[],
+    message = false,
+  ): Record<string, unknown> => {
+    let mapped = record;
+    const assign = (key: string, value: unknown) => {
+      if (value !== record[key]) {
+        if (mapped === record) {
+          mapped = { ...record };
+        }
+        mapped[key] = value;
       }
-      const record = { ...(attachment as Record<string, unknown>) };
-      for (const key of ATTACHMENT_MEDIA_KEYS) {
+    };
+    for (const key of keys) {
+      assign(key, mapString(record[key]));
+    }
+    if (message) {
+      for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
         const value = record[key];
-        if (typeof value === "string") {
-          record[key] = mapValue(value);
+        if (Array.isArray(value)) {
+          assign(key, mapArray(value, mapString));
         }
       }
-      return record;
-    });
-  }
-  return mapped;
+      if (Array.isArray(record.attachments)) {
+        assign(
+          "attachments",
+          mapArray(record.attachments, (attachment) =>
+            isRecord(attachment) ? mapRecord(attachment, ATTACHMENT_MEDIA_KEYS) : attachment,
+          ),
+        );
+      }
+    }
+    return mapped;
+  };
+  return mapRecord(args, MESSAGE_MEDIA_KEYS, true);
 }

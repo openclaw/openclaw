@@ -23,7 +23,6 @@ import {
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationsStore,
-  type OnboardingRecommendationsRecord,
 } from "../state/onboarding-recommendations.js";
 import {
   getSetupAppRecommendations,
@@ -44,7 +43,7 @@ type SetupAppRecommendationDeps = {
   installSkill?: typeof installSkillFromClawHub;
   isSkillInstalled?: (params: { workspaceDir: string; skillRef: string }) => Promise<boolean>;
   resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
-  readStored?: () => OnboardingRecommendationsRecord | null;
+  readStored?: OnboardingRecommendationsStore["read"];
   writeOffer?: OnboardingRecommendationsStore["writeOffer"];
   acknowledgeStored?: OnboardingRecommendationsStore["acknowledge"];
   updatePendingStored?: OnboardingRecommendationsStore["updatePending"];
@@ -74,11 +73,11 @@ async function isClawHubSkillInstalled(params: {
 
 export type SetupAppRecommendationsOutcome = {
   config: OpenClawConfig;
-  commitResult: () => void;
+  commitResult: () => Promise<void>;
 };
 
 function unchangedOutcome(config: OpenClawConfig): SetupAppRecommendationsOutcome {
-  return { config, commitResult: () => undefined };
+  return { config, commitResult: async () => undefined };
 }
 
 function resolveOfficialEntry(pluginId: string): OnboardingPluginInstallEntry | undefined {
@@ -140,7 +139,7 @@ export async function setupAppRecommendations(params: {
   }
   const store = createOnboardingRecommendationsStore({ workspaceDir: params.workspaceDir });
   const readStored = params.deps?.readStored ?? store.read;
-  const storedRecord = readStored();
+  const storedRecord = await readStored();
   if (typeof storedRecord?.acceptedAt === "number") {
     return unchangedOutcome(params.config);
   }
@@ -151,7 +150,7 @@ export async function setupAppRecommendations(params: {
     (match) => match.candidate.source === "clawhub-skill" && !match.candidate.id.startsWith("@"),
   );
   if (hasLegacyClawHubId && storedRecord) {
-    if (!clearPendingStored({ expected: storedRecord })) {
+    if (!(await clearPendingStored({ expected: storedRecord }))) {
       return unchangedOutcome(params.config);
     }
   }
@@ -169,16 +168,16 @@ export async function setupAppRecommendations(params: {
   let matches: SetupAppRecommendationMatch[];
   let appLabels: string[];
   let pendingRecord = stored;
-  let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => void;
-  const commitStoredResult = (retryMatches: SetupAppRecommendationMatch[]) => {
+  let recordResult: (retryMatches: SetupAppRecommendationMatch[]) => Promise<void>;
+  const commitStoredResult = async (retryMatches: SetupAppRecommendationMatch[]) => {
     if (!pendingRecord) {
       throw new Error("Stored onboarding recommendations changed while setup was running.");
     }
     const expected = pendingRecord;
     const updated =
       retryMatches.length === 0
-        ? acknowledgeStored({ expected })
-        : updatePendingStored({ matches: retryMatches, expected });
+        ? await acknowledgeStored({ expected })
+        : await updatePendingStored({ matches: retryMatches, expected });
     if (!updated) {
       throw new Error("Stored onboarding recommendations changed while setup was running.");
     }
@@ -235,22 +234,22 @@ export async function setupAppRecommendations(params: {
       return unchangedOutcome(params.config);
     }
     if (deferOfferToBootstrap()) {
-      writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
+      await writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
       return unchangedOutcome(params.config);
     }
     const scanned = result;
     matches = scanned.matches;
     appLabels = scanned.apps.map((app) => app.label);
-    recordResult = (retryMatches) => {
+    recordResult = async (retryMatches) => {
       if (!pendingRecord) {
-        pendingRecord = writeOffer({
+        pendingRecord = await writeOffer({
           inventory: scanned.apps,
           matches: retryMatches.length > 0 ? retryMatches : scanned.matches,
           answered: retryMatches.length === 0,
         });
         return;
       }
-      commitStoredResult(retryMatches);
+      await commitStoredResult(retryMatches);
     };
   }
 
@@ -292,19 +291,19 @@ export async function setupAppRecommendations(params: {
     ),
   });
   if (selected.includes(SKIP_VALUE)) {
-    recordResult([]);
+    await recordResult([]);
     return unchangedOutcome(params.config);
   }
 
   let next = params.config;
   const selectedMatches = uniqueSelectedMatches(matches, selected);
   if (selectedMatches.length === 0) {
-    recordResult([]);
+    await recordResult([]);
     return unchangedOutcome(params.config);
   }
   // Persist the selected set before external installs. Unselected matches are
   // explicit declines; selected matches stay retryable until each install succeeds.
-  recordResult(selectedMatches);
+  await recordResult(selectedMatches);
   let pendingMatches = selectedMatches;
   const retryMatches: SetupAppRecommendationMatch[] = [];
   const ensurePlugin = params.deps?.ensurePlugin ?? ensureOnboardingPluginInstalled;
@@ -363,7 +362,7 @@ export async function setupAppRecommendations(params: {
       // Skill installation is already durable on disk. Checkpoint it now so a
       // later crash cannot turn an existing target into a permanent retry.
       pendingMatches = pendingMatches.filter((candidate) => candidate !== match);
-      recordResult(pendingMatches);
+      await recordResult(pendingMatches);
     }
   }
   // Official plugin config is durable only after the caller writes `next`.
@@ -373,6 +372,8 @@ export async function setupAppRecommendations(params: {
   );
   return {
     config: next,
-    commitResult: hasDeferredOfficialResult ? () => recordResult(retryMatches) : () => undefined,
+    commitResult: hasDeferredOfficialResult
+      ? () => recordResult(retryMatches)
+      : async () => undefined,
   };
 }

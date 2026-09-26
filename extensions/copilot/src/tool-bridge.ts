@@ -117,6 +117,7 @@ interface CopilotToolBridge {
     apply: (params?: { toolsAllow?: string[]; forceToolNames?: readonly string[] }) => {
       tools: SdkTool[];
       callableToolNames: string[];
+      toolSchemaDirectoryPrompt?: string;
     };
   };
   sourceTools: AnyAgentTool[];
@@ -151,7 +152,7 @@ export async function createCopilotToolBridge(
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: attemptParams.abortSignal,
-    agentId: attemptParams.sandboxAgentId ?? input.agentId,
+    agentId: input.agentId,
     config: attemptParams.config,
     codeModeOverride: attemptParams.codeModeOverride,
     disableTools: attemptParams.disableTools,
@@ -166,11 +167,14 @@ export async function createCopilotToolBridge(
     modelId: input.modelId,
     modelProvider: input.modelProvider,
     modelToolsEnabled: true,
+    // SDK Tool.defer only defers registered declarations; omitted catalog names
+    // have no SDK handler. Use structured calls instead of promising hydration.
+    supportsDeferredToolCalls: false,
     prompt: attemptParams.prompt,
     runId: attemptParams.runId,
     runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
     sessionId: input.sessionId,
-    sessionKey: attemptParams.sandboxSessionKey ?? attemptParams.sessionKey,
+    sessionKey: attemptParams.sessionKey,
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
@@ -273,6 +277,7 @@ export async function createCopilotToolBridge(
         return {
           tools: sdkTools.filter((tool) => directToolNames.has(tool.name)),
           callableToolNames: result.callableToolNames,
+          toolSchemaDirectoryPrompt: result.toolSchemaDirectoryPrompt,
         };
       },
     },

@@ -4,6 +4,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.o
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
 import type {
+  LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
@@ -13,25 +14,17 @@ import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 export type DoctorConfigPreflightOptions = {
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
+  /** Select Doctor normalization without enabling repair-only migrations. */
+  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
   migrateLegacyConfig?: boolean;
   repairPrefixedConfig?: boolean;
   recoverCorruptTargetStore?: boolean;
   invalidConfigNote?: string | false;
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;
-  /** Return false or reject on config drift; the preflight always unwinds owned resources. */
-  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
-  /** CLI readiness policy evaluates the dry repaired config before any startup writes. */
-  validateStartupConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
-  requireStateMigrationCheckpoint?: boolean;
-  requireStartupMigrationCheckpoint?: boolean;
   /** Load one authoritative plugin metadata snapshot for the caller's full lifecycle. */
   preparePluginMetadataSnapshot?: boolean;
-  /** Core state was proven absent before Gateway selection could create runtime files. */
-  skipPristineCoreStateMigrations?: boolean;
-  /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
-  skipPristineStartupStateMigrations?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
   doctorOnlyStateMigrations?: boolean;
 };
@@ -63,7 +56,8 @@ export function prepareDoctorConfigMigrationResult(
     cfg: OpenClawConfig;
     shouldWriteConfig: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
-    runWithCurrentPluginMetadata: (config: OpenClawConfig, run: () => string[]) => string[];
+    pluginInventoryChanged?: boolean;
+    runWithCurrentPluginMetadata: <T>(config: OpenClawConfig, run: () => T) => T;
   }) => {
     let modelBillingRouteWarnings: string[] = [];
     if (
@@ -81,9 +75,38 @@ export function prepareDoctorConfigMigrationResult(
         }),
       );
     }
-    const receipts = preflight.stateMigrationStepReceipts;
-    const postSession = preflight.postSessionPluginMigration;
+    let receipts = preflight.stateMigrationStepReceipts;
+    let postSession = preflight.postSessionPluginMigration;
     const planBound = preflight.postSessionPluginMigrationPlanBound;
+    if (planBound && params.pluginInventoryChanged && postSession) {
+      const { preparePostSessionPluginMigration } =
+        await import("../../../infra/state-migrations.plugin-plan.js");
+      const { resolveLivePluginDoctorStateMigrationInventory } =
+        await import("../../../plugins/doctor-contract-registry.js");
+      // Installation replaces the selected owner generation after preflight. Freeze
+      // that generation before session writers; never reopen a blocked handoff.
+      postSession = params.runWithCurrentPluginMetadata(params.cfg, () =>
+        preparePostSessionPluginMigration({
+          mode: "doctor",
+          inventory: resolveLivePluginDoctorStateMigrationInventory({
+            config: params.cfg,
+            env: process.env,
+          }),
+        }),
+      );
+      if (postSession.step.refusal) {
+        const { createLegacyStateMigrationStepReceipt } =
+          await import("../../../infra/state-migrations.messages.js");
+        receipts = [
+          ...(receipts ?? []),
+          createLegacyStateMigrationStepReceipt(postSession.step, {
+            changes: [],
+            warnings: [postSession.step.refusal.message],
+          }),
+        ];
+        postSession = undefined;
+      }
+    }
     return {
       ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
       ...(modelBillingRouteWarnings.length > 0 ? { modelBillingRouteWarnings } : {}),

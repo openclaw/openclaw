@@ -334,6 +334,8 @@ export function createNodeWorkerContainerFixture(
   const daemonId = "fake-original-daemon";
   const engineTarget = createHash("sha256").update(`docker\0${daemonId}`).digest("hex");
   fs.mkdirSync(engineRoot);
+  // The extensionless fake CLI must stay CommonJS under repository-local temp roots.
+  fs.writeFileSync(path.join(engineRoot, "package.json"), JSON.stringify({ type: "commonjs" }));
   fs.writeFileSync(path.join(engineRoot, "daemon-id"), daemonId);
   fs.writeFileSync(
     command,

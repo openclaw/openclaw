@@ -112,56 +112,18 @@ export async function runInitialCatchupThenIncrementalScenario(context: MatrixQa
       incrementalDriverEventId: incremental.driverEventId,
       incrementalReply: incremental.reply,
       incrementalToken: incremental.token,
-      restartSignal: "SIGUSR1",
+      restartSignal: "SIGUSR2",
       roomId,
     },
     details: [
       `room id: ${roomId}`,
-      "restart signal: SIGUSR1",
+      "restart signal: SIGUSR2",
       `catchup driver event: ${catchupDriverEventId}`,
       ...buildMatrixReplyDetails("catchup reply", catchupReply),
       `incremental driver event: ${incremental.driverEventId}`,
       ...buildMatrixReplyDetails("incremental reply", incremental.reply),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
-}
-
-async function sendAndAssertRestartReplayReply(params: {
-  context: MatrixQaScenarioContext;
-  replyLabel: string;
-  roomId: string;
-  tokenPrefix: string;
-}) {
-  const { client, startSince } = await primeMatrixQaDriverScenarioClient(params.context);
-  const replayToken = buildMatrixQaToken(params.tokenPrefix);
-  const replayBody = buildMentionPrompt(params.context.sutUserId, replayToken);
-  const replayDriverEventId = await client.sendTextMessage({
-    body: replayBody,
-    mentionUserIds: [params.context.sutUserId],
-    roomId: params.roomId,
-  });
-  const firstMatched = await client.waitForRoomEvent({
-    observedEvents: params.context.observedEvents,
-    predicate: (event) =>
-      isMatrixQaExactMarkerReply(event, {
-        roomId: params.roomId,
-        sutUserId: params.context.sutUserId,
-        token: replayToken,
-      }) && event.relatesTo === undefined,
-    roomId: params.roomId,
-    since: startSince,
-    timeoutMs: params.context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: params.context.syncState,
-    nextSince: firstMatched.since,
-    startSince,
-  });
-  const firstReply = buildMatrixReplyArtifact(firstMatched.event, replayToken);
-  assertTopLevelReplyArtifact(params.replyLabel, firstReply);
-
-  return { client, firstMatched, firstReply, replayDriverEventId, replayToken, startSince };
 }
 
 async function assertNoRestartReplayDuplicate(params: {
@@ -227,13 +189,19 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
   });
   const staleCursor = syncStore.cursor;
 
-  const { client, firstMatched, firstReply, replayDriverEventId, replayToken, startSince } =
-    await sendAndAssertRestartReplayReply({
-      context,
-      replyLabel: "first stale-sync replay-dedupe reply",
-      roomId,
-      tokenPrefix: "MATRIX_QA_STALE_SYNC_DEDUPE",
-    });
+  const {
+    client,
+    driverEventId: replayDriverEventId,
+    reply: firstReply,
+    since: firstMatchedSince,
+    startSince,
+    token: replayToken,
+  } = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "first stale-sync replay-dedupe reply",
+    roomId,
+    tokenPrefix: "MATRIX_QA_STALE_SYNC_DEDUPE",
+  });
 
   await waitForMatrixInboundDedupeEntry({
     eventId: replayDriverEventId,
@@ -259,7 +227,7 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
       `stale sync cursor: ${staleCursor}`,
     ],
     errorTitle: "Matrix stale sync cursor replayed an already handled event",
-    firstMatchedSince: firstMatched.since,
+    firstMatchedSince,
     firstReply,
     replayToken,
     roomId,

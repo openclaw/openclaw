@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -42,6 +42,10 @@ import {
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
+
+const publicationOptions = {
+  questionRecipient: expect.any(Function),
+};
 
 function mockReferencedStoreSnapshot() {
   vi.spyOn(secretsRuntimeState, "getActiveSecretsRuntimeSnapshotState").mockReturnValue({
@@ -264,7 +268,11 @@ describe("question gateway methods", () => {
       });
       const id = (request[1] as { id: string }).id;
       const answers = { answers: { destination: ["Home"] } };
-      const sessionScope = { sessionKeys: [requestParams.sessionKey], agentId: "main" };
+      const sessionScope = {
+        sessionKeys: [requestParams.sessionKey],
+        agentId: "main",
+        ...publicationOptions,
+      };
 
       expect(ownerClient.socket.send).toHaveBeenCalledTimes(1);
       expect(viewerClient.socket.send).toHaveBeenCalledTimes(1);
@@ -276,6 +284,7 @@ describe("question gateway methods", () => {
       );
 
       await call("question.resolve", { id, answers }, { cfg, client: ownerClient.client });
+      await manager.drain();
 
       expect(broadcast).toHaveBeenCalledWith(
         "question.resolved",
@@ -308,6 +317,7 @@ describe("question gateway methods", () => {
           questions,
           status: "pending",
         }),
+        publicationOptions,
       );
 
       expect(await call("question.get", { id })).toEqual([
@@ -358,19 +368,22 @@ describe("question gateway methods", () => {
       { status: "answered", answers },
       undefined,
     ]);
-    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-      id,
-      status: "answered",
-      answers,
-    });
+    await manager.drain();
+    expect(broadcast).toHaveBeenCalledWith(
+      "question.resolved",
+      { id, status: "answered", answers },
+      publicationOptions,
+    );
 
     const expiring = await call("question.request", { ...requestParams, timeoutMs: 10 });
     const expiringId = (expiring[1] as { id: string }).id;
     await vi.advanceTimersByTimeAsync(10);
-    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-      id: expiringId,
-      status: "expired",
-    });
+    await manager.drain();
+    expect(broadcast).toHaveBeenCalledWith(
+      "question.resolved",
+      { id: expiringId, status: "expired" },
+      publicationOptions,
+    );
   });
 
   it("returns committed resolution receipts only to opted-in question waiters", async () => {
@@ -388,11 +401,12 @@ describe("question gateway methods", () => {
     ]);
     expect(await legacy).toEqual([true, { status: "answered", answers }, undefined]);
     expect(await tracked).toEqual([true, { status: "answered", answers, resolutionId }, undefined]);
-    expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-      id,
-      status: "answered",
-      answers,
-    });
+    await manager.drain();
+    expect(broadcast).toHaveBeenCalledWith(
+      "question.resolved",
+      { id, status: "answered", answers },
+      publicationOptions,
+    );
     expect((await call("question.get", { id }))[1]).toEqual({ question: manager.get(id) });
     expect(manager.get(id)).not.toHaveProperty("resolutionId");
   });
@@ -497,15 +511,6 @@ describe("question gateway methods", () => {
         },
       ],
     },
-    {
-      behavior: "allowed hosts proposed for environment entries",
-      questions: [
-        {
-          ...secretRequestParams.questions[0],
-          secretStore: { ...secretRequestQuestion.secretStore, kind: "env" },
-        },
-      ],
-    },
   ])("rejects $behavior before opening a pending secret question", async ({ questions }) => {
     const response = await call(
       "question.request",
@@ -605,7 +610,12 @@ describe("question gateway methods", () => {
           expect(reloadSecrets).not.toHaveBeenCalled();
           expect(manager.get(id)?.status).toBe("cancelled");
           await expect(waiting).resolves.toEqual({ status: "cancelled" });
-          expect(broadcast).toHaveBeenCalledWith("question.resolved", { id, status: "cancelled" });
+          await manager.drain();
+          expect(broadcast).toHaveBeenCalledWith(
+            "question.resolved",
+            { id, status: "cancelled" },
+            publicationOptions,
+          );
           expect(
             (
               await call("question.resolve", {
@@ -688,7 +698,7 @@ describe("question gateway methods", () => {
       const id = await requestSecretQuestion();
       const value = "test-secret-value-gateway-diversion-123";
       const client = {
-        connect: { client: { displayName: "Trusted Operator" } },
+        connect: { client: { displayName: "Trusted Operator" }, scopes: ["operator.questions"] },
       } as GatewayClient;
 
       const resolved = await call(
@@ -713,11 +723,12 @@ describe("question gateway methods", () => {
         { status: "answered", answers: safeAnswers },
         undefined,
       ]);
-      expect(broadcast).toHaveBeenCalledWith("question.resolved", {
-        id,
-        status: "answered",
-        answers: safeAnswers,
-      });
+      await manager.drain();
+      expect(broadcast).toHaveBeenCalledWith(
+        "question.resolved",
+        { id, status: "answered", answers: safeAnswers },
+        publicationOptions,
+      );
       expect(JSON.stringify([resolved, manager.get(id), broadcast.mock.calls])).not.toContain(
         value,
       );
@@ -815,33 +826,17 @@ describe("question gateway methods", () => {
     });
   });
 
-  it("cold-refreshes configured SecretRefs after a store-bound question is answered", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      mockReferencedStoreSnapshot();
-      const id = await requestSecretQuestion();
-
-      expect(
-        (
-          await call("question.resolve", {
-            id,
-            answers: { answers: { secret_value: ["test-secret-value-cold-refresh-123"] } },
-          })
-        )[0],
-      ).toBe(true);
-      expect(reloadSecrets).toHaveBeenCalledWith({
-        forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
-        joinInFlight: false,
-      });
-    });
-  });
-
   it.each(["second answer", "cancel", "expiry"] as const)(
     "settles the SQLite commit before deferred refresh can race with %s",
     async (racer) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         mockReferencedStoreSnapshot();
         const reload = createDeferred<{ warningCount: number }>();
-        reloadSecrets.mockReturnValue(reload.promise);
+        const reloadStarted = createDeferred();
+        reloadSecrets.mockImplementation(() => {
+          reloadStarted.resolve();
+          return reload.promise;
+        });
         const id = await requestSecretQuestion();
         const firstValue = "test-secret-committed-first";
         const pending = call("question.resolve", {
@@ -849,24 +844,34 @@ describe("question gateway methods", () => {
           answers: { answers: { secret_value: [firstValue] } },
         });
         const competitors: Array<ReturnType<typeof call>> = [];
-        if (racer === "second answer") {
-          competitors.push(
-            call("question.resolve", {
-              id,
-              answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
-            }),
-          );
-        } else if (racer === "cancel") {
-          competitors.push(call("question.resolve", { id, cancel: true }));
-        } else {
-          await vi.advanceTimersByTimeAsync(secretRequestParams.timeoutMs);
-        }
         try {
+          await Promise.race([
+            reloadStarted.promise,
+            pending.then(() => {
+              throw new Error("Question resolve settled before entering its deferred refresh");
+            }),
+          ]);
+          if (racer === "second answer") {
+            competitors.push(
+              call("question.resolve", {
+                id,
+                answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
+              }),
+            );
+          } else if (racer === "cancel") {
+            competitors.push(call("question.resolve", { id, cancel: true }));
+          } else {
+            await vi.advanceTimersByTimeAsync(secretRequestParams.timeoutMs);
+          }
           expect(
             readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
           ).toEqual({ ok: true, value: firstValue });
           expect(manager.get(id)?.status).toBe("answered");
           expect(reloadSecrets).toHaveBeenCalledTimes(1);
+          expect(reloadSecrets).toHaveBeenCalledWith({
+            forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
+            joinInFlight: false,
+          });
         } finally {
           reload.resolve({ warningCount: 0 });
           await Promise.all([pending, ...competitors]);

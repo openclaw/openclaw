@@ -2,8 +2,7 @@ import {
   isFutureDateTimestampMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-// Gateway channel health monitor.
-// Periodically evaluates channel account health and restarts stale runtimes.
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -37,6 +36,7 @@ type ChannelHealthTimingPolicy = {
 
 type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
+  scheduler: GatewayScheduler;
   checkIntervalMs?: number;
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
@@ -69,7 +69,6 @@ function resolveTimingPolicy(
   };
 }
 
-/** Start the periodic channel health monitor and return its stop handle. */
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,
@@ -79,14 +78,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   } = deps;
   const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
   const timing = resolveTimingPolicy(deps);
+  const { scheduler } = deps;
 
   const cooldownMs = cooldownCycles * checkIntervalMs;
   const restartRecords = new Map<string, RestartRecord>();
-  const startedAt = Date.now();
+  const startedAt = scheduler.now();
   let stopped = false;
   let abandonInFlightRestart = false;
   let activeCheck: Promise<void> | null = null;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let scheduledCheck: GatewayScheduledJob | undefined;
   const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -99,7 +99,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
   async function runCheckWork() {
     try {
-      const now = Date.now();
+      const now = scheduler.now();
       if (
         !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
         now - startedAt < timing.monitorStartupGraceMs
@@ -259,42 +259,19 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     if (stopped) {
       return Promise.resolve();
     }
-    if (activeCheck) {
-      return activeCheck;
-    }
-    const check = runCheckWork().finally(() => {
-      if (activeCheck === check) {
-        activeCheck = null;
-      }
+    activeCheck = runCheckWork().finally(() => {
+      activeCheck = null;
       if (stopped) {
         abortSignal?.removeEventListener("abort", shutdown);
       }
     });
-    activeCheck = check;
-    return check;
-  }
-
-  function scheduleCheck(delayMs: number) {
-    timer = setTimeout(() => {
-      timer = null;
-      void runCheck().finally(() => {
-        if (!stopped) {
-          scheduleCheck(checkIntervalMs);
-        }
-      });
-    }, delayMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
+    return activeCheck;
   }
 
   function retire(abandonRestart: boolean) {
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    scheduledCheck?.cancel();
     if (!activeCheck) {
       abortSignal?.removeEventListener("abort", shutdown);
     }
@@ -335,9 +312,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abandonInFlightRestart = true;
   } else {
     abortSignal?.addEventListener("abort", shutdown, { once: true });
-    // One lifecycle-owned timer runs first when startup grace expires, then rearms only after
-    // each check settles so slow provider recovery cannot overlap the next evaluation.
-    scheduleCheck(resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0));
+    scheduledCheck = scheduler.schedule({
+      id: "channel-health-monitor",
+      atMs: startedAt + resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0),
+      everyMs: checkIntervalMs,
+      run: runCheck,
+    });
     log.info?.(
       `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
     );

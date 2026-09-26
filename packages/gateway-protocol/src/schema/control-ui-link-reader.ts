@@ -7,6 +7,7 @@ export const ControlUiLinkReaderMetadataSchema = closedObject({
   pathPattern: Type.String({ minLength: 2, maxLength: 1024 }),
   detailMethod: Type.String({ minLength: 1, maxLength: 128 }),
   previewMethod: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  imageMethod: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 });
 
 export const ControlUiLinkReaderDescriptorSchema = closedObject({

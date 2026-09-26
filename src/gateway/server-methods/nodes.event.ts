@@ -5,6 +5,7 @@ import {
 } from "../../infra/device-pairing-node-state.js";
 import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -143,6 +144,19 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertApnsRegistrationCurrent: () => {
+            const current = apnsGeneration
+              ? context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key)
+              : undefined;
+            if (
+              !current ||
+              current !== nodeSession ||
+              current.connId !== eventConnId ||
+              current.client.invalidated === true
+            ) {
+              throw new ApnsRegistrationPairingChangedError();
+            }
+          },
           resolveApnsRegistrationGeneration: async () => {
             if (!apnsGeneration || !client?.connId) {
               return null;

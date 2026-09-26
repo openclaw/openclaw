@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { createUpdateRun } from "./update-run-ledger.js";
@@ -24,9 +25,10 @@ it.each(["complete", "close"] as const)(
       initializeGatewayUpdateStatus,
       resetUpdateAvailableStateForTest,
     } = await import("./update-startup.js");
-    resetUpdateAvailableStateForTest();
+    const scheduler = createTestGatewayScheduler();
+    resetUpdateAvailableStateForTest(scheduler);
     const { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
-    const lifecycle = createGatewayUpdateLifecycle();
+    const lifecycle = createGatewayUpdateLifecycle(scheduler);
     const started = createDeferred<AbortSignal | undefined>();
     const probe = createDeferred<UpdateCheckResult>();
     const status: UpdateCheckResult = { root: null, installKind: "package", packageManager: "npm" };
@@ -74,7 +76,7 @@ it.each(["complete", "close"] as const)(
     } finally {
       probe.resolve(status);
       await Promise.allSettled([channelRequest, admissionRequest, initialization, owner?.stop()]);
-      resetUpdateAvailableStateForTest();
+      resetUpdateAvailableStateForTest(scheduler);
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();
     }
@@ -89,7 +91,8 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     await import("../gateway/server-methods/update-admission.js");
   const { createGatewayUpdateCheck, getUpdateEffectiveChannel, resetUpdateAvailableStateForTest } =
     await import("./update-startup.js");
-  resetUpdateAvailableStateForTest();
+  const scheduler = createTestGatewayScheduler();
+  resetUpdateAvailableStateForTest(scheduler);
   const ready = createDeferred();
   const started = createDeferred<AbortSignal | undefined>();
   const probe = createDeferred<UpdateCheckResult>();
@@ -100,6 +103,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
   });
   const factory = vi.fn(createGatewayUpdateCheck);
   const owner = createDeferredGatewayUpdateCheck({
+    scheduler,
     createUpdateCheck: factory,
     getConfig: () => ({}),
     log: { info: vi.fn(), warn: vi.fn() },
@@ -132,14 +136,14 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     ]);
     await stopping;
     expect(stopped).toBe(true);
-    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
     expect(factory).not.toHaveBeenCalled();
   } finally {
     probe.resolve(status);
     await requests;
     await (stopping ?? owner.stop());
     ready.resolve();
-    resetUpdateAvailableStateForTest();
+    resetUpdateAvailableStateForTest(scheduler);
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   }

@@ -7,19 +7,24 @@ import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibi
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 
-const CHANNEL_LABELS: Record<string, string> = {
-  imessage: "iMessage",
-  telegram: "Telegram",
-  discord: "Discord",
-  signal: "Signal",
-  slack: "Slack",
-  whatsapp: "WhatsApp",
-  matrix: "Matrix",
-  email: "Email",
-  sms: "SMS",
-};
+const CHANNEL_LABELS = new Map<string, string>([
+  ["imessage", "iMessage"],
+  ["telegram", "Telegram"],
+  ["discord", "Discord"],
+  ["signal", "Signal"],
+  ["slack", "Slack"],
+  ["whatsapp", "WhatsApp"],
+  ["matrix", "Matrix"],
+  ["msteams", "Microsoft Teams"],
+  ["bluebubbles", "BlueBubbles"],
+  ["googlechat", "Google Chat"],
+  ["mattermost", "Mattermost"],
+  ["irc", "IRC"],
+  ["email", "Email"],
+  ["sms", "SMS"],
+]);
 
-const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
+const KNOWN_CHANNEL_KEYS = [...CHANNEL_LABELS.keys()];
 
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
@@ -162,10 +167,8 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-/** Machine identity of a typed session, derived from the session key. */
 type SessionTypedKind = "subagent" | "automation";
 
-/** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
   /** Typed-session identity; display branching keys off this, not label text. */
   kind?: SessionTypedKind;
@@ -211,23 +214,17 @@ type SessionDisplayOptions = {
   includeSubagentPrefix?: boolean;
 };
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+export function formatSessionChannelLabel(channel: string): string {
+  return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-/**
- * Parse a session key to extract type information and a human-readable
- * fallback display name. Exported for testing.
- */
 function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
-  // Main session.
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
     return { prefix: "", fallbackName: "Main Session" };
   }
 
-  // Subagent.
   if (key.includes(":subagent:")) {
     const prefix = typedSessionPrefix("subagent");
     return { kind: "subagent", prefix, fallbackName: prefix };
@@ -251,7 +248,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
     if (!channel || !identifier) {
       return { prefix: "", fallbackName: key, accountId };
     }
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    const channelLabel = formatSessionChannelLabel(channel);
     return {
       prefix: "",
       fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}`,
@@ -268,7 +265,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
     if (!channel) {
       return { prefix: "", fallbackName: key };
     }
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    const channelLabel = formatSessionChannelLabel(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
@@ -276,7 +273,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${formatSessionChannelLabel(ch)} Session` };
     }
   }
 
@@ -295,7 +292,6 @@ function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyName) };
   }
 
-  // Unknown: return key as-is.
   return { prefix: "", fallbackName: key };
 }
 

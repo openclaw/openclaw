@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
+  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   readPublishPreflightRelease,
   validatePublishPreflightNpm,
   verifyPublishedPreflightTarball,
+  type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -23,6 +25,116 @@ const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+});
+
+describe("protected tooling tag resolution", () => {
+  const repo = "openclaw/openclaw";
+  const toolingSha = "a".repeat(40);
+  const prefix = "release-publish/aaaaaaaaaaaa-";
+  const compare = [
+    "api",
+    `repos/${repo}/compare/${toolingSha}...main`,
+    "--method",
+    "GET",
+    "--jq",
+    ".status",
+  ];
+  const inventory = ["api", `repos/${repo}/git/matching-refs/tags/${prefix}`, "--method", "GET"];
+  const ref = (suffix: string, type = "commit", sha = toolingSha) => ({
+    ref: `refs/tags/${prefix}${suffix}`,
+    object: { type, sha },
+  });
+  const scriptedGh = (...responses: string[]) => {
+    const runGh = vi.fn<PublishPreflightGh>(() => {
+      throw new Error("Unexpected GitHub request");
+    });
+    for (const response of responses) {
+      runGh.mockReturnValueOnce(response);
+    }
+    return runGh;
+  };
+
+  it.each(["ahead", "identical"])(
+    "reuses the newest lightweight tag on %s main ancestry",
+    (ancestry) => {
+      const runGh = scriptedGh(
+        `${ancestry}\n`,
+        JSON.stringify([
+          ref("10"),
+          ref("9"),
+          ref("11", "tag"),
+          ref("12", "commit", "b".repeat(40)),
+          ref("0"),
+          ref("01"),
+          ref("13-extra"),
+          null,
+        ]),
+      );
+      expect(ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toEqual({
+        tag: `${prefix}10`,
+        created: false,
+      });
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+    },
+  );
+
+  it.each([true, false])(
+    "mints through git refs and verifies the created target (matches: %s)",
+    (matches) => {
+      const tag = `${prefix}1750000000`;
+      const runGh = scriptedGh(
+        "ahead",
+        JSON.stringify([ref("1750000001", "tag"), ref("1750000002", "commit", "b".repeat(40))]),
+        "ignored POST output",
+        JSON.stringify({ object: { type: "commit", sha: matches ? toolingSha : "b".repeat(40) } }),
+      );
+      const ensure = () =>
+        ensureReleasePublishToolingTag({ runGh, repo, toolingSha, now: () => 1750000000999 });
+      if (matches) {
+        expect(ensure()).toEqual({ tag, created: true });
+      } else {
+        expect(ensure).toThrow(`Protected tooling tag ${tag} does not resolve to ${toolingSha}.`);
+      }
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([
+        compare,
+        inventory,
+        [
+          "api",
+          `repos/${repo}/git/refs`,
+          "--method",
+          "POST",
+          "-f",
+          `ref=refs/tags/${tag}`,
+          "-f",
+          `sha=${toolingSha}`,
+        ],
+        ["api", `repos/${repo}/git/ref/tags/${tag}`, "--method", "GET"],
+      ]);
+    },
+  );
+
+  it.each(["behind", "diverged"])(
+    "refuses %s ancestry before tag inventory or mutation",
+    (ancestry) => {
+      const runGh = scriptedGh(ancestry);
+      expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
+        `Tooling SHA ${toolingSha} is not reachable from trusted main.`,
+      );
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare]);
+    },
+  );
+
+  it("rejects malformed SHAs before API access and malformed inventory before mutation", () => {
+    const runGh = scriptedGh("ahead", "{}");
+    expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha: "ABC123" })).toThrow(
+      "Tooling SHA must be a lowercase 40-character commit SHA.",
+    );
+    expect(runGh).not.toHaveBeenCalled();
+    expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
+      "Invalid protected tooling tag inventory.",
+    );
+    expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
+  });
 });
 
 describe("publish preflight release inventory", () => {

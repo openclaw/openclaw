@@ -47,3 +47,9 @@ attempt. Normal Codex turns work, but `/btw` side questions fail closed because
 they are not placement-bound. The placement workspace does not confine
 execution: process and filesystem access remain bounded only by the node's
 operating system account.
+
+A turn assigned to an active remote placement uses that execution owner, including
+for writable-sandbox checks. The Gateway still prepares source files and prompt
+attachments under its host filesystem policy; remote execution roots remain owned
+by the placement. Local sandbox allocation is reserved for turns without a remote
+placement.

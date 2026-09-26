@@ -2,7 +2,6 @@ import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { RouteId } from "../app-routes.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -12,6 +11,15 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n, isSupportedLocale } from "../i18n/index.ts";
+import {
+  invalidateChatMetadataForSessionEvent,
+  invalidateChatMetadataStore,
+} from "../lib/chat/chat-metadata-cache.ts";
+import {
+  invalidateModelAuthStatusRequests,
+  modelAuthEventInvalidates,
+} from "../lib/model-auth-request-state.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -34,13 +42,12 @@ export type StoredOutboxScopeHost = {
   hello?: { snapshot?: unknown } | null;
 };
 
-export type OutboxStoreRuntime = Pick<
-  typeof import("../lib/chat/outbox-store-projection.ts"),
-  "summarizeStoredChatOutboxes" | "subscribeStoredChatOutboxChanges"
+export type OutboxStoreRuntime = ReturnType<
+  (typeof import("../lib/chat/outbox-store-projection.ts"))["createStoredChatOutboxReader"]
 >;
 
 export interface ShellGatewayHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   routeState: ShellRouteState;
   activeSessionKey: string;
   desktopNavigationExpanded: boolean;
@@ -53,6 +60,7 @@ export interface ShellGatewayHost {
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
+  observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   requestUpdate(): void;
@@ -86,6 +94,27 @@ export class ShellGatewayOwner {
 
   constructor(private readonly host: ShellGatewayHost) {}
 
+  observeSessions(
+    sessions: ApplicationContext["sessions"],
+    synchronizeTitle: () => void,
+  ): () => void {
+    let active = true;
+    const synchronize = () => {
+      if (!active || this.host.context?.sessions !== sessions) {
+        return;
+      }
+      this.host.observeDeletedSessions(sessions.state);
+      this.host.recoverDeletedActiveSession(sessions.state);
+      synchronizeTitle();
+    };
+    synchronize();
+    const unsubscribe = sessions.subscribe(synchronize);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }
+
   reconcileServerUiPrefs(runtimeConfig: ApplicationContext["runtimeConfig"]): void {
     const snapshot = runtimeConfig.state.configSnapshot;
     const context = this.host.context;
@@ -103,12 +132,7 @@ export class ShellGatewayOwner {
       scope,
       profileId: context.gateway.snapshot?.selfUser?.id,
       onThemeChanged: (theme) => context.theme.recordServerSelection(theme, scope),
-      onApplied: (patch) => {
-        if (patch.sidebarEntries !== undefined) {
-          context.navigation.update({ sidebarEntries: patch.sidebarEntries });
-        }
-        context.theme.refresh();
-      },
+      onApplied: () => context.theme.refresh(),
     });
     void this.refreshProfileAppearancePrefs(context).catch(() => undefined);
     const localePref = resolveServerUiPrefState(snapshot.config, "locale", scope);
@@ -143,6 +167,21 @@ export class ShellGatewayOwner {
   }
 
   handleGatewayEvent(event: GatewayEventFrame): void {
+    const sourceContext = this.host.context;
+    const client = sourceContext?.gateway?.snapshot.client;
+    if (client && event.event === "sessions.changed") {
+      invalidateChatMetadataForSessionEvent(client, event.payload, {
+        hello: sourceContext?.gateway.snapshot.hello,
+        agentsList: sourceContext?.agents.state.agentsList,
+      });
+    }
+    const modelInvalidation = modelCatalogEventInvalidation(event);
+    if (client && modelAuthEventInvalidates(event)) {
+      invalidateModelAuthStatusRequests(client);
+    }
+    if (client && (modelInvalidation || event.event === "chat.metadata.changed")) {
+      invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
+    }
     if (event.event === "sessions.changed") {
       const context = this.host.context;
       if (context) {
@@ -154,7 +193,8 @@ export class ShellGatewayOwner {
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
-        void runtimeConfig.refresh();
+        // Save notifications reconcile in place so active editors keep focus and stay interactive.
+        void runtimeConfig.refresh({ background: true });
       }
       this.scheduleAgentRosterRefresh();
       return;
@@ -233,7 +273,7 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey);
+      this.host.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 
@@ -375,10 +415,7 @@ export class ShellGatewayOwner {
     }
   }
 
-  private refreshProfileAppearancePrefs(
-    context: ApplicationContext<RouteId>,
-    force = false,
-  ): Promise<void> {
+  private refreshProfileAppearancePrefs(context: ApplicationContext, force = false): Promise<void> {
     const snapshot = context.gateway.snapshot;
     const profileId = snapshot?.selfUser?.id;
     if (!profileId) {

@@ -3,7 +3,7 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { readFileWindowFully } from "../../infra/file-read.js";
+import { createAsyncLock, readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 
@@ -16,7 +16,7 @@ type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonic
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
+export const enqueueWorkspaceFileUpdate = createAsyncLock();
 
 export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
@@ -71,12 +71,7 @@ export async function readWorkspaceFile(
     return undefined;
   }
   try {
-    const read = await workspaceRoot.read(browserPath, {
-      hardlinks: "reject",
-      maxBytes: opts?.maxBytes ?? WORKSPACE_PREVIEW_MAX_BYTES,
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
+    const read = await workspaceRoot.read(browserPath, { maxBytes: opts?.maxBytes });
     return {
       ...read,
       canonicalPath: path.relative(workspaceRoot.rootReal, read.realPath).split(path.sep).join("/"),
@@ -103,25 +98,18 @@ export async function readWorkspaceFilePrefix(
     return undefined;
   }
   try {
-    const opened = await workspaceRoot.open(browserPath, {
-      hardlinks: "reject",
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
-    try {
-      const buffer = Buffer.allocUnsafe(Math.min(maxBytes, opened.stat.size));
-      const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
-      return {
-        buffer: buffer.subarray(0, bytesRead),
-        canonicalPath: path
-          .relative(workspaceRoot.rootReal, opened.realPath)
-          .split(path.sep)
-          .join("/"),
-        stat: opened.stat,
-      };
-    } finally {
-      await opened.handle.close();
-    }
+    const opened = await workspaceRoot.open(browserPath);
+    await using handle = opened.handle;
+    const buffer = Buffer.allocUnsafe(Math.min(maxBytes, opened.stat.size));
+    const bytesRead = await readFileWindowFully(handle, buffer, 0);
+    return {
+      buffer: buffer.subarray(0, bytesRead),
+      canonicalPath: path
+        .relative(workspaceRoot.rootReal, opened.realPath)
+        .split(path.sep)
+        .join("/"),
+      stat: opened.stat,
+    };
   } catch {
     return undefined;
   }
@@ -131,15 +119,6 @@ export type WorkspaceFileUpdateResult =
   | { status: "updated"; canonicalPath: string; hash: string; stat: WorkspacePathStat }
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
-
-export function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
-  const result = workspaceFileUpdateQueue.then(update, update);
-  workspaceFileUpdateQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
 
 export async function updateWorkspaceFile(
   rootDir: string,
@@ -158,12 +137,7 @@ export async function updateWorkspaceFile(
   return await enqueueWorkspaceFileUpdate<WorkspaceFileUpdateResult>(async () => {
     let current: ReadResult;
     try {
-      current = await workspaceRoot.read(browserPath, {
-        hardlinks: "reject",
-        maxBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-        nonBlockingRead: true,
-        symlinks: "reject",
-      });
+      current = await workspaceRoot.read(browserPath);
     } catch {
       return { status: "unsafe" };
     }
@@ -178,9 +152,10 @@ export async function updateWorkspaceFile(
     await workspaceRoot.write(browserPath, content, {
       encoding: "utf8",
       renameIdentity: "strict",
+      assertBeforeMutation: assertCurrent,
     });
     const stat = await workspaceRoot.stat(browserPath);
-    if (workspaceStatKind(stat) !== "file") {
+    if (!stat.isFile) {
       return { status: "unsafe" };
     }
     return {
@@ -234,34 +209,6 @@ export function resolveWorkspacePath(
   }
   const resolved = path.resolve(root, filePath);
   return isPathInside(root, resolved) ? resolved : undefined;
-}
-
-export function workspaceStatKind(
-  stat: WorkspacePathStat,
-): "file" | "directory" | "symlink" | undefined {
-  const kind = (stat as { kind?: unknown }).kind;
-  if (kind === "file" || kind === "directory" || kind === "symlink") {
-    return kind;
-  }
-  const nodeStat = stat as {
-    isDirectory?: boolean | (() => boolean);
-    isFile?: boolean | (() => boolean);
-    isSymbolicLink?: boolean | (() => boolean);
-  };
-  const isFile = typeof nodeStat.isFile === "function" ? nodeStat.isFile() : nodeStat.isFile;
-  if (isFile) {
-    return "file";
-  }
-  const isDirectory =
-    typeof nodeStat.isDirectory === "function" ? nodeStat.isDirectory() : nodeStat.isDirectory;
-  if (isDirectory) {
-    return "directory";
-  }
-  const isSymbolicLink =
-    typeof nodeStat.isSymbolicLink === "function"
-      ? nodeStat.isSymbolicLink()
-      : nodeStat.isSymbolicLink;
-  return isSymbolicLink ? "symlink" : undefined;
 }
 
 /** Protocol timestamps are integer milliseconds. */

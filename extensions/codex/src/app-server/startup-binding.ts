@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isPathStrictlyInside,
+  readFileWindowFully,
   root as openSafeFilesystemRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
@@ -192,18 +193,9 @@ async function readCodexAppServerRolloutTokenSnapshot(
       const bytesToRead = Math.min(position, CODEX_APP_SERVER_ROLLOUT_TAIL_READ_BYTES);
       const nextPosition = position - bytesToRead;
       const chunk = Buffer.allocUnsafe(bytesToRead);
-      let bytesRead = 0;
-      while (bytesRead < bytesToRead) {
-        const result = await handle.read(
-          chunk,
-          bytesRead,
-          bytesToRead - bytesRead,
-          nextPosition + bytesRead,
-        );
-        if (result.bytesRead === 0) {
-          return snapshot;
-        }
-        bytesRead += result.bytesRead;
+      const bytesRead = await readFileWindowFully(handle, chunk, nextPosition);
+      if (bytesRead < bytesToRead) {
+        return snapshot;
       }
       let lineEnd = bytesRead;
       // Negative Buffer offsets wrap from the end, so stop when byte zero is consumed.

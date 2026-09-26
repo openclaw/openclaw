@@ -20,13 +20,11 @@ import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import { createDispatchBlockReplyHandler } from "./dispatch-from-config.block-reply.js";
 import { flushDispatchDeferredFinalText } from "./dispatch-from-config.deferred-final.js";
-import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
@@ -76,7 +74,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
   );
-  let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
   const releasePendingContinuation = async () => {
@@ -85,7 +82,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     await settlement?.settle(false);
   };
   let didDeliverVisiblePartialReply = false;
-  const { onBlockReply, flush: flushBlockTtsText } = createDispatchBlockReplyHandler(state);
+  const {
+    onBlockReply,
+    onPreparedBlockReply,
+    flush: flushBlockTtsText,
+  } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
     const delivered = await flushDispatchDeferredFinalText({
       deferFinalTtsText,
@@ -128,22 +129,17 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
                 ...state.sourceReplyDeliveryRuntimeOptions,
-                ...({
-                  mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
-                  onDeliberateSilentTerminalReply: () => {
-                    deliberateSilentTerminalReply = true;
-                  },
-                  onPendingContinuation: (settlement) => {
-                    pendingContinuation = true;
-                    pendingContinuationSettlement ??= settlement;
-                  },
-                  onSessionMetadataChanges: notifySessionMetadataChanges,
-                  onSessionPrepared: state.notePreparedSession,
-                  onRunVerbosityResolved: (settings) => {
-                    state.noteRunVerbosity(settings);
-                    params.replyOptions?.onRunVerbosityResolved?.(settings);
-                  },
-                } satisfies InternalReplyResolverOptions),
+                mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
+                onPendingContinuation: (settlement) => {
+                  pendingContinuation = true;
+                  pendingContinuationSettlement ??= settlement;
+                },
+                onSessionMetadataChanges: notifySessionMetadataChanges,
+                onSessionPrepared: state.notePreparedSession,
+                onRunVerbosityResolved: (settings) => {
+                  state.noteRunVerbosity(settings);
+                  params.replyOptions?.onRunVerbosityResolved?.(settings);
+                },
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
@@ -437,6 +433,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 onPatchSummary: (payload) =>
                   forwardToolProgress(() => state.onPatchSummaryFromReplyOptions?.(payload)),
                 onBlockReply,
+                onPreparedBlockReply,
               },
               state.preparedReplyDispatchRuntime && !params.configOverride
                 ? undefined
@@ -485,16 +482,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       // Adoption retires ingress replay before the model starts. A progress ACK
       // cannot settle a later failure; use normal final delivery and its policy.
       return adopted &&
-        state.noVisibleReplyFallbackDirected &&
+        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
+        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
         !state.suppressDelivery &&
         !state.getObservedReplyDelivery()
         ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
         : undefined;
     }
     return buildTerminalAgentRunFailureReplyPayload({
+      replyExpectation: state.replyOperationRunState.replyCompletion?.expectation ?? "required",
       visibleReplyDelivered: true,
-      sessionCtx: ctx,
-      cfg: replyConfig,
     });
   });
   try {
@@ -526,8 +523,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     if (acpTailResult) {
       return acpTailResult;
     }
-    const nextState = extendPreparedDispatchState(state, {
-      deliberateSilentTerminalReply,
+    const nextState = Object.assign(state, {
       pendingContinuation,
       pendingContinuationSettlement,
       replyResult,

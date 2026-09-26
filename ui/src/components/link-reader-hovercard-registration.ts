@@ -9,21 +9,28 @@ import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
   LINK_READER_HOVERCARD_PROVIDER_TAG,
-  resolveLinkReaderTarget,
+  resolveHoverPreviewTarget,
 } from "./link-reader-target.ts";
 
-const bootstrap = new LazyHovercardBootstrap<LinkReaderHovercardProvider>({
-  tag: LINK_READER_HOVERCARD_PROVIDER_TAG,
-  load: async () => (await import("./link-reader-hovercard.ts")).LinkReaderHovercardProvider,
-});
+export const linkReaderHovercardBootstrap = new LazyHovercardBootstrap<LinkReaderHovercardProvider>(
+  {
+    tag: LINK_READER_HOVERCARD_PROVIDER_TAG,
+    load: async () => (await import("./link-reader-hovercard.ts")).LinkReaderHovercardProvider,
+  },
+);
 
-export function previewTargetForAnchor(anchor: HTMLAnchorElement) {
-  const provider = bootstrap.providerFor(anchor);
-  const target =
-    provider?.client && provider.readers
-      ? resolveLinkReaderTarget(anchor.href, provider.readers)
-      : null;
-  return target?.reader.linkReader.previewMethod ? target : null;
+/** Hover may use public page metadata; transcript prefetch remains reader-only. */
+function hoverTargetForAnchor(anchor: HTMLAnchorElement) {
+  const owner = linkReaderHovercardBootstrap.providerFor(anchor);
+  return owner ? resolveHoverPreviewTarget(anchor, owner) : null;
+}
+
+export function ownsHoverPreview(anchor: HTMLAnchorElement): boolean {
+  const target = hoverTargetForAnchor(anchor);
+  // Cold public-page imports can fail: keep title hints until a runtime exists.
+  return Boolean(
+    target && (target.reader || customElements.get(LINK_READER_HOVERCARD_PROVIDER_TAG)),
+  );
 }
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
@@ -31,22 +38,26 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
     return;
   }
   const anchor = anchorFromNavigationEvent(event);
-  const target = anchor ? previewTargetForAnchor(anchor) : null;
+  const target = anchor ? hoverTargetForAnchor(anchor) : null;
+  if (target && !target.reader && trigger === "focus" && !anchor?.matches(":focus-visible")) {
+    return;
+  }
   if (!anchor || !target) {
     return;
   }
   const startedAt = performance.now();
   try {
-    await bootstrap.define();
+    await linkReaderHovercardBootstrap.define();
   } catch {
     return;
   }
-  const provider = bootstrap.providerFor(anchor);
+  const provider = linkReaderHovercardBootstrap.providerFor(anchor);
   // Definition can precede Lit replaying values assigned before the lazy upgrade.
   await provider?.updateComplete;
-  const current = previewTargetForAnchor(anchor);
+  const current = hoverTargetForAnchor(anchor);
   if (
     !provider ||
+    !current ||
     !anchor.isConnected ||
     current?.reader !== target.reader ||
     current.href !== target.href ||
@@ -64,32 +75,4 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   );
 }
 
-export async function prefetchLinkReader(
-  anchor: HTMLAnchorElement,
-  signal: AbortSignal,
-): Promise<void> {
-  const target = previewTargetForAnchor(anchor);
-  const owner = bootstrap.providerFor(anchor);
-  if (!target || !owner?.client?.connected || signal.aborted) {
-    return;
-  }
-  const { client, agentId, readers } = owner;
-  await bootstrap.define();
-  const provider = bootstrap.providerFor(anchor);
-  await provider?.updateComplete;
-  if (
-    signal.aborted ||
-    !anchor.isConnected ||
-    anchor.href !== target.href ||
-    document.hidden ||
-    provider !== owner ||
-    provider.client !== client ||
-    provider.agentId !== agentId ||
-    provider.readers !== readers
-  ) {
-    return;
-  }
-  await provider.prefetch(target, signal);
-}
-
-bootstrap.install(activateHovercard);
+linkReaderHovercardBootstrap.install(activateHovercard);

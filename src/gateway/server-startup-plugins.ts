@@ -13,6 +13,7 @@ import {
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
@@ -88,6 +89,15 @@ export async function runGatewayStartupMaintenance(params: {
       }),
     ];
     if (!params.minimalTestGateway) {
+      const { migrateLegacyDesktopStreamOptOuts } =
+        await import("../infra/device-pairing-node-desktop-migration.js");
+      const retiredDesktopApprovals =
+        await migrateLegacyDesktopStreamOptOuts(startupMaintenanceConfig);
+      if (retiredDesktopApprovals > 0) {
+        params.log.warn(
+          `Preserved disabled desktop access for ${retiredDesktopApprovals} paired node(s); approve their updated desktop capability to enable sharing.`,
+        );
+      }
       const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
       startupTasks.push(
         runStartupSessionMigration({
@@ -379,6 +389,12 @@ export async function loadGatewayStartupPluginRuntime(params: {
     ).catch((error: unknown) => {
       params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
     });
+    const metadata = getPluginRuntimeLoadContext(loaded.pluginRegistry)?.metadataSnapshot;
+    const { settlePluginNativeAdmissions } =
+      await import("../plugins/plugin-native-admission-state.js");
+    await settlePluginNativeAdmissions(
+      metadata ? getPluginMetadataSnapshotCache(metadata) : undefined,
+    );
     return loaded;
   } catch (error) {
     loaded.retireGatewayRuntimeBindings();

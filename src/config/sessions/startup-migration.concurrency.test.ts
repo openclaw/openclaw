@@ -238,7 +238,7 @@ function gateFirstCertificationPerTask() {
   };
 }
 
-it("reuses two workers while closing each database task before downstream maintenance", async () => {
+it("reuses two workers while closing each database task before runtime handoff", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env);
     const gate = gateFirstCertificationPerTask();
@@ -254,45 +254,41 @@ it("reuses two workers while closing each database task before downstream mainte
       },
     );
     const consumed: string[] = [];
-    const maintenanceWaves = [createDeferredCore(), createDeferredCore()];
+    const handoffWaves = [createDeferredCore(), createDeferredCore()];
     const log = { info: vi.fn(), warn: vi.fn() };
     const startup = runSessionStartupMigration({
       cfg,
       env: state.env,
       log,
-      deps: {
-        migrateManagedWorktreeCanonicalWorkspaces: async ({ agentId, mode }) => {
-          expect(mode).toBe("detect");
-          const task = gate.tasks.find((entry) => entry.agentId === agentId);
-          expect(task?.closed).toBe(true);
-          expect(
-            openOpenClawStateDatabase({ env: state.env })
-              .db.prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
-              .all(agentId),
-          ).toEqual([]);
-          const proof = withOpenClawAgentDatabaseReadOnly(
-            (database) => ({
-              ready: hasOpenClawAgentCanonicalValidation(database),
-              pending: hasPendingCanonicalSessionValidation(database),
-              rows: database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count,
-            }),
-            { agentId, env: state.env },
-          );
-          expect(proof).toMatchObject({
-            found: true,
-            value: { ready: true, pending: false, rows: agentId === agentIds[0] ? 129 : 1 },
-          });
-          const index = consumed.push(agentId) - 1;
-          const wave = maintenanceWaves[Math.floor(index / 2)];
-          if (wave) {
-            if (index % 2 === 1) {
-              wave.resolve();
-            }
-            await wave.promise;
+      handoffDatabase: async ({ agentId }) => {
+        const task = gate.tasks.find((entry) => entry.agentId === agentId);
+        expect(task?.closed).toBe(true);
+        expect(
+          openOpenClawStateDatabase({ env: state.env })
+            .db.prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
+            .all(agentId),
+        ).toEqual([]);
+        const proof = withOpenClawAgentDatabaseReadOnly(
+          (database) => ({
+            ready: hasOpenClawAgentCanonicalValidation(database),
+            pending: hasPendingCanonicalSessionValidation(database),
+            rows: database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count,
+          }),
+          { agentId, env: state.env },
+        );
+        expect(proof).toMatchObject({
+          found: true,
+          value: { ready: true, pending: false, rows: agentId === agentIds[0] ? 129 : 1 },
+        });
+        const index = consumed.push(agentId) - 1;
+        const wave = handoffWaves[Math.floor(index / 2)];
+        if (wave) {
+          if (index % 2 === 1) {
+            wave.resolve();
           }
-          await yieldToEventLoop();
-          return { found: 1, repaired: 0 };
-        },
+          await wave.promise;
+        }
+        await yieldToEventLoop();
       },
     });
     void startup.catch(() => {});
@@ -324,22 +320,20 @@ it("reuses two workers while closing each database task before downstream mainte
         while (gate.heldReleases.length > 0) {
           gate.heldReleases[0]!.release();
         }
-        const maintenanceWave = maintenanceWaves[waveIndex];
-        if (maintenanceWave) {
-          await Promise.race([maintenanceWave.promise, startup]);
+        const handoffWave = handoffWaves[waveIndex];
+        if (handoffWave) {
+          await Promise.race([handoffWave.promise, startup]);
         }
       }
       await startup;
       expect(observer.workers.size).toBe(2);
       expect(new Set(gate.tasks.map(({ agentId }) => agentId))).toEqual(new Set(agentIds));
       expect(consumed.toSorted()).toEqual(agentIds);
-      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
-        "session: 5 managed-worktree session(s) need canonical workspace repair; run openclaw doctor --fix",
-      );
+      expect(log.warn).not.toHaveBeenCalled();
       expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
       expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
     } finally {
-      for (const wave of maintenanceWaves) {
+      for (const wave of handoffWaves) {
         wave.resolve();
       }
       gate.releaseAll();
@@ -358,9 +352,6 @@ it("reuses durable fleet receipts and recertifies only the store revoked by its 
         cfg,
         env: state.env,
         log: { info: vi.fn(), warn: vi.fn() },
-        deps: {
-          migrateManagedWorktreeCanonicalWorkspaces: async () => ({ found: 0, repaired: 0 }),
-        },
       });
 
     await startup();
@@ -414,12 +405,8 @@ it("stops fleet admission on refusal and drains an already-started sibling befor
       cfg,
       env: state.env,
       log: { info: vi.fn(), warn: vi.fn() },
-      deps: {
-        migrateManagedWorktreeCanonicalWorkspaces: async ({ agentId, mode }) => {
-          expect(mode).toBe("detect");
-          consumed.push(agentId);
-          return { found: 0, repaired: 0 };
-        },
+      handoffDatabase: async ({ agentId }) => {
+        consumed.push(agentId);
       },
     });
     const outcome = startup.then(
@@ -661,6 +648,7 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env);
     const sharedPath = openOpenClawStateDatabase({ env: state.env }).path;
+    const previousExitHooks = new Set(process.rawListeners("beforeExit"));
     const primaryFailure = new Error("synthetic idle pool retirement failed");
     const retryFailures = [new Error("first recovery failed"), new Error("second recovery failed")];
     let worker: Worker | undefined;
@@ -687,7 +675,18 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
       expect(worker?.threadId).toBeGreaterThan(0);
       expect(retirementCalls?.()).toBe(1);
       expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-      for (const latestFailure of retryFailures) {
+      const exitHooks = () =>
+        process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
+      expect(exitHooks()).toHaveLength(1);
+      const emitBeforeExit = () => exitHooks().forEach((hook) => hook.call(process, 0));
+      emitBeforeExit();
+      await yieldToEventLoop();
+      expect(retirementCalls?.()).toBe(2);
+      emitBeforeExit();
+      await yieldToEventLoop();
+      expect(retirementCalls?.()).toBe(2);
+      expect(worker?.threadId).toBeGreaterThan(0);
+      for (const latestFailure of retryFailures.slice(1)) {
         const failure = await closeOpenClawStateDatabaseByPathAsync(sharedPath).catch(
           (error: unknown) => error,
         );

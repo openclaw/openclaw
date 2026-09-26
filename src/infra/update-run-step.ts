@@ -2,35 +2,41 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
-type ResultStep = Pick<
-  UpdateStepResult,
-  | "name"
-  | "exitCode"
-  | "advisory"
-  | "warnings"
-  | "termination"
-  | "stdoutTail"
-  | "stderrTail"
-  | "failureFacts"
-  | "configChanges"
-  | "configWriteRefusal"
-  | "snapshotCapacity"
->;
+type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
+
+/** Physical process success does not erase a failed inspection or incomplete termination. */
+export function isFailedUpdateStep(
+  step: Pick<
+    UpdateStepResult,
+    "exitCode" | "advisory" | "failureFacts" | "termination" | "killed" | "outputLimitExceeded"
+  >,
+): boolean {
+  return (
+    !step.advisory &&
+    (step.exitCode !== 0 ||
+      Boolean(step.failureFacts?.length || step.killed || step.outputLimitExceeded) ||
+      (step.termination !== undefined && step.termination !== "exit"))
+  );
+}
 
 export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolean {
   const step = result.steps.findLast(
     (entry) =>
-      entry.name === "gateway verification" || entry.name === "rollback gateway verification",
+      entry.name === "gateway verification" ||
+      entry.name === "rollback gateway verification" ||
+      entry.name === "gateway recovery verification",
   );
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
-/** Warning rows preserve producer-classified advisories in the existing diagnostic ledger. */
+/** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);
+  const failed = isFailedUpdateStep(step);
   const refusal = step.configWriteRefusal;
   const configWriteRefusal = refusal
     ? {
@@ -67,22 +73,37 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   return [
     {
       step: text(step.name),
-      status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+      status: failed ? "failed" : "completed",
       exitCode: step.exitCode,
-      ...(step.failureFacts?.length && !step.advisory
-        ? { failureFacts: step.failureFacts.slice(0, 5) }
-        : {}),
-      ...(configWriteRefusal ? { configWriteRefusal } : {}),
-      ...(snapshotCapacity ? { snapshotCapacity } : {}),
-      ...(step.exitCode !== 0
-        ? { detail: text(step.advisory?.message ?? summarizeUpdateStepFailure(step)) }
-        : {}),
+      // A completed retry replaces diagnostics from the previous attempt with the same ID.
+      failureFacts:
+        step.failureFacts?.length && !step.advisory ? step.failureFacts.slice(0, 5) : undefined,
+      configWriteRefusal,
+      snapshotCapacity,
+      detail:
+        failed || step.exitCode !== 0
+          ? text(step.advisory?.message ?? summarizeUpdateStepFailure(step))
+          : undefined,
     },
-    ...warnings.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
-      step: text(`warning:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
-      status: "completed" as const,
-      detail: text(detail),
-    })),
+    ...(step.doctorLintFindings
+      ? [
+          {
+            step: text(`finalize:doctor-lint:${step.name}`),
+            status: "completed" as const,
+            detail: formatUpdateDoctorLintReceipt(step),
+          },
+        ]
+      : []),
+    ...[
+      { kind: "warning", messages: warnings },
+      { kind: "diagnostic", messages: step.diagnostics ?? [] },
+    ].flatMap(({ kind, messages }) =>
+      messages.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
+        step: text(`${kind}:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
+        status: "completed" as const,
+        detail: text(detail),
+      })),
+    ),
     ...(step.configChanges ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((change, index) => {
       const configChange =
         change.kind === "key"
@@ -98,10 +119,74 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
-    step.status === "completed" && step.step.startsWith("warning:") && step.detail
+export function updateRunWarningMessages(
+  steps: readonly UpdateRunStep[],
+  maxMessages?: number,
+): string[] {
+  const messages = steps.flatMap((step) =>
+    (step.step === "reconcile:settle" ||
+      (step.status === "completed" && step.step.startsWith("warning:"))) &&
+    step.detail
       ? [step.detail]
       : [],
   );
+  if (maxMessages === undefined) {
+    return messages;
+  }
+  // The operator's restart command must survive later advisory Doctor warnings.
+  const serviceWarning = steps.findLast(
+    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
+  )?.detail;
+  return (
+    serviceWarning
+      ? [
+          serviceWarning,
+          ...messages.filter((message) => message !== serviceWarning).slice(1 - maxMessages),
+        ]
+      : messages.slice(-maxMessages)
+  ).slice(0, maxMessages);
+}
+
+/** Shared bounded receipt for history and rollback-readable diagnostics. */
+export function formatUpdateDoctorLintReceipt(
+  step: Pick<
+    UpdateStepResult,
+    "exitCode" | "termination" | "killed" | "outputLimitExceeded" | "doctorLintFindings"
+  > & { signal?: string | null },
+  maxBytes = UPDATE_RUN_TEXT_LIMIT,
+): string {
+  const errors: Array<{ checkId: string; message: string }> = [];
+  const lint = {
+    exitCode: step.exitCode,
+    termination: step.termination,
+    signal: step.signal,
+    killed: step.killed,
+    outputLimitExceeded: step.outputLimitExceeded,
+    counts: { error: 0, warning: 0, info: 0 },
+    errors,
+    omitted: 0,
+  };
+  for (const finding of step.doctorLintFindings ?? []) {
+    const severity =
+      finding.severity === "warning" || finding.severity === "info" ? finding.severity : "error";
+    lint.counts[severity]++;
+    if (severity === "error") {
+      lint.errors.push({
+        checkId: truncateUtf16Safe(finding.checkId, 128),
+        message: truncateUtf16Safe(
+          [finding.requirement, finding.message].filter(Boolean).join(": "),
+          200,
+        ),
+      });
+    }
+  }
+  const utf8 = new TextEncoder();
+  while (
+    utf8.encode(JSON.stringify(JSON.stringify(lint))).length > maxBytes &&
+    lint.errors.length
+  ) {
+    lint.errors.pop();
+    lint.omitted++;
+  }
+  return JSON.stringify(lint);
 }

@@ -24,6 +24,7 @@ import {
   setSidebarOpen,
   setSidebarDock,
   setSidebarExpanded,
+  SIDEBAR_GEOMETRY_COMMIT_EVENT,
   type SidebarLayout,
 } from "../sidebar-layout.ts";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
@@ -42,6 +43,7 @@ async function createRegion(
   const shell = document.createElement("div");
   shell.className = "sidebar-region";
   const region = document.createElement("openclaw-chat-sidebar-region") as Region;
+  region.panelIdPrefix = `sidebar-region-fixture-${regions.length}`;
   region.layout = layout;
   region.panelTemplates = {
     detail: html`<div data-panel="detail">Detail panel</div>`,
@@ -88,6 +90,101 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("updates the conversation tab identity without relabeling other panels or their controls", async () => {
+    const layout = openSlot(openSlot({ columns: [] }, "dashboard"), "workspace");
+    const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
+    const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
+    const label = () =>
+      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+    expect(label()?.textContent).toBe("Chat");
+
+    region.conversationTab = {
+      label: "Research assistant",
+      icon: html`<span data-agent-avatar>🦉</span>`,
+    };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Research assistant");
+    expect(
+      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+    ).not.toBeNull();
+    expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
+    expect(
+      [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
+    ).toContain("Files");
+
+    region.conversationTab = { label: "", icon: html`` };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Chat");
+    expect(
+      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
+        ?.content,
+    ).toBe("Chat");
+
+    region.conversationTab = {
+      label: "Planning assistant",
+      icon: html`<span data-agent-avatar>🦊</span>`,
+    };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Planning assistant");
+    expect(root(region).querySelector("[data-agent-avatar]")?.textContent).toBe("🦊");
+    region.conversationTab = undefined;
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Chat");
+  });
+
+  it("coalesces committed geometry and retires disconnected measurements", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const region = await createRegion();
+    region.narrow = true;
+    await region.updateComplete;
+    const shell = root(region);
+    const primary = shell.querySelector<HTMLElement>(".sidebar-region__primary")!;
+    const panel = shell.querySelector<HTMLElement>(".side-panel__panel")!;
+    let mainWidth = 800;
+    let sideWidth = 400;
+    const measure = vi
+      .spyOn(primary, "getBoundingClientRect")
+      .mockImplementation(() => new DOMRect(0, 0, mainWidth, 600));
+    vi.spyOn(panel, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, sideWidth, 600),
+    );
+    const commits: boolean[] = [];
+    shell.addEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, (event) => {
+      commits.push((event as CustomEvent<{ widthChanged: boolean }>).detail.widthChanged);
+    });
+    vi.advanceTimersToNextFrame();
+    measure.mockClear();
+    commits.length = 0;
+
+    for (let index = 0; index < 4; index++) {
+      region.requestUpdate();
+      await region.updateComplete;
+    }
+    expect(measure).not.toHaveBeenCalled();
+    expect(commits).toEqual([]);
+    vi.advanceTimersToNextFrame();
+    expect(measure).toHaveBeenCalledTimes(1);
+    expect(commits).toEqual([false]);
+
+    // Swapping content can keep the total width while changing each transcript.
+    mainWidth = 400;
+    sideWidth = 800;
+    region.requestUpdate();
+    await region.updateComplete;
+    vi.advanceTimersToNextFrame();
+    expect(commits).toEqual([false, true]);
+
+    measure.mockClear();
+    region.requestUpdate();
+    await region.updateComplete;
+    shell.remove();
+    vi.advanceTimersToNextFrame();
+    expect(measure).not.toHaveBeenCalled();
+  });
+
   it("claims native Close for the focused side tab and preserves its neighbor", async () => {
     const region = await createRegion(
       openSlot(openSlot({ columns: [] }, "workspace"), "companion"),

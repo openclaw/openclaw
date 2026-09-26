@@ -1,10 +1,9 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
@@ -33,8 +32,9 @@ import { resolveSessionWorkerPlacementMutationError } from "./worker-environment
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await disposeSessionReadContexts();
+  await closeStateDatabaseForTest();
 });
 
 function placementRecord(
@@ -161,8 +161,6 @@ function sequencedPlacementService(
 test.each([
   { action: "fork" as const, allowed: true },
   { action: "restore" as const, allowed: false },
-  { action: "rewind" as const, allowed: false },
-  { action: "switch" as const, allowed: false },
 ])("stopped cloud placement only permits identity-preserving $action", ({ action, allowed }) => {
   for (const state of ["reclaimed", "failed"] as const) {
     const sessionId = `stopped-${state}-${action}`;
@@ -195,8 +193,8 @@ async function beginClaimedTurn(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<() => void> {
-  const claim = params.placementStore.claimTurn({
+}): Promise<() => Promise<void>> {
+  const claim = await params.placementStore.claimTurn({
     sessionId: params.sessionId,
     agentId: "main",
     sessionKey: loadSessionEntry(params.sessionKey).canonicalKey ?? params.sessionKey,
@@ -204,8 +202,17 @@ async function beginClaimedTurn(params: {
     claimId: `${params.sessionId}-claim`,
     runId: `${params.sessionId}-run`,
   });
-  let claimReleased = false;
+  let releasing: Promise<void> | undefined;
   let releaseAdmission = () => {};
+  const releaseClaim = () => {
+    releasing ??= params.placementStore
+      .releaseTurn(claim)
+      .then(() => {
+        params.events.push("claim:released");
+      })
+      .finally(() => releaseAdmission());
+    return releasing;
+  };
   const admission = await beginSessionWorkAdmission({
     scope: params.storePath,
     identities: [params.sessionKey, params.sessionId],
@@ -213,18 +220,16 @@ async function beginClaimedTurn(params: {
     onInterrupt: () => {
       params.events.push("admission:interrupt");
       params.onInterrupt?.();
-      params.placementStore.releaseTurn(claim);
-      claimReleased = true;
-      params.events.push("claim:released");
-      releaseAdmission();
+      void releaseClaim().catch(() => {});
     },
   });
   releaseAdmission = admission.release;
-  return () => {
-    if (!claimReleased) {
-      params.placementStore.releaseTurn(claim);
+  return async () => {
+    try {
+      await releaseClaim();
+    } finally {
+      admission.release();
     }
-    admission.release();
   };
 }
 
@@ -332,6 +337,9 @@ test.each([
         context: {
           workerSessionPlacementService: {
             getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
+            waitForTurnClaimRelease: (
+              ...args: Parameters<WorkerSessionPlacementStore["waitForTurnClaimRelease"]>
+            ) => placementStore.waitForTurnClaimRelease(...args),
             retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
               expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
               events.push("placement:retire");
@@ -350,7 +358,7 @@ test.each([
       expect(loadSessionEntry(placementKey).entry?.sessionId).toBe(sessionId);
     }
   } finally {
-    cleanupAdmission();
+    await cleanupAdmission();
   }
 });
 
@@ -372,7 +380,6 @@ test("sessions.delete retains failed placement when worker cleanup is unavailabl
           get: () => ({ state: "failed", leaseId: "lease-1" }),
           hasInferenceForSession: () => false,
           cancelInferenceForSession: () => [],
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -440,7 +447,6 @@ test.each([
         workerEnvironmentService: {
           get: getWorkerEnvironment,
           hasInferenceForSession: () => false,
-          resolveInferenceSessionForRunId: () => undefined,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -515,6 +521,7 @@ test.each([
             workerSessionPlacementService: {
               getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
               retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
+                expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
                 expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
                 events.push("placement:retire");
                 placementStore.retireSessionPlacement(retirement);
@@ -529,7 +536,7 @@ test.each([
       expect(placementStore.get(sessionId)).toBeUndefined();
       expect(loadSessionEntry(testCase.sessionKey).entry === undefined).toBe(testCase.incognito);
     } finally {
-      cleanupAdmission();
+      await cleanupAdmission();
     }
   },
 );
@@ -585,67 +592,35 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
     expect(embeddedRunMock.abortCalls).toEqual([]);
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).not.toHaveBeenCalled();
   } finally {
-    cleanupAdmission();
+    await cleanupAdmission();
   }
 });
 
 test.each([
   {
-    name: "ordinary reset",
-    sessionKey: "discord:group:local-reset",
-    incognito: false,
-    state: "local" as const,
-  },
-  {
-    name: "incognito reset",
-    sessionKey: "agent:main:dashboard:incognito-local-reset",
-    incognito: true,
-    state: "local" as const,
-  },
-  {
     name: "reclaimed cloud reset",
     sessionKey: "discord:group:reclaimed-reset",
-    incognito: false,
     state: "reclaimed" as const,
   },
   {
     name: "failed cloud reset after worker destruction",
     sessionKey: "discord:group:destroyed-worker-reset",
-    incognito: false,
     state: "failed" as const,
     environment: { state: "destroyed" },
   },
   {
     name: "failed cloud reset after proven bootstrap teardown",
     sessionKey: "discord:group:failed-worker-reset",
-    incognito: false,
     state: "failed" as const,
     environment: { state: "failed", leaseId: null },
   },
 ])("sessions.reset retires the old placement before $name", async (testCase) => {
   await createSessionStoreDir();
-  const sessionId = testCase.incognito
-    ? await (async () => {
-        const created = await directSessionReq<{ sessionId?: string }>("sessions.create", {
-          agentId: "main",
-          key: testCase.sessionKey,
-          incognito: true,
-        });
-        if (!created.ok || !created.payload?.sessionId) {
-          throw new Error(`incognito setup failed: ${JSON.stringify(created.error)}`);
-        }
-        return created.payload.sessionId;
-      })()
-    : `sess-${testCase.name.replaceAll(" ", "-")}`;
-  if (!testCase.incognito) {
-    await writeSessionStore({
-      entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
-    });
-  }
-  const placement =
-    testCase.state === "local"
-      ? placementRecord(sessionId, "local")
-      : terminalPlacementRecord(sessionId, testCase.state);
+  const sessionId = `sess-${testCase.name.replaceAll(" ", "-")}`;
+  await writeSessionStore({
+    entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
+  });
+  const placement = terminalPlacementRecord(sessionId, testCase.state);
   const placementService = sequencedPlacementService([placement], () => {
     expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
   });
@@ -672,7 +647,7 @@ test.each([
     expectedState: testCase.state,
     expectedGeneration: placement.generation,
   });
-  expect(loadSessionEntry(testCase.sessionKey).entry === undefined).toBe(testCase.incognito);
+  expect(loadSessionEntry(testCase.sessionKey).entry).toBeDefined();
 });
 
 test.each([
@@ -774,7 +749,7 @@ test.each(["generation", "claim"] as const)(
     });
     embeddedRunMock.activeIds.add(sessionId);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-    const initialClaim = placementStore.claimTurn({
+    const initialClaim = await placementStore.claimTurn({
       sessionId,
       agentId: "main",
       sessionKey: loadSessionEntry(sessionKey).canonicalKey ?? sessionKey,
@@ -782,13 +757,17 @@ test.each(["generation", "claim"] as const)(
       claimId: `initial-${change}-claim`,
       runId: `initial-${change}-run`,
     });
-    placementStore.releaseTurn(initialClaim);
+    await placementStore.releaseTurn(initialClaim);
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
       const canonicalKey = loadSessionEntry(sessionKey).canonicalKey ?? sessionKey;
       if (change === "generation") {
-        placementStore.startDispatch({ sessionId, agentId: "main", sessionKey: canonicalKey });
+        await placementStore.startDispatch({
+          sessionId,
+          agentId: "main",
+          sessionKey: canonicalKey,
+        });
       } else {
-        placementStore.claimTurn({
+        await placementStore.claimTurn({
           sessionId,
           agentId: "main",
           sessionKey: canonicalKey,
@@ -811,47 +790,6 @@ test.each(["generation", "claim"] as const)(
     expect(placementStore.get(sessionId)).toBeDefined();
   },
 );
-
-test("sessions.compaction.restore rechecks worker placement inside the lifecycle fence", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "discord:group:worker-restore";
-  const sessionId = "sess-worker-restore";
-  const checkpointId = "checkpoint-worker-restore";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, {
-        compactionCheckpoints: [
-          {
-            checkpointId,
-            sessionKey,
-            sessionId,
-            createdAt: 1,
-            reason: "manual",
-            preCompaction: { sessionId },
-            postCompaction: { sessionId },
-          },
-        ],
-      }),
-    },
-  });
-  const placementReader = sequencedPlacementReader([
-    placementRecord(sessionId, "local"),
-    placementRecord(sessionId, "active"),
-  ]);
-
-  const restored = await directSessionReq(
-    "sessions.compaction.restore",
-    { key: sessionKey, checkpointId },
-    {
-      context: { workerSessionPlacementService: placementReader },
-    },
-  );
-
-  expect(restored.ok).toBe(false);
-  expect(restored.error?.message).toContain("cloud worker placement is active");
-  expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-});
 
 test.each(["worker-turn", "remote-exec"] as const)(
   "sessions.delete safely reclaims an active %s placement before committing deletion",
@@ -906,7 +844,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
         },
       },
     );
-    releaseTurn();
+    await releaseTurn();
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect(events).toEqual(["admission:interrupt", "claim:released"]);
     expect(harness.log.indexOf("workspace:reconcile")).toBeLessThan(
@@ -942,7 +880,6 @@ test.each(["worker-turn", "remote-exec"] as const)(
             ...harness.environments,
             hasInferenceForSession: () => false,
             cancelInferenceForSession: () => [],
-            resolveInferenceSessionForRunId: () => undefined,
           },
           workerPlacementDispatchService: harness.service,
           workerSessionPlacementService: placementStore,

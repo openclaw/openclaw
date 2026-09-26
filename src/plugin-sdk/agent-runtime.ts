@@ -1,7 +1,7 @@
 import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
-  getPreparedModelCatalogSnapshot,
   readPreparedModelCatalog,
+  refreshExpiredPreparedModelCatalog,
   type LoadPreparedModelCatalogParams,
 } from "../agents/prepared-model-catalog.js";
 /**
@@ -34,7 +34,8 @@ export {
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
-export { getPreparedModelCatalogSnapshot };
+/** Preserve the shipped SDK getter's background renewal; internal observations stay passive. */
+export { refreshExpiredPreparedModelCatalog as getPreparedModelCatalogSnapshot };
 
 /** Preserves the public SDK's writable default while internal catalog reads stay passive. */
 export async function loadPreparedModelCatalog(params: LoadPreparedModelCatalogParams = {}) {
@@ -77,7 +78,7 @@ export async function loadModelCatalog(params: LoadModelCatalogCompatibilityPara
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   if (cacheOnly) {
-    return getPreparedModelCatalogSnapshot(preparedParams)?.entries ?? [];
+    return refreshExpiredPreparedModelCatalog(preparedParams)?.entries ?? [];
   }
   return await loadPreparedModelCatalog(preparedParams);
 }
@@ -153,6 +154,10 @@ export type {
   AuthProfileStore,
   OAuthCredential,
 } from "../agents/auth-profiles.js";
+export {
+  isPendingOAuthRefreshFence,
+  isSameOAuthRefreshGeneration,
+} from "../agents/auth-profiles/oauth-refresh-marker.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";

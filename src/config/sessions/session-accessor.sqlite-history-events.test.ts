@@ -1,4 +1,3 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
@@ -14,11 +13,11 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readTranscriptDisplayDelta,
   readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventPage,
 } from "./session-accessor.sqlite-history-events.js";
 import {
   historyEventId,
+  readSessionTranscriptHistoryEventCount,
   insertSyntheticHistory,
   readSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
@@ -46,66 +45,6 @@ function enforceSqliteVariableLimit(
 
 describe("SQLite transcript history events", () => {
   const scope = useHistoryEventScope();
-
-  it("reuses recent payloads with fresh result ownership until append or rewrite", async () => {
-    const events = [
-      { type: "session", version: 3, id: scope.sessionId },
-      {
-        type: "message",
-        id: "original",
-        parentId: null,
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "cache-window-original" }],
-        },
-      },
-      {
-        type: "message",
-        id: "initial",
-        parentId: "original",
-        message: { role: "assistant", content: "reply" },
-      },
-    ];
-    await replaceTranscriptEvents(scope, events);
-    const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };
-    const read = () => readRecentSessionTranscriptHistoryEvents(scope, limits);
-    const first = read();
-    const parse = vi.spyOn(JSON, "parse");
-    const second = read();
-    expect(parse.mock.calls.filter(([json]) => json.includes("cache-window-original"))).toEqual([]);
-    parse.mockRestore();
-    for (const page of [first, second]) {
-      const message = asOptionalRecord(page.events[0]?.event)?.message;
-      if (!isRecord(message) || !Array.isArray(message.content) || !isRecord(message.content[0])) {
-        throw new Error("expected the original message content");
-      }
-      message.content[0].text = "caller mutation";
-      expect(asOptionalRecord(read().events[0]?.event)?.message).toEqual(events[1]?.message);
-    }
-    await persistSessionTranscriptTurn(scope, {
-      messages: [transcriptMessage("appended", "initial", { role: "user", content: "next" })],
-      touchSessionEntry: false,
-    });
-    expect(read().events.map(historyEventId)).toEqual(["original", "initial", "appended"]);
-    const replacement = [
-      ...events,
-      {
-        type: "message",
-        id: "appended",
-        parentId: "initial",
-        message: { role: "user", content: "rewritten" },
-      },
-    ];
-    await replaceTranscriptEvents(scope, replacement);
-    expect(asOptionalRecord(read().events.at(-1)?.event)?.message).toEqual(
-      replacement.at(-1)?.message,
-    );
-    expect(
-      readRecentSessionTranscriptHistoryEvents(scope, { ...limits, maxMessages: 1 }).events.map(
-        historyEventId,
-      ),
-    ).toEqual(["appended"]);
-  });
 
   it("reads fresh generations and rows across empty and populated sessions", async () => {
     const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };

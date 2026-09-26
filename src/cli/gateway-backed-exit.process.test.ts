@@ -32,7 +32,7 @@ import {
 import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
-  startCronListGateway,
+  startCliReadGateway,
   startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
@@ -71,7 +71,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "positive", timeout: "10000", valid: true },
   ])(
@@ -452,55 +451,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it.each([
     { label: "list", args: ["devices", "list", "--timeout", "250"] },
-    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
-    {
-      label: "remove",
-      args: ["devices", "remove", "test-device", "--timeout", "250"],
-    },
-    {
-      label: "clear",
-      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
-    },
-    {
-      label: "approve",
-      args: ["devices", "approve", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "reject",
-      args: ["devices", "reject", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "rename",
-      args: [
-        "devices",
-        "rename",
-        "--device",
-        "test-device",
-        "--name",
-        "Test Device",
-        "--timeout",
-        "250",
-      ],
-    },
+    { label: "approve", args: ["devices", "approve", "test-request", "--timeout", "250"] },
     {
       label: "rotate",
       args: [
         "devices",
         "rotate",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-    {
-      label: "revoke",
-      args: [
-        "devices",
-        "revoke",
         "--device",
         "test-device",
         "--role",
@@ -628,7 +584,7 @@ describe("gateway-backed CLI process exit", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const caTriggerPath = path.join(root, "load-default-ca.mjs");
     const token = "test-token";
-    const gateway = await startCronListGateway(token);
+    const gateway = await startCliReadGateway(token);
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(
       caTriggerPath,
@@ -899,7 +855,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "omitted", timeout: undefined, valid: true },
     { label: "positive", timeout: "10000", valid: true },

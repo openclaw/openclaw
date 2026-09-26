@@ -15,6 +15,7 @@ import {
   searchGuildMessages,
   unpinChannelMessage,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import {
   classifyDiscordDeliveryFailure,
@@ -178,6 +179,7 @@ export async function editMessageDiscord(
     body: {
       content: payload.content,
       ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+      ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
     },
   });
 }
@@ -223,8 +225,9 @@ export async function listPinsDiscord(
 export async function createThreadDiscord(
   channelId: string,
   payload: DiscordThreadCreate,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts & { assertCreateAllowed?: () => void },
 ): Promise<DiscordThreadCreateResult> {
+  const assertCreateAllowed = opts.assertCreateAllowed;
   const { rest, request } = createDiscordClient(opts);
   const body: Record<string, unknown> = { name: payload.name };
   if (!payload.messageId && payload.type !== undefined) {
@@ -270,7 +273,10 @@ export async function createThreadDiscord(
   if (!payload.messageId && !isForumLike && body.type === undefined) {
     body.type = ChannelType.PublicThread;
   }
-  const thread = await createThread(rest, channelId, { body }, payload.messageId);
+  const thread = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+    assertCreateAllowed?.();
+    return createThread(rest, channelId, { body }, payload.messageId);
+  });
 
   // Forum creation accepts exactly one starter message, so keep the first chunk in the
   // create request and deliver any remainder after Discord returns the new thread.

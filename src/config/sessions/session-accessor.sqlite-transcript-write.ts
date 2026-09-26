@@ -8,6 +8,7 @@ import {
 import { clearAllCliSessions } from "./cli-session-binding.js";
 import type {
   SessionTranscriptAccessScope,
+  SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
   TranscriptEvent,
@@ -36,9 +37,15 @@ import {
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
+import {
+  appendTranscriptMessageInTransaction,
+  type PreparedTranscriptMessageAppend,
+} from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
-import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
+import {
+  readTranscriptVisibleTailEntryIdInTransaction,
+  resolveTranscriptEventAppendParent,
+} from "./session-accessor.sqlite-transcript-parent.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
@@ -46,7 +53,6 @@ import {
 import {
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
@@ -82,6 +88,12 @@ export type TranscriptWriteSnapshot<T> = {
   lifecycleRevision?: string;
   before: SessionTranscriptContextVersion;
   after: SessionTranscriptContextVersion;
+};
+
+export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
+  TranscriptMessageAppendResult<TMessage> | undefined
+> & {
+  visibleTail: { entryId: string | null; generation: string | null };
 };
 
 export type TranscriptEventAppendResult =
@@ -364,6 +376,7 @@ export function appendTranscriptEventSnapshotSync(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
+  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
   return runTranscriptWriteSnapshotSync(
@@ -375,7 +388,9 @@ export function appendTranscriptEventSnapshotSync(
         event,
         options,
       );
-      if (appendTranscriptEventInTransaction(database, resolved, resolvedEvent) === false) {
+      if (
+        appendTranscriptEventInTransaction(database, resolved, resolvedEvent, projection) === false
+      ) {
         return { appended: false };
       }
       if (
@@ -410,7 +425,7 @@ function runTranscriptWriteSnapshotSync<T>(
   >((database) => {
     beforeCommitInTransaction?.();
     assertOwnedTranscriptWriteCommit(fencedScope);
-    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    const fresh = readSessionEntryRow(database, resolved.sessionKey, "list");
     const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
     if (refusal) {
       return err(refusal);
@@ -478,16 +493,50 @@ export function appendTranscriptMessageSync<TMessage>(
 export function appendTranscriptMessageSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
-): Result<
-  TranscriptWriteSnapshot<TranscriptMessageAppendResult<TMessage> | undefined>,
-  TranscriptAppendRefusal
-> {
-  return runTranscriptWriteSnapshotSync(
+  preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
+  workerOptions?: {
+    messageAlreadyRedacted?: true;
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  },
+): Result<TranscriptMessageWriteSnapshot<TMessage>, TranscriptAppendRefusal> {
+  const snapshot = runTranscriptWriteSnapshotSync(
     scope,
-    (database, resolved) => appendTranscriptMessageInTransaction(database, resolved, options),
+    (database, resolved) => {
+      const result = appendTranscriptMessageInTransaction(
+        database,
+        resolved,
+        workerOptions?.messageAlreadyRedacted
+          ? { ...options, messageAlreadyRedacted: true }
+          : options,
+        preparedMessage,
+        workerOptions,
+      );
+      return {
+        result,
+        visibleTailEntryId: result
+          ? readTranscriptVisibleTailEntryIdInTransaction(
+              database,
+              resolved.sessionId,
+              result.messageId,
+            )
+          : null,
+      };
+    },
     undefined,
     options.expectedMutationAt,
   );
+  if (!snapshot.ok) {
+    return snapshot;
+  }
+  return ok({
+    ...snapshot.value,
+    result: snapshot.value.result.result,
+    visibleTail: {
+      entryId: snapshot.value.result.visibleTailEntryId,
+      generation: snapshot.value.after.generation,
+    },
+  });
 }
 
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */

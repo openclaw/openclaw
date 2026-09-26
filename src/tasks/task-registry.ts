@@ -1,13 +1,7 @@
 // Public task registry surface. Runtime ownership is split across focused modules.
 import "./task-registry-lifecycle.js";
 import { maybeDeliverTaskStateChangeUpdate } from "./task-registry-delivery.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
-} from "./task-registry-query.js";
+import { resetTaskRegistryForTests } from "./task-registry-query.js";
 
 export { isParentFlowLinkError } from "./task-registry-flow-link.js";
 export { assertTaskCancellationReadyById, cancelTaskById } from "./task-registry-cancel.js";
@@ -20,12 +14,10 @@ export {
   markTaskRunningByRunId,
   markTaskTerminalById,
   recordTaskProgressByRunId,
-  setTaskCleanupAfterById,
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry-record-api.js";
 export {
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
   hasActiveTaskForChildSessionKey,
@@ -33,8 +25,7 @@ export {
   listTaskRecordPage,
   listTaskRecords,
   listTaskRecordsForOwnerTree,
-  listTaskRecordsUnsorted,
-  listTasksForAgentId,
+  listTaskSessionActivity,
   listTasksForFlowId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
@@ -46,10 +37,6 @@ export { ensureTaskRegistryReady } from "./task-registry-state.js";
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.taskRegistryTestApi")] = {
     maybeDeliverTaskStateChangeUpdate,
-    resetTaskRegistryControlRuntimeForTests,
-    resetTaskRegistryDeliveryRuntimeForTests,
     resetTaskRegistryForTests,
-    setTaskRegistryControlRuntimeForTests,
-    setTaskRegistryDeliveryRuntimeForTests,
   };
 }

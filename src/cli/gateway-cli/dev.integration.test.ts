@@ -1,9 +1,11 @@
 // Proves a fresh dev gateway can replace the synthetic implicit roster through real config IO.
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { ensureDevGatewayConfig } from "./dev.js";
@@ -37,11 +39,18 @@ describe("ensureDevGatewayConfig integration", () => {
       },
     );
 
-    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
-      agents?: { entries?: Record<string, { default?: boolean; workspace?: string }> };
-    };
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(config.gateway).toEqual({ mode: "local", bind: "loopback" });
+    expect(config.agents?.defaults).toMatchObject({
+      workspace: `${workspace}-dev`,
+      skipBootstrap: true,
+    });
     expect(config.agents?.entries).toEqual({
-      dev: { default: true, workspace: `${workspace}-dev`, identity: expect.any(Object) },
+      dev: {
+        default: true,
+        workspace: `${workspace}-dev`,
+        identity: { name: "C3-PO", theme: "protocol droid", emoji: "🤖" },
+      },
     });
   });
 
@@ -52,6 +61,7 @@ describe("ensureDevGatewayConfig integration", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const workspace = path.join(root, "workspace");
     const devWorkspace = `${workspace}-dev`;
+    const resolvedDevWorkspace = path.join(await fs.realpath(root), path.basename(devWorkspace));
 
     await withEnvAsync(
       {
@@ -61,37 +71,42 @@ describe("ensureDevGatewayConfig integration", () => {
       },
       async () => {
         resetConfigRuntimeState();
-        const realWriteFile = fs.writeFile.bind(fs);
-        const writeSpy = vi
-          .spyOn(fs, "writeFile")
-          .mockImplementation(async (filePath, data, options) => {
-            const rawPath = nodeFilePath(filePath);
-            if (!rawPath) {
-              return await realWriteFile(filePath, data, options);
-            }
-            const target = path.resolve(rawPath);
-            const parent = path.dirname(target);
-            const isStagedAgents =
-              path.dirname(parent) === devWorkspace &&
-              path.basename(parent).startsWith("openclaw-bootstrap-") &&
-              path.basename(target) === "AGENTS.md";
-            if (isStagedAgents) {
-              await realWriteFile(filePath, "# PARTIAL\n", options);
-              const error = new Error("ENOSPC") as NodeJS.ErrnoException;
-              error.code = "ENOSPC";
-              throw error;
-            }
-            return await realWriteFile(filePath, data, options);
-          });
+        const realOpen = fs.open.bind(fs);
+        let injected = false;
+        const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await realOpen(...args);
+          const rawPath = nodeFilePath(args[0]);
+          const exclusiveCreate =
+            typeof args[1] === "number" &&
+            (args[1] & constants.O_CREAT) !== 0 &&
+            (args[1] & constants.O_EXCL) !== 0;
+          if (
+            !injected &&
+            rawPath &&
+            path.dirname(path.resolve(rawPath)) === resolvedDevWorkspace &&
+            exclusiveCreate
+          ) {
+            vi.spyOn(handle, "write").mockImplementationOnce(async () => {
+              injected = true;
+              await handle.writeFile("# PARTIAL\n");
+              throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+            });
+          }
+          return handle;
+        });
 
         try {
-          await expect(ensureDevGatewayConfig({})).rejects.toMatchObject({ code: "ENOSPC" });
+          await expect(
+            withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => ensureDevGatewayConfig({})),
+          ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
+          expect(injected).toBe(true);
           await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
           await expect(fs.access(path.join(devWorkspace, "AGENTS.md"))).rejects.toMatchObject({
             code: "ENOENT",
           });
+          expect(await fs.readdir(devWorkspace)).toEqual([]);
         } finally {
-          writeSpy.mockRestore();
+          openSpy.mockRestore();
         }
 
         await ensureDevGatewayConfig({});

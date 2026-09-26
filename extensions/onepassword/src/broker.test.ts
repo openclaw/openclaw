@@ -7,8 +7,9 @@ import {
   type StandingGrant,
 } from "./broker.js";
 import type { OnePasswordConfig, OnePasswordItemConfig } from "./config.js";
-import { MemoryKeyedStore, MemorySyncKeyedStore } from "./memory-store.test-support.js";
+import { MemoryKeyedStore } from "./memory-store.test-support.js";
 import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
+import { createOnePasswordTool } from "./tool.js";
 
 const invocation = {
   agentId: "agent-a",
@@ -60,7 +61,7 @@ function setup(nowValue = 1_000, configured = config()) {
   let currentConfig: OnePasswordConfig | undefined = configured;
   const audit = new MemoryKeyedStore<AuditRow>(() => now);
   const grants = new MemoryKeyedStore<StandingGrant>(() => now);
-  const pending = new MemorySyncKeyedStore<PendingAuthorization>(() => now);
+  const pending = new MemoryKeyedStore<PendingAuthorization>(() => now);
   const stores = { audit, grants, pending };
   const getItem = vi.fn(async () => ({
     value: ["fixture", "value"].join("-"),
@@ -216,8 +217,8 @@ describe("OnePasswordBroker validation and policy", () => {
     ]);
   });
 
-  it("handles allow-once, deny, and timeout decisions", async () => {
-    const { broker, audit, getItem } = setup();
+  it("handles allow-once, deny, timeout, and cancellation decisions", async () => {
+    const { broker, audit, pending, getItem } = setup();
     const approved = await before(broker, "approve-1", {
       action: "get",
       slug: "approval",
@@ -251,11 +252,20 @@ describe("OnePasswordBroker validation and policy", () => {
     });
     await timedOut?.requireApproval?.onResolution?.("timeout");
 
+    const cancelled = await before(broker, "approve-4", {
+      action: "get",
+      slug: "approval",
+      reason: "cancel",
+    });
+    await cancelled?.requireApproval?.onResolution?.("cancelled");
+
     expect(getItem).toHaveBeenCalledTimes(1);
+    expect(await pending.entries()).toEqual([]);
     expect((await audit.entries()).map((entry) => entry.value.outcome)).toEqual([
       "approved",
       "denied",
       "timeout",
+      "error",
     ]);
   });
 
@@ -308,6 +318,165 @@ describe("OnePasswordBroker validation and policy", () => {
         nonceOf(issued),
       ),
     ).resolves.toMatchObject({ slug: "automatic" });
+  });
+
+  it.each([false, true])(
+    "joins approval writes across brokers and consumes once (dropped nonce: %s)",
+    async (dropNonce) => {
+      const { broker, createBroker, pending, getItem } = setup();
+      const release = Promise.withResolvers<void>();
+      const register = pending.register.bind(pending);
+      vi.spyOn(pending, "register").mockImplementationOnce(async (...args) => {
+        await release.promise;
+        await register(...args);
+      });
+      const params = { action: "get", slug: "approval", reason: "delayed approval" };
+      const approved = await before(broker, "delayed", params);
+      const resolution = approved?.requireApproval?.onResolution?.("allow-once");
+      const tool = createOnePasswordTool(createBroker(), invocation);
+      const executedParams = dropNonce ? params : { ...params, ...approved?.params };
+      const results = Promise.all([
+        tool.execute("delayed", executedParams),
+        tool.execute("delayed", executedParams),
+      ]);
+      try {
+        await before(broker, "unrelated", {
+          action: "get",
+          slug: "automatic",
+          reason: "independent authorization still progresses",
+        });
+        expect(getItem).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await resolution;
+      }
+      expect((await results).map((result) => result.details)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ ok: true, slug: "approval" }),
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({ code: "POLICY_NOT_EVALUATED" }),
+          }),
+        ]),
+      );
+      expect(getItem).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("settles matching writes after a failure without retaining failed authorization", async () => {
+    const { broker, createBroker, pending, audit, getItem } = setup();
+    const failed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const register = pending.register.bind(pending);
+    vi.spyOn(pending, "register")
+      .mockImplementationOnce(async () => await failed.promise)
+      .mockImplementationOnce(async (...args) => {
+        await release.promise;
+        await register(...args);
+      });
+    const params = { action: "get", slug: "approval", reason: "matching approvals" };
+    const first = await before(broker, "matching", params);
+    const second = await before(broker, "matching", params);
+    const resolutions = Promise.allSettled([
+      first?.requireApproval?.onResolution?.("allow-once"),
+      second?.requireApproval?.onResolution?.("allow-once"),
+    ]);
+    const tool = createOnePasswordTool(createBroker(), invocation);
+    let completed = false;
+    const execution = tool.execute("matching", params).then((result) => {
+      completed = true;
+      return result;
+    });
+    failed.reject(new Error("synthetic pending write failure"));
+    try {
+      await before(broker, "unrelated", {
+        action: "get",
+        slug: "automatic",
+        reason: "independent work",
+      });
+      expect((await pending.entries()).map(({ value }) => value.toolCallId)).toEqual(["unrelated"]);
+      expect(completed).toBe(false);
+      expect(getItem).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await resolutions;
+    }
+    expect((await execution).details).toMatchObject({
+      ok: false,
+      error: { message: "synthetic pending write failure" },
+    });
+    expect((await audit.entries()).map(({ value }) => [value.toolCallId, value.outcome])).toEqual([
+      ["matching", "error"],
+    ]);
+    expect(
+      (await tool.execute("matching", { ...params, ...second?.params })).details,
+    ).toMatchObject({
+      ok: true,
+      slug: "approval",
+    });
+    expect((await tool.execute("matching", { ...params, ...first?.params })).details).toMatchObject(
+      {
+        ok: false,
+        error: { code: "POLICY_NOT_EVALUATED" },
+      },
+    );
+    expect(getItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a settled approval-write failure and audits a later denied execution", async () => {
+    const { broker, createBroker, pending, audit, getItem } = setup();
+    vi.spyOn(pending, "register").mockRejectedValueOnce(
+      new Error("synthetic pending write failure"),
+    );
+    const params = { action: "get", slug: "approval", reason: "failed before execution" };
+    const approved = await before(broker, "settled-failure", params);
+    await expect(approved?.requireApproval?.onResolution?.("allow-once")).rejects.toThrow(
+      "synthetic pending write failure",
+    );
+    const result = await createOnePasswordTool(createBroker(), invocation).execute(
+      "settled-failure",
+      { ...params, ...approved?.params },
+    );
+    expect(result.details).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_NOT_EVALUATED" },
+    });
+    expect((await audit.entries()).map(({ value }) => value)).toEqual([
+      expect.objectContaining({
+        toolCallId: "settled-failure",
+        outcome: "error",
+        errorCode: "POLICY_NOT_EVALUATED",
+      }),
+    ]);
+    expect(await pending.entries()).toEqual([]);
+    expect(getItem).not.toHaveBeenCalled();
+  });
+
+  it("rechecks live policy after awaiting pending consumption", async () => {
+    const { broker, pending, getItem, setConfig } = setup();
+    const params = { action: "get", slug: "automatic", reason: "revoke while consuming" };
+    const approved = await before(broker, "revoke", params);
+    const consumed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const consume = pending.consume.bind(pending);
+    vi.spyOn(pending, "consume").mockImplementationOnce(async (key) => {
+      const value = await consume(key);
+      consumed.resolve();
+      await release.promise;
+      return value;
+    });
+    const execution = createOnePasswordTool(broker, invocation).execute("revoke", {
+      ...params,
+      ...approved?.params,
+    });
+    await consumed.promise;
+    setConfig(undefined);
+    release.resolve();
+    expect((await execution).details).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_CHANGED" },
+    });
+    expect(getItem).not.toHaveBeenCalled();
   });
 
   it("isolates concurrent sessions that reuse a provider tool call id", async () => {
@@ -446,6 +615,48 @@ describe("OnePasswordBroker validation and policy", () => {
         undefined,
       ),
     ).rejects.toMatchObject({ code: "POLICY_NOT_EVALUATED" });
+  });
+
+  it("rejects a different caller replacing a fallback candidate before consumption", async () => {
+    const { broker, pending, getItem } = setup();
+    const params = { action: "get", slug: "automatic", reason: "fallback replacement" };
+    const approved = await before(broker, "replaced", params);
+    const nonce = nonceOf(approved);
+    if (!nonce) {
+      throw new Error("missing pending nonce");
+    }
+    const entries = pending.entries.bind(pending);
+    vi.spyOn(pending, "entries").mockImplementationOnce(async () => {
+      const snapshot = await entries();
+      const original = await pending.lookup(nonce);
+      if (!original) {
+        throw new Error("missing pending fixture");
+      }
+      await pending.register(nonce, { ...original, agentId: "other-agent" });
+      return snapshot;
+    });
+    expect(
+      (await createOnePasswordTool(broker, invocation).execute("replaced", params)).details,
+    ).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_NOT_EVALUATED" },
+    });
+    expect(getItem).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("expires pending authorization (dropped nonce: %s)", async (dropNonce) => {
+    const { broker, advance, getItem } = setup();
+    const params = { action: "get", slug: "automatic", reason: "expired pending" };
+    const approved = await before(broker, "expired", params);
+    advance(600_000);
+    const executedParams = dropNonce ? params : { ...params, ...approved?.params };
+    expect(
+      (await createOnePasswordTool(broker, invocation).execute("expired", executedParams)).details,
+    ).toMatchObject({
+      ok: false,
+      error: { code: "POLICY_NOT_EVALUATED" },
+    });
+    expect(getItem).not.toHaveBeenCalled();
   });
 
   it("persists allow-always grants and expires them", async () => {
@@ -777,7 +988,7 @@ describe("OnePasswordBroker cache and audit", () => {
     const cfg = config();
     const audit = new MemoryKeyedStore<AuditRow>();
     const grants = new MemoryKeyedStore<StandingGrant>();
-    const pending = new MemorySyncKeyedStore<PendingAuthorization>();
+    const pending = new MemoryKeyedStore<PendingAuthorization>();
     const getItem = vi.fn(async () => ({
       value: ["fixture", "value"].join("-"),
       itemTitle: "Item",

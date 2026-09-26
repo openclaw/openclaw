@@ -1,8 +1,7 @@
-// Agents gateway methods expose agent listing, config mutation, workspace file
-// reads/writes, identity merging, and safe deletion for operator clients.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -51,8 +50,8 @@ import {
 } from "../../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import {
+  buildIdentityMarkdownForWrite,
   createAgentIdentityConfig,
-  mergeIdentityMarkdownContent,
   normalizeIdentityForFile,
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
@@ -67,11 +66,7 @@ import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
 } from "../../agents/workspace-state-store.js";
-import {
-  DEFAULT_IDENTITY_FILENAME,
-  ensureAgentWorkspace,
-  isWorkspaceSetupCompleted,
-} from "../../agents/workspace.js";
+import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import { trashAllowedRoots } from "../../commands/cleanup-utils.js";
 import {
@@ -96,40 +91,17 @@ import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-r
 import { resolveUserPath } from "../../utils.js";
 import {
   AgentConfigPreconditionError,
+  AgentModelSelectionError,
   deleteAgentConfigEntry,
   isConfiguredAgent,
+  isImplicitAgentModelUpdate,
   updateAgentConfigEntry,
+  validateAgentModelSelectionUpdate,
 } from "./agents-config-mutations.js";
-import { createAgentFileHandlers } from "./agents-files.js";
+import { agentFileHandlers } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-const agentsHandlerDeps = {
-  root,
-  isWorkspaceSetupCompleted,
-};
-const agentFileHandlers = createAgentFileHandlers(agentsHandlerDeps);
-
-export const testing = {
-  setDepsForTests(
-    overrides: Partial<{
-      root: typeof root;
-      isWorkspaceSetupCompleted: typeof isWorkspaceSetupCompleted;
-    }>,
-  ) {
-    if (overrides.isWorkspaceSetupCompleted) {
-      agentsHandlerDeps.isWorkspaceSetupCompleted = overrides.isWorkspaceSetupCompleted;
-    }
-    if (overrides.root) {
-      agentsHandlerDeps.root = overrides.root;
-    }
-  },
-  resetDepsForTests() {
-    agentsHandlerDeps.root = root;
-    agentsHandlerDeps.isWorkspaceSetupCompleted = isWorkspaceSetupCompleted;
-  },
-};
 
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
@@ -177,7 +149,7 @@ function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigin
 
 async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   const parentPath = cleanupPath.parentPath;
-  const parentRoot = await agentsHandlerDeps.root(parentPath, {
+  const parentRoot = await root(parentPath, {
     hardlinks: "reject",
     symlinks: "reject",
   });
@@ -275,39 +247,15 @@ type AgentDeleteCleanupPath = {
 };
 
 async function resolveAgentDeleteCleanupTarget(pathname: string): Promise<string> {
-  let candidate = path.resolve(pathname);
-  const missingSuffix: string[] = [];
-  while (true) {
-    try {
-      return path.resolve(await fs.realpath(candidate), ...missingSuffix);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      let candidateStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
-      try {
-        candidateStat = await fs.lstat(candidate);
-      } catch (statError) {
-        if (!isMissingPathError(statError)) {
-          throw statError;
-        }
-      }
-      if (candidateStat?.isSymbolicLink()) {
-        const linkTarget = await fs.readlink(candidate);
-        const resolvedLinkTarget = await resolveAgentDeleteCleanupTarget(
-          path.isAbsolute(linkTarget)
-            ? linkTarget
-            : path.resolve(path.dirname(candidate), linkTarget),
-        );
-        return path.resolve(resolvedLinkTarget, ...missingSuffix);
-      }
-      const parent = path.dirname(candidate);
-      if (parent === candidate) {
-        throw error;
-      }
-      missingSuffix.unshift(path.basename(candidate));
-      candidate = parent;
+  const candidate = path.resolve(pathname);
+  try {
+    return await fs.realpath(candidate);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
     }
+    const { existingPath, unresolvedSegments } = resolvePathPrefixSync(candidate);
+    return path.resolve(existingPath, ...unresolvedSegments);
   }
 }
 
@@ -385,16 +333,12 @@ async function prepareAgentDeleteCleanupPaths(
       }
     }
     const canonicalPath = normalizeAgentDirRegistryPath(resolvedPath);
-    let trashCoversDescendants = false;
-    if (targetStat) {
-      trashCoversDescendants = !targetStat.isSymbolicLink();
-    }
     addPath({
       path: resolvedPath,
       parentPath: path.dirname(resolvedPath),
       canonicalPath,
       trashPath: resolvedPath,
-      trashCoversDescendants,
+      trashCoversDescendants: targetStat ? !targetStat.isSymbolicLink() : false,
       kind: "target",
       preparedIdentity: cleanupPathIdentity(targetStat),
       done: false,
@@ -528,7 +472,7 @@ async function writeWorkspaceFileOrRespond(params: {
   }
   await fs.mkdir(params.workspaceDir, { recursive: true });
   try {
-    const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+    const workspaceRoot = await root(params.workspaceDir);
     await workspaceRoot.write(params.name, params.content, { encoding: "utf8" });
   } catch (err) {
     if (err instanceof FsSafeError) {
@@ -559,7 +503,7 @@ async function readWorkspaceFileContent(
       }
       return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
     }
-    const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+    const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
       nonBlockingRead: true,
@@ -573,35 +517,6 @@ async function readWorkspaceFileContent(
   }
 }
 
-async function buildIdentityMarkdownForWrite(params: {
-  workspaceDir: string;
-  identity: IdentityConfig;
-  fallbackWorkspaceDir?: string;
-  preferFallbackWorkspaceContent?: boolean;
-}): Promise<string> {
-  let baseContent: string | undefined;
-  if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
-    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
-    baseContent = await readWorkspaceFileContent(
-      params.fallbackWorkspaceDir,
-      DEFAULT_IDENTITY_FILENAME,
-    );
-    if (baseContent === undefined) {
-      baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
-    }
-  } else {
-    baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
-    if (baseContent === undefined && params.fallbackWorkspaceDir) {
-      baseContent = await readWorkspaceFileContent(
-        params.fallbackWorkspaceDir,
-        DEFAULT_IDENTITY_FILENAME,
-      );
-    }
-  }
-
-  return mergeIdentityMarkdownContent(baseContent, params.identity);
-}
-
 async function buildIdentityMarkdownOrRespondUnsafe(params: {
   respond: RespondFn;
   workspaceDir: string;
@@ -610,7 +525,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
   preferFallbackWorkspaceContent?: boolean;
 }): Promise<string | null> {
   try {
-    return await buildIdentityMarkdownForWrite(params);
+    return await buildIdentityMarkdownForWrite({ ...params, readWorkspaceFileContent });
   } catch (err) {
     if (err instanceof FsSafeError) {
       respondWorkspaceFileUnsafe(params.respond, DEFAULT_IDENTITY_FILENAME);
@@ -662,22 +577,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentId = normalized.value;
-    if (!isConfiguredAgent(cfg, agentId)) {
-      respondAgentNotFound(respond, agentId);
-      return;
-    }
-
-    const workspaceDir =
-      typeof params.workspace === "string" && params.workspace.trim()
-        ? resolveUserPath(params.workspace.trim())
-        : undefined;
+    const workspace = resolveOptionalStringParam(params.workspace);
+    const workspaceDir = workspace ? resolveUserPath(workspace) : undefined;
 
     const model = params.model === null ? null : resolveOptionalStringParam(params.model);
 
-    const safeName =
-      typeof params.name === "string" && params.name.trim()
-        ? sanitizeAgentIdentityLine(params.name.trim())
-        : undefined;
+    const name = resolveOptionalStringParam(params.name);
+    const safeName = name ? sanitizeAgentIdentityLine(name) : undefined;
 
     const identity = createAgentIdentityConfig({
       name: safeName,
@@ -691,9 +597,20 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ...(safeName ? { name: safeName } : {}),
       ...(workspaceDir ? { workspace: workspaceDir } : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(params.agentRuntime ? { agentRuntime: params.agentRuntime } : {}),
       ...(identity ? { identity } : {}),
     };
-    const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
+    const selectionError = validateAgentModelSelectionUpdate(params);
+    if (selectionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectionError));
+      return;
+    }
+    const configured = isConfiguredAgent(cfg, agentId);
+    if (!configured && !isImplicitAgentModelUpdate(cfg, agentConfigUpdate)) {
+      respondAgentNotFound(respond, agentId);
+      return;
+    }
+    const nextConfig = configured ? applyAgentConfig(cfg, agentConfigUpdate) : cfg;
 
     let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
@@ -758,6 +675,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
         respondAgentNotFound(respond, agentId);
         return;
       }
+      if (error instanceof AgentModelSelectionError) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+        return;
+      }
       throw error;
     }
 
@@ -814,8 +735,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const requestedDeleteFiles =
-      typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
+    const requestedDeleteFiles = params.deleteFiles ?? true;
     try {
       const result = await withAgentDeletion(agentId, async (begin) =>
         withConfigMutationExclusive(async (lockedConfig) => {
@@ -939,45 +859,44 @@ export const agentsHandlers: GatewayRequestHandlers = {
                 );
               }
             }
-            await context.cron.removeAgentJobsTransactional(
-              agentId,
-              async () =>
-                await withAgentExecApprovalsRemoved(agentId, async () => {
-                  deletion.assertCurrent();
-                  if (!rosterCommitted) {
+            await context.cron.removeAgentJobsTransactional(agentId, () =>
+              withAgentExecApprovalsRemoved(agentId, async () => {
+                deletion.assertCurrent();
+                if (!rosterCommitted) {
+                  try {
+                    committed = await deleteAgentConfigEntry({
+                      agentId,
+                      allowConfigSizeDrop: true,
+                      assertCurrent: deletion.assertCurrent,
+                    });
+                  } catch (error) {
                     try {
-                      committed = await deleteAgentConfigEntry({
-                        agentId,
-                        assertCurrent: deletion.assertCurrent,
-                      });
-                    } catch (error) {
-                      try {
-                        const persisted = await readConfigFileSnapshotForWrite();
-                        if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
-                          rosterCommitted = true;
-                          throw new AgentDeletionCommitUncertainError(error);
-                        }
-                      } catch (readError) {
-                        if (readError instanceof AgentDeletionCommitUncertainError) {
-                          throw readError;
-                        }
+                      const persisted = await readConfigFileSnapshotForWrite();
+                      if (!isConfiguredAgent(persisted.snapshot.sourceConfig, agentId)) {
+                        rosterCommitted = true;
                         throw new AgentDeletionCommitUncertainError(error);
                       }
-                      throw error;
-                    }
-                    if (!committed.result) {
-                      rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
-                      const missingResultError = new Error(
-                        "agent delete config mutation did not return its target",
-                      );
-                      if (rosterCommitted) {
-                        throw new AgentDeletionCommitUncertainError(missingResultError);
+                    } catch (readError) {
+                      if (readError instanceof AgentDeletionCommitUncertainError) {
+                        throw readError;
                       }
-                      throw missingResultError;
+                      throw new AgentDeletionCommitUncertainError(error);
                     }
-                    rosterCommitted = true;
+                    throw error;
                   }
-                }),
+                  if (!committed.result) {
+                    rosterCommitted = !isConfiguredAgent(committed.nextConfig, agentId);
+                    const missingResultError = new Error(
+                      "agent delete config mutation did not return its target",
+                    );
+                    if (rosterCommitted) {
+                      throw new AgentDeletionCommitUncertainError(missingResultError);
+                    }
+                    throw missingResultError;
+                  }
+                  rosterCommitted = true;
+                }
+              }),
             );
             deletion.assertCurrent();
           } catch (error) {
@@ -1089,10 +1008,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
               workspaceCleanupPaths.length > 0
                 ? prepareWorkspaceStateDeletion(deleteResult.workspaceDir)
                 : undefined;
-            const outcomes: Array<{
-              cleanupPath: AgentDeleteCleanupPath;
-              outcome: AgentDeletePathOutcome;
-            }> = [];
             const completedCleanupPaths = new Set(
               cleanupPaths.filter((cleanupPath) => cleanupPath.done),
             );
@@ -1195,11 +1110,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
               const outcome = cleanupPath.preparationError
                 ? cleanupFailure(cleanupPath.path, cleanupPath.preparationError)
                 : await removeAgentPath(cleanupPath, deletion.assertCurrent);
-              outcomes.push({
-                cleanupPath,
-                outcome,
-              });
               if ("removed" in outcome) {
+                removed.push(outcome.removed);
                 markCleanupPathDone(cleanupPath);
               } else if ("skipped" in outcome) {
                 markCleanupPathDone(cleanupPath, outcome.skipped.reason);
@@ -1210,18 +1122,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
                   note: outcome.skipped.reason,
                 });
               } else {
+                failed.push(outcome.failed);
                 protectedCleanupPaths.push({
                   cleanupPath,
                   protectAliases: true,
                   terminal: false,
                 });
-              }
-            }
-            for (const { outcome } of outcomes) {
-              if ("removed" in outcome) {
-                removed.push(outcome.removed);
-              } else if ("failed" in outcome) {
-                failed.push(outcome.failed);
               }
             }
             if (

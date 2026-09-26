@@ -81,7 +81,7 @@ describe("AppSidebar session ownership filtering", () => {
       sidebar.querySelector(
         '[data-session-key="agent:main:opaque-profile"] openclaw-session-owner-chip',
       ),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       sidebar.querySelector(
         '[data-session-key="agent:main:discord-channel"] openclaw-session-owner-chip',

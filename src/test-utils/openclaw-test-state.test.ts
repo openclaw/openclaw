@@ -798,11 +798,15 @@ describe("openclaw test state", () => {
       const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
       const operationSpy = vi
         .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-        .mockImplementationOnce((generation, run) =>
-          runOperation(generation, async (operation) => {
-            await resumeReconcile.promise;
-            return run(operation);
-          }),
+        .mockImplementationOnce((generation, run, owner) =>
+          runOperation(
+            generation,
+            async (operation) => {
+              await resumeReconcile.promise;
+              return run(operation);
+            },
+            owner,
+          ),
         );
       const originalRm = fs.rm;
       let removalStarted = false;
@@ -855,28 +859,64 @@ describe("openclaw test state", () => {
     },
   );
 
-  it("preserves callback failures after closing fixture databases", async () => {
-    const callbackError = new Error("fixture callback failed");
-    let root = "";
-    let shared: ReturnType<typeof openOpenClawStateDatabase> | undefined;
-    let agent: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+  it.each(["ordinary", "indeterminate", "caught indeterminate"] as const)(
+    "preserves %s callback failures after closing fixture databases",
+    async (failure) => {
+      const callbackError = Object.assign(
+        new Error("fixture callback failed"),
+        failure === "ordinary" ? {} : { processTreeState: "indeterminate" },
+      );
+      const selectorKeys = ["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"];
+      const environment = captureEnv(selectorKeys);
+      const previous = selectorKeys.map((key) => process.env[key]);
+      let root = "";
+      let runtimePath = "";
+      let shared: ReturnType<typeof openOpenClawStateDatabase> | undefined;
+      let agent: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
 
-    await expect(
-      withOpenClawTestState({ layout: "state-only", label: "callback-failure" }, async (state) => {
-        root = state.root;
-        shared = openOpenClawStateDatabase({ env: state.env });
-        agent = openOpenClawAgentDatabase({
-          agentId: "main",
-          env: state.env,
-        });
-        throw callbackError;
-      }),
-    ).rejects.toBe(callbackError);
+      try {
+        await expect(
+          withOpenClawTestState({ label: "callback-failure" }, async (state) => {
+            root = state.root;
+            runtimePath = await state.writeText(
+              "runtime/entry.mjs",
+              "export const fixture = true;\n",
+            );
+            shared = openOpenClawStateDatabase({ env: state.env });
+            agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+            if (failure === "caught indeterminate") {
+              await trackAsyncWork(async () => {
+                throw callbackError;
+              }).catch(() => undefined);
+              return;
+            }
+            throw callbackError;
+          }),
+        ).rejects.toBe(callbackError);
 
-    expect(shared?.db.isOpen).toBe(false);
-    expect(agent?.db.isOpen).toBe(false);
-    await expectPathMissing(root);
-  });
+        expect(shared?.db.isOpen).toBe(false);
+        expect(agent?.db.isOpen).toBe(false);
+        expect(selectorKeys.map((key) => process.env[key])).toEqual(previous);
+        if (failure === "ordinary") {
+          await expectPathMissing(root);
+        } else {
+          expect(await fs.readFile(runtimePath, "utf8")).toBe("export const fixture = true;\n");
+        }
+      } finally {
+        environment.restore();
+        if (agent) {
+          closeOpenClawAgentDatabaseByPath(agent.path);
+        }
+        if (shared) {
+          closeOpenClawStateDatabaseByPath(shared.path);
+        }
+        // This synthetic failure owns no native child; dispose only its retained test inputs.
+        if (root) {
+          await fs.rm(root, { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it("creates upgrade survivor fixture state", async () => {
     await withOpenClawTestState(

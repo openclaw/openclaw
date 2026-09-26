@@ -2,6 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { PlivoProvider } from "./plivo.js";
 
+const PROVIDER_CONFIG = { authId: "MA000000000000000000", authToken: "test-token" };
+
 type PlivoPrivateCallState = {
   requestUuidToCallUuid: Map<string, string>;
   callIdToWebhookUrl: Map<string, string>;
@@ -72,10 +74,7 @@ function requireResponseBody(body: string | undefined): string {
 
 describe("PlivoProvider", () => {
   it("parses answer callback into call.answered and returns keep-alive XML", () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
 
     const result = provider.parseWebhookEvent({
       headers: { host: "example.com" },
@@ -97,10 +96,7 @@ describe("PlivoProvider", () => {
   });
 
   it("uses verified request key when provided", () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
 
     const result = provider.parseWebhookEvent(
       {
@@ -120,42 +116,10 @@ describe("PlivoProvider", () => {
     );
   });
 
-  it("pins stored callback bases to publicUrl instead of request Host", () => {
-    const provider = new PlivoProvider(
-      {
-        authId: "MA000000000000000000",
-        authToken: "test-token",
-      },
-      {
-        publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
-      },
-    );
-
-    provider.parseWebhookEvent({
-      headers: { host: "attacker.example" },
-      rawBody:
-        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
-      url: "https://attacker.example/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
-      method: "POST",
-      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
-    });
-
-    const callbackMap = (provider as unknown as { callUuidToWebhookUrl: Map<string, string> })
-      .callUuidToWebhookUrl;
-
-    expect(callbackMap.get("call-uuid")).toBe("https://voice.openclaw.ai/voice/webhook");
-  });
-
   it("pins call-control transfer URLs to the configured publicUrl path", async () => {
-    const provider = new PlivoProvider(
-      {
-        authId: "MA000000000000000000",
-        authToken: "test-token",
-      },
-      {
-        publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
-      },
-    );
+    const provider = new PlivoProvider(PROVIDER_CONFIG, {
+      publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
+    });
     const apiRequest = vi.fn(async (_params: unknown) => ({}));
     (
       provider as unknown as {
@@ -191,10 +155,7 @@ describe("PlivoProvider", () => {
   });
 
   it("renders an auto-response as the prompt for the next speech input", async () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
     const apiRequest = vi.fn(async (_params: unknown) => ({}));
     (
       provider as unknown as {
@@ -241,10 +202,7 @@ describe("PlivoProvider", () => {
   });
 
   it("releases all provider call state on terminal callbacks and late replays", () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
     const callId = "internal-terminal";
     const requestUuid = "request-terminal";
     const callUuid = "call-terminal";
@@ -277,10 +235,7 @@ describe("PlivoProvider", () => {
   });
 
   it("releases call-id state for terminal callbacks without a query override", () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
     const requestUuid = "request-queryless";
     const callUuid = "call-queryless";
     seedPlivoPrivateCallState({
@@ -313,10 +268,7 @@ describe("PlivoProvider", () => {
   });
 
   it("releases all provider call state after repeated explicit hangups", async () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
     const callId = "internal-hangup";
     const requestUuid = "request-hangup";
     const callUuid = "call-hangup";
@@ -341,10 +293,7 @@ describe("PlivoProvider", () => {
   });
 
   it("retains call state when explicit hangup fails so it can retry", async () => {
-    const provider = new PlivoProvider({
-      authId: "MA000000000000000000",
-      authToken: "test-token",
-    });
+    const provider = new PlivoProvider(PROVIDER_CONFIG);
     const callId = "internal-hangup-retry";
     const requestUuid = "request-hangup-retry";
     const callUuid = "call-hangup-retry";

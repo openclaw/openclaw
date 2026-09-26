@@ -1,5 +1,4 @@
 // Provides safe path helpers for plugin installation targets.
-import "./fs-safe-defaults.js";
 export {
   assertCanonicalPathWithinBase,
   resolveSafeInstallDir,

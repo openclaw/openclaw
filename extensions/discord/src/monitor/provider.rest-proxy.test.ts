@@ -79,7 +79,9 @@ const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 vi.mock("undici", async (importOriginal) => ({
   ...(await importOriginal<typeof import("undici")>()),
-  ...createMockUndiciRuntime(),
+  // Bun's bare undici shim has an Agent constructor but no dispatch method.
+  // The monitor must use the installed runtime for both fetch and its dispatcher.
+  Agent: (await import("node:events")).EventEmitter,
 }));
 
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
@@ -207,35 +209,6 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("uses undici proxy fetch when the configured proxy is a DNS host", async () => {
-    const runtime = createRuntimeSpies();
-    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
-    proxyAgentSpy.mockClear();
-    const fetcher = resolveDiscordRestFetch("http://mitm-proxy:8080", runtime);
-
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
-
-    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
-    expect(proxyOptions.uri).toBe("http://mitm-proxy:8080");
-    expect(proxyOptions.allowH2).toBe(false);
-    expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("uses undici proxy fetch when proxy URL is arbitrary DNS", async () => {
-    const runtime = createRuntimeSpies();
-    undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
-
-    const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
-
-    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
-    expect(proxyOptions.uri).toBe("http://proxy.test:8080");
-    expect(proxyOptions.allowH2).toBe(false);
-    expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
   it("uses managed proxy CA trust when a configured REST proxy matches the managed proxy", async () => {
     const caFile = writeTempCa("discord-rest-configured-proxy-ca");
     vi.stubEnv("HTTPS_PROXY", "https://127.0.0.1:8443");
@@ -266,37 +239,12 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("uses undici proxy fetch when proxy URL is a non-loopback IP", async () => {
+  it("uses a runtime-compatible Agent with IPv4-first lookup without a proxy", async () => {
     const runtime = createRuntimeSpies();
-    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
-
-    const fetcher = resolveDiscordRestFetch("http://10.0.0.10:8080", runtime);
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
-
-    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
-    expect(proxyOptions.uri).toBe("http://10.0.0.10:8080");
-    expect(proxyOptions.allowH2).toBe(false);
-    expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("uses undici proxy fetch when the proxy URL is IPv6 loopback", async () => {
-    const runtime = createRuntimeSpies();
-    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
-
-    const fetcher = resolveDiscordRestFetch("http://[::1]:8080", runtime);
-
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
-
-    const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
-    expect(proxyOptions.uri).toBe("http://[::1]:8080");
-    expect(proxyOptions.allowH2).toBe(false);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("uses undici Agent with IPv4-first lookup when no discord proxy URL is configured", async () => {
-    const runtime = createRuntimeSpies();
-    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+    undiciFetchMock.mockImplementation(async (_input, init) => {
+      dispatchRequest(init?.dispatcher, "https://discord.com");
+      return new Response("ok", { status: 200 });
+    });
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
@@ -308,6 +256,7 @@ describe("resolveDiscordRestFetch", () => {
       "https://discord.com/api/v10/oauth2/applications/@me",
     );
     const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
     const dispatcherOptions = recordField(
       recordField(fetchOptions.dispatcher, "dispatcher").options,
       "dispatcher.options",

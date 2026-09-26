@@ -9,10 +9,12 @@ import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  appendTranscriptMessageSync,
   listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
+  publishTranscriptUpdate,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -22,6 +24,7 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -29,6 +32,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
@@ -57,6 +61,7 @@ describe("ordinary chat input admission", () => {
     const bobClient = { ...fixture.client, connId: "bob-one", authenticatedUserProfile: bob };
     const carolClient = { ...fixture.client, connId: "carol", authenticatedUserProfile: carol };
     const inbox = createMentionInbox({
+      scheduler: createTestGatewayScheduler(),
       gatewayInstanceId: "chat-mention-commit-test",
       getRuntimeConfig,
       getClients: () => [fixture.client, bobClient, carolClient],
@@ -191,6 +196,7 @@ describe("ordinary chat input admission", () => {
         expect.anything(),
       );
       await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+      const accepted = listSessionPendingInputs(fixture.scope);
       const reconnect = await fixture.send();
       expect(reconnect).toHaveBeenCalledWith(
         true,
@@ -203,6 +209,9 @@ describe("ordinary chat input admission", () => {
         total: 1,
         items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
       });
+      expect(listSessionPendingInputs(fixture.scope)).toEqual(accepted);
+      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
       expect(fixture.context.removeChatRun).not.toHaveBeenCalled();
       expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
         "chat",
@@ -362,7 +371,7 @@ describe("ordinary chat input admission", () => {
     async (executionMode) => {
       const fixture = await createBrowserFollowupFixture({ active: false });
       const placements = createWorkerSessionPlacementStore();
-      const requested = placements.startDispatch({ ...fixture.scope, executionMode });
+      const requested = await placements.startDispatch({ ...fixture.scope, executionMode });
       const provisioning = placements.transition({
         sessionId: fixture.scope.sessionId,
         from: "requested",
@@ -491,27 +500,6 @@ describe("ordinary chat input admission", () => {
       }
     },
   );
-
-  it("keeps one approved source when an accepted browser request is retried", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    try {
-      await fixture.send();
-      const accepted = listSessionPendingInputs(fixture.scope);
-      expect(accepted.total).toBe(1);
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
-        undefined,
-        expect.objectContaining({ cached: true }),
-      );
-      expect(listSessionPendingInputs(fixture.scope)).toEqual(accepted);
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
 
   it("does not execute a consumed collected source when retried after the session becomes idle", async () => {
     const fixture = await createBrowserFollowupFixture();
@@ -786,6 +774,86 @@ describe("ordinary chat input admission", () => {
         ]);
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
       } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
+
+  it.each(["webchat", "queued-webchat", "external"] as const)(
+    "keeps committed history delivery with the %s source owner",
+    async (route) => {
+      const fixture = await createBrowserFollowupFixture({ active: false });
+      const entered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
+      const release = createDeferred();
+      let settleQueued: (() => void) | undefined;
+      if (route === "external") {
+        fixture.params.originatingChannel = "discord";
+        fixture.params.originatingTo = "channel:synthetic";
+        fixture.params.deliver = true;
+      }
+      dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
+        const options = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
+        if (route === "queued-webchat") {
+          // The queue retains cancellation/admission after the initial dispatch unwinds.
+          options.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+          settleQueued = options.replyOptions?.turnAdoptionLifecycle?.onSettled;
+        }
+        entered.resolve(options);
+        if (route !== "queued-webchat") {
+          await release.promise;
+        }
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      try {
+        const ack = await fixture.send();
+        expect(ack.mock.calls[0]?.[0]).toBe(true);
+        const { replyOptions } = await entered.promise;
+        if (route === "queued-webchat") {
+          await vi.waitFor(() =>
+            expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(
+              false,
+            ),
+          );
+        }
+        await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+        await replyOptions?.onAgentRunStart?.(fixture.params.idempotencyKey);
+        const message = attachSessionTranscriptRunId(
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "The synthetic fixture is ready.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "receipt-answer",
+                  phase: "final_answer",
+                }),
+              },
+              { type: "toolCall", id: "inspect", name: "read", arguments: {} },
+            ],
+            stopReason: "toolUse",
+          },
+          fixture.params.idempotencyKey,
+        );
+        const appended = appendTranscriptMessageSync(fixture.scope, {
+          eventId: "route-answer",
+          message,
+        });
+        if (!appended?.ok) {
+          throw new Error("Expected committed route fixture answer");
+        }
+        await publishTranscriptUpdate(fixture.scope, { message, messageId: "route-answer" });
+        expect((await replyOptions?.resolveReplyDelivery?.()) ?? "missing").toBe(
+          route === "external" ? "missing" : "delivered",
+        );
+        if (route === "queued-webchat") {
+          settleQueued?.();
+          expect(await replyOptions?.resolveReplyDelivery?.()).toBe("missing");
+        }
+      } finally {
+        settleQueued?.();
+        release.resolve();
         await fixture.cleanup();
       }
     },

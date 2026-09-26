@@ -267,12 +267,16 @@ describe("directive parsing", () => {
     ]);
   });
 
-  it("captures invalid exec host values", () => {
-    const res = extractExecDirective("/exec host=spaceship");
+  it.each([
+    ["host", "spaceship", "execHost", "rawExecHost", "invalidHost"],
+    ["security", "wide-open", "execSecurity", "rawExecSecurity", "invalidSecurity"],
+    ["ask", "sometimes", "execAsk", "rawExecAsk", "invalidAsk"],
+  ] as const)("captures invalid exec %s values", (option, value, field, rawField, invalidField) => {
+    const res = extractExecDirective(`/exec ${option}=${value}`);
     expect(res.hasDirective).toBe(true);
-    expect(res.execHost).toBeUndefined();
-    expect(res.rawExecHost).toBe("spaceship");
-    expect(res.invalidHost).toBe(true);
+    expect(res[field]).toBeUndefined();
+    expect(res[rawField]).toBe(value);
+    expect(res[invalidField]).toBe(true);
   });
 
   it("matches queue directive", () => {

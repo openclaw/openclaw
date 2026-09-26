@@ -11,6 +11,7 @@ import {
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { normalizeLimit } from "./session-catalog-parsing.js";
 import type { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
+import { applyCodexCatalogLiveFields } from "./session-catalog-status.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -99,16 +100,12 @@ export function prepareCodexCatalogQuery(
     }
     return {
       sessions: page.flatMap((row) =>
-        row.page.sessions.map(
-          ({ status: _storedStatus, activeFlags: _storedFlags, ...session }) => {
-            const live = liveStatus.get(row.threadId);
-            return {
-              ...session,
-              ...liveSettings.get(row.threadId),
-              status: live?.status ?? "notLoaded",
-              ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
-            };
-          },
+        row.page.sessions.map((session) =>
+          applyCodexCatalogLiveFields(
+            session,
+            liveStatus.get(row.threadId),
+            liveSettings.get(row.threadId),
+          ),
         ),
       ),
       ...(continuation ? { nextCursor: cursor(continuation, false) } : {}),

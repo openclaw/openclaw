@@ -7,6 +7,8 @@ export type ControlUiLinkReaderMetadata = {
   /** Same-plugin gateway method requiring operator.read. */
   detailMethod: string;
   previewMethod?: string;
+  /** Optional same-plugin read method resolving inline images without browser CORS. */
+  imageMethod?: string;
 };
 
 /** Scope-filtered descriptor advertised in hello.controlUiLinkReaders. */
@@ -24,7 +26,15 @@ export type ControlUiLinkReaderPreviewParams = {
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
 };
-export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
+export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  refresh?: boolean;
+};
+export type ControlUiLinkReaderImage = {
+  /** Echo the validated requested image URL. */
+  url: string;
+  /** Canonical base64 data URL for a bounded, validated raster image; never SVG or HTML. */
+  dataUrl: string;
+};
 
 export type ControlUiLinkReaderPreview = {
   /** Echo the validated requested URL; query parameters remain part of the resource identity. */
@@ -34,11 +44,18 @@ export type ControlUiLinkReaderPreview = {
   badge?: {
     label: string;
     tone: "neutral" | "positive" | "negative" | "attention" | "accent";
+    /** Timestamp of the event represented by the badge, displayed instead of creation time. */
+    timestamp?: string;
   };
   author?: string;
+  /** Optional HTTPS profile link on the source origin. */
+  authorUrl?: string;
+  coAuthors?: Array<{ name: string; imageUrl?: string }>;
+  /** Total including authors omitted from the bounded coAuthors array. */
+  coAuthorCount?: number;
   createdAt?: string;
   updatedAt?: string;
-  metadata?: Array<{ label: string; value: string }>;
+  metadata?: Array<{ label: string; value: string; tone?: "positive" | "negative" }>;
   imageUrl?: string;
 };
 
@@ -47,6 +64,24 @@ export type ControlUiLinkReaderDocument = ControlUiLinkReaderPreview & {
   body: string;
   bodyTruncated?: boolean;
   partial?: boolean;
+  /** Passive provider-reported checks, not a mergeability or approval decision. */
+  checks?: {
+    state: "success" | "failure" | "pending" | "neutral" | "unavailable";
+    summary: string;
+    /** Known total; may be incomplete when truncated or unavailable. */
+    total: number;
+    items: Array<{
+      name: string;
+      state: "success" | "failure" | "pending" | "neutral";
+      detail?: string;
+      url?: string;
+    }>;
+    /** The item list is incomplete, including when a source could not be read. */
+    truncated?: boolean;
+    url?: string;
+    /** Exact source revision these checks describe, when available. */
+    commit?: string;
+  };
   comments?: Array<{
     id: string;
     url: string;

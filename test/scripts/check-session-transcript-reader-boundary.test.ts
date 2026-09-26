@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   findSessionTranscriptReaderBoundaryViolations,
   migratedSessionTranscriptReaderFiles,
 } from "../../scripts/check-session-transcript-reader-boundary.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(content: string) {
+  return [content, "source.ts", parser.parseSourceFile("source.ts", content)] as const;
+}
 
 describe("session transcript reader boundary guard", () => {
   it("ratchets only the files migrated by the transcript reader slice", () => {
@@ -31,8 +39,6 @@ describe("session transcript reader boundary guard", () => {
         "src/gateway/server-methods/sessions-files.ts",
         "src/gateway/server-methods/sessions-abort.ts",
         "src/gateway/server-methods/sessions-compact.ts",
-        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-        "src/gateway/server-methods/sessions-compaction-queries.ts",
         "src/gateway/server-methods/sessions-compaction-runner.ts",
         "src/gateway/server-methods/sessions-create.ts",
         "src/gateway/server-methods/sessions-delete.ts",
@@ -59,10 +65,12 @@ describe("session transcript reader boundary guard", () => {
 
   it("flags legacy transcript reader imports", () => {
     expect(
-      findSessionTranscriptReaderBoundaryViolations(`
+      findSessionTranscriptReaderBoundaryViolations(
+        ...parseFixture(`
         import { readSessionMessagesAsync, loadSessionEntry } from "./session-utils.js";
         import { readRecentSessionMessages as readRecent } from "./session-utils.fs.js";
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -79,12 +87,14 @@ describe("session transcript reader boundary guard", () => {
 
   it("flags namespace legacy transcript reader references", () => {
     expect(
-      findSessionTranscriptReaderBoundaryViolations(`
+      findSessionTranscriptReaderBoundaryViolations(
+        ...parseFixture(`
         import * as sessionUtils from "./session-utils.js";
         sessionUtils.readSessionMessagesAsync();
         sessionUtils["readRecentSessionMessages"]();
         const { readSessionMessages } = sessionUtils;
       `),
+      ),
     ).toEqual([
       { line: 3, reason: 'references legacy transcript reader "readSessionMessagesAsync"' },
       { line: 4, reason: 'references legacy transcript reader "readRecentSessionMessages"' },
@@ -94,12 +104,14 @@ describe("session transcript reader boundary guard", () => {
 
   it("flags legacy transcript reader re-exports", () => {
     expect(
-      findSessionTranscriptReaderBoundaryViolations(`
+      findSessionTranscriptReaderBoundaryViolations(
+        ...parseFixture(`
         export { readSessionMessagesAsync } from "./session-utils.js";
         export { readRecentSessionMessages as readRecent } from "./session-utils.fs.js";
         export * as sessionUtils from "./session-utils.js";
         export * from "./session-utils.fs.js";
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -124,31 +136,37 @@ describe("session transcript reader boundary guard", () => {
 
   it("allows migrated reader facade imports and non-reader session utilities", () => {
     expect(
-      findSessionTranscriptReaderBoundaryViolations(`
+      findSessionTranscriptReaderBoundaryViolations(
+        ...parseFixture(`
         import { readSessionMessagesAsync } from "./session-transcript-readers.js";
         import { loadSessionEntry } from "./session-utils.js";
         export { readSessionMessagesAsync };
         await readSessionMessagesAsync(scope, opts);
         loadSessionEntry("agent:main");
       `),
+      ),
     ).toEqual([]);
   });
 
   it("allows reader-named destructuring from non-legacy objects", () => {
     expect(
-      findSessionTranscriptReaderBoundaryViolations(`
+      findSessionTranscriptReaderBoundaryViolations(
+        ...parseFixture(`
         const { readSessionMessagesAsync } = deps;
         const { readSessionMessages: readMessages } = mockReaders;
       `),
+      ),
     ).toEqual([]);
   });
 
   it("flags storage-specific reader aliases in migrated files", () => {
     expect(
-      findSessionTranscriptReaderBoundaryViolations(`
+      findSessionTranscriptReaderBoundaryViolations(
+        ...parseFixture(`
         import { readSessionMessagesAsync as readSessionMessagesFromFileAsync } from "./session-transcript-readers.js";
         await readSessionMessagesFromFileAsync(scope, opts);
       `),
+      ),
     ).toEqual([
       {
         line: 2,

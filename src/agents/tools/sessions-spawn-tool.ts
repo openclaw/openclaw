@@ -11,7 +11,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
@@ -84,15 +84,7 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-type AcpSpawnModule = typeof import("../subagents/spawn/acp-spawn.js");
-
-const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
-  () => import("../subagents/spawn/acp-spawn.js"),
-);
-
-async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
-  return await acpSpawnModuleLoader.load();
-}
+const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
 
 function addRoleToFailureResult<T extends { status: string }>(
   result: T,
@@ -133,10 +125,6 @@ type SessionsSpawnThreadAvailability = {
   subagent: boolean;
   acp: boolean;
 };
-
-function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
-  return availability.subagent || availability.acp;
-}
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
@@ -347,22 +335,25 @@ export function createSessionsSpawnTool(
   } & VisibleSessionsSpawnDeps &
     SpawnedToolContext,
 ): AnyAgentTool {
+  const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
-    config: opts?.config,
+    config: effectiveConfig,
     sandboxed: opts?.sandboxed,
   });
-  const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
-  const threadAvailable = hasAnyThreadAvailability(threadAvailability);
+  const threadAvailability = resolveSessionsSpawnThreadAvailability({
+    ...opts,
+    config: effectiveConfig,
+  });
+  const threadAvailable = threadAvailability.subagent || threadAvailability.acp;
   const requesterAgentId =
     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
-  const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
-  const visibilityCfg = opts?.config ?? getRuntimeConfig();
+  const swarmConfig = resolveSwarmConfig(effectiveConfig, requesterAgentId);
   const sessionToolsVisibility = resolveEffectiveSessionToolsVisibility({
-    cfg: visibilityCfg,
+    cfg: effectiveConfig,
     sandboxed: opts?.sandboxed === true,
   });
   const { restrictToSpawned } = resolveSandboxedSessionToolContext({
-    cfg: visibilityCfg,
+    cfg: effectiveConfig,
     agentSessionKey: opts?.agentSessionKey,
     requesterAgentId,
     sandboxed: opts?.sandboxed,
@@ -508,7 +499,7 @@ export function createSessionsSpawnTool(
           });
         const visibleResult = opts?.expectedParentSessionId
           ? await runWithScopedSessionAccess({
-              cfg: visibilityCfg,
+              cfg: effectiveConfig,
               expectedSessionId: opts.expectedParentSessionId,
               ...(opts.signal ? { signal: opts.signal } : {}),
               targetSessionKey: expectedParentSessionKey!,
@@ -524,7 +515,10 @@ export function createSessionsSpawnTool(
         if (runtime === "acp" && !acpAvailable) {
           return jsonResult({
             status: "error",
-            error: resolveAcpUnavailableMessage(opts),
+            error: resolveAcpUnavailableMessage({
+              config: effectiveConfig,
+              sandboxed: opts?.sandboxed,
+            }),
             ...roleContext,
           });
         }

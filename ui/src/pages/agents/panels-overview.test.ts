@@ -74,7 +74,7 @@ it.each(["overview", "channels", "cron"] as const)(
         },
         config: {
           ...props.config,
-          form: {
+          configForm: {
             agents: {
               defaults: {
                 workspace: "/tmp/agents",
@@ -118,7 +118,9 @@ it.each([
     container,
   );
 
-  const save = container.querySelector<HTMLButtonElement>(".agent-identity-editor__actions button");
+  const save = container.querySelector<HTMLButtonElement>(
+    ".agent-identity-editor__actions button.primary",
+  );
   expect(save?.textContent?.trim()).toBe(text);
   expect(save?.disabled).toBe(true);
 });
@@ -129,16 +131,17 @@ it("shows inherited skills in the Agent Context overview", () => {
     renderAgents(
       createProps({
         config: {
-          form: {
+          configForm: {
             agents: {
               defaults: { skills: ["github", "weather"] },
               entries: { beta: {} },
             },
           },
-          loading: false,
-          saving: false,
-          dirty: false,
-          error: null,
+          configSnapshot: null,
+          configLoading: false,
+          configSaving: false,
+          configFormDirty: false,
+          lastError: null,
         },
       }),
     ),
@@ -158,7 +161,7 @@ describe("fallback field", () => {
     { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
     { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
     { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
-  ] satisfies ReturnType<typeof createProps>["modelCatalog"];
+  ] satisfies ReturnType<typeof createProps>["modelCatalog"]["models"];
 
   function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
     const container = document.createElement("div");
@@ -167,18 +170,19 @@ describe("fallback field", () => {
       renderAgents(
         createProps({
           config: {
-            form: {
+            configForm: {
               agents: {
                 defaults: { model: { primary, fallbacks: [existingFallback] } },
                 entries: { alpha: {}, beta: {} },
               },
             },
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
-          modelCatalog: catalog,
+          modelCatalog: { models: catalog, hasSnapshot: true, retired: false },
           onModelFallbacksChange,
           ...overrides,
         }),
@@ -215,46 +219,49 @@ describe("fallback field", () => {
     ]);
   });
 
-  it.each(["fast", "FAST", "fast@work"])(
-    "excludes primary alias %s while retaining case-distinct model choices",
-    (primaryAlias) => {
-      const target = "custom/model-a";
-      const caseDistinct = "custom/Model-A";
-      const { field } = renderFallbacks({
-        agentsList: {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
-        },
-        config: {
-          form: {
-            agents: {
-              defaults: {
-                model: { primary: primaryAlias },
-                models: { [target]: { alias: "fast" } },
-              },
-              entries: { alpha: {}, beta: {} },
+  it("excludes a profile-qualified primary alias while retaining case-distinct model choices", () => {
+    const primaryAlias = "fast@work";
+    const target = "custom/model-a";
+    const caseDistinct = "custom/Model-A";
+    const { field } = renderFallbacks({
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
+      },
+      config: {
+        configForm: {
+          agents: {
+            defaults: {
+              model: { primary: primaryAlias },
+              models: { [target]: { alias: "fast" } },
             },
+            entries: { alpha: {}, beta: {} },
           },
-          loading: false,
-          saving: false,
-          dirty: false,
-          error: null,
         },
-        modelCatalog: [
+        configSnapshot: null,
+        configLoading: false,
+        configSaving: false,
+        configFormDirty: false,
+        lastError: null,
+      },
+      modelCatalog: {
+        hasSnapshot: true,
+        retired: false,
+        models: [
           { provider: "custom", id: "model-a", name: "Lowercase model" },
           { provider: "custom", id: "Model-A", name: "Uppercase model" },
         ],
-      });
+      },
+    });
 
-      expect(field.isExcluded("FAST")).toBe(true);
-      expect(field.isExcluded(`${target}@other`)).toBe(false);
-      expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
-        expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
-      ]);
-    },
-  );
+    expect(field.isExcluded("FAST")).toBe(true);
+    expect(field.isExcluded(`${target}@other`)).toBe(false);
+    expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
+      expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
+    ]);
+  });
 
   it("disables the field without config write access", () => {
     const access = { ...createProps().access, canUpdateConfig: false };

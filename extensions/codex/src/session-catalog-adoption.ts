@@ -19,8 +19,7 @@ import {
 import type { createImportedCodexSession } from "./app-server/session-history-import.js";
 import {
   adoptionSessionKeyRest,
-  continueOperations,
-  runSessionActionExclusive,
+  catalogSessionActions,
   type AdoptedSessionEntry,
   type CodexSessionDisposition,
 } from "./session-catalog-node-adoption.js";
@@ -39,6 +38,10 @@ import {
 } from "./session-upstream-marker.js";
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
+const continueOperations = new Map<
+  string,
+  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
+>();
 
 const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
@@ -483,7 +486,7 @@ export async function continueLocalCodexSession(params: ContinueLocalCodexSessio
   }
   const run = async (control: CodexSessionCatalogControl) =>
     await continueLocalCodexSessionInner({ ...params, control });
-  const operation = runSessionActionExclusive(sourceKey, async () =>
+  const operation = catalogSessionActions.enqueue(sourceKey, async () =>
     params.control.withPinnedConnection(run),
   );
   continueOperations.set(operationKey, operation);

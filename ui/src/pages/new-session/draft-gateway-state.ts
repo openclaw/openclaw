@@ -5,6 +5,7 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
@@ -15,7 +16,11 @@ import {
 } from "./draft-preference-state.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import type { NewSessionPreference } from "./preferences.ts";
+import {
+  acquirePaletteIdentityPreferences,
+  type PaletteIdentityPreferences,
+} from "./palette-identity-preferences.ts";
+import type { NewSessionPreference, PaletteSessionPreference } from "./preferences.ts";
 import {
   resolveSubmissionOutcomeReason,
   type SubmissionOutcomeReason,
@@ -42,7 +47,12 @@ type DraftGatewaySnapshot = Readonly<{
   runtimeId: string;
 }>;
 
-type DraftGatewayCallbacks = {
+export type DraftPreferenceOptions = {
+  preferenceScope?: "palette";
+  readPalettePreference?: () => PaletteSessionPreference | null;
+};
+
+type DraftGatewayCallbacks = DraftPreferenceOptions & {
   requestUpdate: () => void;
   updateComplete: () => Promise<unknown>;
   onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
@@ -75,6 +85,8 @@ export class DraftGatewayState {
   private cloudProfileRefresh: Promise<void> | null = null;
   private cloudProfileRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private readonly preferences: DraftPreferenceState;
+  private identityPreferences: PaletteIdentityPreferences | undefined;
+  private stopPreferences: (() => void) | undefined;
 
   private readonly gatewayNameTask: Task<readonly unknown[], string>;
   private readonly cloudProfileTask: Task<
@@ -206,7 +218,7 @@ export class DraftGatewayState {
   }
 
   get preferenceLoading(): boolean {
-    return this.preferences.loading;
+    return this.preferences.loading || this.identityPreferences?.mode === "loading";
   }
 
   resolvedGroupCategory(): string | undefined {
@@ -322,6 +334,7 @@ export class DraftGatewayState {
       }
     }
     this.preferences.synchronize();
+    this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
     this.callbacks.requestUpdate();
   }
 
@@ -432,8 +445,52 @@ export class DraftGatewayState {
       });
   };
 
-  readPreference(agentId: string) {
-    return this.preferences.readPreference(agentId);
+  get preferenceState(): PaletteIdentityPreferences | undefined {
+    return this.identityPreferences;
+  }
+
+  savePalettePreference(preference: PaletteSessionPreference | null): Promise<boolean> {
+    const state = this.identityPreferences;
+    const snapshot = this.read().context?.gateway.snapshot;
+    const client = snapshot?.client;
+    const hello = snapshot?.hello;
+    const profileId = snapshot?.selfUser?.id;
+    const gatewayUrl = this.gatewayUrlValue;
+    return (
+      state?.setPalettePreference(
+        preference,
+        () =>
+          this.identityPreferences === state &&
+          this.gatewayConnectedValue &&
+          this.read().context?.gateway.snapshot.client === client &&
+          this.read().context?.gateway.snapshot.hello === hello &&
+          this.read().context?.gateway.snapshot.selfUser?.id === profileId &&
+          this.read().context?.gateway.connection.gatewayUrl === gatewayUrl,
+      ) ?? Promise.resolve(false)
+    );
+  }
+
+  readPreference(agentId: string): NewSessionPreference | null {
+    const snapshot = this.read();
+    if (
+      catalog.isTarget(snapshot.data) ||
+      snapshot.data?.group ||
+      snapshot.pendingPlacement.sessionKey
+    ) {
+      return null;
+    }
+    const ordinary = this.preferences.readPreference(agentId);
+    if (this.callbacks.preferenceScope !== "palette") {
+      return ordinary;
+    }
+    const palette = this.callbacks.readPalettePreference?.();
+    // Name is one-use input belonging to the foreground draft, not a default
+    // the lightweight launcher can silently borrow or consume.
+    return {
+      ...ordinary,
+      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
+      worktreeName: "",
+    };
   }
 
   capturePreferenceConsumption(
@@ -441,15 +498,24 @@ export class DraftGatewayState {
     workspace: string,
     expected: SubmittedWorktreePreference,
   ) {
+    if (this.callbacks.preferenceScope === "palette") {
+      return undefined;
+    }
     return this.preferences.capturePreferenceConsumption(agentId, workspace, expected);
   }
 
   persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {
+    if (this.callbacks.preferenceScope === "palette") {
+      return;
+    }
     return this.preferences.persistPreference(agentId, workspace, patch);
   }
 
   disconnect() {
     this.preferences.disconnect();
+    this.stopPreferences?.();
+    this.stopPreferences = undefined;
+    this.identityPreferences = undefined;
     this.cloudProfileRefresh = null;
     this.gatewaySource = null;
     this.gatewayClientValue = null;
@@ -511,5 +577,51 @@ export class DraftGatewayState {
         void this.cloudProfileTask.run();
       }
     }, delayMs);
+  }
+
+  private synchronizeIdentityPreferences(profileId: string | undefined) {
+    const client = this.gatewayConnectedValue ? this.gatewayClientValue : null;
+    const context = this.read().context;
+    const hello = context?.gateway.snapshot.hello;
+    const advertised =
+      context &&
+      isGatewayMethodAdvertised(context.gateway.snapshot, "users.prefs.get") === true &&
+      isGatewayMethodAdvertised(context.gateway.snapshot, "users.prefs.set") === true;
+    const preferences =
+      this.callbacks.preferenceScope === "palette" && client && hello && profileId && advertised
+        ? acquirePaletteIdentityPreferences({
+            client,
+            hello,
+            profileId,
+            gatewayUrl: this.gatewayUrlValue,
+          })
+        : undefined;
+    if (preferences === this.identityPreferences) {
+      return;
+    }
+    this.stopPreferences?.();
+    this.stopPreferences = undefined;
+    this.identityPreferences = preferences;
+    if (!preferences) {
+      return;
+    }
+    const notify = () => {
+      if (this.identityPreferences !== preferences) {
+        return;
+      }
+      this.callbacks.requestUpdate();
+    };
+    this.stopPreferences = preferences.subscribe(
+      notify,
+      () =>
+        this.identityPreferences === preferences &&
+        this.gatewayConnectedValue &&
+        this.read().context?.gateway.snapshot.client === client &&
+        this.read().context?.gateway.snapshot.hello === hello &&
+        this.read().context?.gateway.connection.gatewayUrl === this.gatewayUrlValue,
+    );
+    if (preferences.mode !== "loading") {
+      notify();
+    }
   }
 }

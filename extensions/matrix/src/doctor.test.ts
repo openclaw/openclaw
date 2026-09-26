@@ -3,29 +3,16 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanStaleMatrixPluginConfig,
-  collectMatrixInstallPathWarnings,
-  matrixDoctor,
-} from "./doctor.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
+import { cleanStaleMatrixPluginConfig, collectMatrixInstallPathWarnings } from "./doctor.js";
 
 describe("matrix doctor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  function runMatrixCompatibilityNormalize(
-    params: Parameters<NonNullable<typeof matrixDoctor.normalizeCompatibilityConfig>>[0],
-  ) {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    if (!normalize) {
-      throw new Error("expected Matrix doctor compatibility normalizer");
-    }
-    return normalize(params);
-  }
-
   function normalizeMatrixDmConfig(dm: Record<string, unknown>) {
-    return runMatrixCompatibilityNormalize({
+    return normalizeCompatibilityConfig({
       cfg: {
         channels: {
           matrix: {
@@ -68,7 +55,7 @@ describe("matrix doctor", () => {
   });
 
   it("normalizes legacy Matrix room allow aliases to enabled", () => {
-    const result = runMatrixCompatibilityNormalize({
+    const result = normalizeCompatibilityConfig({
       cfg: {
         channels: {
           matrix: {
@@ -120,7 +107,7 @@ describe("matrix doctor", () => {
   });
 
   it("normalizes legacy Matrix private-network aliases", () => {
-    const result = runMatrixCompatibilityNormalize({
+    const result = normalizeCompatibilityConfig({
       cfg: {
         channels: {
           matrix: {
@@ -162,7 +149,7 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'allowlist'", () => {
-    const result = runMatrixCompatibilityNormalize({
+    const result = normalizeCompatibilityConfig({
       cfg: {
         channels: {
           matrix: {
@@ -223,7 +210,7 @@ describe("matrix doctor", () => {
   });
 
   it("migrates legacy per-account channels.matrix.accounts.<id>.dm.policy 'trusted'", () => {
-    const result = runMatrixCompatibilityNormalize({
+    const result = normalizeCompatibilityConfig({
       cfg: {
         channels: {
           matrix: {
@@ -267,7 +254,7 @@ describe("matrix doctor", () => {
   });
 
   it("leaves modern dm.policy values untouched", () => {
-    const result = runMatrixCompatibilityNormalize({
+    const result = normalizeCompatibilityConfig({
       cfg: {
         channels: {
           matrix: {
@@ -308,11 +295,7 @@ describe("matrix doctor", () => {
 
 describe("matrix doctor streaming alias migration", () => {
   function normalizeMatrixEntry(entry: Record<string, unknown>) {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    if (!normalize) {
-      throw new Error("expected Matrix doctor compatibility normalizer");
-    }
-    return normalize({ cfg: { channels: { matrix: entry } } as never });
+    return normalizeCompatibilityConfig({ cfg: { channels: { matrix: entry } } as never });
   }
 
   function matrixEntryOf(result: { config: unknown }): Record<string, unknown> {
@@ -412,13 +395,9 @@ describe("matrix doctor streaming alias migration", () => {
   });
 
   it("is idempotent: a second run reports no changes", () => {
-    const normalize = matrixDoctor.normalizeCompatibilityConfig;
-    if (!normalize) {
-      throw new Error("expected Matrix doctor compatibility normalizer");
-    }
     const first = normalizeMatrixEntry({ streaming: "quiet", blockStreaming: true });
     expect(first.changes.length).toBeGreaterThan(0);
-    const second = normalize({ cfg: first.config });
+    const second = normalizeCompatibilityConfig({ cfg: first.config });
     expect(second.changes).toEqual([]);
     expect(second.config).toBe(first.config);
   });

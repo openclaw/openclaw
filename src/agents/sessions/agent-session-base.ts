@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,10 +11,8 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import {
-  takeCodeModeResponseSource,
-  prepareCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
+import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
+import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -383,13 +380,14 @@ export abstract class AgentSessionBase {
 
     const sourceSlots =
       event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
-    // Emit to extensions first
-    let messageChanged = await this.emitExtensionEvent(event);
+    let messageChanged = false;
+    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      messageChanged = await this.emitExtensionEvent(event);
+    }
     // Extensions can replace the final result. Protect listeners before publishing it.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
-    // Notify all listeners
     if (event.type === "agent_end") {
       await this.emitTerminal({
         ...event,
@@ -402,7 +400,6 @@ export abstract class AgentSessionBase {
     // Persist the same prepared bytes after synchronous listener changes.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
 
-    // Handle session persistence
     if (event.type === "message_end") {
       // Check if this is a custom message from extensions
       if (event.message.role === "custom") {
@@ -426,20 +423,13 @@ export abstract class AgentSessionBase {
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
-          // Normalize live delivery facts before persistence makes its redacted copy.
-          // Stored arguments must never replace the values used for tool execution.
-          applyAssistantDeliveryDirectives(event.message);
-          const appendOptions = {
+          const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-          };
-          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
-          const message = event.message;
-          await withSessionManagerWrite(this.sessionManager, () => {
-            const entryId = this.sessionManager.appendMessage(message, appendOptions);
-            if (message.role === "assistant") {
-              this.lastAssistantEntryId = entryId;
-            }
+            sourceAppend: sourceSlots,
           });
+          if (event.message.role === "assistant") {
+            this.lastAssistantEntryId = entryId;
+          }
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);

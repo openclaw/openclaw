@@ -5,20 +5,19 @@ import type { lookup as dnsLookupCb } from "node:dns";
  * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+import { axValue, type AriaSnapshotNode, type RawAXNode } from "./cdp-ax.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
-  readCdpMainFrameDocumentIdentity,
+  readCdpDocumentIdentities,
   type CdpActionTimeouts,
+  type CdpDocumentIdentities,
 } from "./cdp-page-session.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
-  type CdpSendFn,
   fetchJson,
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
@@ -28,27 +27,22 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
-import {
-  appendRoleSnapshotDepthTruncationMarker,
-  ROLE_SNAPSHOT_MAX_DEPTH,
-} from "./snapshot-depth-limit.js";
-import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
+export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
+export { snapshotRoleViaCdp } from "./cdp-role-snapshot.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
-/** Read the current main-frame loader identity from a page-level CDP target. */
-export async function getMainFrameDocumentIdentityViaCdp(opts: {
+/** Read committed document identities from a page-level CDP target. */
+export async function getDocumentIdentitiesViaCdp(opts: {
   wsUrl: string;
   lookup?: typeof dnsLookupCb;
   timeoutMs?: number;
-}): Promise<string | undefined> {
-  return await withCdpSocket(
-    opts.wsUrl,
-    async (send) => await readCdpMainFrameDocumentIdentity(send),
-    { commandTimeoutMs: opts.timeoutMs ?? 5000, ...(opts.lookup ? { lookup: opts.lookup } : {}) },
-  );
+}): Promise<CdpDocumentIdentities> {
+  return await withCdpSocket(opts.wsUrl, async (send) => await readCdpDocumentIdentities(send), {
+    commandTimeoutMs: opts.timeoutMs ?? 5000,
+    ...(opts.lookup ? { lookup: opts.lookup } : {}),
+  });
 }
 
 /** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
@@ -212,45 +206,9 @@ export async function createTargetViaCdp(opts: {
   throw new Error("CDP Target.createTarget failed");
 }
 
-/** Normalized accessibility tree node returned by ARIA snapshots. */
-export type AriaSnapshotNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
-
 /** Prefix assigned to generated accessibility-node refs. */
 const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
-
-/** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
-export type RawAXNode = {
-  nodeId?: string;
-  role?: { value?: string };
-  name?: { value?: string };
-  value?: { value?: string };
-  description?: { value?: string };
-  childIds?: string[];
-  backendDOMNodeId?: number;
-};
-
-function axValue(v: unknown): string {
-  if (!v || typeof v !== "object") {
-    return "";
-  }
-  const value = (v as { value?: unknown }).value;
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return "";
-}
 
 /** Format raw AX nodes into bounded ARIA snapshot nodes. */
 export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
@@ -274,22 +232,11 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   }
 
   const out: AriaSnapshotNode[] = [];
-  const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
+  const stack: Array<{ node: RawAXNode; depth: number }> = [
+    { node: byId.get(root.nodeId)!, depth: 0 },
+  ];
   while (stack.length && out.length < limit) {
-    const popped = stack.pop();
-    // `stack.pop()` only returns undefined on an empty stack, but the
-    // while guard already asserts `stack.length > 0`. Dead defensive guard.
-    /* c8 ignore next 3 */
-    if (!popped) {
-      break;
-    }
-    const { id, depth } = popped;
-    const n = byId.get(id);
-    // Child admission below only pushes ids present in this map.
-    /* c8 ignore next 3 */
-    if (!n) {
-      continue;
-    }
+    const { node: n, depth } = stack.pop()!;
     const role = axValue(n.role);
     const name = axValue(n.name);
     const value = axValue(n.value);
@@ -307,9 +254,10 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 
     const children = n.childIds ?? [];
     for (let i = children.length - 1; i >= 0; i--) {
-      const child = children[i];
-      if (child && byId.has(child)) {
-        stack.push({ id: child, depth: depth + 1 });
+      const childId = children[i];
+      const child = childId ? byId.get(childId) : undefined;
+      if (child) {
+        stack.push({ node: child, depth: depth + 1 });
       }
     }
   }
@@ -338,518 +286,3 @@ export async function snapshotAria(opts: {
     { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
-
-/** Role snapshot ref metadata used by agent-facing snapshots. */
-type CdpRoleRef = {
-  role: string;
-  name?: string;
-  nth?: number;
-  backendDOMNodeId?: number;
-  frameId?: string;
-};
-
-/** Options for CDP role snapshot extraction and compaction. */
-type CdpRoleSnapshotOptions = {
-  interactive?: boolean;
-  compact?: boolean;
-  maxDepth?: number;
-};
-
-type CursorInteractiveInfo = {
-  text: string;
-  tagName: string;
-  hasOnClick?: boolean;
-  hasCursorPointer?: boolean;
-  hasTabIndex?: boolean;
-  isEditable?: boolean;
-  hiddenInputType?: string;
-};
-
-type RoleTreeNode = {
-  raw: RawAXNode;
-  role: string;
-  name: string;
-  value: string;
-  backendDOMNodeId?: number;
-  children: number[];
-  parent?: number;
-  depth: number;
-  ref?: string;
-  nth?: number;
-  url?: string;
-  cursorInfo?: CursorInteractiveInfo;
-  frameId?: string;
-  iframeLineIndex?: number;
-};
-
-function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: number[] } {
-  const byId = new Map<string, number>();
-  const tree: RoleTreeNode[] = [];
-  for (const raw of nodes) {
-    const nodeId = raw.nodeId ?? "";
-    if (!nodeId) {
-      continue;
-    }
-    byId.set(nodeId, tree.length);
-    tree.push({
-      raw,
-      role: axValue(raw.role) || "unknown",
-      name: axValue(raw.name),
-      value: axValue(raw.value),
-      backendDOMNodeId:
-        typeof raw.backendDOMNodeId === "number" && raw.backendDOMNodeId > 0
-          ? Math.floor(raw.backendDOMNodeId)
-          : undefined,
-      children: [],
-      depth: 0,
-    });
-  }
-
-  for (let index = 0; index < tree.length; index += 1) {
-    for (const childId of tree[index]?.raw.childIds ?? []) {
-      const childIndex = byId.get(childId);
-      if (childIndex === undefined) {
-        continue;
-      }
-      tree[index]?.children.push(childIndex);
-      expectDefined(tree[childIndex], "CDP child node index").parent = index;
-    }
-  }
-
-  const roots = tree
-    .map((_node, index) => index)
-    .filter((index) => tree[index]?.parent === undefined);
-  const stack = roots.map((index) => ({ index, depth: 0 }));
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    const node = expectDefined(tree[current.index], "CDP traversal node index");
-    node.depth = current.depth;
-    for (let i = node.children.length - 1; i >= 0; i--) {
-      const child = expectDefined(node.children[i], "CDP traversal child index");
-      stack.push({ index: child, depth: current.depth + 1 });
-    }
-  }
-  return { tree, roots: roots.length ? roots : tree.length ? [0] : [] };
-}
-
-function shouldIncludeRoleNode(node: RoleTreeNode, options: CdpRoleSnapshotOptions): boolean {
-  const role = node.role.toLowerCase();
-  if (options.interactive) {
-    return INTERACTIVE_ROLES.has(role) || role === "iframe" || Boolean(node.cursorInfo);
-  }
-  if (options.compact && STRUCTURAL_ROLES.has(role) && !node.name && !node.ref) {
-    return false;
-  }
-  return true;
-}
-
-function cursorSuffix(info?: CursorInteractiveInfo): string {
-  if (!info) {
-    return "";
-  }
-  const parts = [
-    info.hasCursorPointer ? "cursor:pointer" : undefined,
-    info.hasOnClick ? "onclick" : undefined,
-    info.hasTabIndex ? "tabindex" : undefined,
-    info.isEditable ? "contenteditable" : undefined,
-    info.hiddenInputType ? `hidden-${info.hiddenInputType}` : undefined,
-  ].filter(Boolean);
-  return parts.length ? ` [${parts.join(", ")}]` : "";
-}
-
-function renderRoleTree(
-  tree: RoleTreeNode[],
-  index: number,
-  output: string[],
-  options: CdpRoleSnapshotOptions,
-  state: { truncated: boolean; recordIframePositions?: boolean },
-  indentOffset = 0,
-): void {
-  const node = tree[index];
-  if (!node) {
-    return;
-  }
-  if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
-    return;
-  }
-  const effectiveDepth = Math.max(0, node.depth + indentOffset);
-  if (effectiveDepth > ROLE_SNAPSHOT_MAX_DEPTH) {
-    state.truncated = true;
-    return;
-  }
-  if (shouldIncludeRoleNode(node, options)) {
-    const indent = "  ".repeat(effectiveDepth);
-    const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
-    const ref = node.ref ? ` [ref=${node.ref}]` : "";
-    const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
-    const value = node.value ? ` value=${JSON.stringify(node.value)}` : "";
-    const url = node.url ? ` [url=${node.url}]` : "";
-    if (state.recordIframePositions && node.ref && node.frameId) {
-      // A repeated AX child still expands after its first rendered occurrence.
-      node.iframeLineIndex ??= output.length;
-    }
-    output.push(
-      `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
-    );
-  }
-  for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, state, indentOffset);
-  }
-}
-
-async function findCursorInteractiveElements(
-  send: CdpSendFn,
-  sessionId?: string,
-): Promise<Map<number, CursorInteractiveInfo>> {
-  const attr = "data-openclaw-cdp-ci";
-  const evaluated = (await send(
-    "Runtime.evaluate",
-    {
-      expression: `(() => {
-        const out = [];
-        const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
-        const tags = new Set(["a","button","input","select","textarea","details","summary"]);
-        document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"));
-        for (const el of document.body ? document.body.querySelectorAll("*") : []) {
-          if (!(el instanceof HTMLElement) || el.closest("[hidden],[aria-hidden='true']")) continue;
-          const tagName = el.tagName.toLowerCase();
-          if (tags.has(tagName)) continue;
-          const role = String(el.getAttribute("role") || "").toLowerCase();
-          if (roles.has(role)) continue;
-          const style = getComputedStyle(el);
-          const hasCursorPointer = style.cursor === "pointer";
-          const hasOnClick = el.hasAttribute("onclick") || el.onclick !== null;
-          const tabIndex = el.getAttribute("tabindex");
-          const hasTabIndex = tabIndex !== null && tabIndex !== "-1";
-          const ce = el.getAttribute("contenteditable");
-          const isEditable = ce === "" || ce === "true";
-          if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
-          if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
-            const parent = el.parentElement;
-            if (parent && getComputedStyle(parent).cursor === "pointer") continue;
-          }
-          const rect = el.getBoundingClientRect();
-          if (rect.width <= 0 || rect.height <= 0) continue;
-          let hiddenInputType = "";
-          const hiddenInput = el.querySelector("input[type='radio'],input[type='checkbox']");
-          if (hiddenInput instanceof HTMLInputElement) {
-            const hiddenStyle = getComputedStyle(hiddenInput);
-            if (hiddenInput.hidden || hiddenStyle.display === "none" || hiddenStyle.visibility === "hidden") {
-              hiddenInputType = hiddenInput.type;
-            }
-          }
-          el.setAttribute("${attr}", String(out.length));
-          out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
-            tagName,
-            hasCursorPointer,
-            hasOnClick,
-            hasTabIndex,
-            isEditable,
-            hiddenInputType,
-          });
-        }
-        return out;
-      })()`,
-      returnByValue: true,
-      awaitPromise: false,
-    },
-    sessionId,
-  ).catch(() => null)) as { result?: { value?: unknown } } | null;
-  const entries = Array.isArray(evaluated?.result?.value)
-    ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
-        entry.text = truncateUtf16Safe(entry.text, 100);
-        return entry;
-      })
-    : [];
-  if (!entries.length) {
-    return new Map();
-  }
-
-  const doc = (await send("DOM.getDocument", { depth: 0 }, sessionId).catch(() => null)) as {
-    root?: { nodeId?: number };
-  } | null;
-  const rootNodeId = doc?.root?.nodeId;
-  if (typeof rootNodeId !== "number") {
-    return new Map();
-  }
-  const queried = (await send(
-    "DOM.querySelectorAll",
-    { nodeId: rootNodeId, selector: `[${attr}]` },
-    sessionId,
-  ).catch(() => null)) as { nodeIds?: number[] } | null;
-  const out = new Map<number, CursorInteractiveInfo>();
-  await Promise.all(
-    (queried?.nodeIds ?? []).map(async (nodeId) => {
-      const described = (await send("DOM.describeNode", { nodeId }, sessionId).catch(
-        () => null,
-      )) as { node?: { backendNodeId?: number; attributes?: string[] } } | null;
-      const attrs = described?.node?.attributes ?? [];
-      const attrIndex = attrs.indexOf(attr);
-      const rawIndex = attrIndex >= 0 ? attrs[attrIndex + 1] : undefined;
-      const index = typeof rawIndex === "string" ? Number(rawIndex) : Number.NaN;
-      const backendNodeId = described?.node?.backendNodeId;
-      if (typeof backendNodeId === "number" && Number.isInteger(index) && entries[index]) {
-        out.set(backendNodeId, entries[index]);
-      }
-    }),
-  );
-  await send(
-    "Runtime.evaluate",
-    {
-      expression: `document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"))`,
-      returnByValue: true,
-    },
-    sessionId,
-  ).catch(() => {});
-  return out;
-}
-
-async function resolveLinkUrls(
-  send: CdpSendFn,
-  refs: Record<string, CdpRoleRef>,
-  sessionId?: string,
-): Promise<Map<number, string>> {
-  const out = new Map<number, string>();
-  const linkRefs = Object.values(refs).filter(
-    (ref): ref is CdpRoleRef & { backendDOMNodeId: number } =>
-      ref.role === "link" && Boolean(ref.backendDOMNodeId),
-  );
-  await Promise.all(
-    linkRefs.map(async (ref) => {
-      const resolved = (await send(
-        "DOM.resolveNode",
-        { backendNodeId: ref.backendDOMNodeId },
-        sessionId,
-      ).catch(() => null)) as { object?: { objectId?: string } } | null;
-      const objectId = resolved?.object?.objectId;
-      if (!objectId) {
-        return;
-      }
-      const hrefResult = (await send(
-        "Runtime.callFunctionOn",
-        {
-          objectId,
-          functionDeclaration: "function() { return this.href || ''; }",
-          returnByValue: true,
-        },
-        sessionId,
-      ).catch(() => null)) as { result?: { value?: unknown } } | null;
-      const href = typeof hrefResult?.result?.value === "string" ? hrefResult.result.value : "";
-      if (href) {
-        out.set(ref.backendDOMNodeId, href);
-      }
-    }),
-  );
-  return out;
-}
-
-async function resolveIframeFrameIds(
-  send: CdpSendFn,
-  tree: RoleTreeNode[],
-  sessionId?: string,
-): Promise<Map<number, string>> {
-  const out = new Map<number, string>();
-  const iframeNodes = tree.filter(
-    (node): node is RoleTreeNode & { backendDOMNodeId: number } =>
-      node.role.toLowerCase() === "iframe" && Boolean(node.backendDOMNodeId),
-  );
-  await Promise.all(
-    iframeNodes.map(async (node) => {
-      const described = (await send(
-        "DOM.describeNode",
-        { backendNodeId: node.backendDOMNodeId, depth: 1 },
-        sessionId,
-      ).catch(() => null)) as {
-        node?: { frameId?: string; contentDocument?: { frameId?: string } };
-      } | null;
-      const frameId = described?.node?.contentDocument?.frameId ?? described?.node?.frameId ?? "";
-      if (frameId) {
-        out.set(node.backendDOMNodeId, frameId);
-      }
-    }),
-  );
-  return out;
-}
-
-async function buildCdpRoleSnapshot(params: {
-  send: CdpSendFn;
-  sessionId?: string;
-  frameId?: string;
-  options: CdpRoleSnapshotOptions;
-  urls?: boolean;
-  recurseIframes?: boolean;
-  nextRef: { value: number };
-}): Promise<{
-  lines: string[];
-  refs: Record<string, CdpRoleRef>;
-  truncated: boolean;
-}> {
-  const res = (await params.send(
-    "Accessibility.getFullAXTree",
-    params.frameId ? { frameId: params.frameId } : undefined,
-    params.sessionId,
-  )) as { nodes?: RawAXNode[] };
-  const { tree, roots } = buildRoleTree(Array.isArray(res.nodes) ? res.nodes : []);
-  const cursorElements = await findCursorInteractiveElements(params.send, params.sessionId);
-  for (const node of tree) {
-    if (node.backendDOMNodeId && cursorElements.has(node.backendDOMNodeId)) {
-      const cursorInfo = cursorElements.get(node.backendDOMNodeId);
-      node.cursorInfo = cursorInfo;
-      if (!node.name && cursorInfo?.text) {
-        node.name = cursorInfo.text;
-      }
-    }
-  }
-
-  const counts = new Map<string, number>();
-  const refs: Record<string, CdpRoleRef> = {};
-  for (const node of tree) {
-    const role = node.role.toLowerCase();
-    const shouldRef =
-      INTERACTIVE_ROLES.has(role) ||
-      (CONTENT_ROLES.has(role) && Boolean(node.name)) ||
-      role === "iframe" ||
-      Boolean(node.cursorInfo);
-    if (!shouldRef) {
-      continue;
-    }
-    const key = `${role}:${node.name}`;
-    const nth = counts.get(key) ?? 0;
-    counts.set(key, nth + 1);
-    const ref = `e${params.nextRef.value}`;
-    params.nextRef.value += 1;
-    node.ref = ref;
-    node.nth = nth;
-    refs[ref] = {
-      role,
-      ...(node.name ? { name: node.name } : {}),
-      nth,
-      ...(node.backendDOMNodeId ? { backendDOMNodeId: node.backendDOMNodeId } : {}),
-      ...(params.frameId ? { frameId: params.frameId } : {}),
-    };
-  }
-  for (const node of tree) {
-    if (node.ref && counts.get(`${node.role.toLowerCase()}:${node.name}`) === 1) {
-      delete refs[node.ref]?.nth;
-    }
-  }
-
-  const iframeFrameIds = await resolveIframeFrameIds(params.send, tree, params.sessionId);
-  for (const node of tree) {
-    if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
-      node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
-      if (node.ref && refs[node.ref]) {
-        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
-      }
-    }
-  }
-
-  if (params.urls) {
-    const urls = await resolveLinkUrls(params.send, refs, params.sessionId);
-    for (const node of tree) {
-      if (node.backendDOMNodeId && urls.has(node.backendDOMNodeId)) {
-        node.url = urls.get(node.backendDOMNodeId);
-      }
-    }
-  }
-
-  let lines: string[] = [];
-  const renderState = { truncated: false, recordIframePositions: params.recurseIframes };
-  for (const root of roots) {
-    renderRoleTree(tree, root, lines, params.options, renderState);
-  }
-
-  if (params.recurseIframes) {
-    let childLinesByIndex: Map<number, string[]> | undefined;
-    for (const iframe of tree) {
-      if (iframe.iframeLineIndex === undefined || !iframe.frameId) {
-        continue;
-      }
-      const child = await buildCdpRoleSnapshot({
-        ...params,
-        frameId: iframe.frameId,
-        recurseIframes: false,
-      }).catch(() => null);
-      if (!child) {
-        continue;
-      }
-      renderState.truncated ||= child.truncated;
-      if (!child.lines.length) {
-        continue;
-      }
-      Object.assign(refs, child.refs);
-      (childLinesByIndex ??= new Map()).set(iframe.iframeLineIndex, child.lines);
-    }
-    if (childLinesByIndex) {
-      const expanded: string[] = [];
-      for (let index = 0; index < lines.length; index++) {
-        expanded.push(lines[index]!);
-        const childLines = childLinesByIndex.get(index);
-        if (childLines) {
-          for (const childLine of childLines) {
-            expanded.push(`  ${childLine}`);
-          }
-        }
-      }
-      lines = expanded;
-    }
-  }
-
-  return {
-    lines,
-    refs,
-    truncated: renderState.truncated,
-  };
-}
-
-/** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
-export async function snapshotRoleViaCdp(opts: {
-  wsUrl: string;
-  lookup?: typeof dnsLookupCb;
-  options?: CdpRoleSnapshotOptions;
-  urls?: boolean;
-  recurseIframes?: boolean;
-  timeoutMs?: number;
-  maxChars?: number;
-  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
-}): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, CdpRoleRef>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
-  return await withCdpSocket(
-    opts.wsUrl,
-    async (send) => {
-      await prepareCdpPageSession(send);
-      const built = await buildCdpRoleSnapshot({
-        send,
-        options: opts.options ?? {},
-        urls: opts.urls,
-        recurseIframes: opts.recurseIframes ?? true,
-        nextRef: { value: 1 },
-      });
-      const renderedSnapshot =
-        built.lines.join("\n").trim() ||
-        (opts.options?.interactive ? "(no interactive elements)" : "(empty page)");
-      const finalized = finalizeRoleSnapshot({
-        snapshot: built.truncated
-          ? appendRoleSnapshotDepthTruncationMarker(renderedSnapshot)
-          : renderedSnapshot,
-        refs: built.refs,
-        maxChars: opts.maxChars,
-        delta: opts.delta,
-      });
-      return built.truncated && !finalized.truncated
-        ? { ...finalized, truncated: true }
-        : finalized;
-    },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
-  );
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
-  | "sync-fallback"
+  | "content-version"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -27,8 +27,15 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
+  | { ok: true; contentVersion: string }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
+
+export class SqliteReadOnlyInspectionContentionError extends Error {}
+
+// Released updater parents require exactly { ok, message }. A negotiated worker
+// protocol can replace this owner-generated tag when those parents are retired.
+export const SQLITE_INSPECTION_CONTENTION_PREFIX = "Retryable SQLite inspection contention: ";
 
 export type SqliteAuthProfileRows = { store: unknown; state: unknown; cacheable: boolean };
 export type SqliteAuthProfileReadOptions = {
@@ -60,6 +67,10 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
   }
   return (
     (value.ok === true && "location" in value && typeof value.location === "string") ||
+    (value.ok === true &&
+      "contentVersion" in value &&
+      typeof value.contentVersion === "string" &&
+      /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
@@ -97,7 +108,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "sync-fallback" | "async" | "consolidated",
+  mode: "sync" | "async" | "consolidated" | "content-version",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -121,20 +132,31 @@ export function readSqliteReadOnlyWorkerValue(
     throw error;
   }
   if (params.failure || !result.ok) {
-    throw createSqliteReadOnlyWorkerError(
-      !result.ok ? result.message : (params.failure ?? "failed"),
+    const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
+    const error = createSqliteReadOnlyWorkerError(
+      !result.ok
+        ? contention
+          ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
+          : result.message
+        : (params.failure ?? "failed"),
       params.stderr,
     );
+    if (contention) {
+      throw new SqliteReadOnlyInspectionContentionError(error.message);
+    }
+    throw error;
   }
   if (
     (mode === "sync" ||
-      mode === "sync-fallback" ||
       mode === "async" ||
       mode === "consolidated" ||
       isSqliteSnapshotStagingMode(mode)) &&
     "location" in result
   ) {
     return result.location;
+  }
+  if (mode === "content-version" && "contentVersion" in result) {
+    return result.contentVersion;
   }
   if (mode === "reclaim" && "warnings" in result) {
     return result.warnings;

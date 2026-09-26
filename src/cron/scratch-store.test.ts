@@ -2,19 +2,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import {
+  deleteCronJobScratch,
   hashCronScratchSource,
   readCronJobScratchState,
   writeCronJobScratch,
 } from "./scratch-store.js";
 import { cronStoreKey } from "./store/key.js";
 import { replaceCronRows, upsertCronJobRow } from "./store/row-codec.js";
+import { getCronStoreKysely } from "./store/schema.js";
 import type { CronJob } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -24,7 +28,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-async function createFixture() {
+async function createFixture(jobIds = ["job-1"]) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-scratch-"));
   tempDirs.push(root);
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -44,14 +48,43 @@ async function createFixture() {
     payload: { kind: "systemEvent", text: "test" },
     state: {},
   };
-  runOpenClawStateWriteTransaction(
-    ({ db }) => upsertCronJobRow(db, cronStoreKey(fixture.storePath), job, 0),
-    fixture.options,
-  );
+  runOpenClawStateWriteTransaction(({ db }) => {
+    for (const [index, id] of jobIds.entries()) {
+      upsertCronJobRow(db, cronStoreKey(fixture.storePath), { ...job, id }, index);
+    }
+  }, fixture.options);
   return fixture;
 }
 
 describe("cron job scratch store", () => {
+  it("keeps write guards scoped to the current job and store on a reused connection", async () => {
+    const fixture = await createFixture(["job-1", "job-2"]);
+    writeCronJobScratch({ ...fixture, jobId: "job-1", content: "first" });
+    writeCronJobScratch({ ...fixture, jobId: "job-1", content: "second" });
+    expect(
+      writeCronJobScratch({ ...fixture, jobId: "job-2", content: "other", expectedRevision: 0 }),
+    ).toMatchObject({ ok: true, currentRevision: 1 });
+    expect(
+      writeCronJobScratch({ ...fixture, jobId: "job-1", content: "stale", expectedRevision: 1 }),
+    ).toEqual({ ok: false, reason: "revision-conflict", currentRevision: 2 });
+    const otherStore = path.join(path.dirname(fixture.storePath), "other.json");
+    expect(
+      writeCronJobScratch({
+        ...fixture,
+        storePath: otherStore,
+        jobId: "job-1",
+        content: "orphan",
+        expectedRevision: 0,
+      }),
+    ).toEqual({ ok: false, reason: "revision-conflict", currentRevision: 0 });
+    expect(readCronJobScratchState(otherStore, "job-1", fixture.options)).toEqual({
+      currentRevision: 0,
+    });
+    expect(
+      readCronJobScratchState(fixture.storePath, "job-1", fixture.options).scratch?.content,
+    ).toBe("second");
+  });
+
   it("marks actual writes but not an unset no-op or revision conflict", async () => {
     const fixture = await createFixture();
     const absent = createCronMutationCompletion("cron.scratch.set")!;
@@ -178,6 +211,21 @@ describe("cron job scratch store", () => {
       currentRevision: 4,
       scratch: { content: "recreated", revision: 4, updatedAtMs: 60 },
     });
+    expect(
+      deleteCronJobScratch(fixture.storePath, "job-1", fixture.options, { expectedRevision: 3 }),
+    ).toBe(false);
+    expect(
+      readCronJobScratchState(fixture.storePath, "job-1", fixture.options).currentRevision,
+    ).toBe(4);
+    expect(
+      deleteCronJobScratch(fixture.storePath, "job-1", fixture.options, { expectedRevision: 4 }),
+    ).toBe(true);
+    expect(readCronJobScratchState(fixture.storePath, "job-1", fixture.options)).toEqual({
+      currentRevision: 0,
+    });
+    expect(
+      deleteCronJobScratch(fixture.storePath, "job-1", fixture.options, { expectedRevision: 0 }),
+    ).toBe(true);
   });
 
   it("rejects a late write after the owning job is durably deleted", async () => {
@@ -200,6 +248,73 @@ describe("cron job scratch store", () => {
       currentRevision: 0,
     });
   });
+
+  it.each(["retained content", null])(
+    "preserves the revision of orphan scratch when rejecting a write (%s)",
+    async (content) => {
+      const fixture = await createFixture();
+      writeCronJobScratch({ ...fixture, jobId: "job-1", content: "initial" });
+      writeCronJobScratch({ ...fixture, jobId: "job-1", content });
+      const previous = readCronJobScratchState(fixture.storePath, "job-1", fixture.options);
+      // Job removal commits before its scratch cleanup, so a late writer can see this state.
+      runOpenClawStateWriteTransaction(
+        ({ db }) =>
+          executeSqliteQuerySync(
+            db,
+            getCronStoreKysely(db)
+              .deleteFrom("cron_jobs")
+              .where("store_key", "=", cronStoreKey(fixture.storePath))
+              .where("job_id", "=", "job-1"),
+          ),
+        fixture.options,
+      );
+
+      expect(
+        writeCronJobScratch({
+          ...fixture,
+          jobId: "job-1",
+          content: "late write",
+          expectedRevision: previous.currentRevision,
+        }),
+      ).toEqual({ ok: false, reason: "revision-conflict", currentRevision: 2 });
+      expect(readCronJobScratchState(fixture.storePath, "job-1", fixture.options)).toEqual(
+        previous,
+      );
+    },
+  );
+
+  it.each([
+    ["write", "notes"],
+    ["write", null],
+    ["delete", "notes"],
+    ["delete", null],
+  ] as const)(
+    "preserves native timestamp range errors during %s (%s)",
+    async (operation, content) => {
+      const fixture = await createFixture();
+      writeCronJobScratch({ ...fixture, jobId: "job-1", content: "initial" });
+      writeCronJobScratch({ ...fixture, jobId: "job-1", content });
+      const { db } = openOpenClawStateDatabase(fixture.options);
+      const storeKey = cronStoreKey(fixture.storePath);
+      // A valid SQLite integer can exceed the JavaScript driver's numeric range.
+      db.prepare(
+        "UPDATE cron_job_scratch SET updated_at_ms = ? WHERE store_key = ? AND job_id = ?",
+      ).run(9007199254740995n, storeKey, "job-1");
+      const stored = db.prepare(
+        "SELECT * FROM cron_job_scratch WHERE store_key = ? AND job_id = ?",
+      );
+      stored.setReadBigInts(true);
+      const before = stored.get(storeKey, "job-1");
+      expect(() =>
+        operation === "write"
+          ? writeCronJobScratch({ ...fixture, jobId: "job-1", content: "replacement" })
+          : deleteCronJobScratch(fixture.storePath, "job-1", fixture.options, {
+              expectedRevision: 2,
+            }),
+      ).toThrow(/too large to be represented as a JavaScript number/);
+      expect(stored.get(storeKey, "job-1")).toEqual(before);
+    },
+  );
 
   it("records migration provenance and clears it on plain rewrites", async () => {
     const fixture = await createFixture();

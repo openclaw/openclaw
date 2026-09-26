@@ -26,6 +26,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
@@ -59,6 +60,7 @@ function createSessionManager(
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
+    getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
@@ -90,7 +92,7 @@ async function withPersistedOrphanBoundary(
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const orphanId = seed.appendMessage({
       role: "user",
@@ -103,8 +105,8 @@ async function withPersistedOrphanBoundary(
         : {}),
     });
     if (options.metadata) {
-      seed.appendThinkingLevelChange("low");
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendThinkingLevelChange("low");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {
@@ -250,6 +252,35 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         expect(next.at(-1)).toBe(nextCarrier);
         expect(next[0]!.content).not.toContain("Conversation info:");
       }
+    },
+  );
+
+  it.each([false, true])(
+    "records runtime-context cache retention at the LLM boundary (%s)",
+    async (appendOnlyRuntimeContext) => {
+      const { activeSession } = createActiveSession();
+      activeSession.agent.convertToLlm = convertHarnessMessages;
+      await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        appendOnlyRuntimeContext,
+        attempt: { prompt: "question", trigger: "user" },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: undefined,
+        sessionManager: createSessionManager(),
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      const user = { role: "user" as const, content: "question", timestamp: 1 };
+      const carrier = buildRuntimeContextCustomMessage("context")!;
+      const converted = await activeSession.agent.convertToLlm(
+        appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
+      );
+      const message = converted.at(-1);
+      expect(message).toMatchObject({ role: "user", runtimeContextCarrier: true });
+      expect(
+        (message as { runtimeContextCarrierRetained?: boolean }).runtimeContextCarrierRetained,
+      ).toBe(appendOnlyRuntimeContext);
     },
   );
 

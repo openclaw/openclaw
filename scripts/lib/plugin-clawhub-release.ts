@@ -300,7 +300,7 @@ function hasSharedClawHubReleaseInputChanges(changedPaths: readonly string[]) {
   );
 }
 
-export function resolveChangedClawHubPublishablePluginPackages(params: {
+function resolveChangedClawHubPublishablePluginPackages(params: {
   plugins: PublishablePluginPackage[];
   changedPaths: readonly string[];
 }): PublishablePluginPackage[] {

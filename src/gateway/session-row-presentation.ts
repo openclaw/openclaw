@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -18,7 +19,9 @@ import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { projectGatewaySessionActiveRun } from "./session-utils-display.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-type PresentationOptions = Omit<records.SnapshotOptions, "now" | "active">;
+type PresentationOptions = Omit<records.SnapshotOptions, "now" | "active" | "subagentRuns"> & {
+  includeActivitySummary?: boolean;
+};
 
 function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
   return {
@@ -38,7 +41,11 @@ export function prepareProjectedSessionPresentation(
   now = Date.now(),
   projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
 ) {
-  const { cfg, rowContext } = projection.state;
+  const { cfg, policyConfig, rowContext } = projection.state;
+  const models =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
@@ -53,16 +60,16 @@ export function prepareProjectedSessionPresentation(
     return record ? toProjectedSessionSharingTarget(record) : null;
   };
   const sharing = prepareProjectedSessionSharing({
-    cfg,
+    cfg: policyConfig,
     client: client ?? null,
     isMember: (value, identityId) =>
       projection
-        .describe({
+        .readMembership({
           agentId: value.agentId,
           key: value.storeKey,
           storePath: value.storePath,
         })
-        ?.membership.has(identityId) ?? false,
+        ?.has(identityId) ?? false,
   });
   const profile = gatewayClientSessionCreator(client ?? null);
   const profiles = rowContext.userProfileIdentityById;
@@ -78,19 +85,13 @@ export function prepareProjectedSessionPresentation(
         }
       : {}),
     sharingRole: sharing.roleForTarget(value),
-    canEnsure:
-      !authorizeIncognitoSessionTarget({
-        client: client ?? null,
-        sessionKey: value.canonicalKey,
-        target: value,
-      }) && !sharing.authorizeTarget(value),
   });
   const present = (
     captured: records.MaterializedRow,
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
     const record = projection.describe(
-      { ...captured, storePath: captured.storeTarget.storePath },
+      { agentId: captured.agentId, key: captured.key, storePath: captured.storeTarget.storePath },
       captured,
     );
     if (!record) {
@@ -107,6 +108,7 @@ export function prepareProjectedSessionPresentation(
     const row = projection.present(record, {
       ...options,
       now,
+      subagentRuns,
       active: run?.active,
       excludedChildKeys,
     });
@@ -133,14 +135,25 @@ export function prepareProjectedSessionPresentation(
         run.runIds === undefined ? {} : { activeRunIds: run.runIds },
       );
     }
+    if (options.includeActivitySummary === false) {
+      row.activitySummary = undefined;
+    }
     if (client !== undefined) {
-      const { canEnsure, ...fields } = viewer(toProjectedSessionSharingTarget(record));
-      Object.assign(row, fields);
+      const value = toProjectedSessionSharingTarget(record);
+      Object.assign(row, viewer(value));
       if (row.activitySummary) {
-        row.activitySummary = { ...row.activitySummary, canEnsure };
+        row.activitySummary = {
+          ...row.activitySummary,
+          canEnsure:
+            !authorizeIncognitoSessionTarget({
+              client: client ?? null,
+              sessionKey: value.canonicalKey,
+              target: value,
+            }) && !sharing.authorizeTarget(value),
+        };
       }
     }
-    return row;
+    return models?.session(row) ?? row;
   };
   return {
     rowContext: { ...rowContext, subagentRuns },

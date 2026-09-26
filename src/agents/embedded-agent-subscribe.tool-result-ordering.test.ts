@@ -1,18 +1,222 @@
 import { setImmediate } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import {
+  AgentActivityItemSchema,
+  type AgentActivityItem,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { projectAgentHistoryActivity } from "../infra/agent-activity-events.js";
+import { onAgentEvent as subscribeToAgentEvents } from "../infra/agent-events.js";
+import { summarizeAgentActivity } from "./agent-activity-presentation.js";
+import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
+import {
+  pluginToolWithExecute,
+  resetCodeModeTestState,
+  resultDetails,
+  testing,
+  waitUntilCompleted,
+} from "./code-mode.test-support.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   createSubscribedSessionHarness,
   emitAssistantTextDeltaAndEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { jsonResult } from "./tools/common.js";
 
 describe("subscribeEmbeddedAgentSession tool result ordering", () => {
+  it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
+    const blockReplyFlush = createDeferred();
+    const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
+    const harness = createSubscribedCodeModeHarness({
+      name: "repeated-lifecycle",
+      onBlockReplyFlush,
+    });
+    const target = pluginToolWithExecute("finish_stage", "Finish one suspended stage", async () => {
+      blockReplyFlush.resolve();
+      return jsonResult({ finished: true });
+    });
+    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
+    const liveItems: AgentActivityItem[] = [];
+    const stopEvents = subscribeToAgentEvents((event) => {
+      if (
+        event.runId === harness.runId &&
+        event.stream === "item" &&
+        Value.Check(AgentActivityItemSchema, event.data)
+      ) {
+        liveItems.push(event.data);
+      }
+    });
+
+    try {
+      for (let stage = 0; stage < 2; stage += 1) {
+        const toolCallId = `code-call-stage-${stage}`;
+        const args = { code: 'await yield_control("pause"); return await finish_stage({});' };
+        harness.sessionManager.appendMessage(
+          makeAgentAssistantMessage({
+            content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: args }],
+            stopReason: "toolUse",
+          }),
+        );
+        const result = await harness.subscription.runToolLifecycle({
+          toolName: "exec",
+          toolCallId,
+          args,
+          execute: async (started) => {
+            started();
+            return expectDefined(harness.tools[0], "Code Mode exec test invariant").execute(
+              toolCallId,
+              args,
+            );
+          },
+        });
+        harness.sessionManager.appendMessage({
+          role: "toolResult",
+          toolCallId,
+          toolName: "exec",
+          isError: false,
+          content: result.content,
+          details: result.details,
+          timestamp: 0,
+        });
+        const suspended = resultDetails(result);
+        expect(suspended).toMatchObject({ status: "waiting", reason: "yield" });
+
+        const completed = await waitUntilCompleted({
+          details: suspended,
+          waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
+        });
+        expect(completed).toMatchObject({ status: "completed", value: { finished: true } });
+        expect(countActiveToolExecutions(harness.runId)).toBe(0);
+      }
+
+      expect(target.execute).toHaveBeenCalledTimes(2);
+      expect(onBlockReplyFlush).not.toHaveBeenCalled();
+      expect(harness.subscription.getItemLifecycle()).toMatchObject({
+        startedCount: 4,
+        completedCount: 4,
+        activeCount: 0,
+      });
+      expect(summarizeAgentActivity(liveItems).total).toBe(4);
+      emitAssistantTextDeltaAndEnd({ emit: harness.emit, text: "Both stages finished." });
+      harness.emit({ type: "agent_end", messages: [], willRetry: false });
+      await harness.subscription.waitForPendingEvents();
+      expect(summarizeAgentActivity(liveItems).total).toBe(2);
+      expect(harness.subscription.getItemLifecycle()).toEqual({
+        startedCount: 4,
+        completedCount: 4,
+        activeCount: 0,
+      });
+      const history = projectAgentHistoryActivity(
+        harness.sessionManager
+          .getEntries()
+          .flatMap((entry) =>
+            entry.type === "message" ? [{ messageId: entry.id, message: entry.message }] : [],
+          ),
+      );
+      expect(summarizeAgentActivity(history.flatMap((entry) => entry.items))).toEqual(
+        summarizeAgentActivity(liveItems),
+      );
+      expect(testing.activeRuns.size).toBe(0);
+    } finally {
+      stopEvents();
+      blockReplyFlush.resolve();
+      try {
+        harness.dispose();
+      } finally {
+        await resetCodeModeTestState();
+      }
+    }
+  });
+
+  it.each([
+    "completed",
+    "failed",
+    "execution-failed",
+    "blocked",
+    "incomplete",
+    "overlapping",
+    "reused-active",
+  ])("settles the prepared summary without hiding a %s wrapper outcome", async (outcome) => {
+    const onAgentEvent = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: `wrapper-${outcome}`,
+      onAgentEvent,
+    });
+    const start = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "outer",
+      args: {},
+    };
+    try {
+      emit(start);
+      if (outcome === "overlapping") {
+        emit(start);
+      }
+      emit({
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "child",
+        parentToolCallId: "outer",
+        args: { path: "missing.txt" },
+      });
+      emit({
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "child",
+        isError: true,
+        result: { content: [{ type: "text", text: "Missing file" }] },
+      });
+      if (outcome !== "incomplete") {
+        emit({
+          type: "tool_execution_end",
+          toolName: "exec",
+          toolCallId: "outer",
+          isError: outcome === "failed",
+          result: {
+            content: [{ type: "text", text: "Finished" }],
+            ...(outcome === "blocked" ? { details: { status: "approval-pending" } } : {}),
+            ...(outcome === "execution-failed" ? { details: { status: "failed" } } : {}),
+          },
+        });
+      }
+      if (outcome === "reused-active") {
+        emit(start);
+      }
+      await subscription.waitForPendingEvents();
+      const counters = subscription.getItemLifecycle();
+      emitAssistantTextDeltaAndEnd({ emit, text: "Observed the child outcome." });
+      emit({ type: "agent_end", messages: [], willRetry: false });
+      await subscription.waitForPendingEvents();
+      const events = onAgentEvent.mock.calls.map(([event]) => event);
+      const outer = events.findLast(
+        (event) => event.stream === "item" && event.data.toolCallId === "outer",
+      );
+      expect(outer?.data.hideFromChannelProgress === true).toBe(outcome === "completed");
+      if (outcome === "execution-failed") {
+        expect(outer?.data.status).toBe("failed");
+      }
+      expect(
+        events.findLast((event) => event.stream === "item" && event.data.toolCallId === "child")
+          ?.data,
+      ).toMatchObject({ status: "failed" });
+      expect(subscription.getItemLifecycle()).toEqual(counters);
+    } finally {
+      await subscription.waitForPendingEvents();
+      subscription.unsubscribe();
+    }
+  });
+
   it("captures sanitized trajectory pairs while tool-start delivery remains blocked", async () => {
     const flushEntered = createDeferred();
     const pendingFlush = createDeferred();

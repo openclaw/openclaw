@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginVersionDriftReport } from "../plugins/plugin-version-drift.js";
 import {
   createPluginLoadResult,
@@ -91,66 +92,62 @@ async function runNoteWorkspaceStatusForTest(
 }
 
 describe("noteWorkspaceStatus", () => {
-  it("reports identical registrar failures once across agent workspace loads", () => {
+  it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
     const diagnostic = {
       level: "error" as const,
       pluginId: "broken-fixture",
       source: "/plugins/broken-fixture/index.js",
       message: "board widget registration has invalid kind",
     };
-    mocks.resolveDefaultAgentId.mockReturnValue("alpha");
+    mocks.resolveDefaultAgentId.mockReturnValue("beta");
     mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
     mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
-    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
-      workspaceDir,
-      ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
-    }));
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    let activeWorkspace: string | undefined;
+    const runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner = (scope, run) => {
+      activeWorkspace = scope.workspaceDir;
+      try {
+        return run();
+      } finally {
+        activeWorkspace = undefined;
+      }
+    };
+    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => {
+      expect(activeWorkspace).toBe(workspaceDir);
+      return {
+        workspaceDir,
+        ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
+      };
+    });
+    mocks.buildPluginCompatibilityWarnings.mockImplementation(({ workspaceDir }) => {
+      expect(activeWorkspace).toBe(workspaceDir);
+      return ["legacy-plugin is hook-only"];
+    });
     mocks.listTaskFlowRecords.mockReturnValue([]);
 
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {
+      expect(activeWorkspace).toBeDefined();
+    });
     try {
-      noteWorkspaceStatus({});
-      const diagnosticCalls = noteSpy.mock.calls.filter(
-        ([, title]) => title === "Plugin diagnostics",
-      );
-      expect(diagnosticCalls).toHaveLength(1);
-      expect(diagnosticCalls[0]?.[0]).toContain("broken-fixture");
-
-      expect(
-        collectWorkspaceStatusHealthFindings({}).filter(
-          (finding) => finding.target === "broken-fixture",
-        ),
-      ).toHaveLength(1);
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("warns when plugins use legacy compatibility paths", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "legacy-plugin",
-            name: "Legacy Plugin",
-            hookCount: 1,
-          }),
-        ],
-        typedHooks: [
-          createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" }),
-        ],
-      }),
-    );
-    try {
-      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
-        config: {},
-        workspaceDir: "/workspace",
+      expect(noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot })).toEqual({
+        workspaceDir: "/workspace/beta",
       });
-      const compatibilityCalls = noteSpy.mock.calls.filter(
-        ([, title]) => title === "Plugin compatibility",
-      );
-      expect(compatibilityCalls).toHaveLength(0);
+      expect(noteSpy.mock.calls).toEqual([
+        ['Agent "alpha":\n- legacy-plugin is hook-only', "Plugin compatibility"],
+        [
+          'Agent "alpha":\n- ERROR broken-fixture: board widget registration has invalid kind (/plugins/broken-fixture/index.js)',
+          "Plugin diagnostics",
+        ],
+        ['Agent "beta":\n- legacy-plugin is hook-only', "Plugin compatibility"],
+      ]);
+
+      const findings = collectWorkspaceStatusHealthFindings({}, { runWithPluginMetadataSnapshot });
+      expect(findings.map((finding) => finding.message)).toEqual([
+        'Agent "alpha": legacy-plugin is hook-only',
+        'Agent "alpha": board widget registration has invalid kind',
+        'Agent "beta": legacy-plugin is hook-only',
+      ]);
+      expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
+      expect(activeWorkspace).toBeUndefined();
     } finally {
       noteSpy.mockRestore();
     }
@@ -172,7 +169,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(noteSpy.mock.calls.filter(([, title]) => title === "Plugins")).toHaveLength(0);
+      expect(noteSpy).not.toHaveBeenCalled();
     } finally {
       noteSpy.mockRestore();
     }
@@ -332,6 +329,7 @@ describe("noteWorkspaceStatus", () => {
             source: "/tmp/plugin.json",
             code: "channel-setup-failure",
           },
+          { level: "info", pluginId: "selected", message: "explicit plugin source selected" },
         ],
       }),
     });
@@ -371,6 +369,11 @@ describe("noteWorkspaceStatus", () => {
         requirement: "channel-setup-failure",
         source: "/tmp/plugin.json",
         message: "channel setup failed",
+      }),
+      expect.objectContaining({
+        severity: "info",
+        target: "selected",
+        message: "explicit plugin source selected",
       }),
       expect.objectContaining({
         checkId: "core/doctor/workspace-status",
@@ -484,60 +487,6 @@ describe("noteWorkspaceStatus", () => {
       expect(body).toContain("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
       expect(body).not.toContain("openclaw plugins update brave");
       expect(body).toContain("openclaw gateway restart");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("omits plugin version drift when no daemon status report is supplied", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "codex",
-            name: "Codex",
-            origin: "global",
-            source: "/tmp/codex/index.js",
-          }),
-        ],
-      }),
-      [],
-      {
-        cfg: {
-          gateway: {
-            mode: "remote",
-          },
-          plugins: {
-            entries: {
-              codex: { enabled: true },
-            },
-          },
-        },
-      },
-    );
-    try {
-      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain(
-        "Plugin restart readiness",
-      );
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("omits plugin compatibility note when no legacy compatibility paths are present", async () => {
-    const noteSpy = await runNoteWorkspaceStatusForTest(
-      createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "modern-plugin",
-            name: "Modern Plugin",
-            providerIds: ["modern"],
-          }),
-        ],
-      }),
-    );
-    try {
-      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin compatibility");
     } finally {
       noteSpy.mockRestore();
     }

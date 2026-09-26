@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Rolldown } from "vite";
 import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,12 @@ const repoRoot = path.resolve(configDir, "../..");
 const controlUiBootModules = JSON.parse(
   fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
 ) as Record<"shared" | "new" | "chat", string[]>;
+
+const measuredStyles = new Set(
+  Object.values(controlUiBootModules)
+    .flat()
+    .filter((id) => id.endsWith(".css")),
+);
 
 function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
@@ -42,6 +49,22 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
+  switch (controlUiBootManifestKey(id)) {
+    case "packages/gateway-protocol/src/capability-consent-error-details.ts":
+    case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
+    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
+      // Shared protocol readers must not pull the lazy Plugins page into chat.
+      return "plugin-contracts-runtime";
+    case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-feedback.ts":
+    case "ui/src/i18n/locales/en-login.ts":
+    case "ui/src/lib/gateway-secret-shape.ts":
+      return "login-runtime";
+    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/styles/sidebar-update-card.css":
+      return "sidebar-update-runtime";
+  }
+
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
@@ -51,13 +74,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   if (
+    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+  ) {
+    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    return "chat-transcript-styles";
+  }
+
+  if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    // The cache directive belongs to the deferred text-attachment renderer, not
-    // the shared startup vendor chunk. Let its consumer determine when it loads.
-    return normalized.endsWith("/directives/cache.js") ? undefined : "lit-runtime";
+    // Cache and async content directives have only deferred consumers. Keep
+    // their implementation and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+      ? undefined
+      : "lit-runtime";
   }
 
   if (
@@ -91,38 +124,62 @@ export function controlUiStableChunkName(id: string): string | undefined {
   return undefined;
 }
 
-export const controlUiCodeSplitting = {
-  includeDependenciesRecursively: false,
-  groups: [
-    {
-      name: (id: string) => controlUiStableChunkName(id) ?? null,
-      test: (id: string) => controlUiStableChunkName(id) !== undefined,
-      priority: 20,
-    },
-    {
-      name: (id: string) =>
-        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
-      tags: ["$initial"] as ["$initial"],
-      priority: 10,
-      // Keep the boot graph in fewer partitions; the performance checker owns
-      // the compressed-size and request budgets for the emitted chunks.
-      maxSize: 1024 * 1024,
-    },
-    ...(["shared", "new", "chat"] as const).map((route, index) => {
-      const modules = new Set(controlUiBootModules[route]);
-      return {
-        name: `control-ui-boot-${route}`,
-        test: (id: string) => modules.has(controlUiBootManifestKey(id)),
-        // Shared dependencies must be assigned first, or a route group pulls
-        // them (and therefore other routes) into its eagerly imported chunk.
-        priority: 8 - index,
-        includeDependenciesRecursively: true,
-        // Shared and chat groups both contain dense UI modules; keep their
-        // generated chunks within the existing compressed-size budget.
-        // Let tiny split tails stay with their consumers through automatic chunking.
-        minSize: 16 * 1024,
-        maxSize: 1408 * 1024,
-      };
-    }),
-  ],
-};
+export function createControlUiCodeSplitting(options: { includeBootGroups?: boolean } = {}) {
+  return {
+    includeDependenciesRecursively: false,
+    groups: [
+      {
+        name: (id: string) => controlUiStableChunkName(id) ?? null,
+        test: (id: string) => controlUiStableChunkName(id) !== undefined,
+        priority: 20,
+      },
+      {
+        name: (id: string) =>
+          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        tags: ["$initial"] as ["$initial"],
+        priority: 10,
+        // Keep the boot graph in fewer partitions; the performance checker owns
+        // the compressed-size and request budgets for the emitted chunks.
+        maxSize: 1024 * 1024,
+      },
+      ...(options.includeBootGroups === false
+        ? []
+        : [
+            ...(["shared", "new", "chat"] as const).map((route, index) => {
+              const modules = new Set(controlUiBootModules[route]);
+              return {
+                name: `control-ui-boot-${route}`,
+                test: (id: string) => modules.has(controlUiBootManifestKey(id)),
+                // Shared dependencies must be assigned first, or a route group pulls
+                // them (and therefore other routes) into its eagerly imported chunk.
+                priority: 8 - index,
+                includeDependenciesRecursively: true,
+                // Shared and chat groups both contain dense UI modules; keep their
+                // generated chunks within the existing compressed-size budget.
+                // Let tiny split tails stay with their consumers through automatic chunking.
+                minSize: 16 * 1024,
+                maxSize: 1408 * 1024,
+              };
+            }),
+            {
+              name: (id: string, context: Rolldown.ChunkingContext) => {
+                const pages = new Set(
+                  (context.getModuleInfo(id)?.importers ?? []).flatMap((importer) => {
+                    const page = /^ui\/src\/pages\/([^/]+)\//u.exec(
+                      controlUiBootManifestKey(importer),
+                    )?.[1];
+                    return page ? [page] : [];
+                  }),
+                );
+                return pages.size ? "css-" + [...pages].toSorted().join("-") : null;
+              },
+              test: (id: string) => measuredStyles.has(controlUiBootManifestKey(id)),
+              // Protect measured page styles without splitting unrelated lazy CSS into JS facades.
+              priority: 9,
+            },
+          ]),
+    ],
+  };
+}
+
+export const controlUiCodeSplitting = createControlUiCodeSplitting();

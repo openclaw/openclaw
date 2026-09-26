@@ -3,8 +3,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { readAgentMemoryFile, readMemoryFile } from "./read-file.js";
+import * as memoryReadRetry from "./read-retry.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createDirectorySymlink(target: string, linkPath: string): Promise<boolean> {
   try {
@@ -20,6 +25,150 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
 }
 
 describe("readMemoryFile", () => {
+  it("follows contained workspace parent aliases while keeping extra directories strict", async () => {
+    const directory = tempDirs.make("memory-read-parent-alias-");
+    const workspaceDir = path.join(directory, "workspace");
+    const notes = path.join(workspaceDir, "notes");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.mkdir(notes);
+    await fs.writeFile(path.join(notes, "note.md"), "linked notes");
+    await fs.symlink(notes, path.join(workspaceDir, "memory", "alias"), "junction");
+    const relPath = "memory/alias/note.md";
+    await expect(readMemoryFile({ workspaceDir, relPath })).resolves.toMatchObject({
+      status: "ok",
+      text: "linked notes",
+      path: relPath,
+    });
+    await expect(
+      readMemoryFile({
+        workspaceDir: path.join(directory, "other-workspace"),
+        extraPaths: [workspaceDir],
+        relPath: path.join(workspaceDir, relPath),
+      }),
+    ).rejects.toMatchObject({ code: "MEMORY_PATH_NOT_ALLOWED" });
+  });
+
+  it.each(["EAGAIN", "EIO"])(
+    "preserves read-time %s handling for workspace memory",
+    async (code) => {
+      const workspaceDir = tempDirs.make("memory-read-operational-");
+      const relPath = "memory/note.md";
+      const absolutePath = path.join(workspaceDir, relPath);
+      await fs.mkdir(path.dirname(absolutePath));
+      await fs.writeFile(absolutePath, "memory contents");
+      const failure = Object.assign(new Error(`${code}: read metadata unavailable`), { code });
+      const faultSeen = createDeferred();
+      let reading = false;
+      let injected = false;
+      const retry = memoryReadRetry.retryTransientMemoryRead;
+      const retrySpy = vi
+        .spyOn(memoryReadRetry, "retryTransientMemoryRead")
+        .mockImplementation((read, label) =>
+          retry(async () => {
+            reading = true;
+            return await read();
+          }, label),
+        );
+      const lstat = fsSync.lstatSync;
+      const statSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+        if (reading && !injected && path.resolve(String(args[0])) === absolutePath) {
+          injected = true;
+          faultSeen.resolve();
+          throw failure;
+        }
+        return lstat(...args);
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const result = readMemoryFile({ workspaceDir, relPath }).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        await Promise.race([faultSeen.promise, result]);
+        await vi.runAllTimersAsync();
+        const outcome = await result;
+        if (code === "EAGAIN") {
+          expect(outcome).toEqual({
+            status: "fulfilled",
+            value: { status: "ok", text: "memory contents", path: relPath, from: 1, lines: 1 },
+          });
+        } else {
+          expect(outcome).toEqual({ status: "rejected", error: failure });
+        }
+        expect(injected).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        statSpy.mockRestore();
+        retrySpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["workspace", "extra directory"])(
+    "retains the authorized %s when its pathname is replaced before reading",
+    async (source) => {
+      const directory = tempDirs.make("memory-read-root-replacement-");
+      const workspaceDir = path.join(directory, "workspace");
+      const authorized = source === "workspace" ? workspaceDir : path.join(directory, "extra");
+      const outside = path.join(directory, "outside");
+      const moved = path.join(directory, "moved");
+      const filename = source === "workspace" ? "memory/note.md" : "note.md";
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(path.dirname(path.join(authorized, filename)), { recursive: true });
+      await fs.mkdir(path.dirname(path.join(outside, filename)), { recursive: true });
+      await fs.writeFile(path.join(authorized, filename), "authorized contents");
+      await fs.writeFile(path.join(outside, filename), "outside contents");
+      const retry = memoryReadRetry.retryTransientMemoryRead;
+      const spy = vi
+        .spyOn(memoryReadRetry, "retryTransientMemoryRead")
+        .mockImplementation(async (read, label) => {
+          await fs.rename(authorized, moved);
+          await fs.symlink(outside, authorized, "junction");
+          return await retry(read, label);
+        });
+      try {
+        const absolutePath = path.join(authorized, filename);
+        await expect(
+          readMemoryFile({
+            workspaceDir,
+            extraPaths: source === "workspace" ? [] : [authorized],
+            relPath: absolutePath,
+          }),
+        ).resolves.toEqual({
+          status: "not_found",
+          text: "",
+          path: path.relative(workspaceDir, absolutePath).replace(/\\/g, "/"),
+        });
+        expect(await fs.realpath(authorized)).toBe(await fs.realpath(outside));
+        expect(await fs.readFile(path.join(moved, filename), "utf8")).toBe("authorized contents");
+        expect(await fs.readFile(path.join(outside, filename), "utf8")).toBe("outside contents");
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it("reads an allowed hardlinked memory file larger than the default Root byte limit", async () => {
+    const directory = tempDirs.make("memory-read-large-hardlink-");
+    const workspaceDir = path.join(directory, "workspace");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const source = path.join(directory, "source.md");
+    await fs.writeFile(
+      source,
+      Buffer.concat([Buffer.from("first line\n"), Buffer.alloc(17 * 1024 * 1024, 120)]),
+    );
+    await fs.link(source, path.join(workspaceDir, "memory", "large.md"));
+    await expect(
+      readMemoryFile({ workspaceDir, relPath: "memory/large.md", lines: 1 }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      text: "first line\n\n[More content available. Use from=2 to continue.]",
+      path: "memory/large.md",
+      lines: 1,
+      nextFrom: 2,
+    });
+  });
+
   it("returns not found for absent extra paths and rejects non-directory parents", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
     try {
@@ -201,7 +350,7 @@ describe("readMemoryFile", () => {
     }
   });
 
-  it.each(["runbooks", "..notes", "...notes"])(
+  it.each(["runbooks", "..notes", "...notes", "~"])(
     "enforces %s glob patterns through agent reads",
     async (directory) => {
       const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));

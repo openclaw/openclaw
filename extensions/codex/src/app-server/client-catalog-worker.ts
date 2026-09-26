@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
+import { codexCatalogPageWorkerEntrypoint } from "../../catalog-page-worker-entrypoint.js";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
   projectCodexCatalogMessage,
@@ -10,6 +12,8 @@ import { isJsonObject } from "./protocol.js";
 import type { CodexRequestAttempt } from "./request-attempt.js";
 
 const INLINE_CATALOG_MAX_BYTES = 64 * 1024;
+const CATALOG_WORKER_IDLE_MS = 60_000;
+const runInCatalogWorkerContext = AsyncLocalStorage.snapshot();
 
 /** Late responses retain their decode route after cancellation removes the waiter. */
 export function codexCatalogRequestId(
@@ -34,6 +38,10 @@ export function codexCatalogRequestId(
 export class CodexCatalogWorker {
   private pool: WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult> | undefined;
   private continuationRoute: CodexCatalogDecodeRoute | undefined;
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private retirement: Promise<void> | undefined;
+  private readonly setTimeoutFn = setTimeout;
+  private readonly clearTimeoutFn = clearTimeout;
   private closed = false;
 
   get continuation(): CodexCatalogDecodeRoute | undefined {
@@ -78,6 +86,13 @@ export class CodexCatalogWorker {
         );
       }
     }
+    this.clearTimeoutFn(this.idleTimer);
+    this.idleTimer = undefined;
+    // Rotation retains the pool's custody until native exit; new frames wait here.
+    await this.retirement;
+    if (this.closed) {
+      return undefined;
+    }
     if (!this.pool) {
       const { resolveRuntimeWorkerUrl, WorkerTaskPool } =
         await import("openclaw/plugin-sdk/process-runtime");
@@ -85,12 +100,7 @@ export class CodexCatalogWorker {
         return undefined;
       }
       this.pool = new WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult>({
-        workerUrl: resolveRuntimeWorkerUrl({
-          currentModuleUrl: import.meta.url,
-          sourceWorkerName: "../../catalog-page.worker",
-          distWorkerPath: "extensions/codex/catalog-page.worker.js",
-          package: { name: "@openclaw/codex", distWorkerPath: "catalog-page.worker.js" },
-        }),
+        workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
         maxWorkers: 1,
         maxPendingTasks: 1,
         // Framing admits one line at a time. Completed native messages have no size cap;
@@ -131,12 +141,32 @@ export class CodexCatalogWorker {
       return undefined;
     }
     this.continuationRoute = decoded.pending ? route : undefined;
+    if (!decoded.pending) {
+      this.armIdleRetirement();
+    }
     return decoded;
   }
 
-  close(error: Error): Promise<void> {
+  private armIdleRetirement(): void {
+    // Do not retain the decoded page or its caller's async context in this timer.
+    this.idleTimer = runInCatalogWorkerContext(() =>
+      this.setTimeoutFn(() => {
+        this.idleTimer = undefined;
+        this.retirement = this.pool?.rotate();
+        // The next decode observes failure; terminal close still owns a cleanup retry.
+        void this.retirement?.catch(() => undefined);
+      }, CATALOG_WORKER_IDLE_MS),
+    );
+    this.idleTimer.unref();
+  }
+
+  async close(error: Error): Promise<void> {
     this.closed = true;
+    this.clearTimeoutFn(this.idleTimer);
+    this.idleTimer = undefined;
     this.continuationRoute = undefined;
-    return this.pool?.close(error) ?? Promise.resolve();
+    // A failed rotation must release its stop attempt before close retries custody.
+    await this.retirement?.catch(() => undefined);
+    await this.pool?.close(error);
   }
 }

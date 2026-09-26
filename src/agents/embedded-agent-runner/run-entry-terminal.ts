@@ -11,6 +11,7 @@ import {
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import { isProviderModelRerouted } from "../provider-model-route.js";
+import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 export type RunEntryTerminalBehavior =
@@ -173,7 +174,9 @@ export function buildRunEntryTerminal(params: {
     normalizeAgentRunTerminalReceipt(agentMeta?.terminalReceipt) ??
     // CLI backends report delivery without an embedded model-turn receipt.
     // The entry owner supplies run identity; the tool supplied the send fact.
-    (params.result.sourceReplyDelivered && agentMeta?.provider && agentMeta.model
+    (resolveSourceReplyDelivery(params.result) === "delivered" &&
+    agentMeta?.provider &&
+    agentMeta.model
       ? {
           runId: params.runId,
           sessionId: params.sessionId,

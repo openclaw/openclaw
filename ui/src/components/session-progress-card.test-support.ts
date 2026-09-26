@@ -24,6 +24,9 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
     },
     requestUpdate() {},
     onReaderScroll() {},
+    onComposerInput() {},
+    onComposerLayout() {},
+    cancelComposerResize() {},
   };
   const virtualizer = new VirtualizerController<HTMLDivElement, HTMLElement>(
     {

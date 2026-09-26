@@ -7,15 +7,27 @@ import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 
 const MCP_OAUTH_CALLBACK_PATH = "/oauth/mcp/callback";
 const MCP_OAUTH_CALLBACK_MAX_URL_BYTES = 8 * 1024;
-const CONNECTED_HTML =
-  '<!doctype html><html lang="en"><meta charset="utf-8"><title>Account connected</title><body><main><h1>You\'re connected.</h1><p>Return to the chat.</p></main></body></html>';
-const RETRY_HTML =
-  '<!doctype html><html lang="en"><meta charset="utf-8"><title>Sign-in incomplete</title><body><main><h1>Sign-in wasn\'t completed.</h1><p>Ask the bot to connect again.</p></main></body></html>';
-const EXPIRED_HTML =
-  '<!doctype html><html lang="en"><meta charset="utf-8"><title>Sign-in link expired</title><body><main><h1>This sign-in link expired or was already used.</h1><p>Ask the bot to connect again.</p></main></body></html>';
+const CONNECTED_HTML = renderOAuthPage({
+  title: "Account connected",
+  heading: "You're connected.",
+  message: "Return to the chat.",
+});
+const RETRY_HTML = renderOAuthPage({
+  title: "Sign-in incomplete",
+  heading: "Sign-in wasn't completed.",
+  message: "Ask the bot to connect again.",
+});
+const EXPIRED_HTML = renderOAuthPage({
+  title: "Sign-in link expired",
+  heading: "This sign-in link expired or was already used.",
+  message: "Ask the bot to connect again.",
+});
 
 type CallbackLog = Pick<Console, "warn">;
 
@@ -23,6 +35,7 @@ function respondHtml(res: ServerResponse, status: number, body: string): void {
   res.statusCode = status;
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
   res.end(body);
 }
 
@@ -75,8 +88,9 @@ export async function handleMcpOAuthCallback(
   }
 
   const state = url.searchParams.get("state")?.trim();
-  const storeKey = state ? readMcpOAuthPendingAuthorization(state) : undefined;
-  const pending = storeKey ? readMcpOAuthStore(storeKey) : undefined;
+  const context = captureOpenClawStateWorkerContext();
+  const storeKey = state ? await readMcpOAuthPendingAuthorization(state, context) : undefined;
+  const pending = storeKey ? await readMcpOAuthStore(storeKey, context) : undefined;
   if (!storeKey || !state || readPendingState(pending?.lastAuthorizationUrl ?? "") !== state) {
     respondHtml(res, 404, EXPIRED_HTML);
     return true;
@@ -109,6 +123,8 @@ export async function handleMcpOAuthCallback(
       },
       configuredServer.resolved,
       { code, state },
+      undefined,
+      context,
     );
     if (result === "expired") {
       respondHtml(res, 404, EXPIRED_HTML);

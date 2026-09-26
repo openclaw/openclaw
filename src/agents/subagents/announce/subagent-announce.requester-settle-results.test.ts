@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   sessionStore,
@@ -7,6 +8,8 @@ import {
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
 import {
+  REQUESTER,
+  requesterSettleKey,
   deliverSpy,
   makeSettledChild,
   completeBatchSpy,
@@ -17,6 +20,36 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
+  it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({
+        runId: "run-b",
+        completion: { required: true, resultText: "network findings" },
+      }),
+      makeSettledChild({
+        runId: "run-a",
+        completion: { required: true, resultText: "social findings" },
+      }),
+    ]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    const call = deliveredCallArg();
+    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
+    expect(call.requesterIsSubagent).toBe(false);
+    expect(call.expectsCompletionMessage).toBe(false);
+    expect(call.requireDirectDelivery).toBe(true);
+    expect(call.requireVisibleReply).toBeUndefined();
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
+    const message = String(call.triggerMessage);
+    expect(message).toContain("settled");
+    expect(message).toContain("social findings");
+    expect(message).toContain("network findings");
+    expect(message).toContain("NO_REPLY");
+  });
+
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({
@@ -58,7 +91,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     ];
     findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
       expect(sessionId).toBe("source-reply-session");
-      const event = events.findLast(match);
+      const event = events.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);

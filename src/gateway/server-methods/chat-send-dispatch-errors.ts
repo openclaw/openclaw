@@ -1,7 +1,11 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
+import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
+import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
@@ -23,12 +27,39 @@ import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
+export function formatReturnedAgentErrors(messages: string[]): string | undefined {
+  const [primary, ...additional] = [...new Set(messages)];
+  if (!primary || additional.length === 0) {
+    return primary;
+  }
+  if (additional.length === 1) {
+    return `${primary}\n\nAdditional error: ${additional[0]}`;
+  }
+  return `${primary}\n\nAdditional errors:\n${additional.map((message) => `- ${message}`).join("\n")}`;
+}
+
 type PendingDispatchLifecycleError = {
   endedAt: number;
   error: string;
+  errorKind?: "state_contention";
   sessionId: string;
   startedAt: number;
 };
+
+function formatChatSendError(error: unknown): string {
+  if (error instanceof DispatchSessionRefreshRequiredError) {
+    return (
+      "Your message didn't run because the conversation changed. Refresh the conversation, then send it again." +
+      `\n\n${String(error)}`
+    );
+  }
+  return (
+    resolveStateContentionPresentation(error)?.errorMessage ??
+    renderAgentHarnessPreflightUserMessage(error) ??
+    renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
+    String(error)
+  );
+}
 
 /** Finalize a chat.send that throws before detached dispatch owns cleanup. */
 type ChatSendJobAdmission = Pick<
@@ -52,6 +83,7 @@ export async function handleChatSendSetupError(params: {
 }): Promise<void> {
   const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
+  const hidden = getAgentRunContext(clientRunId)?.projectSessionMessages === false;
   const jobSessionBinding = params.admission.sessionBinding;
   if (params.error instanceof ExpectedProfileMismatchError) {
     // Selection failure belongs to this request, not the run's recorded outcome.
@@ -62,8 +94,8 @@ export async function handleChatSendSetupError(params: {
     params.respond(false, undefined, params.error.error);
     return;
   }
-  const errorMessage =
-    renderFailoverCodeUserCopy(describeFailoverError(params.error).code) ?? String(params.error);
+  const errorMessage = formatChatSendError(params.error);
+  const errorKind = resolveStateContentionPresentation(params.error)?.errorKind;
   const failureDisposition = classifyAcceptedChatSendFailure({
     error: params.error,
     phase: "pre-ack",
@@ -72,6 +104,7 @@ export async function handleChatSendSetupError(params: {
     const terminalized = await params
       .terminalizeRestartSafeAdmission({
         error: errorMessage,
+        errorKind,
         retryable: shouldRetainAcceptedChatSendRetryIdentity(failureDisposition),
         status: "failed",
       })
@@ -94,11 +127,18 @@ export async function handleChatSendSetupError(params: {
   cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
-  const error = errorShape(
-    ErrorCodes.UNAVAILABLE,
-    errorMessage,
-    failureDisposition === "client-retry" ? { retryable: true, retryAfterMs: 250 } : undefined,
-  );
+  const error =
+    params.error instanceof SessionGoalOperationError
+      ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
+          details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
+        })
+      : errorShape(
+          ErrorCodes.UNAVAILABLE,
+          errorMessage,
+          failureDisposition === "client-retry"
+            ? { retryable: true, retryAfterMs: 250 }
+            : undefined,
+        );
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
   if (params.cacheResult !== false && failureDisposition !== "client-retry") {
     setGatewayDedupeEntry({
@@ -109,13 +149,14 @@ export async function handleChatSendSetupError(params: {
     });
   }
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
-  if (failureDisposition !== "client-retry") {
+  if (!hidden && failureDisposition !== "client-retry") {
     broadcastChatError({
       context: params.context,
       runId: clientRunId,
       sessionKey,
       agentId,
       errorMessage,
+      errorKind,
     });
   }
 }
@@ -126,6 +167,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
   context: GatewayRequestContext;
   isAgentRunStarted: () => boolean;
   isQueuedFollowupEnqueued: () => boolean;
+  isQueuedFollowupCompleted?: () => boolean;
   classifyFailure?: (error: unknown) => AcceptedChatSendFailureDisposition;
   isReplyDispatchRun?: () => boolean;
   persistUserTurnTranscript: () => Promise<unknown>;
@@ -149,13 +191,19 @@ export function createChatSendDispatchErrorLifecycle(params: {
     admission;
   const { agentId, backingSessionId, cfg, clientRunId, now, rawSessionKey, sessionKey } = session;
   const jobSessionBinding = admission.sessionBinding;
+  // Cleanup releases the run context before delayed failure publication. Keep
+  // the original projection policy so maintenance cannot become a visible turn.
+  const visibility = getAgentRunContext(clientRunId);
+  const hidden = visibility?.projectSessionMessages === false;
+  const suppressLifecycle = visibility?.projectSessionLifecycle === false;
   let abortedDispatchMarker: ChatAbortMarker | undefined;
   let pendingDispatchLifecycleError: PendingDispatchLifecycleError | undefined;
   let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
   let publishDispatchError: (() => void) | undefined;
 
   const handleError = async (err: unknown) => {
-    const errorMessage = renderFailoverCodeUserCopy(describeFailoverError(err).code) ?? String(err);
+    const errorMessage = formatChatSendError(err);
+    const errorKind = resolveStateContentionPresentation(err)?.errorKind;
     const failureDisposition =
       params.classifyFailure?.(err) ??
       classifyAcceptedChatSendFailure({ error: err, phase: "post-ack" });
@@ -172,7 +220,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
           entry: {
             ts: Date.now(),
             ok: true,
-            payload: { runId: clientRunId, status: "ok" as const },
+            payload: {
+              runId: clientRunId,
+              status: params.isQueuedFollowupCompleted?.() ? "completed" : "ok",
+            },
           },
         });
         broadcastChatFinal({
@@ -230,6 +281,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         error: errorMessage,
+        errorKind,
         retryable: shouldRetainAcceptedChatSendRetryIdentity(failureDisposition),
         status: "failed",
       }).catch((terminalizeError: unknown) => {
@@ -255,6 +307,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
             await persistUserTurnTranscript();
           };
     if (
+      !suppressLifecycle &&
       !restartSafeDispatchFailureTerminalized &&
       abortMarkerAtDispatchReject === undefined &&
       !agentTerminalPersistenceOwnedAtDispatchReject
@@ -262,6 +315,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
         error: errorMessage,
+        errorKind,
         sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
         startedAt: activeRunAbort.entry?.startedAtMs ?? now,
       };
@@ -286,13 +340,16 @@ export function createChatSendDispatchErrorLifecycle(params: {
             error,
           },
         });
-        broadcastChatError({
-          context,
-          runId: clientRunId,
-          sessionKey,
-          agentId,
-          errorMessage,
-        });
+        if (!hidden) {
+          broadcastChatError({
+            context,
+            runId: clientRunId,
+            sessionKey,
+            agentId,
+            errorMessage,
+            errorKind,
+          });
+        }
       };
       if (pendingDispatchLifecycleError) {
         // agent.wait consumes the cached terminal immediately. Commit the lifecycle
@@ -377,6 +434,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
                 startedAt: dispatchError.startedAt,
                 endedAt: dispatchError.endedAt,
                 error: dispatchError.error,
+                errorKind: dispatchError.errorKind,
               },
             },
           });

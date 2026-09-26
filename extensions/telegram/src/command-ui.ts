@@ -4,6 +4,7 @@ import {
   buildModelsKeyboard,
   buildProviderKeyboard,
   type ProviderInfo,
+  type ModelsKeyboardParams,
 } from "./model-buttons.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
@@ -92,15 +93,9 @@ export function buildTelegramModelsAddProviderChannelData(params: {
   };
 }
 
-export function buildTelegramModelsListChannelData(params: {
-  provider: string;
-  models: readonly string[];
-  currentModel?: string;
-  currentPage: number;
-  totalPages: number;
-  pageSize?: number;
-  modelNames?: ReadonlyMap<string, string>;
-}): ReplyPayload["channelData"] | null {
+export function buildTelegramModelsListChannelData(
+  params: ModelsKeyboardParams,
+): ReplyPayload["channelData"] | null {
   return {
     telegram: {
       buttons: buildModelsKeyboard(params),

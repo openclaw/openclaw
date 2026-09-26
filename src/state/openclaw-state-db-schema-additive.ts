@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -23,9 +24,11 @@ import {
 } from "./openclaw-state-db-legacy-backfills.js";
 import {
   ensureColumn,
+  tableExists,
   tableHasColumn,
   tableHasColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import { repairLegacyTaskIdentifiers } from "./openclaw-state-db-task-identifiers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
@@ -142,12 +145,29 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
 }
 
-export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
-  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"));
+export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
+  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+    throw new Error(
+      "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
+    );
+  }
+}
+
+/** Doctor calls this inside the transaction that records its recovery receipt. */
+export function reconstructAgentDeletionJournalSchema(
+  database: DatabaseSync,
+  databasePath: string,
+): boolean {
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal");
+  const existed = tableExists(database, "agent_deletion_journal");
+  if (!existed) {
+    database.exec(schema);
+  }
+  assertSqliteSchemaContains(database, databasePath, schema);
+  return !existed;
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
-  ensureAgentDeletionJournalSchema(database);
   database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_database_leases"));
 }
 
@@ -378,6 +398,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   if (repairHistoricalRows) {
     repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
+    repairLegacyTaskIdentifiers(db);
     repairLegacySubagentTaskBindings(db);
     repairLegacySubagentRetainedResults(db);
   }

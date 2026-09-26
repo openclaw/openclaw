@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
-import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -17,38 +16,36 @@ import {
 } from "../agents/subagents/registry/subagent-registry.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   listSessionPendingInputReceipts,
   listSessionPendingInputs,
 } from "../config/sessions/session-accessor.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  listOpenClawRegisteredAgentDatabases,
-} from "../state/openclaw-agent-db.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   agentCommandMock,
-  getGatewayTestPort,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     for (const root of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(root);
-    }
-    for (const database of listOpenClawRegisteredAgentDatabases()) {
-      if ([...tempDirs.dirs].some((root) => isPathInside(root, database.path))) {
-        unregisterOpenClawAgentDatabase(database);
-      }
+      await releaseGatewaySessionStoreFixture(root);
     }
     cleanup();
   }),
@@ -63,7 +60,7 @@ beforeAll(async () => {
     return kernel;
   });
   try {
-    server = await startTestGatewayServer(await getGatewayTestPort());
+    server = await startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
   } finally {
     capture.mockRestore();
   }
@@ -91,7 +88,8 @@ async function arrangeAuthorityProof(name: string) {
     },
   });
   await prepareGatewayReplyRuntimeForTest();
-  registerSubagentRun({
+  publishSystemEventStoreConfig(getRuntimeConfig());
+  await registerSubagentRun({
     runId: previousRunId,
     childSessionKey: child,
     controllerSessionKey: parent,
@@ -129,7 +127,7 @@ async function arrangeAuthorityProof(name: string) {
     });
     return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
   });
-  const send = (caller = parent, approvalSignal?: AbortSignal) => {
+  const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
     const tool = createSessionsSendTool({
       agentSessionKey: caller,
       config: { tools: { sessions: { visibility: "all" } } },
@@ -147,7 +145,7 @@ async function arrangeAuthorityProof(name: string) {
       () =>
         tool.execute(`${name}-proof`, {
           sessionKey: child,
-          mode: "resume",
+          ...(mode ? { mode } : {}),
           message: "The answer is ready; finish the task.",
         }),
     );
@@ -177,11 +175,14 @@ async function arrangeAuthorityProof(name: string) {
 
 it("rejects an unrelated visible controller without consuming input or producing a child result", async () => {
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("unrelated-controller");
-    const result = await proof.send(proof.unrelated);
+    const result = await proof.send(proof.unrelated, undefined, "resume");
     expect(result.details).toMatchObject({
       status: "error",
       error: "Task resume is limited to children controlled by the calling session.",
@@ -194,20 +195,22 @@ it("rejects an unrelated visible controller without consuming input or producing
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
-    testState.sessionStorePath = undefined;
   }
 });
 
 it("rejects a child without task-owned completion before input or execution", async () => {
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("completion-disabled");
     const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
     previous.expectsCompletionMessage = false;
     persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
-    const result = await proof.send();
+    const result = await proof.send(undefined, undefined, "resume");
     expect(result.details).toMatchObject({
       status: "error",
       error: "Task resume requires a child with task-owned completion.",
@@ -220,7 +223,6 @@ it("rejects a child without task-owned completion before input or execution", as
     expect(announce).not.toHaveBeenCalled();
   } finally {
     announce.mockRestore();
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -243,7 +245,10 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       return input;
     });
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   let sending: ReturnType<Awaited<ReturnType<typeof arrangeAuthorityProof>>["send"]> | undefined;
   try {
@@ -280,7 +285,6 @@ it("rejects parent authority revoked while durable input preparation awaits", as
     preparation.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releasePreparation);
-    testState.sessionStorePath = undefined;
   }
 });
 
@@ -315,7 +319,10 @@ it("fences a cancelled successor after adoption before queued input consumption"
       return executionCompletion;
     });
   const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .spyOn(
+      await import("../agents/subagents/announce/subagent-announce.js"),
+      "runSubagentAnnounceFlow",
+    )
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("cancelled-successor");
@@ -380,116 +387,142 @@ it("fences a cancelled successor after adoption before queued input consumption"
     execution.mockRestore();
     announce.mockRestore();
     signal.removeEventListener("abort", releaseExecution);
-    testState.sessionStorePath = undefined;
   }
 });
 
-it("resumes a visible child through sessions_send and delivers exactly one task-owned result", async () => {
-  const root = tempDirs.make("openclaw-parent-resume-gateway-");
-  const parent = "agent:main:main";
-  const child = "agent:main:dashboard:resume-proof";
-  const previousRunId = "resume-gateway-paused";
-  const release = createDeferred();
-  const started = createDeferred();
-  const announce = vi
-    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
-    .mockResolvedValue("delivered");
-  testState.sessionStorePath = path.join(root, "sessions.json");
-  try {
-    await writeSessionStore({
-      entries: {
-        [parent]: { sessionId: "resume-parent", updatedAt: Date.now() },
-        [child]: {
-          sessionId: "resume-child",
-          updatedAt: Date.now(),
-          spawnedBy: parent,
-          spawnDepth: 1,
-        },
-      },
-    });
-    await prepareGatewayReplyRuntimeForTest();
-    // Seed paused registry/canonical-task state without polling a nonexistent source execution.
-    registerSubagentRun({
-      runId: previousRunId,
-      childSessionKey: child,
-      controllerSessionKey: parent,
-      requesterSessionKey: parent,
-      requesterDisplayKey: parent,
-      task: "Wait for the answer",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-      queued: true,
-    });
-    const previous = subagentRuns.get(previousRunId)!;
-    markSubagentRunPausedAfterYield({ entry: previous });
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-    const taskId = findTaskByRunId(previousRunId)?.taskId;
-    expect(taskId).toBeTruthy();
-    agentCommandMock.mockImplementation(async (opts) => {
-      const command = opts as AgentCommandGatewayIngressOpts;
-      const runId = expectDefined(command.runId, "resume execution run id");
-      expect(subagentRuns.get(runId)?.taskRunId).toBe(previousRunId);
-      const recorder = expectDefined(command.userTurnTranscriptRecorder, "resume input recorder");
-      await recorder.persistApproved();
-      expect(recorder.hasPersisted()).toBe(true);
-      started.resolve();
-      await release.promise;
-      const text = "Resumed child finished.";
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: Date.now() - 1,
-          endedAt: Date.now(),
-          terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+it.each(["explicit", "automatic"] as const)(
+  "resumes a visible child with write-only operator authority (%s)",
+  async (mode) => {
+    const root = tempDirs.make("openclaw-parent-resume-gateway-");
+    const parent = "agent:main:main";
+    const child = `agent:main:dashboard:resume-proof-${mode}`;
+    const previousRunId = `resume-gateway-${mode}-paused`;
+    const release = createDeferred();
+    const started = createDeferred();
+    const announce = vi
+      .spyOn(
+        await import("../agents/subagents/announce/subagent-announce.js"),
+        "runSubagentAnnounceFlow",
+      )
+      .mockResolvedValue("delivered");
+    testState.sessionStorePath = path.join(root, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          [parent]: { sessionId: `resume-${mode}-parent`, updatedAt: Date.now() },
+          [child]: {
+            sessionId: `resume-${mode}-child`,
+            updatedAt: Date.now(),
+            spawnedBy: parent,
+            spawnDepth: 1,
+          },
         },
       });
-      return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
-    });
-    const tool = createSessionsSendTool({
-      agentSessionKey: parent,
-      config: { tools: { sessions: { visibility: "all" } } },
-    });
-    const result = await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: parent,
-        operationalRunInstance: createOperationalRunInstanceRef("resume-gateway-parent-turn"),
-        receiptAuthority: () => true,
-        gatewayContextResolver: () => kernel.gatewayRequestContext,
-      },
-      () =>
-        tool.execute("resume-proof", {
-          sessionKey: child,
-          mode: "resume",
-          message: "The answer is ready; finish the task.",
-        }),
-    );
-    expect(result.details, JSON.stringify(result.details)).toMatchObject({
-      status: "accepted",
-      mode: "resume",
-      taskRunId: previousRunId,
-      completion: "task",
-    });
-    expect(result.details).not.toHaveProperty("reply");
-    await started.promise;
-    expect(announce).not.toHaveBeenCalled();
-    expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
-    release.resolve();
-    await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
-    expect(announce).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: parent,
+      await prepareGatewayReplyRuntimeForTest();
+      publishSystemEventStoreConfig(getRuntimeConfig());
+      // Seed paused registry/canonical-task state without polling a nonexistent source execution.
+      await registerSubagentRun({
+        runId: previousRunId,
         childSessionKey: child,
-        roundOneReply: "Resumed child finished.",
-      }),
-    );
-    await vi.waitFor(() => expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded"));
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-  } finally {
-    release.resolve();
-    announce.mockRestore();
-    testState.sessionStorePath = undefined;
-  }
-});
+        controllerSessionKey: parent,
+        requesterSessionKey: parent,
+        requesterDisplayKey: parent,
+        task: "Wait for the answer",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+        queued: true,
+      });
+      const previous = subagentRuns.get(previousRunId)!;
+      markSubagentRunPausedAfterYield({ entry: previous });
+      persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+      const taskId = findTaskByRunId(previousRunId)?.taskId;
+      expect(taskId).toBeTruthy();
+      agentCommandMock.mockImplementation(async (opts) => {
+        const command = opts as AgentCommandGatewayIngressOpts;
+        const runId = expectDefined(command.runId, "resume execution run id");
+        expect(subagentRuns.get(runId)?.taskRunId).toBe(previousRunId);
+        const recorder = expectDefined(command.userTurnTranscriptRecorder, "resume input recorder");
+        await recorder.persistApproved();
+        expect(recorder.hasPersisted()).toBe(true);
+        started.resolve();
+        await release.promise;
+        const text = "Resumed child finished.";
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            startedAt: Date.now() - 1,
+            endedAt: Date.now(),
+            terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+          },
+        });
+        return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
+      });
+      const tool = createSessionsSendTool({
+        agentSessionKey: parent,
+        config: { tools: { sessions: { visibility: "all" } } },
+      });
+      const result = await withPluginRuntimeGatewayRequestScope(
+        {
+          client: createSyntheticPluginRuntimeClient({
+            scopes: ["operator.write"],
+            operatorRoleActor: {
+              kind: "operator",
+              profileId: ensureProfileForEmail("resume-operator@example.test").id,
+            },
+          }),
+          context: kernel.gatewayRequestContext,
+          isWebchatConnect: () => false,
+        },
+        () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: parent,
+              operationalRunInstance: createOperationalRunInstanceRef(
+                `resume-gateway-${mode}-parent-turn`,
+              ),
+              receiptAuthority: () => true,
+              gatewayContextResolver: () => kernel.gatewayRequestContext,
+            },
+            () =>
+              tool.execute("resume-proof", {
+                sessionKey: child,
+                ...(mode === "explicit" ? { mode: "resume" } : { timeoutSeconds: 30, watch: true }),
+                message: "The answer is ready; finish the task.",
+              }),
+          ),
+      );
+      expect(result.details, JSON.stringify(result.details)).toMatchObject({
+        status: "accepted",
+        mode: "resume",
+        taskRunId: previousRunId,
+        completion: "task",
+      });
+      expect(result.details).not.toHaveProperty("reply");
+      await started.promise;
+      expect(announce).not.toHaveBeenCalled();
+      expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
+      release.resolve();
+      await settleGatewaySessionStoreFixture(root);
+      await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
+      expect(announce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requesterSessionKey: parent,
+          childSessionKey: child,
+          roundOneReply: "Resumed child finished.",
+        }),
+      );
+      await vi.waitFor(() => expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded"));
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    } finally {
+      release.resolve();
+      try {
+        await settleGatewaySessionStoreFixture(root);
+      } finally {
+        announce.mockRestore();
+      }
+    }
+  },
+);

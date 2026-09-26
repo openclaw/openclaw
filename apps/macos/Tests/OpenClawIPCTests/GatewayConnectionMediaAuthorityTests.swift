@@ -15,7 +15,7 @@ struct GatewayConnectionMediaAuthorityTests {
     func `cancellation before transport creation cannot dispatch or invalidate its session`(
         afterAdmission: Bool) async throws
     {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         var requests: [String] = []
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { request in
             requests.append(request)
@@ -54,7 +54,7 @@ struct GatewayConnectionMediaAuthorityTests {
 
     @Test(arguments: ["current", "redirect", "expired", "wrong-origin"])
     func `browser authority controls the actual media HTTP request`(_ scenario: String) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         var otherRequests = 0
         let other = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, requestHandler: { _ in
             otherRequests += 1
@@ -128,7 +128,7 @@ struct GatewayConnectionMediaAuthorityTests {
 
     @Test(arguments: ["manual-upgrade", "browser-replacement", "expiry"])
     func `retiring authority cancels media waiting for HTTP headers`(_ retirement: String) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         let gate = GatewayConnectionSuspensionGate()
         var requests: [String] = []
         let server = try await DashboardHTTPFixture.start(

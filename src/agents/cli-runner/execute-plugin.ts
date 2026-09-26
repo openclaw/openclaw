@@ -16,7 +16,10 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
-import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import {
+  recordAdjustedParamsForToolCall,
+  runBeforeToolCallHook,
+} from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
@@ -26,7 +29,6 @@ import { compileStructuredInputQuestions } from "../harness/structured-input.js"
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { normalizeToolPolicyName } from "../tool-policy.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
@@ -37,10 +39,11 @@ import {
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
-import { createCliPluginWatchdog } from "./execute-plugin-watchdog.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
+import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
+import { normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
@@ -85,9 +88,7 @@ function createPluginToolPermissionHandler(params: {
     }
 
     // Provider schemas are not policy schemas: match canonical names and file operands.
-    const canonicalToolName = normalizeToolPolicyName(
-      toolName.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
-    );
+    const canonicalToolName = normalizeCliToolName(toolName);
     const nativeFileTool =
       ["read", "write", "edit"].includes(canonicalToolName) &&
       Object.hasOwn(request.toolInput, "file_path");
@@ -210,6 +211,7 @@ function createPluginToolPermissionHandler(params: {
     const currentGrants = getCliLiveSessionApprovalGrants(params.context) ?? grants;
     if (plan === "allow" || (permission.ask !== "always" && currentGrants.has(toolName))) {
       assertActive();
+      recordAdjustedParamsForToolCall(request.toolCallId, toolInput, run.runId);
       return { behavior: "allow", updatedInput: toolInput };
     }
 
@@ -258,7 +260,9 @@ function createPluginToolPermissionHandler(params: {
     if (outcome.grantAlways) {
       currentGrants.add(toolName);
     }
-    return { behavior: "allow", updatedInput: outcome.updatedInput ?? toolInput };
+    const updatedInput = outcome.updatedInput ?? toolInput;
+    recordAdjustedParamsForToolCall(request.toolCallId, updatedInput, run.runId);
+    return { behavior: "allow", updatedInput };
   };
 }
 
@@ -423,6 +427,7 @@ export async function executePluginOwnedProcess(params: {
   forceNewSession?: boolean;
   sessionId?: string;
   noOutputTimeoutMs: number;
+  watchdogClock?: CliWatchdogClock;
   consumeStdout: (chunk: string) => void;
   onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
@@ -485,47 +490,40 @@ export async function executePluginOwnedProcess(params: {
     outstanding.approvals = Math.max(0, outstanding.approvals + delta);
     reportOutstandingWork();
   };
-  const watchdog = createCliPluginWatchdog({
-    provider: run.provider,
-    model: params.context.modelId,
-    sessionId: run.sessionId,
-    lane: run.lane,
-    overallTimeoutMs: clampPositiveTimerTimeoutMs(run.timeoutMs),
-    noOutputTimeoutMs: clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs),
-    useResume: params.useResume,
-    getActiveAskUserDeadline: params.getActiveLoopbackAskUserDeadline,
-    activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
-    backgroundTaskCount: () => outstanding.background,
-    hasObservedActivity: () => outstanding.observed,
-    hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
-    onNoOutputTimeout: (error) => {
-      termination.reason = "no-output-timeout";
-      params.onNoOutputTimeout?.(error);
-      controller.abort(error);
+  const watchdog = createCliPluginWatchdog(
+    {
+      provider: run.provider,
+      model: params.context.modelId,
+      sessionId: run.sessionId,
+      lane: run.lane,
+      overallTimeoutMs: clampPositiveTimerTimeoutMs(run.timeoutMs),
+      noOutputTimeoutMs: clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs),
+      useResume: params.useResume,
+      getActiveAskUserDeadline: params.getActiveLoopbackAskUserDeadline,
+      activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
+      backgroundTaskCount: () => outstanding.background,
+      hasObservedActivity: () => outstanding.observed,
+      hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
+      onNoOutputTimeout: (error) => {
+        termination.reason = "no-output-timeout";
+        params.onNoOutputTimeout?.(error);
+        controller.abort(error);
+      },
+      onOverallTimeout: () => {
+        termination.reason = "overall-timeout";
+        controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
+      },
     },
-    onOverallTimeout: () => {
-      termination.reason = "overall-timeout";
-      controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
-    },
-  });
+    params.watchdogClock,
+  );
   const stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
     watchdog.reset(),
   );
 
-  const replyBackendHandle = run.replyOperation
-    ? {
-        kind: "cli" as const,
-        runId: run.runId,
-        toolAuthorityFingerprint: run.toolAuthorityFingerprint,
-        cancel: () => {
-          termination.reason = "manual-cancel";
-          controller.abort(createCliAbortError());
-        },
-      }
-    : undefined;
-  if (replyBackendHandle) {
-    run.replyOperation?.attachBackend(replyBackendHandle);
-  }
+  const detachReplyBackend = attachCliReplyBackend(run, () => {
+    termination.reason = "manual-cancel";
+    controller.abort(createCliAbortError());
+  });
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
@@ -602,7 +600,7 @@ export async function executePluginOwnedProcess(params: {
         outstanding.replayUnsafe = true;
         throw new Error("CLI plugin runtime emitted an invalid structured stream event.");
       }
-      if (next.value.type === "result") {
+      if (next.value.type === "result" && next.value.openclaw_interim_result !== true) {
         terminalResult =
           terminalResult === "error" ||
           next.value.is_error === true ||
@@ -669,9 +667,7 @@ export async function executePluginOwnedProcess(params: {
     if (!controller.signal.aborted) {
       controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     }
-    if (replyBackendHandle) {
-      run.replyOperation?.detachBackend(replyBackendHandle);
-    }
+    detachReplyBackend?.();
     await closePluginIterator(iterator);
   }
 

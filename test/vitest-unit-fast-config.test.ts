@@ -8,10 +8,8 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
-import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createContractsPluginVitestConfig } from "./vitest/vitest.contracts-plugin.config.ts";
 import { pluginContractPatterns } from "./vitest/vitest.contracts-shared.ts";
-import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import {
@@ -490,6 +488,7 @@ describe("unit-fast vitest lane", () => {
     for (const file of [
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/provider-transport-fetch.headers.test.ts",
     ]) {
@@ -659,14 +658,5 @@ describe("unit-fast vitest lane", () => {
     expect(getUnitFastTestFilesForIncludePatterns(["!src/**/*.test.ts"])).toEqual(
       unitFastTestFiles,
     );
-  });
-
-  it("excludes unit-fast files from the older light lanes so full runs do not duplicate them", () => {
-    const pluginSdkLight = createPluginSdkLightVitestConfig({});
-    const commandsLight = createCommandsLightVitestConfig({});
-
-    expect(unitFastTestFiles).toContain("src/plugin-sdk/text-chunking.test.ts");
-    expect(requireTestConfig(pluginSdkLight).exclude).toContain("plugin-sdk/text-chunking.test.ts");
-    expect(requireTestConfig(commandsLight).exclude).toContain("status-overview-values.test.ts");
   });
 });

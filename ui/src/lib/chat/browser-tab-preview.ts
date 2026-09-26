@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ControlUiLinkPreview } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   bindBrowserRequestClient,
@@ -13,49 +12,6 @@ import {
 } from "../../components/browser/browser-target.ts";
 import type { ToolCard } from "./chat-types.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "./tool-cards.ts";
-
-// Page metadata follows the connection, not a tab id that another Gateway can
-// reuse. Share flights across transcript cards without retaining unbounded images.
-type PagePreviewEntry = { expiresAt: number; promise: Promise<ControlUiLinkPreview> };
-const pagePreviews = new WeakMap<GatewayBrowserClient, Map<string, PagePreviewEntry>>();
-
-export function loadBrowserPagePreview(
-  client: GatewayBrowserClient,
-  url: string,
-): Promise<ControlUiLinkPreview> {
-  let cache = pagePreviews.get(client);
-  if (!cache) {
-    cache = new Map();
-    pagePreviews.set(client, cache);
-  }
-  const cached = cache.get(url);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.promise;
-  }
-  const entry: PagePreviewEntry = {
-    expiresAt: Number.POSITIVE_INFINITY,
-    promise: client.request<ControlUiLinkPreview>("controlUi.linkPreview", { url }).then(
-      (preview) => {
-        // Freshness is checked on the next card load, without a background poll.
-        entry.expiresAt = Date.now() + 5 * 60_000;
-        return preview;
-      },
-      () => {
-        // Reconnects reuse the client: never cache a transport failure as missing metadata.
-        if (cache.get(url) === entry) {
-          cache.delete(url);
-        }
-        return {};
-      },
-    ),
-  };
-  cache.delete(url);
-  cache.set(url, entry);
-  if (cache.size > 32) {
-    cache.delete(cache.keys().next().value!);
-  }
-  return entry.promise;
-}
 
 export function browserTabCardRevision(card: ToolCard): string | undefined {
   return card.callId ?? card.messageId ?? card.previewRevision;

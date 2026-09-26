@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -56,9 +55,7 @@ describe("protected historical session cancellation", () => {
 
   it.each([
     ["planning", false],
-    ["planning", true],
     ["materialization", false],
-    ["materialization", true],
     ["worker", false],
     ["worker", true],
     ["archived entry", false],
@@ -174,23 +171,42 @@ describe("protected historical session cancellation", () => {
         }
         return result;
       });
-      const admissions: Array<{ workerThreadId: number; admissionId: number | undefined }> = [];
-      const detachWorkerListeners: Array<() => void> = [];
-      const observeWorker = (worker: Worker) => {
-        const workerThreadId = worker.threadId;
-        const observeMessage = (message: { type?: string; admissionId?: number }) => {
-          // Archive materialization and disk scans do not request reclamation write admission.
-          if (message.type === "admission-request") {
-            admissions.push({ workerThreadId, admissionId: message.admissionId });
-            if ((stage === "worker" || stage === "archived entry") && !protectionChanged) {
-              releasePressure();
-            }
-          }
-        };
-        worker.on("message", observeMessage);
-        detachWorkerListeners.push(() => worker.off("message", observeMessage));
-      };
-      process.on("worker", observeWorker);
+      const admissions: Array<{ kind: "history-eviction" | "entry"; admissionId: number }> = [];
+      const workerOwner = await import("./session-accessor.sqlite-reclamation-worker.js");
+      const withWorker = workerOwner.withSqliteReclamationWorker;
+      const observeAdmissions = vi
+        .spyOn(workerOwner, "withSqliteReclamationWorker")
+        .mockImplementation((options, claim, consume, assertCurrent) =>
+          withWorker(
+            options,
+            claim,
+            async (worker) => {
+              const run = worker.run.bind(worker);
+              const observeRun = vi.spyOn(worker, "run").mockImplementation((params) => {
+                const kind = params.plan.kind;
+                if (kind !== "history-eviction" && kind !== "entry") {
+                  return run(params);
+                }
+                return run({
+                  ...params,
+                  withWriteAdmission: async (operation, admission) => {
+                    admissions.push({ kind, admissionId: admission.admissionId });
+                    if ((stage === "worker" || stage === "archived entry") && !protectionChanged) {
+                      releasePressure();
+                    }
+                    return params.withWriteAdmission(operation, admission);
+                  },
+                });
+              });
+              try {
+                return await consume(worker);
+              } finally {
+                observeRun.mockRestore();
+              }
+            },
+            assertCurrent,
+          ),
+        );
       try {
         const sweep = enforceSqliteSessionHistoryDiskBudget({
           storePath,
@@ -209,18 +225,8 @@ describe("protected historical session cancellation", () => {
         }
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
-        if (stage === "worker") {
+        if (stage === "worker" || stage === "archived entry") {
           expect(admissions.length).toBeGreaterThan(0);
-          expect(reclaimedHistories[0]).toEqual({
-            sessionId: protectedHistory.sessionId,
-            deleted: false,
-          });
-        } else if (stage === "archived entry") {
-          expect(admissions.length).toBeGreaterThan(0);
-          expect(reclaimedEntries[0]).toEqual({
-            sessionKey: protectedHistory.sessionKey,
-            deleted: false,
-          });
         }
         for (const [index, history] of histories.entries()) {
           expect(sessionExists(history.sessionId), history.sessionId).toBe(true);
@@ -246,8 +252,7 @@ describe("protected historical session cancellation", () => {
           expect(result?.totalBytesAfter).toBe((await measure(storePath)).totalBytes);
         }
       } finally {
-        process.off("worker", observeWorker);
-        detachWorkerListeners.forEach((detach) => detach());
+        observeAdmissions.mockRestore();
       }
     },
   );

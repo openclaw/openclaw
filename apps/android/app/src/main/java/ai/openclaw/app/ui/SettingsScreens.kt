@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppLanguage
+import ai.openclaw.app.AppearanceTextScale
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
@@ -68,6 +69,7 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
 import ai.openclaw.app.ui.design.agentAvatarSource
+import ai.openclaw.app.ui.design.badgeInitials
 import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.VoiceWakePreferences
@@ -142,7 +144,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -182,9 +183,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.text.DateFormat
 import java.util.Date
 
-/**
- * Dispatches a selected settings route to its detail screen without changing navigation ownership.
- */
 @Composable
 internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
@@ -245,7 +243,9 @@ private fun UsageSettingsScreen(
           ),
       )
       if (usageSummary.providers.isNotEmpty()) {
-        UsageProvidersPanel(providers = usageSummary.providers)
+        ClawListPanel(items = usageSummary.providers) { provider ->
+          UsageProviderListRow(provider = provider)
+        }
       } else if (usageState.errorText == null) {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -363,7 +363,9 @@ private fun CronJobsSettingsScreen(
       }
 
       else -> {
-        CronJobsPanel(jobs = visibleJobs, onJobClick = { selectedJobId = it.id })
+        ClawListPanel(items = visibleJobs) { job ->
+          CronJobListRow(job = job, onClick = { selectedJobId = job.id })
+        }
       }
     }
   }
@@ -585,7 +587,9 @@ private fun AgentsSettingsScreen(
       }
 
       else -> {
-        AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+        ClawListPanel(items = agents) { agent ->
+          AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
+        }
       }
     }
   }
@@ -649,15 +653,18 @@ private fun ApprovalsSettingsScreen(
         }
       }
     } else {
-      ExecApprovalsPanel(
-        approvals = inbox.approvals,
-        onResolve = viewModel::resolveExecApproval,
-      )
+      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        inbox.approvals.forEach { approval ->
+          ExecApprovalCard(approval = approval, onResolve = viewModel::resolveExecApproval)
+        }
+      }
     }
     if (pendingToolCalls.isNotEmpty()) {
       Text(text = nativeString("Thread activity"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = nativeString("Chat tool calls waiting in the active thread remain visible here."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      SessionToolCallsPanel(toolCalls = pendingToolCalls)
+      ClawListPanel(items = pendingToolCalls) { toolCall ->
+        ApprovalListRow(toolCall = toolCall)
+      }
     }
   }
 }
@@ -1568,7 +1575,7 @@ private fun PhoneCapabilitiesScreen(
       showBackgroundLocationExplanation = false
     }
 
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = ::cancelBackgroundLocationRequest,
       title = { Text(nativeString("Allow background location?")) },
       text = {
@@ -1604,7 +1611,7 @@ private fun InstalledAppsDisclosureDialog(
   onDismiss: () -> Unit,
   onAgree: () -> Unit,
 ) {
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(nativeString("Share installed app information?")) },
     text = {
@@ -1741,23 +1748,24 @@ private fun GatewaySettingsScreen(
   // Keep discovery available to the disclosed list, as in onboarding.
   LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
 
-  fun connectSetupCode() {
+  fun connectGateway(useSetupCode: Boolean) {
     val plan =
       resolveGatewayConnectPlan(
-        useSetupCode = true,
-        setupCode = setupCode,
+        useSetupCode = useSetupCode,
+        setupCode = if (useSetupCode) setupCode else "",
         savedManualHost = manualHost,
         savedManualPort = manualPort.toString(),
         savedManualTls = manualTls,
         manualHostInput = hostInput,
         manualPortInput = portInput,
         manualTlsInput = transport.effectiveTls,
-        tokenInput = "",
-        bootstrapTokenInput = "",
-        passwordInput = "",
+        tokenInput = if (useSetupCode) "" else tokenInput,
+        bootstrapTokenInput = if (useSetupCode) "" else bootstrapTokenInput,
+        passwordInput = if (useSetupCode) "" else passwordInput,
       )
     if (plan == null) {
-      setupValidationText = nativeString("Enter a valid setup code or gateway address.")
+      val message = nativeString("Enter a valid setup code or gateway address.")
+      if (useSetupCode) setupValidationText = message else manualValidationText = message
       return
     }
     if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
@@ -1893,15 +1901,7 @@ private fun GatewaySettingsScreen(
       style = ClawTheme.type.body,
       color = ClawTheme.colors.textMuted,
     )
-    TextButton(onClick = { showDiscovery = !showDiscovery }, modifier = Modifier.semantics { stateDescription = if (showDiscovery) nativeString("Expanded") else nativeString("Collapsed") }) {
-      Text(nativeString("Discovered"))
-      Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
-      Icon(
-        imageVector = if (showDiscovery) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-        contentDescription = null,
-        modifier = Modifier.size(ClawTheme.spacing.icon),
-      )
-    }
+    SettingsDisclosureButton(text = nativeString("Discovered"), expanded = showDiscovery, onClick = { showDiscovery = !showDiscovery })
     if (showDiscovery) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
@@ -1930,15 +1930,7 @@ private fun GatewaySettingsScreen(
         }
       }
     }
-    TextButton(onClick = { showDiagnostics = !showDiagnostics }, modifier = Modifier.semantics { stateDescription = if (showDiagnostics) nativeString("Expanded") else nativeString("Collapsed") }) {
-      Text(nativeString("Diagnostics"))
-      Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
-      Icon(
-        imageVector = if (showDiagnostics) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-        contentDescription = null,
-        modifier = Modifier.size(ClawTheme.spacing.icon),
-      )
-    }
+    SettingsDisclosureButton(text = nativeString("Diagnostics"), expanded = showDiagnostics, onClick = { showDiagnostics = !showDiagnostics })
     if (showDiagnostics) {
       SettingsMetricPanel(
         rows =
@@ -1971,15 +1963,7 @@ private fun GatewaySettingsScreen(
         modifier = Modifier.fillMaxWidth(),
       )
     }
-    TextButton(onClick = { showManual = !showManual }, modifier = Modifier.semantics { stateDescription = if (showManual) nativeString("Expanded") else nativeString("Collapsed") }) {
-      Text(nativeString("Manual Gateway"))
-      Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
-      Icon(
-        imageVector = if (showManual) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-        contentDescription = null,
-        modifier = Modifier.size(ClawTheme.spacing.icon),
-      )
-    }
+    SettingsDisclosureButton(text = nativeString("Manual Gateway"), expanded = showManual, onClick = { showManual = !showManual })
     if (showManual) {
       // Adding an already saved gateway intentionally retains its credentials.
       // Manage Gateway keeps the explicit, confirmed setup-replacement path here.
@@ -1999,7 +1983,7 @@ private fun GatewaySettingsScreen(
           setupValidationText?.let {
             Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
           }
-          ClawSecondaryButton(text = nativeString("Connect"), onClick = ::connectSetupCode, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
+          ClawSecondaryButton(text = nativeString("Connect"), onClick = { connectGateway(useSetupCode = true) }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
           TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
             Text(nativeString("Where do I get a setup code?"))
           }
@@ -2095,36 +2079,29 @@ private fun GatewaySettingsScreen(
           }
           ClawPrimaryButton(
             text = nativeString("Save & Connect"),
-            onClick = {
-              val plan =
-                resolveGatewayConnectPlan(
-                  useSetupCode = false,
-                  setupCode = "",
-                  savedManualHost = manualHost,
-                  savedManualPort = manualPort.toString(),
-                  savedManualTls = manualTls,
-                  manualHostInput = hostInput,
-                  manualPortInput = portInput,
-                  manualTlsInput = transport.effectiveTls,
-                  tokenInput = tokenInput,
-                  bootstrapTokenInput = bootstrapTokenInput,
-                  passwordInput = passwordInput,
-                )
-              if (plan == null) {
-                manualValidationText = nativeString("Enter a valid setup code or gateway address.")
-                return@ClawPrimaryButton
-              }
-              if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
-                pendingSetupResetPlan = plan
-              } else {
-                saveAndConnect(plan)
-              }
-            },
+            onClick = { connectGateway(useSetupCode = false) },
             modifier = Modifier.fillMaxWidth(),
           )
         }
       }
     }
+  }
+}
+
+@Composable
+private fun SettingsDisclosureButton(
+  text: String,
+  expanded: Boolean,
+  onClick: () -> Unit,
+) {
+  TextButton(onClick = onClick, modifier = Modifier.semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }) {
+    Text(text)
+    Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
+    Icon(
+      imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+      contentDescription = null,
+      modifier = Modifier.size(ClawTheme.spacing.icon),
+    )
   }
 }
 
@@ -2148,6 +2125,7 @@ private fun AppearanceSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val textScale by viewModel.appearanceTextScale.collectAsState()
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
   val themeFamily by viewModel.appearanceThemeFamily.collectAsState()
   val accentArgb by viewModel.appearanceAccentArgb.collectAsState()
@@ -2207,6 +2185,19 @@ private fun AppearanceSettingsScreen(
             }
           }
         }
+      }
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        Text(text = nativeString("Text size"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Default: 100%. Only on this device."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        ClawSegmentedControl(
+          options = AppearanceTextScale.entries,
+          selected = textScale,
+          onSelect = viewModel::setAppearanceTextScale,
+          maxOptionsPerRow = 3,
+          optionLabel = { "${it.percent}%" },
+        )
       }
     }
     ClawPanel {
@@ -2598,7 +2589,6 @@ private fun AboutStatusRow(
   }
 }
 
-/** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
     nativeString("OpenClaw turns this phone into a clean mobile command surface for threads, voice, providers, and Gateway.")
@@ -2706,9 +2696,6 @@ internal fun SettingsDetailFrame(
   }
 }
 
-/**
- * Toggle row model reused by settings sections that render simple on/off controls.
- */
 internal data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
@@ -2718,29 +2705,11 @@ internal data class SettingsToggleRow(
   val enabled: Boolean = true,
 )
 
-/**
- * Compact metric row model for connected gateway summaries.
- */
 internal data class SettingsMetric(
   val title: String,
   val value: String,
   val copyable: Boolean = false,
 )
-
-@Composable
-private fun ExecApprovalsPanel(
-  approvals: List<GatewayExecApprovalSummary>,
-  onResolve: (String, String) -> Unit,
-) {
-  Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-    approvals.forEach { approval ->
-      ExecApprovalCard(
-        approval = approval,
-        onResolve = onResolve,
-      )
-    }
-  }
-}
 
 @Composable
 private fun ExecApprovalCard(
@@ -2858,13 +2827,6 @@ private fun ExecApprovalNotice(
 }
 
 @Composable
-private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
-  ClawListPanel(items = toolCalls) { toolCall ->
-    ApprovalListRow(toolCall = toolCall)
-  }
-}
-
-@Composable
 private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
   ClawListItem(
@@ -2873,23 +2835,6 @@ private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
     leading = { ClawIconBadge(icon = Icons.Default.Lock) },
     trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else nativeString("Review"), status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
   )
-}
-
-@Composable
-private fun CronJobsPanel(
-  jobs: List<GatewayCronJobSummary>,
-  onJobClick: (GatewayCronJobSummary) -> Unit,
-) {
-  ClawListPanel(items = jobs) { job ->
-    CronJobListRow(job = job, onClick = { onJobClick(job) })
-  }
-}
-
-@Composable
-private fun UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
-  ClawListPanel(items = providers) { provider ->
-    UsageProviderListRow(provider = provider)
-  }
 }
 
 internal fun usageRefreshVisible(
@@ -2920,7 +2865,7 @@ private fun CronJobListRow(
     leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        ClawStatusPill(text = cronJobStatusText(job), status = cronJobStatus(job))
+        ClawStatusPill(text = cronJobStatusText(job.enabled, job.lastRunStatus), status = cronJobStatus(job))
         Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(17.dp), tint = ClawTheme.colors.textSubtle)
       }
     },
@@ -2980,7 +2925,7 @@ private fun CronJobDetailPanel(
         SettingsMetric(nativeString("Created"), formatCronTimestamp(job.createdAtMs)),
         SettingsMetric(nativeString("Updated"), formatCronTimestamp(job.updatedAtMs)),
         SettingsMetric(nativeString("Running Since"), formatCronTimestamp(job.runningAtMs)),
-        SettingsMetric(nativeString("Last Status"), cronJobStatusText(job)),
+        SettingsMetric(nativeString("Last Status"), cronJobStatusText(job.enabled, job.lastRunStatus)),
         SettingsMetric(
           nativeString("Last Duration"),
           job.lastDurationMs?.let { durationMs -> nativeString("\${durationMs}ms", durationMs) } ?: nativeString("None"),
@@ -3075,16 +3020,6 @@ private fun CronJobTextPanel(
 }
 
 @Composable
-private fun AgentsPanel(
-  agents: List<GatewayAgentSummary>,
-  defaultAgentId: String?,
-) {
-  ClawListPanel(items = agents) { agent ->
-    AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
-  }
-}
-
-@Composable
 private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
@@ -3107,9 +3042,6 @@ internal fun gatewayShowsScanHero(pairedGatewayCount: Int): Boolean = pairedGate
 /** Discovered rows show the endpoint target so users can tell twins apart before connecting. */
 internal fun gatewayDiscoveredRowSubtitle(endpoint: GatewayEndpoint): String = "${endpoint.host}:${endpoint.port}"
 
-/**
- * Chooses a display name for the configured default agent, falling back to any available agent.
- */
 private fun defaultAgentName(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -3119,27 +3051,15 @@ private fun defaultAgentName(
   return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: nativeString("None")
 }
 
-/**
- * Builds a short stable badge from agent emoji/name/id for dense lists.
- */
 private fun agentBadge(agent: GatewayAgentSummary): String {
   agent.emoji
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
     ?.let { return it }
   val source = agent.name?.takeIf { it.isNotBlank() } ?: agent.id
-  return source
-    .split(' ', '-', '_')
-    .filter { it.isNotBlank() }
-    .take(2)
-    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-    .joinToString("")
-    .ifBlank { "A" }
+  return badgeInitials(source, fallback = "A")
 }
 
-/**
- * Normalizes tool-call names into readable approval action labels.
- */
 internal fun approvalActionName(name: String): String {
   val cleaned =
     name
@@ -3229,7 +3149,6 @@ internal fun cronSessionTargetLabel(target: String): String =
     else -> target
   }
 
-/** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String =
   nativeString(
     "\${job.scheduleLabel} · \${formatCronWake(job.nextRunAtMs)} · \${job.promptPreview}",
@@ -3275,7 +3194,6 @@ internal fun filterCronJobs(
   }
 }
 
-/** Summarizes a provider plan and most-used quota window for usage rows. */
 internal fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
   provider.error?.let { return it }
   val window = provider.windows.maxByOrNull { it.usedPercent }
@@ -3289,9 +3207,6 @@ internal fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): Strin
   }
 }
 
-/**
- * Converts usage timestamps into short relative labels for metric panels.
- */
 internal fun formatUsageUpdated(
   updatedAtMs: Long?,
   nowMs: Long = System.currentTimeMillis(),
@@ -3320,10 +3235,12 @@ internal fun formatUsageUpdated(
   }
 }
 
-/** Converts gateway cron status text into the short row badge label. */
-private fun cronJobStatusText(job: GatewayCronJobSummary): String {
-  if (!job.enabled) return nativeString("Off")
-  return when (job.lastRunStatus?.lowercase()) {
+private fun cronJobStatusText(
+  enabled: Boolean,
+  lastRunStatus: String?,
+): String {
+  if (!enabled) return nativeString("Off")
+  return when (lastRunStatus?.lowercase()) {
     "error" -> nativeString("Issue")
     "ok" -> "OK"
     "skipped" -> nativeString("Skipped")
@@ -3331,17 +3248,6 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   }
 }
 
-private fun cronJobStatusText(job: GatewayCronJobDetail): String {
-  if (!job.enabled) return nativeString("Off")
-  return when (job.lastRunStatus?.lowercase()) {
-    "error" -> nativeString("Issue")
-    "ok" -> "OK"
-    "skipped" -> nativeString("Skipped")
-    else -> nativeString("Ready")
-  }
-}
-
-/** Maps gateway cron status text to app status colors. */
 private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   if (!job.enabled) return ClawStatus.Neutral
   return when (job.lastRunStatus?.lowercase()) {
@@ -3379,7 +3285,6 @@ internal fun filterNotificationAppsForPicker(
   }
 }
 
-/** Summarizes allowlist/blocklist mode with an empty-state warning when needed. */
 private fun notificationPackageSelectionSummary(
   mode: NotificationPackageFilterMode,
   selectedCount: Int,
@@ -3406,7 +3311,6 @@ private fun notificationPackageSelectionSummary(
     }
   }
 
-/** Builds compact two-letter app badges from package-picker labels. */
 private fun notificationAppBadge(label: String): String {
   val initials =
     label
@@ -3419,9 +3323,6 @@ private fun notificationAppBadge(label: String): String {
   return initials.ifBlank { "A" }
 }
 
-/**
- * Converts cron wake times into short relative labels for scheduled-work rows.
- */
 internal fun formatCronWake(
   timeMs: Long?,
   nowMs: Long = System.currentTimeMillis(),
@@ -3520,9 +3421,6 @@ private fun SettingsIconMark(icon: ImageVector) {
   }
 }
 
-/**
- * Checks an exact Android runtime permission for settings enablement.
- */
 private fun hasPermission(
   context: Context,
   permission: String,

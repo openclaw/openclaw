@@ -6,7 +6,7 @@ function inspectJson(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("Crabbox worker inspect", () => {
-  it("projects lifecycle facts without retaining provider transport details", () => {
+  it("projects lifecycle and account facts without retaining SSH transport secrets", () => {
     expect(
       parseInspectJson(
         inspectJson({
@@ -15,6 +15,7 @@ describe("Crabbox worker inspect", () => {
           sshHost: "worker.example.test",
           sshPort: 2222,
           sshKey: "/tmp/provider-owned-key",
+          sshUser: "desktop-user",
         }),
       ),
     ).toStrictEqual({
@@ -23,6 +24,11 @@ describe("Crabbox worker inspect", () => {
       tailscaleEnabled: false,
       awsInstanceProfileAttached: false,
       ready: true,
+      sshUser: "desktop-user",
     });
+  });
+
+  it.each([undefined, "", "   ", "<token>"])("does not invent an account from %s", (sshUser) => {
+    expect(parseInspectJson(inspectJson({ sshUser })).sshUser).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 // Control UI tests cover form controls behavior.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
@@ -41,6 +41,18 @@ function readUiCss(): string {
     "ui/src/styles/plugins.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
+}
+
+function buttonAppearance(button: Locator) {
+  return button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      border: style.borderColor,
+      color: style.color,
+      shadow: style.boxShadow,
+    };
+  });
 }
 
 function controlsHtml() {
@@ -208,6 +220,130 @@ describeBrowserLayout("settings icon buttons", () => {
       expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
     });
   });
+});
+
+describeBrowserLayout("shared button states", () => {
+  it("honors distinct primary fill and hover colors in a custom light palette", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.setContent(`<!doctype html>
+        <html data-theme="custom-light" data-theme-mode="light">
+          <head><style>
+            :root[data-theme="custom-light"] {
+              --primary: #1e40af;
+              --primary-hover: #1e3a8a;
+              --primary-foreground: #ffffff;
+              --accent: #d1fae5;
+              --accent-hover: #a7f3d0;
+            }
+            ${readUiCss()}
+          </style></head>
+          <body><main style="padding: 24px"><button class="btn primary" type="button">Continue</button></main></body>
+        </html>`);
+      const button = page.getByRole("button", { name: "Continue", exact: true });
+      expect(await buttonAppearance(button)).toMatchObject({
+        background: "rgb(30, 64, 175)",
+        border: "rgba(0, 0, 0, 0)",
+        color: "rgb(255, 255, 255)",
+      });
+      await button.hover();
+      expect(await buttonAppearance(button)).toMatchObject({
+        background: "rgb(30, 58, 138)",
+        border: "rgba(0, 0, 0, 0)",
+        color: "rgb(255, 255, 255)",
+      });
+    });
+  });
+
+  it.each(["dark", "light"] as const)(
+    "keeps disabled buttons visually settled on hover and press in %s mode",
+    async (theme) => {
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.setContent(`<!doctype html>
+          <html data-theme="${theme}" data-theme-mode="${theme}">
+            <head><style>${readUiCss()}</style></head>
+            <body><main style="padding: 24px"><button class="btn" type="button">Action</button></main></body>
+          </html>`);
+        const button = page.getByRole("button", { name: "Action", exact: true });
+        for (const variant of [
+          "",
+          "primary",
+          "danger",
+          "btn--icon",
+          "btn--ghost",
+          "btn--icon btn--ghost",
+        ]) {
+          for (const disabled of ["native", "aria"] as const) {
+            await page.mouse.move(0, 0);
+            await button.evaluate(
+              (element, state) => {
+                element.setAttribute("class", `btn ${state.variant}`);
+                element.toggleAttribute("disabled", state.disabled === "native");
+                element.setAttribute("aria-disabled", String(state.disabled === "aria"));
+              },
+              { variant, disabled },
+            );
+            const resting = await buttonAppearance(button);
+            await button.hover();
+            expect(
+              await buttonAppearance(button),
+              `${variant || "neutral"} ${disabled} hover`,
+            ).toEqual(resting);
+            await page.mouse.down();
+            try {
+              expect(
+                await buttonAppearance(button),
+                `${variant || "neutral"} ${disabled} press`,
+              ).toEqual(resting);
+            } finally {
+              await page.mouse.up();
+            }
+          }
+        }
+        await page.mouse.move(0, 0);
+        await button.evaluate((element) => {
+          element.setAttribute("class", "btn");
+          element.removeAttribute("disabled");
+          element.removeAttribute("aria-disabled");
+        });
+        const enabled = await buttonAppearance(button);
+        await button.hover();
+        expect((await buttonAppearance(button)).background).not.toBe(enabled.background);
+      });
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
+    "keeps destructive buttons softly tinted without a hard border in %s mode",
+    async (theme) => {
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.setContent(`<!doctype html>
+          <html data-theme="${theme}" data-theme-mode="${theme}">
+            <head><style>${readUiCss()}</style></head>
+            <body><main style="padding: 24px">
+              <button class="btn" type="button">Cancel</button>
+              <button class="btn danger" type="button">Delete</button>
+            </main></body>
+          </html>`);
+        const neutral = await buttonAppearance(
+          page.getByRole("button", { name: "Cancel", exact: true }),
+        );
+        const button = page.getByRole("button", { name: "Delete", exact: true });
+        const resting = await buttonAppearance(button);
+        expect(resting.border).toBe("rgba(0, 0, 0, 0)");
+        expect(resting.background).not.toBe("rgba(0, 0, 0, 0)");
+        expect(resting.background).not.toBe(neutral.background);
+        expect(resting.color).not.toBe(neutral.color);
+        await button.hover();
+        const hovered = await buttonAppearance(button);
+        expect(hovered.border).toBe(resting.border);
+        expect(hovered.color).toBe(resting.color);
+        expect(hovered.background).not.toBe(resting.background);
+      });
+    },
+  );
 });
 
 describeBrowserLayout("settings row wrapping", () => {
@@ -547,6 +683,79 @@ describeBrowserLayout("app chrome interaction styles", () => {
       }
     });
   });
+
+  it.each([
+    { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
+    { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
+    {
+      label: "native macOS",
+      nativeClass: "openclaw-native-macos",
+      merged: false,
+      search: "hidden",
+    },
+    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
+    {
+      label: "native web chrome",
+      nativeClass: "openclaw-native-web-chrome",
+      merged: false,
+      search: "hidden",
+    },
+  ])(
+    "shows the mobile drawer command palette button only where nothing else carries it ($label)",
+    async ({ nativeClass, merged, search }) => {
+      await withBrowserPage(mobileContext.newPage(), async (page) => {
+        await page.setContent(`
+        <!doctype html>
+        <html class="${nativeClass}">
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>${readUiCss()}</style>
+          </head>
+          <body>
+            <div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+              <div class="sidebar-brand">
+                <div class="sidebar-brand__actions">
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
+                  ></button>
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
+                  ></button>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+        const display = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile drawer fixture ${selector}`);
+            }
+            return getComputedStyle(node).display;
+          };
+          return {
+            collapse: read(".sidebar-brand__collapse"),
+            search: read(".sidebar-brand__search"),
+          };
+        });
+
+        // The drawer has no collapsed state, so the collapse toggle always goes.
+        expect(display.collapse).toBe("none");
+        // Merged chat chrome hides the topbar, leaving the drawer as the only
+        // surface that can carry search. Everywhere else - including every native
+        // host, which never merges - the topbar keeps its own, so a drawer copy
+        // would put two on screen at once.
+        if (search === "visible") {
+          expect(display.search).not.toBe("none");
+        } else {
+          expect(display.search).toBe("none");
+        }
+      });
+    },
+  );
 
   it("scales mobile sidebar variants while preserving the coarse-pointer input floor", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {

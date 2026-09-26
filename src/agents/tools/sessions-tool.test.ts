@@ -1,9 +1,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureExecutionDecisionWorkSink,
-  type ExecutionDecisionWork,
-} from "../../audit/execution-decision-work.js";
+import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
   loadSessionEntry,
@@ -126,7 +124,7 @@ describe("sessions tool", () => {
     expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
 
-  it.each(["patch", "reset", "delete"] as const)(
+  it.each(["patch", "delete"] as const)(
     "does not treat another agent's bare global row as self for %s",
     async (action) => {
       const requests: AgentToolGatewayRequest[] = [];

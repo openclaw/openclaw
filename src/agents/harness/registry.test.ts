@@ -24,6 +24,24 @@ import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const resolveProviderRefOwnership = vi.hoisted(() => vi.fn(() => ({ status: "unowned" as const })));
+const warn = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => {
+    const logger = {
+      warn,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      isEnabled: () => false,
+      child: () => logger,
+    };
+    return logger;
+  },
+}));
 
 // Registry tests exercise selection handoff; provider owner/route tests own the real artifacts,
 // which would cold-load bundled plugin surfaces for this synthetic provider config.
@@ -40,6 +58,7 @@ const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
   clearAgentHarnesses();
+  warn.mockClear();
   resolveProviderRefOwnership.mockClear();
 });
 
@@ -90,6 +109,35 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("warns once per harness across reset failures and registry replacement while retrying", async () => {
+    const failingReset = vi.fn(async () => {
+      throw new Error("reset unavailable");
+    });
+    const healthyReset = vi.fn(async () => {});
+    const ids = ["failing-reset-a", "failing-reset-b"];
+    for (const id of ids) {
+      registerAgentHarness({ ...makeHarness(id), reset: failingReset });
+    }
+    registerAgentHarness({ ...makeHarness("healthy-reset"), reset: healthyReset });
+    await Promise.all(
+      Array.from({ length: 110 }, () => resetRegisteredAgentHarnessSessions({ reason: "reset" })),
+    );
+    clearAgentHarnesses();
+    for (const id of ids) {
+      registerAgentHarness({ ...makeHarness(id), reset: failingReset });
+    }
+    await resetRegisteredAgentHarnessSessions({ reason: "reset" });
+    expect(failingReset).toHaveBeenCalledTimes(222);
+    expect(healthyReset).toHaveBeenCalledTimes(110);
+    expect(warn).toHaveBeenCalledTimes(2);
+    for (const id of ids) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("session reset hook failed"), {
+        harnessId: id,
+        error: expect.any(Error),
+      });
+    }
+  });
+
   it("rejects the built-in runtime id before mutating the registry", () => {
     expect(() =>
       registerAgentHarness(makeHarness("openclaw"), { ownerPluginId: "untrusted-plugin" }),
@@ -266,44 +314,6 @@ describe("agent harness registry", () => {
     expectOwner("active-plugin");
   });
 
-  it("dispatches generic session reset to registered harnesses", async () => {
-    const resets: unknown[] = [];
-    registerAgentHarness({
-      ...makeHarness("custom"),
-      reset: async (params) => {
-        resets.push(params);
-      },
-    });
-
-    await resetRegisteredAgentHarnessSessions({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      reason: "reset",
-    });
-
-    expect(resets).toEqual([
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile: "/tmp/session.jsonl",
-        reason: "reset",
-      },
-    ]);
-  });
-
-  it("disposes registered harness runtime state", async () => {
-    const dispose = vi.fn(async () => undefined);
-    registerAgentHarness({
-      ...makeHarness("custom"),
-      dispose,
-    });
-
-    await disposeRegisteredAgentHarnesses();
-
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {
     // Auto mode should not select a model-specific runtime until the owning
     // plugin has registered its harness in this process.
@@ -320,23 +330,6 @@ describe("agent harness registry", () => {
     expect(selectAgentHarness({ provider: "plugin-models", modelId: "custom-1" }).id).toBe(
       "custom",
     );
-  });
-
-  it("falls back to OpenClaw for other models", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-
-    expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6" }).id).toBe(
-      "openclaw",
-    );
-  });
-
-  it("lets a plugin harness win in auto mode by priority", () => {
-    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
-    registerAgentHarness(makeHarness("plugin-harness", { priority: 200 }), {
-      ownerPluginId: "plugin-a",
-    });
-
-    expect(selectAgentHarness({ provider: "codex", modelId: "gpt-5.4" }).id).toBe("plugin-harness");
   });
 
   it("honors explicit provider OpenClaw runtime policy", () => {

@@ -172,6 +172,14 @@ the registry retires or the load cache is cleared.
 Validation, full registration, and CLI metadata loads have separate cache entries;
 validating a module cannot satisfy a later request for its registrations.
 
+Outbound channel bootstrap remembers successful and unavailable senders within
+the selected plugin cache and metadata scope. Inventory replacement or metadata
+invalidation permits a fresh attempt; repeated deliveries within the same scope
+reuse the outcome without retrying failed registration. A request-scoped channel
+owner still takes precedence over process-root bootstrap outcomes.
+Payload preparation carries the selected sender's directive policy on its handler,
+so one batch resolves its plugin once before parsing and applying channel transforms.
+
 Provider lookup uses an explicit caller workspace first, then the workspace
 recorded by its metadata snapshot, including an explicitly shared-root scope.
 Only narrowed metadata views without a workspace field inherit the active

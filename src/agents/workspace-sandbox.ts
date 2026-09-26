@@ -4,10 +4,12 @@ import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { resolveSandboxContext } from "./sandbox.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
 export type WorkspaceSandboxParams = Pick<
   EmbeddedRunAttemptParams,
+  | "abortSignal"
   | "agentId"
   | "config"
   | "cwd"
@@ -22,7 +24,11 @@ export type WorkspaceSandboxParams = Pick<
   | "requireWritableSandbox"
   | "requireWorkspaceOnly"
   | "workspaceDir"
-> & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
+> & {
+  admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
+  /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
+  placementSandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
+};
 
 function assertSandboxCwd(requestedCwd: string | undefined, workspaceDir: string) {
   if (requestedCwd && requestedCwd !== workspaceDir) {
@@ -56,13 +62,17 @@ export function resolveHarnessWorkspace(
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
-  const assertCurrent = params.admittedRunContext
-    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext)
+  const assertRunCurrent = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
-  if (params.admittedRunContext && !assertCurrent) {
+  if (params.admittedRunContext && !assertRunCurrent) {
     throw new Error("Sandbox preparation requires an active admitted run");
   }
-  assertCurrent?.();
+  const assertCurrent = () => {
+    params.abortSignal?.throwIfAborted();
+    assertRunCurrent?.();
+  };
+  assertCurrent();
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -70,26 +80,43 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
+  assertCurrent();
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-    agentId:
-      params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir: resolvedWorkspace,
-    assertCurrent,
-  });
-  assertCurrent?.();
+  const sandboxRuntimeStatus = params.placementSandbox
+    ? undefined
+    : resolveSandboxRuntimeStatus({
+        cfg: params.config,
+        // Independent policy sessions keep their own owner.
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+        sessionKey: sandboxSessionKey,
+      });
+  const sandbox = sandboxRuntimeStatus
+    ? await resolveSandboxContext({
+        config: params.config,
+        agentId: sandboxRuntimeStatus.agentId,
+        execOverrides: params.execOverrides,
+        sessionKey: sandboxSessionKey,
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: resolvedWorkspace,
+        assertCurrent,
+        admittedRunContext: params.admittedRunContext,
+        preparedRuntimeStatus: sandboxRuntimeStatus,
+      })
+    : null;
+  assertCurrent();
   const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
   const effectiveWorkspace =
     sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
       ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
       : resolvedWorkspace;
-  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+  const executionSandbox = params.placementSandbox ?? sandbox;
+  if (
+    params.requireWritableSandbox &&
+    executionSandbox?.enabled &&
+    executionSandbox.workspaceAccess !== "rw"
+  ) {
     throw new Error("sandbox workspace is not read-write; collection review skipped");
   }
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
@@ -107,7 +134,11 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   if (sandbox?.enabled) {
     assertSandboxCwd(requestedCwd, resolvedWorkspace);
   }
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
+  assertCurrent();
+  if (effectiveWorkspace !== resolvedWorkspace) {
+    await fs.mkdir(effectiveWorkspace, { recursive: true });
+  }
+  assertCurrent();
   return {
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly:
@@ -121,6 +152,9 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     sessionPermissionRoot,
     sessionPermissionPolicy,
     sandbox,
+    sandboxReport: sandboxRuntimeStatus
+      ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
+      : undefined,
     sandboxSessionKey,
     sessionAgentId,
   };

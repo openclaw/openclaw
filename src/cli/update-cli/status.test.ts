@@ -2,14 +2,20 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
+import * as configModule from "../../config/config.js";
+import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import {
+  completeGatewayBootLifecycle,
+  recordGatewayBootStart,
+} from "../../infra/gateway-boot-lifecycle.js";
+import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
   createSessionSqliteMigrationRun,
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
-} from "../../commands/doctor-session-sqlite-migration-run.js";
-import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
-import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
-import * as runtimeGuard from "../../infra/runtime-guard.js";
+} from "../../infra/session-sqlite-migration-manifest.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -19,6 +25,7 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
@@ -91,6 +98,54 @@ beforeEach(() => {
   const stateDir = tempDirs.make("openclaw-update-status-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+});
+
+describe("update status installation replacement history", () => {
+  it.each([true, false])(
+    "reports the recorded replacement while the Gateway is unavailable (JSON: %s)",
+    async (json) => {
+      const reason =
+        "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
+      const completedAtMs = Date.UTC(2026, 8, 19, 12);
+      const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
+      completeGatewayBootLifecycle(
+        bootId,
+        { outcome: "planned_restart", reason },
+        process.env,
+        completedAtMs,
+      );
+
+      await updateStatusCommand({ json });
+
+      if (json) {
+        expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+          lastGatewayInstallationReplacement: { reason, completedAtMs },
+        });
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain("Previous Gateway installation replacement");
+        expect(output).toContain(new Date(completedAtMs).toISOString());
+        expect(output).toContain(reason);
+      }
+    },
+  );
+
+  it("does not attribute local replacement history to a remote Gateway", async () => {
+    const bootId = recordGatewayBootStart();
+    completeGatewayBootLifecycle(bootId, {
+      outcome: "planned_restart",
+      reason: "gateway.installation_replaced: local install changed",
+    });
+    vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      gateway: { mode: "remote" },
+    });
+
+    await updateStatusCommand({ json: true });
+
+    expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty(
+      "lastGatewayInstallationReplacement",
+    );
+  });
 });
 
 describe("update status service definition facts", () => {
@@ -204,16 +259,17 @@ describe("update status Node runtime findings", () => {
         prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
       } = DatabaseSync.prototype;
       const realPrepare = sqlitePrototype.prepare;
-      const prepare = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          return realPrepare.call(
-            this,
-            sql === "SELECT sqlite_version() AS version"
-              ? `SELECT '${sqliteVersion}' AS version`
-              : sql,
-          );
-        });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        return realPrepare.call(
+          this,
+          sql === "SELECT sqlite_version() AS version"
+            ? `SELECT '${sqliteVersion}' AS version`
+            : sql,
+        );
+      });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
         kind: "node",
@@ -380,6 +436,71 @@ afterEach(() => {
 });
 
 describe("update status readiness outcome", () => {
+  it.each([false, true])(
+    "prioritizes an active update over availability (finished=%s)",
+    async (finished) => {
+      vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+        root: "/fixture/openclaw",
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: "9999.0.0" },
+      });
+      const run = createUpdateRun({ trigger: "cli" });
+      recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: "sample",
+            reason: "Plugin upgrade did not complete.",
+            command: "openclaw doctor --fix",
+          },
+        ],
+      });
+      recordUpdateRunPhase(run.runId, "validating");
+      if (finished) {
+        finishUpdateRun(run.runId, { status: "succeeded" });
+      }
+      await updateStatusCommand({});
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output.includes("available ·")).toBe(finished);
+      expect(output.includes("Update available")).toBe(finished);
+      expect(output.includes("Let the current update or repair finish")).toBe(!finished);
+      if (!finished) {
+        expect(output).toContain("in progress · validating");
+        expect(output.trim()).toMatch(/Check progress with openclaw update status\.$/);
+      }
+      await updateStatusCommand({ json: true });
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        availability: { available: true },
+      });
+    },
+  );
+
+  it("keeps a managed-service refusal and its code visible after a retained dry run", async () => {
+    const failed = createUpdateRun({ trigger: "cli" });
+    const failureFacts = [
+      { check: "managed-service-preflight", code: "inside-gateway-process-tree" },
+    ];
+    recordUpdateRunStep(failed.runId, {
+      step: "managed-service-preflight",
+      status: "failed",
+      failureFacts,
+    });
+    const failure = finishUpdateRun(failed.runId, {
+      status: "failed",
+      reason: "managed-service-preflight",
+    });
+    const preview = createUpdateRun({ trigger: "cli", preview: true });
+    finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
+
+    await updateStatusCommand({ json: true });
+
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun.steps).toContainEqual(
+      expect.objectContaining({ failureFacts }),
+    );
+    expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
+  });
+
   it("shows installed but unverified as a closed non-success outcome", async () => {
     const run = createUpdateRun({ trigger: "cli" });
     recordUpdateRunVerification(run.runId, { serviceRunning: true, readyz: false, settled: false });
@@ -439,6 +560,9 @@ describe("update status abandoned-run reporting", () => {
       expect(output).not.toContain("version mismatch");
       expect(runtime.log).not.toHaveBeenCalledWith(advice);
       expect(output).toContain("Historical recovery advice:");
+      expect(output).toContain(
+        `Last recorded update (${new Date(created.createdAtMs).toISOString()}):`,
+      );
       expect(output).toContain(
         responding ? "supersedes saved claims" : "Current health unavailable",
       );
@@ -557,14 +681,14 @@ describe("update status abandoned-run reporting", () => {
       await updateStatusCommand({ json });
       if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
-          expect.stringContaining('Plugin "codex" state migration is pending:'),
+          expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished:'),
         ]);
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings[0]).toContain(
           pending.command,
         );
       } else {
         const output = runtime.log.mock.calls.flat().join("\n");
-        expect(output).toContain('Plugin "codex" state migration is pending:');
+        expect(output).toContain('Plugin "codex" data/settings upgrade is unfinished:');
         expect(output).toContain(pending.command);
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
@@ -577,7 +701,7 @@ describe("update status abandoned-run reporting", () => {
         expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("migrationWarnings");
       } else {
         expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(
-          'Plugin "codex" state migration is pending:',
+          'Plugin "codex" data/settings upgrade is unfinished:',
         );
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
@@ -721,6 +845,9 @@ describe("update status abandoned-run reporting", () => {
       });
       expect(output).toContain("treated as abandoned after 24 h");
       expect(output.includes("Historical update:")).toBe(laterRun !== "none");
+      if (surface === "text") {
+        expect(output.includes("Last recorded update (")).toBe(laterRun !== "active");
+      }
       expect(output.includes("run `openclaw update` to retry.")).toBe(laterRun === "none");
       expect(findActiveUpdateRun()?.runId).toBe(laterRun === "active" ? currentRunId : undefined);
       // A later read must still surface the advisory after the terminal write.

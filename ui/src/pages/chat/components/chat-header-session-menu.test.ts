@@ -3,7 +3,6 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { RouteId } from "../../../app-route-paths.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
@@ -76,12 +75,13 @@ async function mountMenu(
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
     sharing?: ChatSessionSharingProps | null;
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     currentOwner?: SessionOwnerOption | null;
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
     forkFromLastCompleted?: boolean;
     archiveAllowed?: boolean;
+    archiveShortcut?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
     onOpenCommandPalette?: () => void;
@@ -125,6 +125,7 @@ async function mountMenu(
       .forkDisabled=${options.forkDisabled ?? false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
+      .archiveShortcut=${options.archiveShortcut ?? false}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
       .onOpenCommandPalette=${options.onOpenCommandPalette ?? (() => {})}
@@ -167,6 +168,29 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it.each(["MacIntel", "Win32"])(
+    "shows the direct Archive hint only for the current unarchived chat on %s",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const menu = await mountMenu({ archiveShortcut: true });
+      expect(
+        item(menu, "Archive session").querySelector(".session-menu__shortcut")?.textContent?.trim(),
+      ).toBe(platform === "MacIntel" ? "A / ⌘⇧A" : "A / Ctrl+Shift+A");
+      const inactive = await mountMenu();
+      expect(
+        item(inactive, "Archive session")
+          .querySelector(".session-menu__shortcut")
+          ?.textContent?.trim(),
+      ).toBe("A");
+      const archived = await mountMenu({ archiveShortcut: true, session: { archived: true } });
+      expect(
+        archived
+          .querySelector('[value="toggle-archived"] .session-menu__shortcut')
+          ?.textContent?.trim(),
+      ).toBe("A");
+    },
+  );
+
   it.each([false, true])(
     "gates personal visibility for hidden=%s on multiple identities",
     async (hidden) => {

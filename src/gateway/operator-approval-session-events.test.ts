@@ -3,24 +3,35 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
-import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
+import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
 import { createOperatorApprovalSessionEventRuntime } from "./operator-approval-session-events.js";
+import {
+  createClient,
+  createPendingRecord,
+  createTerminalRecord,
+  PARENT_SESSION_KEY,
+  SOURCE_SESSION_KEY,
+} from "./operator-approval-session-events.test-support.js";
 import {
   insertOperatorApproval,
   resolveOperatorApproval,
   type OperatorApprovalRecord,
 } from "./operator-approval-store.js";
+import * as operatorApprovalStore from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-const SOURCE_SESSION_KEY = "agent:main:child";
-const PARENT_SESSION_KEY = "agent:main:parent";
 const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
 const subscriptions: Array<() => void> = [];
@@ -30,93 +41,6 @@ function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-events-"));
   tempDirs.push(stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
-
-function createClient(params: {
-  connId: string;
-  scopes: string[];
-  deviceId?: string;
-  invalidated?: boolean;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: "approval-session-events", displayName: "Approval Session Events" },
-      scopes: params.scopes,
-      ...(params.deviceId ? { device: { id: params.deviceId } } : {}),
-    },
-    ...(params.invalidated ? { invalidated: true } : {}),
-  } as unknown as GatewayClient;
-}
-
-function createPendingRecord(
-  params: {
-    id?: string;
-    audienceSessionKeys?: string[];
-    sourceSessionKey?: string | null;
-    reviewerDeviceIds?: string[];
-    createdAtMs?: number;
-    expiresAtMs?: number;
-  } = {},
-): OperatorApprovalRecord {
-  const id = params.id ?? "approval:child/request?1";
-  const createdAtMs = params.createdAtMs ?? 1_000;
-  return {
-    id,
-    resolutionRef: buildApprovalResolutionRef({ approvalId: id, approvalKind: "exec" }),
-    kind: "exec",
-    status: "pending",
-    presentation: {
-      kind: "exec",
-      commandText: "printf session-approval",
-      commandPreview: "printf session-approval",
-      warningText: "Review this command",
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    },
-    requester: {
-      deviceId: "requester-device",
-      clientId: "requester-client",
-      deviceTokenAuth: true,
-    },
-    reviewerDeviceIds: params.reviewerDeviceIds ?? ["reviewer-device"],
-    source: {
-      agentId: "main",
-      sessionKey: params.sourceSessionKey ?? SOURCE_SESSION_KEY,
-      sessionId: "private-session-id",
-      runId: "private-run-id",
-      toolCallId: "private-tool-call-id",
-      toolName: "exec",
-    },
-    audienceSessionKeys: params.audienceSessionKeys ?? [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
-    runtimeEpoch: "private-runtime-epoch",
-    createdAtMs,
-    expiresAtMs: params.expiresAtMs ?? 10_000,
-    updatedAtMs: createdAtMs,
-    decision: null,
-    terminalReason: null,
-    resolvedAtMs: null,
-    resolver: null,
-    consumedAtMs: null,
-    consumedBy: null,
-  };
-}
-
-function createTerminalRecord(
-  pending: OperatorApprovalRecord,
-  resolvedAtMs = 2_000,
-): OperatorApprovalRecord {
-  return {
-    ...pending,
-    status: "denied",
-    updatedAtMs: resolvedAtMs,
-    decision: "deny",
-    terminalReason: "user",
-    resolvedAtMs,
-    resolver: { kind: "device", id: "reviewer-device" },
-  };
 }
 
 function createRuntime(params: {
@@ -145,17 +69,28 @@ function createRuntime(params: {
     getLiveManager: params.getLiveManager,
     isCurrent: params.isCurrent,
   });
-  return { broadcastToConnIds, runtime, subscribers };
+  return {
+    broadcastToConnIds,
+    runtime: {
+      ...runtime,
+      replay: async (...args: Parameters<typeof runtime.replay>) => {
+        const prepared = await runtime.replay(...args);
+        subscriptions.push(prepared.release);
+        return prepared;
+      },
+    },
+    subscribers,
+  };
 }
 
-function insertPendingApproval(params: {
+async function insertPendingApproval(params: {
   databaseOptions: OpenClawStateDatabaseOptions;
   id: string;
   audienceSessionKeys: string[];
   createdAtMs: number;
   expiresAtMs: number;
   reviewerDeviceIds?: string[];
-}): OperatorApprovalRecord {
+}): Promise<OperatorApprovalRecord> {
   const record = createPendingRecord(params);
   const approval: NewOperatorApproval = {
     id: record.id,
@@ -169,7 +104,10 @@ function insertPendingApproval(params: {
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
   };
-  const inserted = insertOperatorApproval({ approval, databaseOptions: params.databaseOptions });
+  const inserted = await insertOperatorApproval({
+    approval,
+    databaseOptions: params.databaseOptions,
+  });
   if (inserted.outcome !== "inserted") {
     throw new Error(`expected approval '${params.id}' to be inserted`);
   }
@@ -177,12 +115,13 @@ function insertPendingApproval(params: {
 }
 
 describe("operator approval session events", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const unsubscribe of subscriptions.splice(0)) {
       unsubscribe();
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
@@ -392,30 +331,80 @@ describe("operator approval session events", () => {
     );
   });
 
-  it("returns the authoritative sanitized pending set for one exact audience", () => {
+  it("preserves normalized reviewer access to valid retained binding bytes", async () => {
     const databaseOptions = createDatabaseOptions();
-    insertPendingApproval({
+    await insertPendingApproval({
+      databaseOptions,
+      id: "padded-reviewer",
+      audienceSessionKeys: [SOURCE_SESSION_KEY],
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    });
+    const { db } = openOpenClawStateDatabase(databaseOptions);
+    const binding = JSON.stringify([" reviewer-device "]);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<DB, "operator_approvals">>(db)
+        .updateTable("operator_approvals")
+        .set({ reviewer_device_ids_json: binding })
+        .where("approval_id", "=", "padded-reviewer"),
+    );
+    const reviewer = createClient({
+      connId: "reviewer",
+      scopes: ["operator.approvals"],
+      deviceId: "reviewer-device",
+    });
+    const other = createClient({
+      connId: "other",
+      scopes: ["operator.approvals"],
+      deviceId: "other-device",
+    });
+    const { runtime } = createRuntime({
+      clients: [reviewer, other],
+      databaseOptions,
+      now: () => 2_000,
+    });
+    expect(
+      (await runtime.replay(SOURCE_SESSION_KEY, reviewer)).replay.approvals.map(
+        (record) => record.id,
+      ),
+    ).toEqual(["padded-reviewer"]);
+    expect((await runtime.replay(SOURCE_SESSION_KEY, other)).replay.approvals).toEqual([]);
+    const lookup = await operatorApprovalStore.getOperatorApprovalDetailed({
+      id: "padded-reviewer",
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    expect(lookup).toMatchObject({
+      outcome: "found",
+      record: { reviewerDeviceIds: [" reviewer-device "] },
+    });
+  });
+
+  it("returns the authoritative sanitized pending set for one exact audience", async () => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({
       databaseOptions,
       id: "source-and-parent",
       audienceSessionKeys: [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
       createdAtMs: 1_000,
       expiresAtMs: 10_000,
     });
-    const parentOnly = insertPendingApproval({
+    const parentOnly = await insertPendingApproval({
       databaseOptions,
       id: "parent-only",
       audienceSessionKeys: [PARENT_SESSION_KEY],
       createdAtMs: 1_001,
       expiresAtMs: 10_000,
     });
-    insertPendingApproval({
+    await insertPendingApproval({
       databaseOptions,
       id: "sibling-only",
       audienceSessionKeys: [SIBLING_SESSION_KEY],
       createdAtMs: 1_002,
       expiresAtMs: 10_000,
     });
-    const resolved = insertPendingApproval({
+    const resolved = await insertPendingApproval({
       databaseOptions,
       id: "already-resolved",
       audienceSessionKeys: [PARENT_SESSION_KEY],
@@ -423,7 +412,7 @@ describe("operator approval session events", () => {
       expiresAtMs: 10_000,
     });
     expect(
-      resolveOperatorApproval({
+      await resolveOperatorApproval({
         id: resolved.id,
         decision: "deny",
         resolver: { kind: "device", id: "reviewer-device" },
@@ -443,7 +432,7 @@ describe("operator approval session events", () => {
       scopes: ["operator.approvals"],
       deviceId: "reviewer-device",
     });
-    expect(runtime.replay(PARENT_SESSION_KEY, replayReviewer)).toEqual({
+    expect((await runtime.replay(PARENT_SESSION_KEY, replayReviewer)).replay).toEqual({
       sessionKey: PARENT_SESSION_KEY,
       updatedAtMs: 5_000,
       truncated: false,
@@ -469,14 +458,16 @@ describe("operator approval session events", () => {
       ],
     });
     expect(
-      runtime.replay(
-        PARENT_SESSION_KEY,
-        createClient({
-          connId: "unrelated-replay",
-          scopes: ["operator.approvals"],
-          deviceId: "unrelated-device",
-        }),
-      ),
+      (
+        await runtime.replay(
+          PARENT_SESSION_KEY,
+          createClient({
+            connId: "unrelated-replay",
+            scopes: ["operator.approvals"],
+            deviceId: "unrelated-device",
+          }),
+        )
+      ).replay,
     ).toEqual({
       sessionKey: PARENT_SESSION_KEY,
       updatedAtMs: 5_000,
@@ -485,9 +476,143 @@ describe("operator approval session events", () => {
     });
   });
 
-  it("publishes replay-triggered expiry to existing ancestor recipients before an empty replay", () => {
+  it("shares only matching audiences and reviewers while checking each waiting client", async () => {
     const databaseOptions = createDatabaseOptions();
-    insertPendingApproval({
+    await insertPendingApproval({
+      databaseOptions,
+      id: "shared-replay",
+      audienceSessionKeys: [SOURCE_SESSION_KEY],
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    });
+    const clients = ["revoked", "retained", "other-reviewer"].map((connId) =>
+      createClient({
+        connId,
+        scopes: ["operator.approvals"],
+        deviceId: connId === "other-reviewer" ? "other-device" : "reviewer-device",
+      }),
+    );
+    const { runtime } = createRuntime({ clients, databaseOptions, now: () => 5_000 });
+    const selected = createDeferredCore();
+    const reply = createDeferredCore();
+    const list = operatorApprovalStore.listPendingOperatorApprovals;
+    const delayed = vi
+      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
+      .mockImplementationOnce(async (params) => {
+        const records = await list(params);
+        selected.resolve();
+        await reply.promise;
+        return records;
+      });
+    const revoked = runtime.replay(SOURCE_SESSION_KEY, clients[0]!);
+    const rejected = expect(revoked).rejects.toThrow("replay authority is no longer current");
+    const retained = runtime.replay(SOURCE_SESSION_KEY, clients[1]!);
+    const otherReviewer = runtime.replay(SOURCE_SESSION_KEY, clients[2]!);
+    const otherSession = runtime.replay(SIBLING_SESSION_KEY, clients[1]!);
+    try {
+      await selected.promise;
+      clients[0]!.connect.scopes = [];
+      reply.resolve();
+      await rejected;
+      const retainedReplay = await retained;
+      const otherReviewerReplay = await otherReviewer;
+      const otherSessionReplay = await otherSession;
+      expect(retainedReplay.replay.approvals.map(({ id }) => id)).toEqual(["shared-replay"]);
+      expect(otherReviewerReplay.replay.approvals).toEqual([]);
+      expect(otherSessionReplay.replay.approvals).toEqual([]);
+      expect(delayed.mock.calls.length).toBe(3);
+      const secondReplay = await runtime.replay(SOURCE_SESSION_KEY, clients[1]!);
+      retainedReplay.release();
+      retainedReplay.release();
+      expect(retainedReplay.isCurrent()).toBe(false);
+      // Completed work is not cached: storage truth can change without a lifecycle publication.
+      const terminal = await resolveOperatorApproval({
+        id: "shared-replay",
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device" },
+        nowMs: 5_001,
+        databaseOptions,
+      });
+      expect((await runtime.replay(SOURCE_SESSION_KEY, clients[1]!)).replay.approvals).toEqual([]);
+      if (terminal.outcome !== "resolved") {
+        throw new Error("Expected terminal approval decision");
+      }
+      runtime.publish({ phase: "terminal", record: terminal.record });
+      expect(secondReplay.isCurrent()).toBe(false);
+      expect(otherReviewerReplay.isCurrent()).toBe(true);
+      expect(otherSessionReplay.isCurrent()).toBe(true);
+    } finally {
+      reply.resolve();
+      await Promise.allSettled([revoked, retained, otherReviewer, otherSession]);
+    }
+  });
+
+  it("invalidates a pending replay when a terminal event precedes the worker reply", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const pending = await insertPendingApproval({
+      databaseOptions,
+      id: "terminal-during-replay",
+      audienceSessionKeys: [SOURCE_SESSION_KEY],
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    });
+    const reviewer = createClient({
+      connId: "reviewer",
+      scopes: ["operator.approvals"],
+      deviceId: "reviewer-device",
+    });
+    const { runtime, subscribers, broadcastToConnIds } = createRuntime({
+      clients: [reviewer],
+      databaseOptions,
+      now: () => 5_000,
+    });
+    subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
+    const selected = createDeferredCore();
+    const reply = createDeferredCore();
+    const list = operatorApprovalStore.listPendingOperatorApprovals;
+    const delayedReply = vi
+      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
+      .mockImplementationOnce(async (params) => {
+        const records = await list(params);
+        selected.resolve();
+        await reply.promise;
+        return records;
+      });
+    const preparation = runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    try {
+      await selected.promise;
+      const terminal = await resolveOperatorApproval({
+        id: pending.id,
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device" },
+        nowMs: 5_001,
+        databaseOptions,
+      });
+      if (terminal.outcome !== "resolved") {
+        throw new Error("Expected terminal approval decision");
+      }
+      runtime.publish({ phase: "terminal", record: terminal.record });
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "session.approval",
+        expect.objectContaining({ phase: "terminal" }),
+        new Set(["reviewer"]),
+      );
+      reply.resolve();
+      expect((await preparation).isCurrent()).toBe(false);
+      const prepared = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
+      expect(prepared.isCurrent()).toBe(true);
+      expect(prepared.replay.approvals).toEqual([]);
+      expect(delayedReply.mock.calls.length).toBe(2);
+    } finally {
+      reply.resolve();
+      await preparation;
+      delayedReply.mockRestore();
+    }
+  });
+
+  it("publishes replay-triggered expiry to existing ancestor recipients before an empty replay", async () => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({
       databaseOptions,
       id: "expired-child-approval",
       audienceSessionKeys: [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
@@ -507,7 +632,7 @@ describe("operator approval session events", () => {
     });
     subscribers.subscribe("parent-reviewer", PARENT_SESSION_KEY, { includeApprovals: true });
 
-    const replay = runtime.replay(SOURCE_SESSION_KEY, parent);
+    const { replay } = await runtime.replay(SOURCE_SESSION_KEY, parent);
 
     expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -534,8 +659,162 @@ describe("operator approval session events", () => {
     });
   });
 
+  it("publishes committed expiry to authorized subscribers after the replay requester is revoked", async () => {
+    const databaseOptions = createDatabaseOptions();
+    await insertPendingApproval({
+      databaseOptions,
+      id: "expired-during-revocation",
+      audienceSessionKeys: [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
+      createdAtMs: 1_000,
+      expiresAtMs: 4_000,
+    });
+    const requester = createClient({
+      connId: "requester",
+      scopes: ["operator.approvals"],
+      deviceId: "reviewer-device",
+    });
+    const observer = createClient({
+      connId: "observer",
+      scopes: ["operator.approvals"],
+      deviceId: "reviewer-device",
+    });
+    const { runtime, subscribers, broadcastToConnIds } = createRuntime({
+      clients: [requester, observer],
+      databaseOptions,
+      now: () => 5_000,
+    });
+    subscribers.subscribe("observer", PARENT_SESSION_KEY, { includeApprovals: true });
+    const committed = createDeferredCore();
+    const reply = createDeferredCore();
+    const expire = operatorApprovalStore.expireDueOperatorApprovals;
+    const delayedReply = vi
+      .spyOn(operatorApprovalStore, "expireDueOperatorApprovals")
+      .mockImplementationOnce(async (params) => {
+        const result = await expire(params);
+        committed.resolve();
+        await reply.promise;
+        return result;
+      });
+    const replay = runtime.replay(SOURCE_SESSION_KEY, requester);
+    const rejected = expect(replay).rejects.toThrow("replay authority is no longer current");
+    try {
+      await committed.promise;
+      requester.connect.scopes = [];
+      reply.resolve();
+      await rejected;
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "session.approval",
+        expect.objectContaining({
+          sessionKey: PARENT_SESSION_KEY,
+          phase: "terminal",
+          approval: expect.objectContaining({
+            id: "expired-during-revocation",
+            status: "expired",
+            reason: "timeout",
+          }),
+        }),
+        new Set(["observer"]),
+      );
+    } finally {
+      reply.resolve();
+      await rejected;
+      delayedReply.mockRestore();
+    }
+  });
+
+  it("publishes expiry once when replay reconciliation joins a held manager mutation", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const reviewer = createClient({
+      connId: "reviewer",
+      scopes: ["operator.approvals"],
+      deviceId: "reviewer-device",
+    });
+    const managerHolder: { current?: ExecApprovalManager } = {};
+    const reconciling = createDeferredCore();
+    let replayAtMs = Date.now();
+    const { runtime, subscribers, broadcastToConnIds } = createRuntime({
+      clients: [reviewer],
+      databaseOptions,
+      now: () => replayAtMs,
+      reconcileTerminal: (record) => {
+        reconciling.resolve();
+        return managerHolder.current?.reconcileDurableTerminal(record) ?? false;
+      },
+    });
+    const manager = new ExecApprovalManager({
+      persistence: { runtimeEpoch: "replay-mutation-race", databaseOptions },
+      onLifecycle: runtime.publish,
+    });
+    managerHolder.current = manager;
+    const record = manager.create(
+      { command: "printf expiry", sessionKey: SOURCE_SESSION_KEY },
+      60_000,
+      "expiry-race",
+    );
+    const { decision } = await manager.register(record, 60_000);
+    subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
+    replayAtMs = record.expiresAtMs;
+    const sweepCommitted = createDeferredCore();
+    const releaseSweep = createDeferredCore();
+    const mutationCommitted = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const sweep = operatorApprovalStore.expireDueOperatorApprovals;
+    const forceDeny = operatorApprovalStore.forceDenyOperatorApproval;
+    const delayedSweep = vi
+      .spyOn(operatorApprovalStore, "expireDueOperatorApprovals")
+      .mockImplementationOnce(async (params) => {
+        const result = await sweep(params);
+        sweepCommitted.resolve();
+        await releaseSweep.promise;
+        return result;
+      });
+    const delayedMutation = vi
+      .spyOn(operatorApprovalStore, "forceDenyOperatorApproval")
+      .mockImplementationOnce(async (params) => {
+        const result = await forceDeny(params);
+        mutationCommitted.resolve();
+        await releaseMutation.promise;
+        return result;
+      });
+    const replay = runtime.replay(SOURCE_SESSION_KEY, reviewer);
+    let expiry: Promise<boolean> | undefined;
+    try {
+      await sweepCommitted.promise;
+      expiry = manager.expire(record.id);
+      await mutationCommitted.promise;
+      releaseSweep.resolve();
+      await reconciling.promise;
+      releaseMutation.resolve();
+      await expiry;
+      const prepared = await replay;
+      expect(prepared.isCurrent()).toBe(true);
+      expect(prepared.replay.approvals).toEqual([]);
+      await expect(decision).resolves.toBeNull();
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "session.approval",
+        expect.objectContaining({
+          phase: "terminal",
+          approval: expect.objectContaining({
+            id: record.id,
+            status: "expired",
+            reason: "timeout",
+          }),
+        }),
+        new Set(["reviewer"]),
+      );
+    } finally {
+      releaseSweep.resolve();
+      releaseMutation.resolve();
+      await Promise.allSettled([replay, expiry]);
+      await manager.drain();
+      delayedSweep.mockRestore();
+      delayedMutation.mockRestore();
+    }
+  });
+
   it("settles the owning waiter and publishes replay-triggered expiry once", async () => {
     vi.useFakeTimers();
+    installTestApprovalClock();
     vi.setSystemTime(1_000);
     const databaseOptions = createDatabaseOptions();
     // Replay reconciliation runs only after the manager exists; route it
@@ -587,14 +866,14 @@ describe("operator approval session events", () => {
       3_000,
       "replay-expiry-with-waiter",
     );
-    const decisionPromise = manager.register(record, 3_000);
+    const decisionPromise = (await manager.register(record, 3_000)).decision;
     expect(executionEvents.map((event) => event.data)).toEqual([
       { approval: { id: record.id, state: "pending" } },
     ]);
     harness.broadcastToConnIds.mockClear();
     vi.setSystemTime(record.expiresAtMs);
 
-    expect(runtime.replay(SOURCE_SESSION_KEY, parent)).toEqual({
+    expect((await runtime.replay(SOURCE_SESSION_KEY, parent)).replay).toEqual({
       sessionKey: SOURCE_SESSION_KEY,
       updatedAtMs: record.expiresAtMs,
       approvals: [],

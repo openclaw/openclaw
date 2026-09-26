@@ -1,5 +1,5 @@
 import { isSettingsTakeover } from "../app-navigation.ts";
-import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
 import { desktopPanelLayout } from "../components/desktop/desktop-panel-layout.ts";
 import { browserPanelLayout, terminalPanelLayout } from "../components/dock-panel-layout.ts";
 import { resolveLinkReaderTarget } from "../components/link-reader-target.ts";
@@ -24,7 +24,7 @@ import { isNativeEmbedHost } from "./native-web-chrome.ts";
 import { isBrowserPanelSurfaceAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 
 export interface ShellPanelHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;

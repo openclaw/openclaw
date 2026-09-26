@@ -1,5 +1,5 @@
 // Covers heartbeat delivery routes for queued events and isolated completions.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -9,6 +9,7 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "./heartbeat-runner.js";
 import {
   getFirstReplyContext,
@@ -18,11 +19,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import {
-  requestHeartbeatAndWait,
-  setHeartbeatWakeHandler,
-  type HeartbeatRunResult,
-} from "./heartbeat-wake.js";
+import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
@@ -266,7 +263,9 @@ describe("Heartbeat event routing", () => {
     },
   );
 
-  it("retains a legacy queue's explicit base until its mixed cron follow-up completes", async () => {
+  it("retains a legacy queue's explicit base until its mixed cron follow-up completes", async ({
+    signal,
+  }) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const baseKey = "agent:ops:alerts:heartbeat";
       const isolatedKey = `${baseKey}:heartbeat`;
@@ -303,21 +302,22 @@ describe("Heartbeat event routing", () => {
       replySpy.mockImplementation(async (ctx) => ({
         text: ctx.InternalTurnSource === "exec" ? "Command completed" : "Reminder handled",
       }));
-      const followUp = createDeferred<HeartbeatRunResult>();
+      const followup = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
       const runner = startHeartbeatRunner({
         cfg,
-        runOnce: async (opts) => {
-          const result = await runHeartbeatOnce({
+        runOnce: (opts) => {
+          const run = runHeartbeatOnce({
             ...opts,
             cfg,
             deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
           });
           if (opts.source === "cron") {
-            followUp.resolve(result);
+            followup.resolve(run);
           }
-          return result;
+          return run;
         },
       });
+      onTestFinished(() => runner.stop());
       try {
         await requestHeartbeatAndWait({
           source: "exec-event",
@@ -327,8 +327,10 @@ describe("Heartbeat event routing", () => {
           sessionKey: queueKey,
           coalesceMs: 0,
         });
-        // The cron wake owns a separate dispatch and storage lifecycle after the exec waiter settles.
-        await expect(followUp.promise).resolves.toMatchObject({ status: "ran" });
+        // The exec wake settles before its separately scheduled cron follow-up.
+        await expect(racePromiseWithAbortSignal(followup.promise, signal)).resolves.toMatchObject({
+          status: "ran",
+        });
         expect(replySpy).toHaveBeenCalledTimes(2);
         expect(
           replySpy.mock.calls.map(([ctx]) => [ctx.AgentId, ctx.SessionKey, ctx.InternalTurnSource]),

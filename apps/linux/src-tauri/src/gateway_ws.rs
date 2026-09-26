@@ -68,10 +68,11 @@ pub enum GatewayOwnership {
 
 #[derive(Clone)]
 pub struct GatewayWsConfig {
-    ws_url: String,
-    token: Option<String>,
-    password: Option<String>,
-    tls_fingerprint: Option<String>,
+    pub(crate) ws_url: String,
+    pub(crate) token: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) tls_fingerprint: Option<String>,
+    pub(crate) node_identity_scope: String,
     ownership: GatewayOwnership,
 }
 
@@ -84,12 +85,18 @@ impl GatewayWsConfig {
         ownership: GatewayOwnership,
     ) -> Self {
         Self {
+            node_identity_scope: ws_url.clone(),
             ws_url,
             token,
             password,
             tls_fingerprint,
             ownership,
         }
+    }
+
+    pub(crate) fn with_node_identity_scope(mut self, scope: String) -> Self {
+        self.node_identity_scope = scope;
+        self
     }
 }
 
@@ -533,7 +540,13 @@ impl GatewayClient {
     }
 
     fn set_configuration(&self, app: &AppHandle, config: Option<GatewayWsConfig>) {
-        self.replace_configuration(config);
+        let generation = GatewayGeneration(self.replace_configuration(config.clone()));
+        if let Some(node) = app.try_state::<crate::desktop_node::DesktopNode>() {
+            let _ = self.with_generation(generation, || {
+                node.configure(generation, config);
+                Ok(())
+            });
+        }
         self.inner.reconnect_paused.store(false, Ordering::SeqCst);
         self.set_connection_state(app, GatewayConnectionState::Down, None);
         self.emit_connection_state(app);
@@ -3401,6 +3414,7 @@ esac
                 tls_fingerprint: None,
             };
             crate::remote_ws_config(&request, &Url::parse(url).expect("Gateway URL"))
+                .expect("remote config")
         }
 
         struct SleepSocketFixture {

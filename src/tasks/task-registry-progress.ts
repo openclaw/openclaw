@@ -2,42 +2,36 @@ import { createHash } from "node:crypto";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import {
-  getAgentRunLifecycleGeneration,
-  resolveProjectedAgentRunProgressState,
-} from "../infra/agent-run-registry.js";
+import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   getGatewayRestartDrainSignal,
-  isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import type { SessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
-import { shouldAutoDeliverTaskStateChange } from "./task-executor-policy.js";
-import { canDeliverToRequesterOrigin, resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
+import { hasResidentTaskBacking, prepareTaskBackingRead } from "./task-backing-authority.js";
+import { readResidentTaskFlow } from "./task-flow-runtime-internal.js";
+import {
+  prepareProgressBatch,
+  resolveYieldedTaskProgress,
+  type ProgressRead,
+} from "./task-progress-batch.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
   getTasksByRunId,
   tasks,
   taskProgressBatches,
   taskRegistryLog,
-  withTaskRegistryMutation,
 } from "./task-registry-state.js";
-import type {
-  TaskProgressBatch,
-  TaskProgressMember,
-  TaskProgressPlan,
-} from "./task-registry.process-state.js";
+import type { TaskProgressBatch, TaskProgressPlan } from "./task-registry.process-state.js";
 import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { formatTaskStatusTitleText } from "./task-status.js";
@@ -48,66 +42,11 @@ export const MAX_PROGRESS_BATCH_MEMBERS = 32;
 const MAX_PENDING_PROGRESS_ITEMS = 128;
 const loadProgressPresentation = createLazyPromise(() => import("./task-progress-presentation.js"));
 const loadProgressRuntime = createLazyPromise(() => import("./task-registry-progress-runtime.js"));
-
-function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
-  if (task.runtime !== "subagent" || task.notifyPolicy === "silent") {
-    return undefined;
-  }
-  const backing = readTaskBackingInstance(task.detail);
-  const entry = subagentRuns.get(runId);
-  const wake = entry?.requesterSettleWake;
-  const operationId = wake?.progressOperationId;
-  if (
-    backing?.runtime !== "subagent" ||
-    !entry ||
-    entry.generation !== backing.generation ||
-    (operationId && !entry.completionRequesterSessionId) ||
-    (entry.taskRunId ?? entry.runId) !== task.runId ||
-    entry.childSessionKey !== task.childSessionKey ||
-    entry.requesterSessionKey !== task.ownerKey ||
-    (entry.requesterAgentId !== undefined && entry.requesterAgentId !== task.requesterAgentId) ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.execution.suppressSessionEffects ||
-    entry.suppressAnnounceReason ||
-    entry.requesterTurnRunId ||
-    entry.collect === true ||
-    wake?.requesterYieldBatch !== true ||
-    (wake.status !== "pending" && wake.status !== "dispatching") ||
-    (!operationId &&
-      (!shouldAutoDeliverTaskStateChange(task) ||
-        wake.status !== "pending" ||
-        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
-    wake.rearmGeneration === undefined ||
-    !wake.batchRunIds?.includes(runId) ||
-    !hasAuthoritativeTaskBacking(task)
-  ) {
-    return undefined;
-  }
-  const owner = resolveTaskDeliveryOwner(task);
-  if (
-    !owner.sessionKey ||
-    (operationId && !owner.agentId) ||
-    !canDeliverToRequesterOrigin(owner.requesterOrigin)
-  ) {
-    return undefined;
-  }
-  const key = JSON.stringify([
-    owner.sessionKey,
-    owner.agentId,
-    owner.requesterOrigin,
-    ...(operationId ? [operationId] : [wake.rearmGeneration, wake.batchRunIds]),
-  ]);
-  return {
-    task,
-    entry,
-    owner,
-    key,
-    generation: backing.generation,
-    operationId,
-    requesterSessionId: entry.completionRequesterSessionId,
-  };
-}
+const residentProgressRead: ProgressRead = {
+  getTaskById: (taskId) => tasks.get(taskId),
+  getTaskFlowById: readResidentTaskFlow,
+  hasAuthoritativeTaskBacking: hasResidentTaskBacking,
+};
 
 /** Detached presentation consumes prepared public activity, never raw child prose or results. */
 export function scheduleYieldedSubagentTaskProgress(
@@ -134,7 +73,13 @@ export function scheduleYieldedSubagentRunProgress(entry: SubagentRunRecord) {
 }
 
 function enqueueYieldedTaskProgress(task: TaskRecord, runId: string, prepared?: AgentActivityItem) {
-  const progress = resolveYieldedTaskProgress(task, runId);
+  // Capture records without draining persistence; adoption and delivery recheck authority.
+  const progress = resolveYieldedTaskProgress(
+    task,
+    runId,
+    hasResidentTaskBacking,
+    readResidentTaskFlow,
+  );
   if (!progress) {
     return;
   }
@@ -207,7 +152,11 @@ function trimPendingItems(batch: TaskProgressBatch): void {
   }
 }
 
-export function getTaskProgressBatchesForRuns(entries: readonly SubagentRunRecord[]) {
+export async function getTaskProgressBatchesForRuns(entries: readonly SubagentRunRecord[]) {
+  const read = await prepareTaskBackingRead();
+  if (!read) {
+    return [];
+  }
   const generations = new Map(entries.map((entry) => [entry.runId, entry.generation]));
   for (const entry of entries) {
     scheduleYieldedSubagentRunProgress(entry);
@@ -217,7 +166,7 @@ export function getTaskProgressBatchesForRuns(entries: readonly SubagentRunRecor
     [...batch.members.values()].some(
       (member) => generations.get(member.runId) === member.generation,
     ) &&
-    prepareProgressBatch(key, batch)
+    prepareProgressBatch(key, batch, read)
       ? [{ key, batch }]
       : [],
   );
@@ -229,7 +178,11 @@ export function recordRequesterTaskProgress(
   update: { kind: "item"; item: AgentActivityItem } | { kind: "plan"; plan: TaskProgressPlan },
 ): void {
   const requester = batch.requesterContinuation;
-  if (!requester || !requester.isCurrent() || !prepareProgressBatch(key, batch)) {
+  if (
+    !requester ||
+    !requester.isCurrent() ||
+    !prepareProgressBatch(key, batch, residentProgressRead)
+  ) {
     return;
   }
   if (update.kind === "plan") {
@@ -256,15 +209,73 @@ export async function flushTaskProgressBatch(key: string, batch: TaskProgressBat
   clearTimeout(batch.timer);
   batch.timer = undefined;
   await batch.publication;
-  if (prepareProgressBatch(key, batch)) {
+  if (taskProgressBatches.get(key) === batch) {
     clearTimeout(batch.timer);
     batch.timer = undefined;
     await publishProgressBatch(key, batch);
   }
 }
 
+/** A confirmed requester final retires only its adopted card, after all edits settle. */
+export async function completeTaskProgressBatch(
+  key: string,
+  batch: TaskProgressBatch,
+): Promise<boolean> {
+  const continuation = batch.requesterContinuation;
+  const { operationId, requesterSessionId, requesterAgentId } = batch;
+  const read = await prepareTaskBackingRead();
+  const current = read && prepareProgressBatch(key, batch, read);
+  if (
+    !read ||
+    !current ||
+    !continuation?.isCurrent() ||
+    !operationId ||
+    !requesterSessionId ||
+    !requesterAgentId ||
+    current.rows.length !== batch.members.size ||
+    !current.rows.every(({ task }) => isTerminalTaskStatus(task.status))
+  ) {
+    return false;
+  }
+  batch.finalReplyDelivered = true;
+  clearTimeout(batch.timer);
+  const assertCurrent = () => {
+    const fresh = prepareProgressBatch(key, batch, read);
+    if (
+      !fresh ||
+      fresh.membersKey !== current.membersKey ||
+      batch.requesterContinuation !== continuation ||
+      !continuation.isCurrent()
+    ) {
+      throw new Error("Completed task progress owner was superseded");
+    }
+  };
+  try {
+    await batch.publication;
+    await runWithGatewayDetachedWorkContinuation(async () => {
+      const { deleteTaskProgressMessage } = await loadProgressRuntime();
+      assertCurrent();
+      const outcome = await deleteTaskProgressMessage({
+        operationId,
+        requesterSessionId,
+        sessionKey: batch.requesterSessionKey,
+        agentId: requesterAgentId,
+        origin: current.origin,
+        signal: AbortSignal.any([batch.abortController.signal, getGatewayRestartDrainSignal()]),
+        assertCurrent,
+      });
+      if (outcome !== "sent") {
+        taskRegistryLog.debug("Completed task progress could not be removed", { outcome });
+      }
+    }, "tasks:progress-cleanup");
+  } finally {
+    retireProgressBatch(key, batch);
+  }
+  return true;
+}
+
 function scheduleProgressBatch(key: string, batch: TaskProgressBatch, immediate = false) {
-  if (batch.publication || (batch.timer && !immediate)) {
+  if (batch.finalReplyDelivered || batch.publication || (batch.timer && !immediate)) {
     return;
   }
   clearTimeout(batch.timer);
@@ -298,7 +309,7 @@ export function reconcileTaskProgressBatches(event?: TaskRegistryObserverEvent):
     if (taskId && !batch.members.has(taskId)) {
       continue;
     }
-    const current = prepareProgressBatch(key, batch);
+    const current = prepareProgressBatch(key, batch, residentProgressRead);
     if (!current) {
       retireProgressBatch(key, batch);
     } else if (event || current.complete) {
@@ -315,7 +326,7 @@ export function reconcileTaskProgressBatches(event?: TaskRegistryObserverEvent):
   if (event?.kind === "upserted") {
     const task = tasks.get(event.task.taskId);
     if (task?.runtime === "subagent" && task.childSessionKey) {
-      const entry = getLatestSubagentRunByChildSessionKey(task.childSessionKey);
+      const entry = getLatestLiveSubagentRunByChildSessionKey(task.childSessionKey);
       if (entry) {
         enqueueYieldedTaskProgress(task, entry.runId);
       }
@@ -344,114 +355,12 @@ export function retireTaskProgressForSession(mutation: SessionIdentityMutation):
   }
 }
 
-function prepareProgressBatch(key: string, batch: TaskProgressBatch) {
-  if (
-    taskProgressBatches.get(key) !== batch ||
-    batch.abortController.signal.aborted ||
-    isGatewayRestartDraining() ||
-    batch.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
-    (!batch.operationId &&
-      resolveProjectedAgentRunProgressState({
-        sessionKeys: [batch.requesterSessionKey],
-        agentId: batch.requesterAgentId,
-      }))
-  ) {
-    return undefined;
-  }
-  const rows: Array<{ task: TaskRecord; entry: TaskProgressMember }> = [];
-  let awaitingTerminal = false;
-  let hasPendingWake = false;
-  for (const [taskId, member] of batch.members) {
-    const task = tasks.get(taskId);
-    const backing = task ? readTaskBackingInstance(task.detail) : undefined;
-    if (
-      !task ||
-      task.runtime !== "subagent" ||
-      task.notifyPolicy === "silent" ||
-      task.runId !== member.taskRunId ||
-      task.ownerKey !== batch.requesterSessionKey ||
-      backing?.runtime !== "subagent" ||
-      backing.generation !== member.generation ||
-      task.childSessionKey !== member.childSessionKey
-    ) {
-      continue;
-    }
-    const owner = resolveTaskDeliveryOwner(task);
-    if (
-      owner.agentId !== batch.requesterAgentId ||
-      (owner.requesterOrigin &&
-        JSON.stringify(owner.requesterOrigin) !== JSON.stringify(batch.origin))
-    ) {
-      continue;
-    }
-    const latest = getLatestLiveSubagentRunByChildSessionKey(member.childSessionKey);
-    if (
-      latest &&
-      (latest.taskRunId ?? latest.runId) === task.runId &&
-      (latest.runId !== member.runId || latest.generation !== member.generation)
-    ) {
-      continue;
-    }
-    const entry = subagentRuns.get(member.runId);
-    if (
-      entry &&
-      (entry.generation !== member.generation ||
-        entry.requesterSessionKey !== batch.requesterSessionKey ||
-        entry.completionRequesterSessionId !== batch.requesterSessionId ||
-        entry.collect ||
-        (entry.requesterSettleWake?.progressOperationId &&
-          entry.requesterSettleWake.progressOperationId !== batch.operationId))
-    ) {
-      continue;
-    }
-    const active = resolveYieldedTaskProgress(task, member.runId);
-    if (active?.key === key) {
-      hasPendingWake = true;
-      rows.push({ task, entry: member });
-    } else if (batch.operationId && isTerminalTaskStatus(task.status)) {
-      const wake = entry?.requesterSettleWake;
-      hasPendingWake ||=
-        wake?.progressOperationId === batch.operationId &&
-        wake.batchRunIds?.includes(member.runId) === true;
-      rows.push({ task, entry: member });
-    } else if (batch.operationId && (entry?.killIntent || entry?.killReconciliation)) {
-      awaitingTerminal = true;
-    }
-  }
-  if (rows.length === 0 && !awaitingTerminal) {
-    return undefined;
-  }
-  rows.sort(
-    (left, right) =>
-      left.task.createdAt - right.task.createdAt ||
-      left.task.taskId.localeCompare(right.task.taskId),
-  );
-  return {
-    owner: {
-      sessionKey: batch.requesterSessionKey,
-      agentId: batch.requesterAgentId,
-      requesterOrigin: batch.origin,
-    },
-    origin: batch.origin,
-    sessionKey: batch.requesterSessionKey,
-    rows,
-    complete:
-      Boolean(batch.operationId) &&
-      !awaitingTerminal &&
-      !hasPendingWake &&
-      !batch.requesterContinuation?.isCurrent() &&
-      rows.every(({ task }) => isTerminalTaskStatus(task.status)),
-    membersKey: JSON.stringify(
-      rows.map(({ task, entry }) => [task.taskId, task.status, entry.runId, entry.generation]),
-    ),
-  };
-}
-
 async function ensureProgressTyping(key: string, batch: TaskProgressBatch): Promise<void> {
   if (batch.typingStarted || batch.abortController.signal.aborted) {
     return;
   }
-  const current = prepareProgressBatch(key, batch);
+  const read = await prepareTaskBackingRead();
+  const current = read && prepareProgressBatch(key, batch, read);
   const requesterSessionId = batch.requesterSessionId;
   const operationId = batch.operationId;
   if (
@@ -466,7 +375,7 @@ async function ensureProgressTyping(key: string, batch: TaskProgressBatch): Prom
   }
   try {
     const { startTaskProgressTyping } = await loadProgressRuntime();
-    if (!prepareProgressBatch(key, batch)) {
+    if (!read || !prepareProgressBatch(key, batch, read)) {
       return;
     }
     batch.typingStarted = startTaskProgressTyping({
@@ -476,10 +385,16 @@ async function ensureProgressTyping(key: string, batch: TaskProgressBatch): Prom
       sessionKey: current.sessionKey,
       origin: current.origin,
       signal: AbortSignal.any([batch.abortController.signal, getGatewayRestartDrainSignal()]),
-      assertCurrent: () => {
-        if (!prepareProgressBatch(key, batch)) {
+      prepareCurrent: async () => {
+        const currentRead = await prepareTaskBackingRead();
+        if (!currentRead) {
           throw new Error("Task progress typing owner retired");
         }
+        return () => {
+          if (!prepareProgressBatch(key, batch, currentRead)) {
+            throw new Error("Task progress typing owner retired");
+          }
+        };
       },
       isExecutionActive: () => {
         if (batch.requesterContinuation?.isCurrent()) {
@@ -506,33 +421,61 @@ async function ensureProgressTyping(key: string, batch: TaskProgressBatch): Prom
 }
 
 function publishProgressBatch(key: string, batch: TaskProgressBatch): Promise<void> {
+  if (batch.finalReplyDelivered) {
+    return batch.publication ?? Promise.resolve();
+  }
   if (batch.publication) {
     return batch.publication;
   }
   const revision = batch.revision;
-  const publication = runProgressPublication(key, batch).finally(() => {
-    if (batch.publication === publication) {
-      batch.publication = undefined;
-    }
-    if (taskProgressBatches.get(key) !== batch) {
-      return;
-    }
+  const settlePublication = async () => {
+    let reschedule = false;
     try {
-      const current = prepareProgressBatch(key, batch);
-      if (!current || ((!batch.operationId || current.complete) && batch.revision === revision)) {
-        retireProgressBatch(key, batch);
-      } else if (batch.revision !== revision) {
-        scheduleProgressBatch(key, batch);
+      reschedule = await finalizeProgressBatch(key, batch, revision);
+    } finally {
+      if (batch.publication === publication) {
+        batch.publication = undefined;
+        if (reschedule && taskProgressBatches.get(key) === batch) {
+          scheduleProgressBatch(key, batch);
+        }
       }
-    } catch (error) {
-      retireProgressBatch(key, batch);
-      taskRegistryLog.debug("Progress owner could not settle", {
-        error: formatErrorMessage(error),
-      });
     }
-  });
+  };
+  const publication = runProgressPublication(key, batch).then(
+    settlePublication,
+    async (error: unknown) => {
+      await settlePublication();
+      throw error;
+    },
+  );
   batch.publication = publication;
   return publication;
+}
+
+async function finalizeProgressBatch(
+  key: string,
+  batch: TaskProgressBatch,
+  revision: number,
+): Promise<boolean> {
+  try {
+    if (taskProgressBatches.get(key) !== batch || batch.finalReplyDelivered) {
+      return false;
+    }
+    const read = await prepareTaskBackingRead();
+    if (!read) {
+      return true;
+    }
+    const current = prepareProgressBatch(key, batch, read);
+    if (!current || ((!batch.operationId || current.complete) && batch.revision === revision)) {
+      retireProgressBatch(key, batch);
+      return false;
+    }
+    return batch.revision !== revision;
+  } catch (error) {
+    retireProgressBatch(key, batch);
+    taskRegistryLog.debug("Progress owner could not settle", { error: formatErrorMessage(error) });
+    return false;
+  }
 }
 
 async function runProgressPublication(key: string, batch: TaskProgressBatch): Promise<void> {
@@ -541,16 +484,14 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
       return;
     }
     await runWithGatewayDetachedWorkContinuation(async () => {
-      const fresh = withTaskRegistryMutation(
-        () => prepareProgressBatch(key, batch),
-        () => undefined,
-      );
-      if (!fresh || fresh.rows.length === 0) {
+      const read = await prepareTaskBackingRead();
+      const fresh = read && prepareProgressBatch(key, batch, read);
+      if (!read || !fresh || fresh.rows.length === 0) {
         return null;
       }
       const assertCurrent = () => {
-        const current = prepareProgressBatch(key, batch);
-        if (!current || current.membersKey !== fresh.membersKey) {
+        const current = prepareProgressBatch(key, batch, read);
+        if (batch.finalReplyDelivered || !current || current.membersKey !== fresh.membersKey) {
           throw new Error("Background progress was superseded before delivery");
         }
       };
@@ -573,13 +514,12 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
         if (!source) {
           return true;
         }
-        const task = tasks.get(source.taskId);
-        const backing = task ? readTaskBackingInstance(task.detail) : undefined;
-        return (
-          task?.ownerKey === batch.requesterSessionKey &&
-          task.notifyPolicy !== "silent" &&
-          backing?.runtime === "subagent" &&
-          backing.generation === source.generation
+        // A committed rebind can preserve the backing generation while retiring this member.
+        return fresh.rows.some(
+          ({ task, entry }) =>
+            task.taskId === source.taskId &&
+            entry.runId === source.runId &&
+            entry.generation === source.generation,
         );
       });
       const capturedPlan = batch.pendingPlan;

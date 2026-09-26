@@ -10,7 +10,7 @@ import {
   requestOptions,
   safeCodexControlRequest,
   type CodexControlRequestOptions,
-  type SafeValue,
+  type SafeCodexControlRequestFn,
 } from "./command-rpc.js";
 import { resolveCodexDefaultWorkspaceDir } from "./conversation-binding-data.js";
 import {
@@ -32,13 +32,6 @@ type CodexControlRequestFn = (
   requestParams: JsonValue | undefined,
   options?: CodexControlRequestOptions,
 ) => Promise<JsonValue | undefined>;
-
-type SafeCodexControlRequestFn = (
-  pluginConfig: unknown,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<SafeValue<JsonValue | undefined>>;
 
 type ListCodexCliSessionsOnNodeFn = (
   params: Omit<Parameters<typeof listCodexCliSessionsOnNode>[0], "runtime">,

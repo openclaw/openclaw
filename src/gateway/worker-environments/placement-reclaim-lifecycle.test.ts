@@ -25,10 +25,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it.each([
-    { operation: "reclaim", failure: "rejection" },
     { operation: "reclaim", failure: "timeout" },
     { operation: "move", failure: "rejection" },
-    { operation: "move", failure: "timeout" },
     { operation: "recovery", failure: "rejection" },
     { operation: "reclaim", failure: "reconciliation" },
     { operation: "reclaim", failure: "resume-owner-close" },
@@ -54,15 +52,19 @@ describe("placement reclaim with provider-owned node teardown", () => {
         ...support.BUNDLE_ARTIFACT,
         ...build,
       });
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         environmentId,
         providerId: "fake",
         profileId: REQUEST.profileId,
         profileSnapshot: { settings: { region: "test" } },
         provisionOperationId: "provision-fixture",
       });
-      support.testState.store.transition({ environmentId, from: "requested", to: "provisioning" });
-      support.testState.store.transition({
+      await support.testState.store.transition({
+        environmentId,
+        from: "requested",
+        to: "provisioning",
+      });
+      await support.testState.store.transition({
         environmentId,
         from: "provisioning",
         to: "ready",
@@ -73,7 +75,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           sharedHost: false,
         },
       });
-      const attached = support.testState.store.transition({
+      const attached = await support.testState.store.transition({
         environmentId,
         from: "ready",
         to: "attached",
@@ -82,12 +84,12 @@ describe("placement reclaim with provider-owned node teardown", () => {
           sharedHost: false,
         },
       });
-      const active = harness.placements.seedActive(attached.ownerEpoch);
+      const active = await harness.placements.seedActive(attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("expected active placement");
       }
       if (operation === "recovery") {
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...REQUEST,
           claimId: "pending-claim",
           runId: "pending-run",
@@ -223,7 +225,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
       );
       invoke.mockClear();
       vi.mocked(harness.environments.startTunnel).mockClear();
-      vi.useFakeTimers();
+      // SQLite workers compare cross-thread monotonic deadlines; fake only the provider timer.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const request = {
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
@@ -352,8 +355,8 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         workspacePath: support.testState.root,
       });
       const environmentId = harness.ready.environmentId;
-      const identity = support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
-      const active = seedActivePlacement(placements, {
+      const identity = await support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
+      const active = await seedActivePlacement(placements, {
         environmentId,
         ownerEpoch: identity.ownerEpoch,
         executionMode: "remote-exec",

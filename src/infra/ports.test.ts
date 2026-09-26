@@ -1,9 +1,11 @@
 // Covers gateway port availability and diagnostics behavior.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { listenServer, withNativeSsConnection } from "./ports.test-support.js";
 import {
@@ -13,6 +15,7 @@ import {
 } from "./windows-install-roots.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -161,23 +164,32 @@ describe("ports helpers", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("prints an OpenClaw-specific hint when port details look like another OpenClaw instance", async () => {
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: vi.fn() as unknown as (code: number) => never,
-    };
+  it.each([
+    { details: "openclaw-gateway", openclaw: false },
+    { details: "node dist/index.js", openclaw: false },
+    { details: "node src/index.ts", openclaw: false },
+  ])(
+    "keeps port guidance independent of diagnostic text ($details)",
+    async ({ details, openclaw }) => {
+      const runtime = {
+        error: vi.fn(),
+        log: vi.fn(),
+        exit: vi.fn() as unknown as (code: number) => never,
+      };
 
-    await handlePortError(
-      new PortInUseError(18789, "node dist/index.js openclaw gateway"),
-      18789,
-      "gateway start",
-      runtime,
-    ).catch(() => {});
+      await handlePortError(
+        new PortInUseError(18789, details),
+        18789,
+        "gateway start",
+        runtime,
+      ).catch(() => {});
 
-    const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
-    expect(messages.join("\n")).toContain("another OpenClaw instance is already running");
-  });
+      const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
+      expect(messages.join("\n").includes("another OpenClaw instance is already running")).toBe(
+        openclaw,
+      );
+    },
+  );
 });
 
 describeUnix("inspectPortUsage", () => {
@@ -212,27 +224,27 @@ describeUnix("inspectPortUsage", () => {
     ]);
   });
 
-  it("keeps only listener rows that can block a scoped bind", async ({ skip }) => {
-    await using server = net.createServer();
-    const address = await listenServer(skip, server, 0, "127.0.0.1");
-    const port = address.port;
-
-    mockUnixCommands({
-      lsof: commandOutput(
-        `p111\ncgateway\nnTCP 127.0.0.1:${port} (LISTEN)\n` +
-          `p222\ncother\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
-      ),
-    });
-
-    const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
-
-    expect(result.status).toBe("busy");
-    expect(result.listeners).toHaveLength(1);
-    expect(result.listeners[0]).toMatchObject({
-      pid: 111,
-      address: `TCP 127.0.0.1:${port} (LISTEN)`,
-    });
-  });
+  it.for(["127.0.0.1", "0.0.0.0"])(
+    "preserves the relevant %s listener in single and batched loopback inspection",
+    async (host, { skip }) => {
+      await using server = net.createServer();
+      const { port } = await listenServer(skip, server, 0, host);
+      const address = `TCP ${host === "0.0.0.0" ? "*" : host}:${port} (LISTEN)`;
+      mockUnixCommands({
+        lsof: commandOutput(
+          `p111\ncgateway\nn${address}\np222\ncother\nnTCP 127.0.0.2:${port} (LISTEN)\n`,
+        ),
+      });
+      const single = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+      const batch = await inspectPortUsages([port], {
+        probeHostsByPort: new Map([[port, ["127.0.0.1"]]]),
+      });
+      for (const result of [single, batch.get(port)]) {
+        expect(result?.status).toBe("busy");
+        expect(result?.listeners).toEqual([{ pid: 111, command: "gateway", address }]);
+      }
+    },
+  );
 
   it.for([
     { probeHost: "127.0.0.1", unrelatedWildcard: "[::]" },
@@ -279,20 +291,23 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
-  it("reports busy when lsof is missing but loopback listener exists", async ({ skip }) => {
-    await using server = net.createServer();
-    const address = await listenServer(skip, server, 0, "127.0.0.1");
-    const port = address.port;
+  it.for(["127.0.0.1", "0.0.0.0"])(
+    "reports busy when lsof is missing and %s serves loopback",
+    async (host, { skip }) => {
+      await using server = net.createServer();
+      const address = await listenServer(skip, server, 0, host);
+      const port = address.port;
 
-    runCommandWithTimeoutMock.mockRejectedValueOnce(
-      Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
-    );
+      runCommandWithTimeoutMock.mockRejectedValueOnce(
+        Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
+      );
 
-    const result = await inspectPortUsage(port);
-    expect(result.status).toBe("busy");
-    const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
-    expect(enoentErrors.length).toBeGreaterThan(0);
-  });
+      const result = await inspectPortUsage(port, { probeHosts: ["127.0.0.1"] });
+      expect(result.status).toBe("busy");
+      const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
+      expect(enoentErrors.length).toBeGreaterThan(0);
+    },
+  );
 
   it.for(["single", "batch"])(
     "falls back to ss when lsof is unavailable (%s)",
@@ -999,12 +1014,16 @@ describe("inspectPortUsage on Windows", () => {
   });
 
   it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
+    const root = tempDirs.make("openclaw-port-listener-");
+    const script = path.join(root, "dist", "index.js");
+    mkdirSync(path.dirname(script), { recursive: true });
+    writeFileSync(script, "");
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    const commandLine = `"${process.execPath}" "${script}" gateway run`;
     mockWindowsCommands({
       netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
       tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
-      powershell: commandOutput(
-        '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
-      ),
+      powershell: commandOutput(`${commandLine}\r\n`),
     });
 
     const result = await inspectPortUsage(18789);
@@ -1012,10 +1031,8 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.status).toBe("busy");
     expect(result.listeners).toHaveLength(1);
     expect(result.listeners[0]?.command).toBe("node.exe");
-    expect(result.listeners[0]?.commandLine).toContain("openclaw");
-    expect(result.hints.some((hint) => hint.includes("Gateway already running locally"))).toBe(
-      false,
-    );
+    expect(result.listeners[0]?.commandLine).toBe(commandLine);
+    expect(result.hints).toEqual([]);
   });
 
   it("reports localized Windows listener rows without requiring English state text", async () => {

@@ -84,6 +84,27 @@ describe("registerOnboardCommand", () => {
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
+  it.each([
+    { args: ["recommendations"], target: "onboardRecommendationsCommand" },
+    {
+      args: ["recommendations", "acknowledge"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+    },
+    { args: ["recommendations", "refresh"], target: "refreshOnboardRecommendationsCommand" },
+  ] as const)(
+    "reports asynchronous recommendation persistence failures for $target",
+    async ({ args, target }) => {
+      mocks[target].mockRejectedValueOnce(
+        new Error("synthetic recommendation persistence failure"),
+      );
+      await runCli(["onboard", ...args]);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("synthetic recommendation persistence failure"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it("routes the read-only recommendations subcommand", async () => {
     await runCli(["onboard", "recommendations", "--json"]);
 
@@ -123,19 +144,9 @@ describe("registerOnboardCommand", () => {
 
   it.each([
     {
-      args: ["--agent", "writer", "--json"],
-      target: "onboardRecommendationsCommand",
-      expected: { agent: "writer", json: true },
-    },
-    {
       args: ["--json", "--agent", "writer"],
       target: "onboardRecommendationsCommand",
       expected: { agent: "writer", json: true },
-    },
-    {
-      args: ["--agent", "writer", "acknowledge"],
-      target: "acknowledgeOnboardRecommendationsCommand",
-      expected: { agent: "writer", retry: undefined },
     },
     {
       args: ["acknowledge", "--agent", "writer"],
@@ -156,11 +167,6 @@ describe("registerOnboardCommand", () => {
       args: ["acknowledge", "--retry", "chat-plugin", "--agent", "writer"],
       target: "acknowledgeOnboardRecommendationsCommand",
       expected: { agent: "writer", retry: ["chat-plugin"] },
-    },
-    {
-      args: ["--agent", "writer", "refresh"],
-      target: "refreshOnboardRecommendationsCommand",
-      expected: { agent: "writer" },
     },
     {
       args: ["refresh", "--agent", "writer"],
@@ -289,10 +295,14 @@ describe("registerOnboardCommand", () => {
       { flag: "--install-daemon", option: ["--install-daemon"] },
       { flag: "--skip-skills", option: ["--skip-skills"] },
       { flag: "--import-from", option: ["--import-from", "hermes"] },
-    ].flatMap(({ flag, option }) => [
-      { flag, placement: "parent", args: ["--json", ...option, "recommendations"] },
-      { flag, placement: "leaf", args: [...option, "recommendations", "--json"] },
-    ]),
+    ].map(({ flag, option }, index) => ({
+      flag,
+      placement: index % 2 === 0 ? "parent" : "leaf",
+      args:
+        index % 2 === 0
+          ? ["--json", ...option, "recommendations"]
+          : [...option, "recommendations", "--json"],
+    })),
   )("reports rejected $flag as one $placement JSON error", async ({ flag, args }) => {
     await runCli(["onboard", ...args]);
 

@@ -88,12 +88,15 @@ hello from source
     const ingestQueued = deferred();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi
-      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
-        ingestQueued.resolve();
-        return originalEnqueue.call(this, key, task, hooks);
-      });
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+      this: KeyedAsyncQueue,
+      key,
+      task,
+      hooks,
+    ) {
+      ingestQueued.resolve();
+      return originalEnqueue.call(this, key, task, hooks);
+    });
     let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
     try {
       ingest = ingestMemoryWikiSource({

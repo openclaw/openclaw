@@ -1,13 +1,9 @@
-// Device Pair plugin module implements notify behavior.
 import { randomUUID } from "node:crypto";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  PluginStateCompareIntent,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
@@ -56,10 +52,6 @@ function formatRoleList(request: PendingPairingRequest): string {
   return formatStringList(request.roles);
 }
 
-function formatScopeList(request: PendingPairingRequest): string {
-  return formatStringList(request.scopes);
-}
-
 export function formatPendingRequests(pending: PendingPairingRequest[]): string {
   if (pending.length === 0) {
     return "No pending device pairing requests.";
@@ -74,7 +66,7 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
       label ? `name=${label}` : null,
       platform ? `platform=${platform}` : null,
       `role=${formatRoleList(req)}`,
-      `scopes=${formatScopeList(req)}`,
+      `scopes=${formatStringList(req.scopes)}`,
       ip ? `ip=${ip}` : null,
     ].filter(Boolean);
     lines.push(parts.join(" · "));
@@ -155,14 +147,16 @@ async function registerNotifySubscriber(params: {
   target: NotifyTarget;
   mode: NotifySubscription["mode"];
   refresh: boolean;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const store = openNotifySubscriberStore(params.api);
   const key = notifySubscriberStoreKey(params.target);
   const current = await store.lookup(key);
   if (!params.refresh && current?.mode === params.mode) {
     return false;
   }
-  await store.register(key, nextNotifySubscription(params.target, params.mode));
+  await store.register(key, nextNotifySubscription(params.target, params.mode), { assertCurrent });
   return true;
 }
 
@@ -183,16 +177,6 @@ function isSameNotifySubscription(
   );
 }
 
-function decideDeliveredNotifySubscriptionDeletion(
-  current: NotifySubscription | undefined,
-  delivered: NotifySubscription,
-): PluginStateCompareIntent<NotifySubscription> {
-  return {
-    operation: "delete",
-    action: current && isSameNotifySubscription(current, delivered) ? "delete" : "keep",
-  };
-}
-
 async function deleteDeliveredNotifySubscription(
   store: NotifySubscriberStore,
   key: string,
@@ -200,11 +184,13 @@ async function deleteDeliveredNotifySubscription(
 ): Promise<void> {
   let observation = await store.observe(key);
   for (;;) {
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      decideDeliveredNotifySubscriptionDeletion(observation.value, delivered),
-    );
+    const result = await store.compareAndApply(key, observation.comparison, {
+      operation: "delete",
+      action:
+        observation.value && isSameNotifySubscription(observation.value, delivered)
+          ? "delete"
+          : "keep",
+    });
     if (result.status !== "conflict") {
       return;
     }
@@ -217,7 +203,7 @@ function buildPairingRequestNotificationText(request: PendingPairingRequest): st
   const platform = normalizeOptionalString(request.platform);
   const ip = normalizeOptionalString(request.remoteIp);
   const role = formatRoleList(request);
-  const scopes = formatScopeList(request);
+  const scopes = formatStringList(request.scopes);
   const lines = [
     "📲 New device pairing request",
     `ID: ${request.requestId}`,
@@ -374,16 +360,19 @@ async function runNotifyPoll(api: OpenClawPluginApi): Promise<void> {
   }
 }
 
+type NotifyCommandContext = {
+  assertOwnerCurrent?: () => void;
+  channel: string;
+  senderId?: string;
+  from?: string;
+  to?: string;
+  accountId?: string;
+  messageThreadId?: string | number;
+};
+
 export async function armPairNotifyOnce(params: {
   api: OpenClawPluginApi;
-  ctx: {
-    channel: string;
-    senderId?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    messageThreadId?: string | number;
-  };
+  ctx: NotifyCommandContext;
 }): Promise<boolean> {
   if (params.ctx.channel !== "telegram") {
     return false;
@@ -398,22 +387,17 @@ export async function armPairNotifyOnce(params: {
     target,
     mode: "once",
     refresh: true,
+    assertCurrent: params.ctx.assertOwnerCurrent,
   });
   return true;
 }
 
 export async function handleNotifyCommand(params: {
   api: OpenClawPluginApi;
-  ctx: {
-    channel: string;
-    senderId?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    messageThreadId?: string | number;
-  };
+  ctx: NotifyCommandContext;
   action: string;
 }): Promise<{ text: string }> {
+  const assertOwnerCurrent = params.ctx.assertOwnerCurrent;
   if (params.ctx.channel !== "telegram") {
     return { text: "Pairing notifications are currently supported only on Telegram." };
   }
@@ -432,6 +416,7 @@ export async function handleNotifyCommand(params: {
       target,
       mode: "persistent",
       refresh: false,
+      assertCurrent: assertOwnerCurrent,
     });
     return {
       text:
@@ -441,7 +426,7 @@ export async function handleNotifyCommand(params: {
   }
 
   if (params.action === "off" || params.action === "disable") {
-    await subscriberStore.delete(targetStoreKey);
+    await subscriberStore.delete(targetStoreKey, { assertCurrent: assertOwnerCurrent });
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
 
@@ -466,6 +451,7 @@ export async function handleNotifyCommand(params: {
       listDevicePairing(),
     ]);
     const enabled = Boolean(current);
+    assertOwnerCurrent?.();
     const mode = current?.mode ?? "off";
     return {
       text: [
@@ -488,14 +474,10 @@ export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPl
   return {
     id: "device-pair-notifier",
     start: () => {
-      const tick = async () => {
-        await runNotifyPoll(api);
-      };
-
       // Pairing notifications are eventual background work. Starting on the
       // existing interval keeps SQLite pairing scans out of Gateway readiness.
       notifyInterval = setInterval(() => {
-        tick().catch((err: unknown) => {
+        runNotifyPoll(api).catch((err: unknown) => {
           api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
         });
       }, NOTIFY_POLL_INTERVAL_MS);

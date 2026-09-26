@@ -25,6 +25,96 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
 const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
 
+describe.skipIf(process.platform === "win32")("cloud-worker app packaging identity", () => {
+  const script = readFileSync(scriptPath, "utf8");
+  const initialization = script.slice(
+    script.indexOf('CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"'),
+    script.indexOf("PKG_VERSION="),
+  );
+
+  function resolveVariant(overrides: NodeJS.ProcessEnv) {
+    return spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        `set -euo pipefail\nROOT_DIR="$1"\n${initialization}\nprintf '%s\\n' "$APP_DESTINATION" "$BUNDLE_ID"`,
+        "package-identity",
+        process.cwd(),
+      ],
+      { encoding: "utf8", env: { PATH: "/usr/bin:/bin", ...overrides } },
+    );
+  }
+
+  it.each([false, true])(
+    "keeps the cloud variant %s separate from the ordinary output",
+    (cloud) => {
+      const result = resolveVariant({ OPENCLAW_MAC_CLOUD_WORKER_HOST: cloud ? "1" : "0" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual([
+        path.join(process.cwd(), "dist", cloud ? "OpenClawCloudWorker.app" : "OpenClaw.app"),
+        cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+      ]);
+    },
+  );
+
+  it.each([
+    { BUNDLE_ID: "ai.openclaw.mac" },
+    { ALLOW_ADHOC_SIGNING: "1" },
+    { SIGN_IDENTITY: "-" },
+    { DISABLE_LIBRARY_VALIDATION: "1" },
+    { SKIP_TEAM_ID_CHECK: "1" },
+    { OPENCLAW_PACKAGE_APP_ROOT: path.join(process.cwd(), "dist/OpenClaw.app") },
+  ])(
+    "rejects a cloud build that weakens its identity or replaces the ordinary app: %j",
+    (override) => {
+      const result = resolveVariant({ OPENCLAW_MAC_CLOUD_WORKER_HOST: "1", ...override });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ERROR:");
+    },
+  );
+
+  it.runIf(process.platform === "darwin").each([false, true])(
+    "stamps cloud capability only in its dedicated bundle: %s",
+    (cloud) => {
+      const app = tempDirs.make("openclaw-cloud-bundle-");
+      mkdirSync(path.join(app, "Contents"));
+      writeFileSync(
+        path.join(app, "Contents/Info.plist"),
+        readFileSync("apps/macos/Sources/OpenClaw/Resources/Info.plist"),
+      );
+      const stamp = script.slice(
+        script.indexOf(
+          'plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier',
+        ),
+        script.indexOf(
+          'plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString',
+        ),
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          `set -euo pipefail\nsource "$1"\nAPP_ROOT="$2"\nBUNDLE_ID="$3"\nCLOUD_WORKER_HOST="$4"\n${stamp}\n/usr/bin/plutil -convert json -o - "$APP_ROOT/Contents/Info.plist"`,
+          "package-stamp",
+          path.resolve("scripts/lib/plistbuddy.sh"),
+          app,
+          cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+          cloud ? "1" : "0",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const plist = JSON.parse(result.stdout);
+      expect(plist.CFBundleIdentifier).toBe(
+        cloud ? "ai.openclaw.cloud-worker" : "ai.openclaw.mac.debug",
+      );
+      expect(plist.CFBundleName).toBe(cloud ? "OpenClaw Cloud Worker" : "OpenClaw");
+      expect(plist.OpenClawCloudWorkerHostVersion).toBe(cloud ? 1 : undefined);
+      expect(plist.CFBundleURLTypes).toEqual(cloud ? undefined : expect.any(Array));
+    },
+  );
+});
+
 describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
   "parallel macOS Swift build ownership",
   () => {
@@ -223,6 +313,7 @@ describe("packaged worker freshness", () => {
           `set -euo pipefail
 ROOT_DIR="$1"
 APP_DESTINATION="$ROOT_DIR/dist/OpenClaw.app"
+APP_BUNDLE_NAME=OpenClaw.app
 ${script.slice(allocationStart, allocationEnd)}
 printf '%s' "$APP_STAGE_DIR"
 `,
@@ -288,23 +379,22 @@ ${cleanup}
     },
   );
 
-  it.each([
-    "dist/OpenClaw.app",
-    "dist/OpenClaw-proof.app",
-    "dist/.openclaw-package.fixture/OpenClaw.app",
-  ])("bounds expanded package exclusions to the app root %s", (app) => {
-    const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
-    const exclusions = manifest.files
-      .filter((entry) => entry.startsWith("!"))
-      .map((entry) => entry.slice(1));
-    const entries = [app, `${app}/Contents`, `${app}/Contents/MacOS/OpenClaw`, "dist/entry.js"];
-    // npm 12 expands files globs into individual ignore rules. Exclude the app
-    // directory, which also excludes its contents, not every payload file separately.
-    const matches = entries.filter((entry) =>
-      exclusions.some((pattern) => minimatch(entry, pattern, { dot: true })),
-    );
-    expect(matches).toEqual([app]);
-  });
+  it.each(["dist/OpenClaw-proof.app", "dist/.openclaw-package.fixture/OpenClaw.app"])(
+    "bounds expanded package exclusions to the app root %s",
+    (app) => {
+      const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
+      const exclusions = manifest.files
+        .filter((entry) => entry.startsWith("!"))
+        .map((entry) => entry.slice(1));
+      const entries = [app, `${app}/Contents`, `${app}/Contents/MacOS/OpenClaw`, "dist/entry.js"];
+      // npm 12 expands files globs into individual ignore rules. Exclude the app
+      // directory, which also excludes its contents, not every payload file separately.
+      const matches = entries.filter((entry) =>
+        exclusions.some((pattern) => minimatch(entry, pattern, { dot: true })),
+      );
+      expect(matches).toEqual([app]);
+    },
+  );
 
   it("rebuilds dirty JavaScript even when the old SKIP_TSC shortcut is requested", () => {
     const root = tempDirs.make("openclaw-package-worker-freshness-");
@@ -357,37 +447,24 @@ function runHelper(script: string, shell = process.platform === "win32" ? "bash"
   });
 }
 
-function getPackageManagerHelperBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("PNPM_CMD=()");
-  const end = script.indexOf("merge_framework_machos()");
-
+function scriptBlock(startMarker: string, endMarker: string, file = scriptPath): string {
+  const script = readFileSync(file, "utf8");
+  const start = script.indexOf(startMarker);
+  const end = script.indexOf(endMarker, start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
-
   return script.slice(start, end);
+}
+
+function getPackageManagerHelperBlock(): string {
+  return scriptBlock("PNPM_CMD=()", "merge_framework_machos()");
 }
 
 function getMergeFrameworkMachOsBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("merge_framework_machos()");
-  const end = script.indexOf('PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"');
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
-}
-
-function getSwiftToolchainBlock(): string {
-  const script = readFileSync("scripts/lib/swift-toolchain.sh", "utf8");
-  const start = script.indexOf("REQUIRED_SWIFT_TOOLS_MAJOR=");
-  const end = script.length;
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock(
+    "merge_framework_machos()",
+    'PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"',
+  );
 }
 
 function runSwiftToolchainHarness(options: {
@@ -467,31 +544,23 @@ function runSwiftToolchainHarness(options: {
     PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
     export MOCK_SELECTED_DEVELOPER_DIR=${JSON.stringify(selectedDeveloperDir)}
     ${developerDirOverride}
-    ${getSwiftToolchainBlock()}
+    ${readFileSync("scripts/lib/swift-toolchain.sh", "utf8")}
     require_swift_toolchain
   `);
 }
 
 function getSparkleBuildHelperBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("sparkle_canonical_build_from_version()");
-  const end = script.indexOf('source "$ROOT_DIR/scripts/lib/mac-swift-build.sh"');
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock(
+    "sparkle_canonical_build_from_version()",
+    'source "$ROOT_DIR/scripts/lib/mac-swift-build.sh"',
+  );
 }
 
 function getPeekabooSourceCommitHelperBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("resolve_peekaboo_source_commit() {");
-  const end = script.indexOf("sparkle_canonical_build_from_version()");
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock(
+    "resolve_peekaboo_source_commit() {",
+    "sparkle_canonical_build_from_version()",
+  );
 }
 
 function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevision?: string) {
@@ -510,19 +579,10 @@ function runPeekabooSourceCommitHarness(packageResolved: string, expectedRevisio
 }
 
 function getSourceProvenanceStampBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf(
+  return scriptBlock(
     'plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp',
-  );
-  const end = script.indexOf(
     'plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL',
-    start,
   );
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
 }
 
 function runSourceProvenanceStampHarness(corruptKey?: string) {
@@ -567,35 +627,25 @@ function runSourceProvenanceStampHarness(corruptKey?: string) {
 }
 
 function getMLXTTSHelperBuildBlock(): string {
-  const script = readFileSync(swiftScriptPath, "utf8");
-  const start = script.indexOf("helper_build_path_for_arch() {");
-  const end = script.indexOf("sparkle_framework_for_arch()", start);
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock(
+    "helper_build_path_for_arch() {",
+    "sparkle_framework_for_arch()",
+    swiftScriptPath,
+  );
 }
 
 function getSwiftPackageResolutionBlock(): string {
-  const script = readFileSync(swiftScriptPath, "utf8");
-  const start = script.indexOf("run_with_locked_swift_packages()");
-  const end = script.indexOf("build_swift_architecture() {");
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
+  const block = scriptBlock(
+    "run_with_locked_swift_packages()",
+    "build_swift_architecture() {",
+    swiftScriptPath,
+  );
   // The shared EXIT cleanup also needs the packager preamble's unallocated app stage.
-  return `${script.slice(start, end)}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
+  return `${block}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
 }
 
 function getCompiledPeekabooHelperBlock(): string {
-  const script = readFileSync(swiftScriptPath, "utf8");
-  const start = script.indexOf("compiled_peekaboo_commit() {");
-  const end = script.indexOf("swiftpm_resource_sources()", start);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return script.slice(start, end);
+  return scriptBlock("compiled_peekaboo_commit() {", "swiftpm_resource_sources()", swiftScriptPath);
 }
 
 function runRealCompiledPeekabooHarness(
@@ -751,36 +801,18 @@ function runRealCompiledPeekabooHarness(
 }
 
 function getStopPackagedAppBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("running_packaged_app_pids()");
-  const end = script.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]');
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock("running_packaged_app_pids()", 'if [[ -n "${SIGN_IDENTITY:-}" ]]');
 }
 
 function getSwiftCompatibilityBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
-  const end = script.indexOf('echo "🖼  Compiling app icon"');
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock(
+    'echo "📦 Copying Swift 6.2 compatibility libraries"',
+    'echo "🖼  Compiling app icon"',
+  );
 }
 
 function getSwiftPMResourceBundleBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf('echo "📦 Copying SwiftPM resource bundles"');
-  const end = script.indexOf("running_packaged_app_pids()");
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock('echo "📦 Copying SwiftPM resource bundles"', "running_packaged_app_pids()");
 }
 
 function getControlUiOmissionBlock(): string {
@@ -795,14 +827,11 @@ function getControlUiOmissionBlock(): string {
 }
 
 function getSwiftPMResourcePatchBlock(): string {
-  const script = readFileSync(swiftScriptPath, "utf8");
-  const start = script.indexOf("swiftpm_resource_sources()");
-  const end = script.indexOf("cleanup_swift_architecture() {", start);
-
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-
-  return script.slice(start, end);
+  return scriptBlock(
+    "swiftpm_resource_sources()",
+    "cleanup_swift_architecture() {",
+    swiftScriptPath,
+  );
 }
 
 const swiftPMResourceBundles = [
@@ -1463,20 +1492,19 @@ describe("package-mac-app plist stamping", () => {
     },
   );
 
-  it.each(["arm64", "x86_64"])(
-    "builds and locates the MLX helper with SwiftBuild on %s without a legacy output alias",
-    (arch) => {
-      const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
-      const metalPath = path.join(tempRoot, "metal");
-      const invocationPath = path.join(tempRoot, "swift-args");
-      const helperBuildRoot = path.join(tempRoot, "build");
-      const helperBuildProducts = path.join(helperBuildRoot, arch, "out", "Products", "Release");
-      mkdirSync(helperBuildProducts, { recursive: true });
-      writeFileSync(path.join(helperBuildProducts, "openclaw-mlx-tts"), arch);
-      writeFileSync(metalPath, "#!/bin/sh\nexit 1\n");
-      chmodSync(metalPath, 0o755);
+  it("builds and locates the MLX helper with SwiftBuild without a legacy output alias", () => {
+    const arch = "arm64";
+    const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
+    const metalPath = path.join(tempRoot, "metal");
+    const invocationPath = path.join(tempRoot, "swift-args");
+    const helperBuildRoot = path.join(tempRoot, "build");
+    const helperBuildProducts = path.join(helperBuildRoot, arch, "out", "Products", "Release");
+    mkdirSync(helperBuildProducts, { recursive: true });
+    writeFileSync(path.join(helperBuildProducts, "openclaw-mlx-tts"), arch);
+    writeFileSync(metalPath, "#!/bin/sh\nexit 1\n");
+    chmodSync(metalPath, 0o755);
 
-      const result = runHelper(`
+    const result = runHelper(`
       set -euo pipefail
       PATH=/usr/bin:/bin
       xcrun() {
@@ -1509,32 +1537,31 @@ describe("package-mac-app plist stamping", () => {
       cat "$(helper_bin_for_arch ${arch})"
     `);
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe(arch);
-      const buildArgs = [
-        "build",
-        "--build-system",
-        "swiftbuild",
-        "--package-path",
-        path.join(tempRoot, "helper"),
-        "-c",
-        "release",
-        "--product",
-        "openclaw-mlx-tts",
-        "--build-path",
-        path.join(helperBuildRoot, arch),
-        "--arch",
-        arch,
-        "--jobs",
-        "2",
-      ];
-      const invocations = readFileSync(invocationPath, "utf8")
-        .trim()
-        .split("\n\n")
-        .map((call) => call.split("\n"));
-      expect(invocations).toEqual([buildArgs, [...buildArgs, "--show-bin-path"]]);
-    },
-  );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(arch);
+    const buildArgs = [
+      "build",
+      "--build-system",
+      "swiftbuild",
+      "--package-path",
+      path.join(tempRoot, "helper"),
+      "-c",
+      "release",
+      "--product",
+      "openclaw-mlx-tts",
+      "--build-path",
+      path.join(helperBuildRoot, arch),
+      "--arch",
+      arch,
+      "--jobs",
+      "2",
+    ];
+    const invocations = readFileSync(invocationPath, "utf8")
+      .trim()
+      .split("\n\n")
+      .map((call) => call.split("\n"));
+    expect(invocations).toEqual([buildArgs, [...buildArgs, "--show-bin-path"]]);
+  });
 
   it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
     const script = readFileSync(scriptPath, "utf8") + readFileSync(swiftScriptPath, "utf8");
@@ -2437,7 +2464,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
-  it("stages the pinned universal CUA driver before nested-code signing", () => {
+  it("stages the pinned CUA driver and thins single-architecture packages before signing", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
@@ -2454,13 +2481,14 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.24.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.28.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
     );
-    expect(packageScript).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(packageScript).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
+    expect(packageScript).toContain('if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]');
+    expect(packageScript).toContain('lipo "$CUA_DRIVER" -thin "$CUA_ARCH"');
+    expect(packageScript).toContain('[[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]]');
     expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
       packageScript.indexOf('echo "🔏 Signing bundle'),
     );
@@ -2485,9 +2513,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
     expect(cuaBlock).toContain("else");
     expect(cuaBlock).toContain("Staging embedded CUA driver");
-    expect(cuaBlock).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(cuaBlock).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
   });
 
   it("does not mask required Info.plist stamp failures", () => {

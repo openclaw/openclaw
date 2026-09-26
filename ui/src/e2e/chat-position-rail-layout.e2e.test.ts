@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
@@ -6,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
+  captureUiProof,
   installMockGateway,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
@@ -13,7 +15,124 @@ import {
 const suite = createChatFlowE2eSuite();
 const POSITION_RAIL_MIN_TRANSCRIPT_HEIGHT = 360;
 
+function readPositionRailGeometry(page: Page) {
+  return page.locator(".chat-position-rail__marks").evaluate((element) => {
+    const thread = element.closest(".chat-thread")!;
+    const current = element.querySelector('[aria-current="true"]');
+    const activeId = current?.getAttribute("data-position-marker-id") ?? null;
+    const message = activeId
+      ? thread.querySelector(`.chat-bubble[data-entry-id="${activeId}"]`)
+      : null;
+    const marker = current?.getBoundingClientRect();
+    const viewport = element.getBoundingClientRect();
+    const reader = thread.getBoundingClientRect();
+    const bubble = message?.getBoundingClientRect();
+    const distanceFromEnd = thread.scrollHeight - thread.clientHeight - thread.scrollTop;
+    return {
+      activeId,
+      atEnd: Math.abs(distanceFromEnd) <= 1,
+      currentVisible: current?.hasAttribute("data-visible") ?? false,
+      messageInViewport: Boolean(
+        bubble && bubble.bottom > reader.top && bubble.top < reader.bottom,
+      ),
+      markerInViewport: Boolean(
+        marker &&
+        marker.top >= viewport.top &&
+        marker.bottom <= viewport.top + element.clientHeight,
+      ),
+      distanceFromEnd,
+      transcript: {
+        scrollTop: thread.scrollTop,
+        clientHeight: thread.clientHeight,
+        scrollHeight: thread.scrollHeight,
+      },
+      rail: {
+        scrollTop: element.scrollTop,
+        clientHeight: element.clientHeight,
+        top: viewport.top,
+        bottom: viewport.bottom,
+      },
+      marker: marker?.toJSON() ?? null,
+      bubble: bubble?.toJSON() ?? null,
+    };
+  });
+}
+
+async function expectPositionRailAtEnd(page: Page) {
+  try {
+    await expect
+      .poll(() => readPositionRailGeometry(page))
+      .toMatchObject({
+        atEnd: true,
+        currentVisible: true,
+        messageInViewport: true,
+        markerInViewport: true,
+      });
+  } catch (error) {
+    console.error("[chat-position-rail] geometry", await readPositionRailGeometry(page));
+    throw error;
+  }
+}
+
 suite.define(() => {
+  it.each([false, true])(
+    "reveals the current marker when navigation and composer resize share a frame (navigation first: %s)",
+    async (navigationFirst) => {
+      await suite.withPage(
+        { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            historyMessages: Array.from({ length: 80 }, (_, index) => ({
+              __openclaw: { id: `resize-navigation-${index}`, seq: index + 1 },
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: `Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
+                },
+              ],
+            })),
+          });
+          await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.locator(".chat-position-rail__track").waitFor();
+          await waitForChatScrollIdle(page);
+          await expectPositionRailAtEnd(page);
+          const transcript = page.locator(".chat-thread");
+          await transcript.hover();
+          await page.mouse.wheel(0, -30000);
+          await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+          await expect
+            .poll(() => readPositionRailGeometry(page))
+            .toMatchObject({
+              currentVisible: true,
+              messageInViewport: true,
+              markerInViewport: true,
+            });
+          await waitForChatScrollIdle(page);
+          // Apply input and navigation in one frame, before observer delivery.
+          await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .evaluate((element, first) => {
+              const textarea = element as HTMLTextAreaElement;
+              const thread = document.querySelector(".chat-thread")!;
+              if (first) {
+                thread.scrollTop = thread.scrollHeight;
+              }
+              textarea.value = "Keep the review notes available.\n".repeat(6);
+              textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              if (!first) {
+                thread.scrollTop = thread.scrollHeight;
+              }
+            }, navigationFirst);
+          await waitForChatScrollIdle(page);
+          await captureUiProof(suite, page, "rail-resize-navigation", "settled.png");
+          await expectPositionRailAtEnd(page);
+        },
+      );
+    },
+  );
+
   it.each([
     { count: 1, direction: "ltr" },
     { count: 2, direction: "ltr" },
@@ -84,34 +203,10 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-shell");
           await track.waitFor();
           const markers = marks.locator(".chat-position-rail__marker");
+          const markerForIndex = (index: number) =>
+            marks.locator(`[data-position-marker-id="stable-rail-${index}"]`);
           // Wait for the rail to reflect the visible reader before recording its anchor.
-          await expect
-            .poll(() =>
-              marks.evaluate((element) => {
-                const thread = element.closest(".chat-thread")!;
-                const current = element.querySelector('[aria-current="true"]');
-                const message = current
-                  ? thread.querySelector(
-                      `.chat-bubble[data-entry-id="${current.getAttribute("data-position-marker-id")}"]`,
-                    )
-                  : null;
-                if (!current?.hasAttribute("data-visible") || !message) {
-                  return false;
-                }
-                const marker = current.getBoundingClientRect();
-                const viewport = element.getBoundingClientRect();
-                const reader = thread.getBoundingClientRect();
-                const bubble = message.getBoundingClientRect();
-                return (
-                  Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 1 &&
-                  bubble.bottom > reader.top &&
-                  bubble.top < reader.bottom &&
-                  marker.top >= viewport.top &&
-                  marker.bottom <= viewport.top + element.clientHeight
-                );
-              }),
-            )
-            .toBe(true);
+          await expectPositionRailAtEnd(page);
           const bounds = () =>
             track.evaluate((element) => element.getBoundingClientRect().toJSON());
           const collapsed = await bounds();
@@ -205,15 +300,12 @@ suite.define(() => {
             expect((await anchorTick.boundingBox())!.y).toBe(tickTop);
           }
           const expandedHeight = (await marks.boundingBox())!.height;
+          const expandedDraft = Array.from(
+            { length: 6 },
+            (_, index) => `Review note ${index + 1}: keep navigation visible.`,
+          ).join("\n");
           const textareaSamples = sampleAnchor();
-          await page
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill(
-              Array.from(
-                { length: 6 },
-                (_, index) => `Review note ${index + 1}: keep navigation visible.`,
-              ).join("\n"),
-            );
+          await page.locator(".agent-chat__composer-combobox textarea").fill(expandedDraft);
           await expect
             .poll(async () => (await composer.boundingBox())!.height)
             .toBeGreaterThan(collapsedComposer.height + 180);
@@ -228,18 +320,53 @@ suite.define(() => {
           }
           if (count === 80 && direction === "ltr") {
             const textarea = page.locator(".agent-chat__composer-combobox textarea");
-            const goalSamples = sampleAnchor();
-            await textarea.fill("/goal");
-            await textarea.press("Enter");
-            await page.locator(".agent-chat__goal-mode").waitFor();
-            await assertAnchor(goalSamples);
-            const cancelSamples = sampleAnchor();
-            await textarea.press("Escape");
-            await page.locator(".agent-chat__goal-mode").waitFor({ state: "hidden" });
-            await assertAnchor(cancelSamples);
+            for (const coalesced of [false, true]) {
+              if (coalesced) {
+                const expansionSamples = sampleAnchor();
+                await textarea.fill(expandedDraft);
+                await assertAnchor(expansionSamples);
+              }
+              const goalSamples = sampleAnchor();
+              if (coalesced) {
+                // Both composer resizes can precede the next transcript observation.
+                await textarea.evaluate((element) => {
+                  const input = element as HTMLTextAreaElement;
+                  input.value = "/goal";
+                  input.dispatchEvent(new Event("input", { bubbles: true }));
+                  input.dispatchEvent(
+                    new KeyboardEvent("keydown", {
+                      key: "Enter",
+                      bubbles: true,
+                      cancelable: true,
+                    }),
+                  );
+                });
+              } else {
+                await textarea.fill("/goal");
+                await textarea.press("Enter");
+              }
+              await page.locator(".agent-chat__goal-mode").waitFor();
+              await assertAnchor(goalSamples);
+              await expect
+                .poll(() => readPositionRailGeometry(page))
+                .toMatchObject({ atEnd: true });
+              await expect
+                .poll(() => page.locator(".chat-scroll-to-bottom").getAttribute("data-visible"))
+                .toBe("false");
+              await captureUiProof(
+                suite,
+                page,
+                "rail-goal-resize",
+                coalesced ? "coalesced.png" : "native.png",
+              );
+              const cancelSamples = sampleAnchor();
+              await textarea.press("Escape");
+              await page.locator(".agent-chat__goal-mode").waitFor({ state: "hidden" });
+              await assertAnchor(cancelSamples);
+            }
             await gateway.setOnline(false);
             await gateway.closeLatest();
-            await page.locator('.agent-chat__composer-status[data-tone="warn"]').waitFor();
+            await page.locator(".agent-chat__input--offline").waitFor();
             const queuedTexts = ["Review the next checkpoint", "Check the supporting notes"];
             for (const text of queuedTexts) {
               const queueSamples = sampleAnchor();
@@ -309,7 +436,7 @@ suite.define(() => {
             }
             await expect
               .poll(() =>
-                markers.nth(index).evaluate((element) => {
+                markerForIndex(index).evaluate((element) => {
                   const marker = element.getBoundingClientRect();
                   const scroller = element.closest(".chat-position-rail__marks")!;
                   const viewport = scroller.getBoundingClientRect();
@@ -377,7 +504,9 @@ suite.define(() => {
               )
               .toBe(true);
             await page.locator(".agent-chat__search-bar button").click();
-            await expect.poll(() => markers.count()).toBe(count);
+            await expect
+              .poll(() => markers.first().getAttribute("aria-label"))
+              .toContain(`of ${count}`);
           }
           await page.setViewportSize({ width: 390, height: 844 });
           await track.waitFor({ state: "hidden" });
@@ -456,9 +585,11 @@ suite.define(() => {
         const marks = page.locator(".chat-position-rail__marks");
         const first = marks.locator(".chat-position-rail__marker").first();
         await first.waitFor();
-        await transcript.evaluate((element) => {
-          element.scrollTop = 0;
-        });
+        // Settle initial end-follow before real reader input takes over the viewport.
+        await waitForChatScrollIdle(page);
+        await expectPositionRailAtEnd(page);
+        await transcript.hover();
+        await page.mouse.wheel(0, -30000);
         await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
         await waitForChatScrollIdle(page);
         const top = (await track.boundingBox())!.y;

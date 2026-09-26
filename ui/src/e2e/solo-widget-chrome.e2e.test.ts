@@ -91,9 +91,27 @@ async function openDashboard(page: Page, source: BoardSnapshot, readOnly = false
   return { gateway, board };
 }
 
-async function showHeaderMenu(page: Page) {
-  await page.locator(".chat-header-session-menu__trigger").click();
+async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "pointer") {
   const menu = page.locator(menuSelector);
+  const dropdown = menu.locator("wa-dropdown");
+  // The heading is visible before the menu finishes scaling. Observe this opening,
+  // not a previous one, before Playwright chooses an action's click coordinates.
+  await dropdown.evaluate((element) => {
+    element.removeAttribute("data-e2e-after-show");
+    element.addEventListener(
+      "wa-after-show",
+      () => element.setAttribute("data-e2e-after-show", ""),
+      { once: true },
+    );
+  });
+  const trigger = page.locator(".chat-header-session-menu__trigger");
+  if (input === "keyboard") {
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+  } else {
+    await trigger.click();
+  }
+  await expect.poll(() => dropdown.getAttribute("data-e2e-after-show")).not.toBeNull();
   await menu.locator(".board-widget__page-menu-heading").waitFor();
   return menu;
 }
@@ -117,20 +135,9 @@ suite.define(() => {
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-expanded.png") });
-        const menu = await showHeaderMenu(page);
+        await showHeaderMenu(page);
         await page.keyboard.press("Escape");
-        await page.locator(".chat-header-session-menu__trigger").focus();
-        await menu.locator("wa-dropdown").evaluate((dropdown) => {
-          dropdown.addEventListener(
-            "wa-after-show",
-            () => dropdown.setAttribute("data-e2e-after-show", ""),
-            { once: true },
-          );
-        });
-        await page.keyboard.press("Enter");
-        await expect
-          .poll(() => menu.locator("wa-dropdown").getAttribute("data-e2e-after-show"))
-          .not.toBeNull();
+        const menu = await showHeaderMenu(page, "keyboard");
         const capabilities = menu.getByRole("note", { name: "Active widget capabilities" });
         await capabilities.waitFor({ state: "visible" });
         expect(await capabilities.textContent()).toContain("Tool: health");

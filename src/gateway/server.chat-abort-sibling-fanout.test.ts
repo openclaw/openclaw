@@ -136,7 +136,7 @@ for (const { name, fault, replaceParent } of [
         agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
-          command.onExecutionStarted?.();
+          await command.onExecutionStarted?.();
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();
@@ -151,8 +151,8 @@ for (const { name, fault, replaceParent } of [
           ok: true,
           payload: { runId: parentRunId, status: "accepted" },
         });
-        await expect.poll(() => agentCommandMock.mock.calls.length, { timeout: 2_000 }).toBe(1);
         const parent = await parentStarted.promise;
+        expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
           await writeSubagentSessionEntry({
@@ -166,7 +166,7 @@ for (const { name, fault, replaceParent } of [
               reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
             ).toBe(true);
           }
-          registerSubagentRun({
+          await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
             requesterSessionKey: parentKey,

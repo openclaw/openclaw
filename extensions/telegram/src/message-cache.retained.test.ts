@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveProviderObservedTelegramThreadSpec } from "./message-cache-codec.js";
 import {
   type PersistedTelegramMessageCacheValue,
   resolveTelegramMessageCachePersistentScopeKey,
@@ -539,6 +540,47 @@ describe("Telegram retained message history", () => {
     expect((await history(reopened, { threadId: 77 })).messages).toEqual([]);
     expect((await get(reopened, 9))?.threadId).toBeUndefined();
     expect(await openStores().retained.count()).toBe(1);
+  });
+
+  it("preserves authenticated native thread precedence across database reopen", async () => {
+    const cache = createTelegramMessageCache({ scope });
+    await cache.record({
+      accountId,
+      chatId,
+      msg: message(30, {
+        message_thread_id: 999,
+        reply_to_message: message(29, {
+          message_thread_id: 88,
+          reply_to_message: message(28),
+        }),
+      }),
+      threadId: 77,
+      providerObservedThread: { scope: "forum", id: 77 },
+    });
+    await cache.record({
+      accountId,
+      chatId,
+      msg: message(31, {
+        chat: { ...chat, is_direct_messages: true },
+        direct_messages_topic: { topic_id: 77 },
+        message_thread_id: 999,
+      }),
+      threadId: 999,
+      providerObservedThread: { scope: "direct-messages", id: 77 },
+    });
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    const reopened = createTelegramMessageCache({ scope });
+    expect(resolveProviderObservedTelegramThreadSpec(await get(reopened, 30))).toEqual({
+      scope: "forum",
+      id: 77,
+    });
+    expect((await get(reopened, 29))?.threadId).toBe("88");
+    expect((await get(reopened, 28))?.threadId).toBe("88");
+    expect(resolveProviderObservedTelegramThreadSpec(await get(reopened, 31))).toEqual({
+      scope: "direct-messages",
+      id: 77,
+    });
   });
 
   it("merges late media against a concurrently edited canonical source", async () => {

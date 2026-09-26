@@ -1,8 +1,5 @@
 import "../../styles/chat/startup-layout.css";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -10,19 +7,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
-import type {
-  ChannelUiMetaEntry,
-  CronJob,
-  CronRunLogEntry,
-  CronStatus,
-  CronDeliveryStatus,
-  CronJobsEnabledFilter,
-  CronJobsScheduleKindFilter,
-  CronJobsTriggerFilter,
-  CronRunsStatusValue,
-  CronJobsSortBy,
-  CronSortDir,
-} from "../../api/types.ts";
+import type { CronJob, CronJobsEnabledFilter } from "../../api/types.ts";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
@@ -35,7 +20,6 @@ import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { renderPicker, type PickerOption } from "../../components/select-picker.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import "../../components/web-awesome-popover.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -51,110 +35,23 @@ import {
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
-import type {
-  CronFieldErrors,
-  CronFieldKey,
-  CronFormState,
-  CronJobsLastStatusFilter,
-} from "../../lib/cron/types.ts";
+import type { CronFieldErrors, CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
+import { renderJobsFilterPopover } from "./view-jobs-filter.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+import { renderCronSuggestionLists } from "./view-suggestions.ts";
+import type { CronDetailTab, CronProps } from "./view-types.ts";
 
 registerCronEnglish();
 
 type CronPanelMode = "overview" | "create" | "job";
 
-export type CronListTab = "tasks" | "activity";
-export type CronDetailTab = "settings" | "history";
 type CronOverviewTab = CronJobsEnabledFilter | "activity";
-
-type CronProps = {
-  basePath: string;
-  agentId: string;
-  loading: boolean;
-  /** True once a cron.list response has completed (initial load finished). */
-  hasLoaded: boolean;
-  listError: string | null;
-  /** Canonical gateway capability for every mutation-capable cron control. */
-  canManage: boolean;
-  jobsLoadingMore: boolean;
-  status: CronStatus | null;
-  jobs: CronJob[];
-  jobsTotal: number;
-  jobsHasMore: boolean;
-  jobsQuery: string;
-  jobsEnabledFilter: CronJobsEnabledFilter;
-  jobsScheduleKindFilter: CronJobsScheduleKindFilter;
-  jobsLastStatusFilter: CronJobsLastStatusFilter;
-  jobsTriggerFilter: CronJobsTriggerFilter;
-  jobsSortBy: CronJobsSortBy;
-  jobsSortDir: CronSortDir;
-  error: string | null;
-  busy: boolean;
-  form: CronFormState;
-  heartbeatScratch: string;
-  fieldErrors: CronFieldErrors;
-  canSubmit: boolean;
-  editingJob: CronJob | null;
-  createOpen: boolean;
-  listTab: CronListTab;
-  detailTab: CronDetailTab;
-  channels: string[];
-  channelLabels?: Record<string, string>;
-  channelMeta?: ChannelUiMetaEntry[];
-  runs: CronRunLogEntry[];
-  highlightedRunId?: string | null;
-  runsTotal: number;
-  runsHasMore: boolean;
-  runsLoadingMore: boolean;
-  runsStatuses: CronRunsStatusValue[];
-  runsDeliveryStatuses: CronDeliveryStatus[];
-  runsQuery: string;
-  runsSortDir: CronSortDir;
-  agentSuggestions: string[];
-  modelSuggestions: string[];
-  thinkingSuggestions: string[];
-  timezoneSuggestions: string[];
-  deliveryToSuggestions: string[];
-  accountSuggestions: string[];
-  onListTabChange: (tab: CronListTab) => void;
-  onDetailTabChange: (tab: CronDetailTab) => void;
-  onFormChange: (patch: Partial<CronFormState>) => void;
-  onRefresh: () => void;
-  onSubmit: () => void;
-  onSubmitRunNow: () => void;
-  onSelectJob: (job: CronJob) => void;
-  onOpenCreate: (patch?: Partial<CronFormState>) => void;
-  onClosePanel: () => void;
-  onClone: (job: CronJob) => void;
-  onToggle: (job: CronJob, enabled: boolean) => void;
-  onRun: (job: CronJob, mode?: "force" | "due") => void;
-  onRemove: (job: CronJob) => void;
-  onLoadMoreJobs: () => void;
-  onJobsFiltersChange: (patch: {
-    cronJobsQuery?: string;
-    cronJobsEnabledFilter?: CronJobsEnabledFilter;
-    cronJobsScheduleKindFilter?: CronJobsScheduleKindFilter;
-    cronJobsLastStatusFilter?: CronJobsLastStatusFilter;
-    cronJobsTriggerFilter?: CronJobsTriggerFilter;
-    cronJobsSortBy?: CronJobsSortBy;
-    cronJobsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
-  onJobsFiltersReset: () => void | Promise<void>;
-  onLoadMoreRuns: () => void;
-  onRunsFiltersChange: (patch: {
-    cronRunsStatuses?: CronRunsStatusValue[];
-    cronRunsDeliveryStatuses?: CronDeliveryStatus[];
-    cronRunsQuery?: string;
-    cronRunsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void;
-};
 
 // ── Shared option helpers ──
 
@@ -169,15 +66,6 @@ function buildChannelOptions(props: CronProps): ChannelPickerOption[] {
         value,
     })),
   ];
-}
-
-function renderSuggestionList(id: string, options: string[]) {
-  const clean = uniqueStrings(normalizeStringEntries(options));
-  return clean.length === 0
-    ? nothing
-    : html`<datalist id=${id}>
-        ${clean.map((value) => html`<option value=${value}></option> `)}
-      </datalist>`;
 }
 
 // ── Validation summary helpers ──
@@ -431,11 +319,7 @@ export function renderCron(props: CronProps) {
   const mode: CronPanelMode = props.editingJob ? "job" : props.createOpen ? "create" : "overview";
   return html`
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
-    ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
-    ${renderSuggestionList("cron-thinking-suggestions", props.thinkingSuggestions)}
-    ${renderSuggestionList("cron-tz-suggestions", props.timezoneSuggestions)}
-    ${renderSuggestionList("cron-delivery-to-suggestions", props.deliveryToSuggestions)}
-    ${renderSuggestionList("cron-delivery-account-suggestions", props.accountSuggestions)}
+    ${renderCronSuggestionLists(props)}
   `;
 }
 
@@ -455,15 +339,6 @@ const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = 
   { value: "enabled", labelKey: "cron.tabs.active" },
   { value: "disabled", labelKey: "cron.tabs.paused" },
 ];
-
-const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = {
-  all: "cron.jobs.all",
-  at: "cron.form.at",
-  every: "cron.form.every",
-  cron: "cron.form.cronOption",
-  "on-exit": "cron.form.repeatOnExit",
-  stream: "cron.form.repeatStream",
-};
 
 function renderListView(props: CronProps) {
   const hasAdvancedJobsFilters =
@@ -625,129 +500,6 @@ function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
         </div>
       </div>
     </div>
-  `;
-}
-
-function renderJobsFilter(
-  props: CronProps,
-  field: keyof Parameters<CronProps["onJobsFiltersChange"]>[0],
-  params: {
-    label: string;
-    value: string;
-    options: readonly CronSelectOption[];
-    testId?: string;
-  },
-) {
-  return html`
-    <label class="field">
-      <span>${params.label}</span>
-      <select
-        class="settings-select"
-        data-test-id=${ifDefined(params.testId)}
-        .value=${params.value}
-        @change=${(event: Event) =>
-          props.onJobsFiltersChange({ [field]: (event.currentTarget as HTMLSelectElement).value })}
-      >
-        ${params.options.map(
-          // Same first-option fallback as renderCronSelect: mark the bound value.
-          ({ value, label }) =>
-            html`<option value=${value} ?selected=${value === params.value}>${label}</option>`,
-        )}
-      </select>
-    </label>
-  `;
-}
-
-function renderJobsFilterPopover(props: CronProps, active: boolean) {
-  return html`
-    <button
-      id="cron-jobs-filter-trigger"
-      type="button"
-      class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
-      title=${t("cron.list.filters")}
-      aria-label=${t("cron.list.filters")}
-      aria-haspopup="dialog"
-      aria-expanded="false"
-    >
-      ${icon("listFilter")}
-    </button>
-    <wa-popover
-      class="cron-filter-popover"
-      for="cron-jobs-filter-trigger"
-      placement="bottom-end"
-      without-arrow
-      @wa-show=${(event: Event) => {
-        (event.currentTarget as Element).previousElementSibling?.setAttribute(
-          "aria-expanded",
-          "true",
-        );
-      }}
-      @wa-hide=${(event: Event) => {
-        (event.currentTarget as Element).previousElementSibling?.setAttribute(
-          "aria-expanded",
-          "false",
-        );
-      }}
-    >
-      <div class="cron-filter-popover__panel">
-        ${renderJobsFilter(props, "cronJobsScheduleKindFilter", {
-          label: t("cron.jobs.schedule"),
-          value: props.jobsScheduleKindFilter,
-          testId: "cron-jobs-schedule-filter",
-          options: Object.entries(SCHEDULE_KIND_FILTER_LABELS).map(([value, labelKey]) => ({
-            value,
-            label: t(labelKey),
-          })),
-        })}
-        ${renderJobsFilter(props, "cronJobsLastStatusFilter", {
-          label: t("cron.jobs.lastRun"),
-          value: props.jobsLastStatusFilter,
-          testId: "cron-jobs-last-status-filter",
-          options: [
-            { value: "all", label: t("cron.jobs.all") },
-            { value: "ok", label: t("cron.runs.runStatusOk") },
-            { value: "error", label: t("cron.runs.runStatusError") },
-            { value: "skipped", label: t("cron.runs.runStatusSkipped") },
-            { value: "unknown", label: t("cron.runs.runStatusUnknown") },
-          ],
-        })}
-        ${renderJobsFilter(props, "cronJobsTriggerFilter", {
-          label: t("cron.jobs.condition"),
-          value: props.jobsTriggerFilter,
-          testId: "cron-jobs-trigger-filter",
-          options: [
-            { value: "all", label: t("cron.jobs.all") },
-            { value: "conditional", label: t("cron.jobs.conditional") },
-            { value: "unconditional", label: t("cron.jobs.unconditional") },
-          ],
-        })}
-        ${renderJobsFilter(props, "cronJobsSortBy", {
-          label: t("cron.jobs.sort"),
-          value: props.jobsSortBy,
-          options: [
-            { value: "nextRunAtMs", label: t("cron.jobs.nextRun") },
-            { value: "updatedAtMs", label: t("cron.jobs.recentlyUpdated") },
-            { value: "name", label: t("cron.jobs.name") },
-          ],
-        })}
-        ${renderJobsFilter(props, "cronJobsSortDir", {
-          label: t("cron.jobs.direction"),
-          value: props.jobsSortDir,
-          options: [
-            { value: "asc", label: t("cron.jobs.ascending") },
-            { value: "desc", label: t("cron.jobs.descending") },
-          ],
-        })}
-        <button
-          class="btn btn--sm"
-          data-test-id="cron-jobs-filters-reset"
-          ?disabled=${!active}
-          @click=${props.onJobsFiltersReset}
-        >
-          ${t("cron.jobs.reset")}
-        </button>
-      </div>
-    </wa-popover>
   `;
 }
 
@@ -1137,7 +889,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
     renderDetailHeader(props, mode, selectedJob),
     renderAdminRequired(props),
     hasDetailTabs ? renderDetailTabs(props) : nothing,
-    props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing,
+    props.error ? html`<div class="cron-error-banner" role="alert">${props.error}</div>` : nothing,
     html`
       <div
         id="cron-detail-panel"
@@ -1455,6 +1207,7 @@ function renderPromptSection(
             class="code-block cron-payload-code"
             data-test-id="cron-payload-code"
             tabindex="0"
+            role="region"
             aria-label=${promptLabel}
           ><code class="hljs">${unsafeHTML(
             highlightCodeHtml(payloadText, codeLanguage),
@@ -2055,7 +1808,7 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
             ${renderCronInputField(props, "failureAlertTo", {
               label: t("cron.form.failureAlertTo"),
               help: t("cron.form.failureAlertToHelp"),
-              list: "cron-delivery-to-suggestions",
+              list: "cron-failure-alert-to-suggestions",
               placeholder: t("cron.form.failureAlertToPlaceholder"),
             })}
             ${renderCronSelectField(props, "failureAlertDeliveryMode", {

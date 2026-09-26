@@ -1,8 +1,8 @@
 // Elevenlabs tests cover tts plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-test-contracts";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -64,16 +64,7 @@ describe("elevenlabs tts diagnostics", () => {
     );
   });
 
-  it("falls back to raw body text when the error body is non-JSON", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response("service unavailable", { status: 503 }),
-    );
-    globalThis.fetch = fetchMock;
-
-    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503): service unavailable");
-  });
-
-  it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
+  it("includes raw non-JSON error detail while capping streamed body reads", async () => {
     const streamed = createStreamingErrorResponse({
       status: 503,
       chunkCount: 200,
@@ -83,7 +74,7 @@ describe("elevenlabs tts diagnostics", () => {
     const fetchMock = vi.fn<typeof fetch>(async () => streamed.response);
     globalThis.fetch = fetchMock;
 
-    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503)");
+    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503): yyyy");
 
     expect(streamed.getReadCount()).toBeLessThan(200);
   });
@@ -97,6 +88,15 @@ describe("elevenlabs tts diagnostics", () => {
     const [, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
     const headers = new Headers(expectDefined(init, "ElevenLabs request init").headers);
     expect(headers.get("accept")).toBe("audio/mpeg");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(
+      '{"text":"hello","model_id":"eleven_multilingual_v2","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0,"use_speaker_boost":true,"speed":1}}',
+    );
+    expect(Object.fromEntries(headers)).toEqual({
+      accept: "audio/mpeg",
+      "content-type": "application/json",
+      "xi-api-key": "test-key",
+    });
   });
 
   it("rejects JSON success bodies as malformed audio", async () => {
@@ -189,10 +189,19 @@ describe("elevenlabs tts diagnostics", () => {
       latencyTier: 2,
     });
     try {
-      const [requestUrl] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+      const [requestUrl, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
       const url = new URL(resolveRequestUrl(requestUrl));
       expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
       expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(
+        '{"text":"hello","model_id":"eleven_multilingual_v2","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0,"use_speaker_boost":true,"speed":1}}',
+      );
+      expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+        accept: "audio/mpeg",
+        "content-type": "application/json",
+        "xi-api-key": "test-key",
+      });
       const reader = result.audioStream.getReader();
       await expect(reader.read()).resolves.toEqual({
         done: false,

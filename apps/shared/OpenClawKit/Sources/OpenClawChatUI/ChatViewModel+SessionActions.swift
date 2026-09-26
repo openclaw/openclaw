@@ -53,7 +53,7 @@ extension OpenClawChatViewModel {
             (entry.agentId ?? self.currentSessionSnapshot().deliveryAgentID) == target.agentID
     }
 
-    var canRequestSessionCompact: Bool {
+    public var canRequestSessionCompact: Bool {
         !self.isCompacting &&
             !self.isSending &&
             !self.hasBlockingRunActivity &&
@@ -338,22 +338,13 @@ extension OpenClawChatViewModel {
                 }
             }
             switch action {
-            case .pin:
+            case .pin, .unpin:
                 try await routeLease.patchSession(
                     key: key,
                     agentID: targets[key]?.agentID,
                     label: nil,
                     category: nil,
-                    pinned: true,
-                    archived: nil,
-                    unread: nil)
-            case .unpin:
-                try await routeLease.patchSession(
-                    key: key,
-                    agentID: targets[key]?.agentID,
-                    label: nil,
-                    category: nil,
-                    pinned: false,
+                    pinned: action == .pin,
                     archived: nil,
                     unread: nil)
             case .archive:
@@ -669,10 +660,6 @@ extension OpenClawChatViewModel {
             }
             return false
         }
-    }
-
-    func refreshSessionBranchesForMenuPresentation() async {
-        await self.refreshSessionBranches()
     }
 
     var canSwitchSessionBranch: Bool {

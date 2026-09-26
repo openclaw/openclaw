@@ -1,5 +1,6 @@
 /** Leases and formats completed subagent results for injection into requester turns. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import type { PreparedAnnounceResult } from "./subagents/announce/subagent-announce-result.js";
 import type {
@@ -97,7 +98,7 @@ function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   const now = params.now ?? Date.now();
   const items: AgentSteeringQueueItem[] = [];
   for (const [runId, entry] of params.runs.entries()) {
-    const delivery = entry.delivery;
+    const { delivery, requesterStorePath, requesterAgentId } = entry;
     const payload = delivery?.payload;
     if (!delivery || !payload) {
       continue;
@@ -106,7 +107,10 @@ function listPendingAgentSteeringItemsFromSubagentRuns(params: {
     if (entry.cleanupHandled === true && !staleLease) {
       continue;
     }
-    if (payload.requesterSessionKey !== requesterSessionKey) {
+    if (
+      payload.requesterSessionKey !== requesterSessionKey ||
+      !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
+    ) {
       continue;
     }
     // Suspension requires explicit retry; only an already leased generation may recover.
@@ -236,6 +240,11 @@ export async function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
         (item) =>
           params.runs.get(item.runId) === item.entry &&
           item.isCurrent() &&
+          isSystemEventStoreCurrent(
+            params.requesterSessionKey,
+            item.entry.requesterStorePath,
+            item.entry.requesterAgentId,
+          ) &&
           item.entry.delivery?.status === "in_progress" &&
           item.entry.delivery.steeringLeaseId === params.leaseId,
       ),

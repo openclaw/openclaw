@@ -199,16 +199,16 @@ async function runEmbeddedAgentViaCliBackend(
   // Reply/cron callers advance lifecycle state and arm execution-phase
   // watchdogs on this signal; dispatched runs emit it at the same
   // post-admission boundary where the native path does.
-  params.onExecutionStarted?.(
-    params.lifecycleGeneration !== undefined
-      ? { lifecycleGeneration: params.lifecycleGeneration }
-      : undefined,
-  );
   log.info(
     `dispatching embedded run through CLI backend: runId=${params.runId} provider=${dispatch.provider} model=${params.model ?? ""}`,
   );
   let finalAssistantText: string | undefined;
   try {
+    await params.onExecutionStarted?.(
+      params.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: params.lifecycleGeneration }
+        : undefined,
+    );
     const result = await runCliAgent({
       admittedRunContext,
       sessionManager: params.sessionManager,

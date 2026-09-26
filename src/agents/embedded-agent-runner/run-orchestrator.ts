@@ -8,10 +8,10 @@ import {
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -90,6 +90,10 @@ import type {
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import {
+  assertInitialOperatorModelPolicy,
+  resolveEmbeddedRunConfig,
+} from "./run/model-admission.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
@@ -109,13 +113,7 @@ const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 export function runEmbeddedAgent(
   internalParamsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
-  const requestedModel = normalizeOptionalString(internalParamsInput.model);
-  const needsConfiguredDefault =
-    !internalParamsInput.config && !requestedProvider && !requestedModel;
-  const config =
-    internalParamsInput.config ??
-    (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
+  const config = resolveEmbeddedRunConfig(internalParamsInput);
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
@@ -181,7 +179,7 @@ async function runEmbeddedAgentInternal(
     skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
+  const globalLane = resolveGlobalLane(params.lane, params);
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   // Detached runs neither write durable metadata nor claim the outer deferral.
@@ -260,6 +258,7 @@ async function runEmbeddedAgentInternal(
       const onAttemptStart = params.onAttemptStart;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
+        assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
         // Subscription-scoped claude-cli auth executes via the CLI backend;
         // resolved post-admission so dispatched runs obey the same lifecycle,
         // placement, and concurrency gates as native embedded runs.
@@ -436,7 +435,9 @@ async function runEmbeddedAgentInternal(
                 sessionId: params.sessionId,
                 tracker: startupStages,
               });
-              params.onExecutionStarted?.({ lifecycleGeneration });
+              await params.onExecutionStarted?.({ lifecycleGeneration });
+              throwIfAborted();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
               notifyExecutionPhase("runner_entered");
               const canonicalWorkspace = resolveUserPath(
                 resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),

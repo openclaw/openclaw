@@ -1,25 +1,94 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const repoRoot = join(__dirname, "../..");
 const testNodeExecPath = resolveTestNodeExecPath();
+const benchmarkUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.benchCli);
+const benchmarkArgs = resolveRuntimeWorkerArgv(benchmarkUrl, testNodeExecPath);
+
+type SuiteResult = Parameters<typeof testing.collectFailedSamples>[0];
+type CaseResult = SuiteResult["cases"][number];
+type CliSample = CaseResult["samples"][number];
+
+function stats(value: number) {
+  return { avg: value, p50: value, p95: value, min: value, max: value };
+}
+
+function cliSample(overrides: Partial<CliSample> = {}): CliSample {
+  return { ms: 10, firstOutputMs: 5, maxRssMb: 50, exitCode: 0, signal: null, ...overrides };
+}
+
+function suiteResult(
+  {
+    summary,
+    ...overrides
+  }: Partial<Omit<CaseResult, "summary">> & {
+    summary?: Partial<CaseResult["summary"]>;
+  } = {},
+  entry = "openclaw.mjs",
+): SuiteResult {
+  return {
+    entry,
+    cases: [
+      {
+        id: "version",
+        name: "--version",
+        args: ["--version"],
+        contract: null,
+        samples: [cliSample()],
+        ...overrides,
+        summary: {
+          sampleCount: overrides.samples?.length ?? 1,
+          durationMs: stats(10),
+          firstOutputMs: stats(5),
+          maxRssMb: stats(50),
+          exitSummary: "code:0x1",
+          ...summary,
+        },
+      },
+    ],
+  };
+}
 
 function runBenchmarkCli(args: string[]) {
-  return spawnSync(testNodeExecPath, ["--import", "tsx", "scripts/bench-cli-startup.ts", ...args], {
+  return spawnSync(testNodeExecPath, [...benchmarkArgs, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
   });
+}
+
+function runBenchmarkSample(entry: string, caseId: string, flags: string[] = []) {
+  return runBenchmarkCli([
+    "--entry",
+    entry,
+    "--case",
+    caseId,
+    "--runs",
+    "1",
+    "--warmup",
+    "0",
+    "--json",
+    ...flags,
+  ]);
+}
+
+function configFixture(id: string) {
+  return testing.buildConfigFixture({ id, name: id, args: [], presets: [] });
 }
 
 describe("bench-cli-startup", () => {
@@ -72,9 +141,7 @@ console.log("fixture version");
       const result = spawnSync(
         testNodeExecPath,
         [
-          "--import",
-          "tsx",
-          "scripts/bench-cli-startup.ts",
+          ...benchmarkArgs,
           "--entry",
           entry,
           "--case",
@@ -123,14 +190,10 @@ console.log("fixture version");
   it.each(["{}", '{"prefix":["relative"],"binary":"/node","env":{}}'])(
     "rejects malformed cross-user transport before candidate execution: %s",
     (transport) => {
-      const result = spawnSync(
-        testNodeExecPath,
-        ["--import", "tsx", "scripts/bench-cli-startup.ts", "--entry", "/not-executed"],
-        {
-          env: { ...process.env, OPENCLAW_BENCH_TRANSPORT_JSON: transport },
-          encoding: "utf8",
-        },
-      );
+      const result = spawnSync(testNodeExecPath, [...benchmarkArgs, "--entry", "/not-executed"], {
+        env: { ...process.env, OPENCLAW_BENCH_TRANSPORT_JSON: transport },
+        encoding: "utf8",
+      });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Invalid benchmark transport");
       expect(result.stdout).toBe("");
@@ -149,14 +212,7 @@ throw new Error("SUT prefix must not launch");`,
     );
     const result = spawnSync(
       testNodeExecPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-cli-startup.ts",
-        "--runtime-rss",
-        "--entry",
-        join(root, "missing-entry.mjs"),
-      ],
+      [...benchmarkArgs, "--runtime-rss", "--entry", join(root, "missing-entry.mjs")],
       {
         cwd: repoRoot,
         env: {
@@ -182,6 +238,8 @@ throw new Error("SUT prefix must not launch");`,
       const tmpDir = memoryTempDirs.make("openclaw-cli-rss-respawn-");
       const entryPath = join(tmpDir, "entry.mjs");
       const caPath = join(tmpDir, "ca.pem");
+      const respawnUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.respawn);
+      const respawnPreload = resolveRuntimeWorkerArgv(respawnUrl, testNodeExecPath).slice(0, -1);
       writeFileSync(caPath, "");
       writeFileSync(
         entryPath,
@@ -191,9 +249,8 @@ const usage = process.resourceUsage();
 const runtime = process.env.FIXTURE_RUNTIME === "1";
 process.resourceUsage = () => ({ ...usage, maxRSS: (runtime ? 32 : 64) * 1024 });
 if (isMainThread && !runtime) {
-  const { tsImport } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-  const { buildCliRespawnPlan, runCliRespawnPlan } = await tsImport(
-    ${JSON.stringify(resolve(repoRoot, "src/entry.respawn.ts"))}, import.meta.url);
+  ${respawnPreload.length > 0 ? `await import(${JSON.stringify(respawnPreload[1])});` : ""}
+  const { buildCliRespawnPlan, runCliRespawnPlan } = await import(${JSON.stringify(respawnUrl.href)});
   const plan = buildCliRespawnPlan({
     platform: ${JSON.stringify(mode === "windows" ? "win32" : "linux")},
     env: { ...process.env, OPENCLAW_NO_RESPAWN: "0", NODE_EXTRA_CA_CERTS: "",
@@ -215,18 +272,7 @@ if (isMainThread && !runtime) {
 `,
       );
       for (const runtimeRss of [false, true]) {
-        const result = runBenchmarkCli([
-          "--entry",
-          entryPath,
-          "--case",
-          "health",
-          "--runs",
-          "1",
-          "--warmup",
-          "0",
-          "--json",
-          ...(runtimeRss ? ["--runtime-rss"] : []),
-        ]);
+        const result = runBenchmarkSample(entryPath, "health", runtimeRss ? ["--runtime-rss"] : []);
         expect(result.status, result.stderr).toBe(0);
         const report = JSON.parse(result.stdout);
         const sample = report.primary.cases[0].samples[0];
@@ -260,18 +306,7 @@ if (isMainThread && !runtime) {
     const entryPath = join(tmpDir, "entry.mjs");
     writeFileSync(entryPath, "");
     for (const runtimeRss of [false, true]) {
-      const result = runBenchmarkCli([
-        "--entry",
-        entryPath,
-        "--case",
-        "version",
-        "--runs",
-        "1",
-        "--warmup",
-        "0",
-        "--json",
-        ...(runtimeRss ? ["--runtime-rss"] : []),
-      ]);
+      const result = runBenchmarkSample(entryPath, "version", runtimeRss ? ["--runtime-rss"] : []);
       expect(result.status, result.stderr).toBe(0);
       const report = JSON.parse(result.stdout);
       expect(report.primary.executionMode).toBe("native");
@@ -308,18 +343,7 @@ if (runtime) {
 }
 `,
     );
-    const result = runBenchmarkCli([
-      "--runtime-rss",
-      "--entry",
-      entryPath,
-      "--case",
-      "health",
-      "--runs",
-      "1",
-      "--warmup",
-      "0",
-      "--json",
-    ]);
+    const result = runBenchmarkSample(entryPath, "health", ["--runtime-rss"]);
     expect(result.status, result.stderr).toBe(0);
     const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
     expect(sample.maxRssMb).toBe(32);
@@ -359,18 +383,7 @@ if (process.env.FIXTURE_RUNTIME === "1") {
 }
 `,
       );
-      const result = runBenchmarkCli([
-        "--runtime-rss",
-        "--entry",
-        entryPath,
-        "--case",
-        "health",
-        "--runs",
-        "1",
-        "--warmup",
-        "0",
-        "--json",
-      ]);
+      const result = runBenchmarkSample(entryPath, "health", ["--runtime-rss"]);
       expect(result.status, result.stderr).toBe(mode === "auxiliary" ? 0 : 1);
       const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
       if (mode === "auxiliary") {
@@ -422,18 +435,7 @@ console.log("runtime ready");
 `,
       );
       symlinkSync(launcher, alias);
-      const result = runBenchmarkCli([
-        "--runtime-rss",
-        "--entry",
-        alias,
-        "--case",
-        "health",
-        "--runs",
-        "1",
-        "--warmup",
-        "0",
-        "--json",
-      ]);
+      const result = runBenchmarkSample(alias, "health", ["--runtime-rss"]);
       expect(result.status, result.stderr).toBe(0);
       const sample = JSON.parse(result.stdout).primary.cases[0].samples[0];
       expect(sample.maxRssMb).toBe(32);
@@ -509,8 +511,7 @@ setInterval(() => {}, 1000);
         const result = spawnSync(
           testNodeExecPath,
           [
-            "--import",
-            "tsx",
+            ...benchmarkArgs.slice(0, -1),
             "--input-type=module",
             "-e",
             `
@@ -518,7 +519,7 @@ import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { isProcessAlive, waitForPidFile } from ${JSON.stringify(new URL("../helpers/process-wait.ts", import.meta.url).href)};
+import { isProcessAlive, waitForPidFile } from ${JSON.stringify(resolveRuntimeWorkerUrl(toolingTsEntrypoints.processWait).href)};
 const realDelay = delay;
 mock.timers.enable({ apis: ["setTimeout", "Date"] });
 try {
@@ -543,7 +544,7 @@ try {
   mock.timers.reset();
 }
 `,
-            resolve(__dirname, "../../scripts/bench-cli-startup.ts"),
+            fileURLToPath(benchmarkUrl),
             "--entry",
             entryPath,
             "--case",
@@ -614,21 +615,9 @@ try {
               samples: [],
               summary: {
                 sampleCount: 1,
-                durationMs: {
-                  avg: durationAvg,
-                  p50: durationAvg,
-                  p95: durationAvg,
-                  min: durationAvg,
-                  max: durationAvg,
-                },
+                durationMs: stats(durationAvg),
                 firstOutputMs: null,
-                maxRssMb: {
-                  avg: maxRssAvg,
-                  p50: maxRssAvg,
-                  p95: maxRssAvg,
-                  min: maxRssAvg,
-                  max: maxRssAvg,
-                },
+                maxRssMb: stats(maxRssAvg),
                 exitSummary: "code:0x1",
               },
             },
@@ -749,62 +738,34 @@ try {
 
   it("fails reports with no measured samples", () => {
     expect(
-      testing.collectFailedSamples({
-        entry: "openclaw.mjs",
-        cases: [
-          {
-            id: "version",
-            name: "--version",
-            args: ["--version"],
-            contract: null,
-            samples: [],
-            summary: {
-              sampleCount: 0,
-              durationMs: { avg: 0, p50: 0, p95: 0, min: 0, max: 0 },
-              firstOutputMs: null,
-              maxRssMb: null,
-              exitSummary: "",
-            },
-          },
-        ],
-      }),
+      testing.collectFailedSamples(
+        suiteResult({
+          samples: [],
+          summary: { durationMs: stats(0), firstOutputMs: null, maxRssMb: null, exitSummary: "" },
+        }),
+      ),
     ).toEqual(["openclaw.mjs version: no measured samples"]);
   });
 
   it("fails reports with nonzero or signaled CLI samples", () => {
-    const passingSample = {
-      ms: 10,
-      firstOutputMs: 5,
-      maxRssMb: 50,
-      exitCode: 0,
-      signal: null,
-    };
-
     expect(
-      testing.collectFailedSamples({
-        entry: "dist/entry.js",
-        cases: [
+      testing.collectFailedSamples(
+        suiteResult(
           {
             id: "gatewayStatusJson",
             name: "gateway status --json",
             args: ["gateway", "status", "--json"],
-            contract: null,
             samples: [
-              passingSample,
-              { ...passingSample, exitCode: 1 },
-              { ...passingSample, exitCode: null, signal: "SIGTERM" },
-              { ...passingSample, timedOut: true },
+              cliSample(),
+              cliSample({ exitCode: 1 }),
+              cliSample({ exitCode: null, signal: "SIGTERM" }),
+              cliSample({ timedOut: true }),
             ],
-            summary: {
-              sampleCount: 4,
-              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
-              exitSummary: "code:0x1, code:1x1, signal:SIGTERMx1",
-            },
+            summary: { exitSummary: "code:0x1, code:1x1, signal:SIGTERMx1" },
           },
-        ],
-      }),
+          "dist/entry.js",
+        ),
+      ),
     ).toEqual([
       "dist/entry.js gatewayStatusJson sample 2: exited with code 1",
       "dist/entry.js gatewayStatusJson sample 3: exited via signal SIGTERM",
@@ -813,139 +774,73 @@ try {
   });
 
   it("retains and validates warmup samples separately from measured samples", () => {
-    const passingSample = {
-      ms: 10,
-      firstOutputMs: 5,
-      maxRssMb: 50,
-      exitCode: 0,
-      signal: null,
+    const passingSample = cliSample({
       startedAt: "2026-08-01T20:00:00.000Z",
       endedAt: "2026-08-01T20:00:00.010Z",
-    };
+    });
 
     expect(
-      testing.collectFailedSamples({
-        entry: "dist/entry.js",
-        cases: [
+      testing.collectFailedSamples(
+        suiteResult(
           {
             id: "gatewayHealthJsonWarmState",
             name: "gateway health --json (warm state)",
             args: ["gateway", "health", "--json"],
-            contract: null,
             warmupSamples: [{ ...passingSample, exitCode: 1 }],
             samples: [passingSample],
-            summary: {
-              sampleCount: 1,
-              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
-              exitSummary: "code:0x1",
-            },
           },
-        ],
-      }),
+          "dist/entry.js",
+        ),
+      ),
     ).toEqual(["dist/entry.js gatewayHealthJsonWarmState warmup 1: exited with code 1"]);
   });
 
   it("fails reports with samples that did not report RSS", () => {
     expect(
-      testing.collectFailedSamples({
-        entry: "openclaw.mjs",
-        cases: [
-          {
-            id: "version",
-            name: "--version",
-            args: ["--version"],
-            contract: null,
-            samples: [
-              {
-                ms: 10,
-                firstOutputMs: 5,
-                maxRssMb: null,
-                exitCode: 0,
-                signal: null,
-              },
-            ],
-            summary: {
-              sampleCount: 1,
-              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-              maxRssMb: null,
-              exitSummary: "code:0x1",
-            },
-          },
-        ],
-      }),
+      testing.collectFailedSamples(
+        suiteResult({
+          samples: [cliSample({ maxRssMb: null })],
+          summary: { maxRssMb: null },
+        }),
+      ),
     ).toEqual(["openclaw.mjs version sample 1: did not report max RSS"]);
   });
 
   it("allows declared nonzero exit codes for clean-state probes", () => {
-    const sample = {
-      ms: 10,
-      firstOutputMs: 5,
-      maxRssMb: 50,
-      exitCode: 1,
-      signal: null,
-      stderrTail: "Health check failed: gateway closed\n  Gateway target: ws://127.0.0.1:18789",
-    };
-
     expect(
-      testing.collectFailedSamples({
-        entry: "openclaw.mjs",
-        cases: [
-          {
-            id: "health",
-            name: "health",
-            args: ["health"],
-            expectedExitCodes: [0, 1],
-            expectedNonzeroOutputIncludes: ["Gateway target:"],
-            contract: null,
-            samples: [sample],
-            summary: {
-              sampleCount: 1,
-              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
-              exitSummary: "code:1x1",
-            },
-          },
-        ],
-      }),
+      testing.collectFailedSamples(
+        suiteResult({
+          id: "health",
+          name: "health",
+          args: ["health"],
+          expectedExitCodes: [0, 1],
+          expectedNonzeroOutputIncludes: ["Gateway target:"],
+          samples: [
+            cliSample({
+              exitCode: 1,
+              stderrTail:
+                "Health check failed: gateway closed\n  Gateway target: ws://127.0.0.1:18789",
+            }),
+          ],
+          summary: { exitSummary: "code:1x1" },
+        }),
+      ),
     ).toEqual([]);
   });
 
   it("rejects allowed nonzero exits without their expected clean-state output", () => {
-    const sample = {
-      ms: 10,
-      firstOutputMs: 5,
-      maxRssMb: 50,
-      exitCode: 1,
-      signal: null,
-      stderrTail: "TypeError: crashed before output",
-    };
-
     expect(
-      testing.collectFailedSamples({
-        entry: "openclaw.mjs",
-        cases: [
-          {
-            id: "health",
-            name: "health",
-            args: ["health"],
-            expectedExitCodes: [0, 1],
-            expectedNonzeroOutputIncludes: ["Gateway target:"],
-            contract: null,
-            samples: [sample],
-            summary: {
-              sampleCount: 1,
-              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
-              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
-              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
-              exitSummary: "code:1x1",
-            },
-          },
-        ],
-      }),
+      testing.collectFailedSamples(
+        suiteResult({
+          id: "health",
+          name: "health",
+          args: ["health"],
+          expectedExitCodes: [0, 1],
+          expectedNonzeroOutputIncludes: ["Gateway target:"],
+          samples: [cliSample({ exitCode: 1, stderrTail: "TypeError: crashed before output" })],
+          summary: { exitSummary: "code:1x1" },
+        }),
+      ),
     ).toEqual([
       "openclaw.mjs health sample 1: exited with expected code 1 but output did not match expected clean-state markers (Gateway target:)",
     ]);
@@ -978,67 +873,14 @@ try {
   });
 
   it("writes a config fixture for config get benchmarks", () => {
-    const unauthenticatedFixture = {
-      gateway: {
-        auth: { mode: "none" },
-        bind: "loopback",
-        mode: "local",
-        port: 32123,
-      },
-    };
-    for (const commandCase of [
-      {
-        id: "configGetGatewayPort",
-        name: "config get gateway.port",
-        args: ["config", "get", "gateway.port"],
-        presets: ["real"],
-      },
-      {
-        id: "gatewayHealthJson",
-        name: "gateway health --json",
-        args: ["gateway", "health", "--json"],
-        presets: ["real"],
-      },
-      { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
-      {
-        id: "healthJson",
-        name: "health --json",
-        args: ["health", "--json"],
-        presets: ["startup"],
-      },
-    ]) {
-      expect(
-        withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
-          testing.buildConfigFixture(commandCase),
-        ),
-      ).toEqual(unauthenticatedFixture);
+    for (const id of ["configGetGatewayPort", "gatewayHealthJson", "health", "healthJson"]) {
+      expect(withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => configFixture(id))).toEqual({
+        gateway: { auth: { mode: "none" }, bind: "loopback", mode: "local", port: 32123 },
+      });
     }
-
-    for (const commandCase of [
-      {
-        id: "gatewayHealthJsonWarmState",
-        name: "gateway health --json (warm state)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
-      {
-        id: "gatewayHealthJsonFreshState",
-        name: "gateway health --json (fresh state)",
-        args: ["gateway", "health", "--json"],
-        presets: [],
-      },
-    ]) {
-      expect(
-        withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
-          testing.buildConfigFixture(commandCase),
-        ),
-      ).toEqual({
-        gateway: {
-          auth: { mode: "token" },
-          bind: "loopback",
-          mode: "local",
-          port: 32123,
-        },
+    for (const id of ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]) {
+      expect(withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => configFixture(id))).toEqual({
+        gateway: { auth: { mode: "token" }, bind: "loopback", mode: "local", port: 32123 },
       });
     }
   });
@@ -1055,28 +897,14 @@ try {
       "gatewayHealthJsonWarmState",
       "gatewayHealthJsonFreshState",
     ]) {
-      expect(
-        withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>
-          testing.buildConfigFixture({
-            id,
-            name: "gateway health --json",
-            args: ["gateway", "health", "--json"],
-            presets: [],
-          }),
-        ),
-      ).toMatchObject({ gateway: { port: 45678 } });
+      expect(withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () => configFixture(id))).toMatchObject({
+        gateway: { port: 45678 },
+      });
     }
 
     for (const invalid of ["45678abc", "127.0.0.1:45678abc"]) {
       expect(() =>
-        withEnv({ OPENCLAW_GATEWAY_PORT: invalid }, () =>
-          testing.buildConfigFixture({
-            id: "gatewayHealthJson",
-            name: "gateway health --json",
-            args: ["gateway", "health", "--json"],
-            presets: ["real"],
-          }),
-        ),
+        withEnv({ OPENCLAW_GATEWAY_PORT: invalid }, () => configFixture("gatewayHealthJson")),
       ).toThrow("OPENCLAW_GATEWAY_PORT must be an integer >= 1");
     }
   });

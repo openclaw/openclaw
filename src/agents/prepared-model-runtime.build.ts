@@ -4,6 +4,8 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
+import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
@@ -61,6 +63,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
+  retirementSignal: AbortSignal;
   isBuildCurrent?: () => boolean;
   onBeforeAuthCapture?: () => void;
   inspectRegistry?: boolean;
@@ -142,6 +145,7 @@ async function buildSnapshotBatch(
         catalogFacts,
         pluginGeneration,
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
+        retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
       }),
       requestedByInput.get(candidate.input)!.config,
@@ -300,6 +304,10 @@ async function buildSnapshotBatch(
           );
         }
       }
+      await settlePluginNativeAdmissions(
+        getPluginMetadataSnapshotCache(prepared.pluginGeneration.pluginMetadataSnapshot),
+      );
+      assertPreparedModelRuntimeCandidatesCurrent(groupCandidates);
     }
     const workspaceFactsMs = performance.now() - workspaceFactsStartedAt;
     const catalogSourceStartedAt = performance.now();

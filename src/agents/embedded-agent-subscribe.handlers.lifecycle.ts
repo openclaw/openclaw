@@ -3,7 +3,6 @@
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -26,6 +25,7 @@ import {
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import { finalizeToolActivity } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -199,6 +199,7 @@ export function handleAgentEnd(
   }
 
   const emitLifecycleTerminal = () => {
+    finalizeToolActivity(ctx);
     const terminalStopReason =
       ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??
@@ -252,13 +253,6 @@ export function handleAgentEnd(
   };
 
   const finalizeAgentEnd = () => {
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.fence = undefined;
-    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.blockState.pendingFenceFragment = undefined;
-
     if (ctx.state.pendingCompactionRetry > 0) {
       ctx.resolveCompactionRetry();
     } else {
@@ -274,28 +268,20 @@ export function handleAgentEnd(
       }
     }
 
+    const flushChannel = () => {
+      const result = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
+      return isPromiseLike<void>(result) ? result : undefined;
+    };
     const postMediaFlushResult = ctx.flushBlockReplyBuffer();
-    if (isPromiseLike<void>(postMediaFlushResult)) {
-      return postMediaFlushResult.then(() => {
-        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
-        if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-          return onBlockReplyFlushResult;
-        }
-        return undefined;
-      });
-    }
-
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult;
-    }
-    return undefined;
+    return isPromiseLike<void>(postMediaFlushResult)
+      ? postMediaFlushResult.then(flushChannel)
+      : flushChannel();
   };
 
   const runBeforeTerminalDelivery = ():
     | BeforeTerminalDeliveryDecision
     | Promise<BeforeTerminalDeliveryDecision> => {
-    const result = ctx.params.onBeforeTerminalDelivery?.({
+    return ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
       ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
@@ -306,10 +292,16 @@ export function handleAgentEnd(
       incompleteTerminalAssistant,
       hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
     });
-    if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(result)) {
-      return result;
+  };
+
+  const rethrowAfterLifecycleTerminal = (error: unknown) => {
+    const emitted = emitLifecycleTerminalOnce();
+    if (isPromiseLike<void>(emitted)) {
+      return Promise.resolve(emitted).then(() => {
+        throw error;
+      });
     }
-    return result;
+    throw error;
   };
 
   const deliverTerminal = () => {
@@ -323,15 +315,7 @@ export function handleAgentEnd(
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
       return Promise.resolve(flushPendingMediaAndChannelResult).then(
         () => emitLifecycleTerminalOnce(),
-        (error: unknown) => {
-          const emitted = emitLifecycleTerminalOnce();
-          if (isPromiseLike<void>(emitted)) {
-            return Promise.resolve(emitted).then(() => {
-              throw error;
-            });
-          }
-          throw error;
-        },
+        rethrowAfterLifecycleTerminal,
       );
     }
     return emitLifecycleTerminalOnce();
@@ -341,13 +325,7 @@ export function handleAgentEnd(
     try {
       return deliverTerminal();
     } catch (error) {
-      const emitted = emitLifecycleTerminalOnce();
-      if (isPromiseLike<void>(emitted)) {
-        return Promise.resolve(emitted).then(() => {
-          throw error;
-        });
-      }
-      throw error;
+      return rethrowAfterLifecycleTerminal(error);
     }
   };
 

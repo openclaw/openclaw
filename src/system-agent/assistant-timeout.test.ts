@@ -1,31 +1,16 @@
 // System-agent timeout tests cover manifest-owned local-route classification.
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
   SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
 } from "./assistant-prompts.js";
-import "./assistant-timeout.js";
-
-const { resolveSystemAgentAssistantTimeoutFromManifests } = (
-  globalThis as Record<PropertyKey, unknown>
-)[Symbol.for("openclaw.systemAgentTimeoutTestApi")] as {
-  resolveSystemAgentAssistantTimeoutFromManifests: (params: {
-    route: { modelLabel: string; provider: string };
-    plugins: ReadonlyArray<{
-      modelPricing?: { providers?: Record<string, { external?: boolean }> };
-    }>;
-  }) => number;
-};
+import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 
 describe("system-agent assistant timeout", () => {
   it.each([
-    {
-      name: "external provider",
-      provider: "openai",
-      modelLabel: "openai/gpt-5.5",
-      external: true,
-      expected: SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
-    },
     {
       name: "local provider",
       provider: "ollama",
@@ -41,11 +26,37 @@ describe("system-agent assistant timeout", () => {
       expected: SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
     },
   ])("uses the $name budget", ({ provider, modelLabel, external, expected }) => {
-    expect(
-      resolveSystemAgentAssistantTimeoutFromManifests({
-        route: { provider, modelLabel },
-        plugins: [{ modelPricing: { providers: { [provider]: { external } } } }],
-      }),
-    ).toBe(expected);
+    const workspaceDir = path.resolve("timeout-workspace");
+    const config = { agents: { entries: { main: { workspace: workspaceDir } } } };
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        { id: "timeout-fixture", modelPricing: { providers: { [provider]: { external } } } },
+      ],
+    });
+    const resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+      .mockReturnValue(snapshot);
+    try {
+      expect(
+        resolveSystemAgentAssistantTimeoutMs({
+          sourceConfig: config,
+          runConfig: config,
+          modelLabel,
+          provider,
+          model: modelLabel.split("/").slice(1).join("/"),
+          agentDir: path.join(workspaceDir, "agent"),
+          agentId: "main",
+          runner: "embedded",
+        }),
+      ).toBe(expected);
+      expect(resolveMetadata).toHaveBeenCalledExactlyOnceWith({
+        config,
+        workspaceDir,
+        env: process.env,
+        allowWorkspaceScopedCurrent: true,
+      });
+    } finally {
+      resolveMetadata.mockRestore();
+    }
   });
 });

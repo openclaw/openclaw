@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   replaceSessionEntrySync,
@@ -8,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import {
@@ -57,16 +59,14 @@ describe("health and status resident session summaries", () => {
         await backfill;
         await settleProjection(projection);
         const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const reads = (["all", "get", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        );
+        const reads = observeMainThreadReads();
         const agents = agentIds.map((id) => ({ id }));
-        for (const limit of [0, 5, 10]) {
+        for (const limit of [-2.5, 0, 0.5, 5, 5.7, 10, Infinity, Number.NaN]) {
           const status = await readStatusSessionStores(cfg, agents, limit, projection);
           expect(status.paths).toHaveLength(1);
           expect(status.count).toBe(24);
           expect(status.recent.map((row) => row.sessionKey)).toEqual(
-            suffixes.slice(0, limit).map((suffix) => `agent:worker:${suffix}`),
+            [...sessionKeys.slice(12), ...sessionKeys.slice(0, 12)].slice(0, limit),
           );
           expect(status.byAgent.map((agent) => [agent.agent.id, agent.count])).toEqual([
             ["main", 12],
@@ -77,6 +77,29 @@ describe("health and status resident session summaries", () => {
               suffixes.slice(0, limit).map((suffix) => `agent:${agent.agent.id}:${suffix}`),
             );
           }
+        }
+        for (const limit of [0, 5]) {
+          const subset = await readStatusSessionStores(
+            cfg,
+            [{ id: "main" }, { id: "empty" }, { id: "main" }],
+            limit,
+            projection,
+          );
+          expect(subset.count).toBe(24);
+          expect(subset.recent.map((row) => row.sessionKey)).toEqual(
+            sessionKeys.slice(12, 12 + limit),
+          );
+          expect(
+            subset.byAgent.map(({ agent, count, recent }) => [
+              agent.id,
+              count,
+              recent.map((row) => row.sessionKey),
+            ]),
+          ).toEqual([
+            ["main", 12, sessionKeys.slice(0, limit)],
+            ["empty", 0, []],
+            ["main", 12, sessionKeys.slice(0, limit)],
+          ]);
         }
         const health = await buildHealthAgentSummaries(
           cfg,
@@ -91,9 +114,7 @@ describe("health and status resident session summaries", () => {
           );
         }
         expect(prepares).not.toHaveBeenCalled();
-        for (const read of reads) {
-          expect(read).not.toHaveBeenCalled();
-        }
+        reads.expectIdle();
       } finally {
         projection.dispose();
       }
@@ -111,9 +132,7 @@ describe("health and status resident session summaries", () => {
         { agentId: "main", sessionKey: mainKey },
         { sessionId: "main-primary", updatedAt: 10 },
       );
-      if (!committed) {
-        throw new Error("Expected the session write owner to return its committed row");
-      }
+      assert(committed, "Expected the session write owner to return its committed row");
       const initialUpdatedAt = committed.updatedAt;
       const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
       try {
@@ -128,9 +147,7 @@ describe("health and status resident session summaries", () => {
         ).toMatchObject({ sessionId: committed.sessionId, updatedAt: initialUpdatedAt });
 
         const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const reads = (["all", "get", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        );
+        const reads = observeMainThreadReads();
         const agents = [{ id: "main" }];
         const readStatus = () => readStatusSessionStores(cfg, agents, 10, projection);
         const readHealth = () =>
@@ -154,9 +171,7 @@ describe("health and status resident session summaries", () => {
         await readStatus();
         await readHealth();
         expect(prepares).not.toHaveBeenCalled();
-        for (const read of reads) {
-          expect(read).not.toHaveBeenCalled();
-        }
+        reads.expectIdle();
 
         const dirtyBackfill = observeSessionRowBackfill([mainKey]);
         replaceSessionEntrySync(
@@ -166,23 +181,16 @@ describe("health and status resident session summaries", () => {
         expect(projection.dirtyRowCount).toBeGreaterThan(0);
         const dirty = await readStatus();
         expect(dirty.byAgent[0]?.recent[0]?.entry.updatedAt).toBe(20);
-        expect(
-          prepares.mock.calls.length +
-            reads.reduce((total, read) => total + read.mock.calls.length, 0),
-        ).toBeGreaterThan(0);
+        expect(prepares.mock.calls.length + reads.count()).toBeGreaterThan(0);
         await dirtyBackfill;
         await settleProjection(projection);
 
         prepares.mockClear();
-        for (const read of reads) {
-          read.mockClear();
-        }
+        reads.clear();
         const clean = await readHealth();
         expect(clean[0]?.sessions.recent[0]?.updatedAt).toBe(20);
         expect(prepares).not.toHaveBeenCalled();
-        for (const read of reads) {
-          expect(read).not.toHaveBeenCalled();
-        }
+        reads.expectIdle();
 
         const workerKey = "agent:worker:primary";
         await upsertSessionEntryCore(

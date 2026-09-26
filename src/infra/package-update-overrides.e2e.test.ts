@@ -9,7 +9,7 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "./package-update-steps.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const exec = promisify(execFile);
 const scenarios = [
@@ -248,7 +248,7 @@ describe("local overrides through real npm package updates", () => {
           expect(
             result.steps.some(
               (step) =>
-                step.name === "local package overrides" && step.advisory?.message.includes(saved),
+                step.name === "local-package-overrides" && step.advisory?.message.includes(saved),
             ),
           ).toBe(true);
         }

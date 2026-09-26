@@ -1,15 +1,7 @@
 import type { OpenAICompatibleModelDiscoveryOptions } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-// Minimax provider module implements model/runtime integration.
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  DEFAULT_MINIMAX_MAX_TOKENS,
-  MINIMAX_API_BASE_URL,
-  resolveMinimaxApiCost,
-} from "./model-definitions.js";
-import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { MINIMAX_API_BASE_URL, buildMinimaxApiModelDefinition } from "./model-definitions.js";
+import { MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
 
 export function buildMinimaxModelDiscovery(
   { baseUrl, api }: Pick<ModelProviderConfig, "baseUrl" | "api">,
@@ -51,35 +43,15 @@ export function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.en
   }
 }
 
-function buildMinimaxCatalog(): ModelDefinitionConfig[] {
-  return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
-    const model = MINIMAX_TEXT_MODEL_CATALOG[id];
-    return {
-      id,
-      name: model.name,
-      reasoning: model.reasoning,
-      input: [...model.input],
-      cost: resolveMinimaxApiCost(id),
-      contextWindow: model.contextWindow,
-      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
-    };
-  });
-}
-
 export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
     baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
-    models: buildMinimaxCatalog(),
+    models: MINIMAX_TEXT_MODEL_ORDER.map(buildMinimaxApiModelDefinition),
   };
 }
 
 export function buildMinimaxPortalProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
-  return {
-    baseUrl: resolveMinimaxCatalogBaseUrl(env),
-    api: "anthropic-messages",
-    authHeader: true,
-    models: buildMinimaxCatalog(),
-  };
+  return buildMinimaxProvider(env);
 }

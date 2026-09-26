@@ -117,6 +117,24 @@
       }
     },
     {
+      "name": "@openclaw/cua-computer",
+      "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "cua-computer",
+          "label": "CUA Computer"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cua-computer",
+          "npmSpec": "@openclaw/cua-computer",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diagnostics-otel",
       "description": "OpenClaw diagnostics OpenTelemetry exporter",
       "source": "official",
@@ -271,6 +289,30 @@
           "npmSpec": "@openclaw/exa-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/facetime",
+      "description": "Experimental OpenClaw FaceTime realtime voice carrier",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "facetime",
+          "label": "FaceTime"
+        },
+        "contracts": {
+          "tools": [
+            "facetime_call"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/facetime",
+          "npmSpec": "@openclaw/facetime",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4",
+          "allowInvalidConfigRecovery": true
         }
       }
     },
@@ -505,6 +547,24 @@
           "npmSpec": "@openclaw/mxc-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/onnx",
+      "description": "Local ONNX decision models for OpenClaw",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "onnx",
+          "label": "ONNX"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/onnx",
+          "npmSpec": "@openclaw/onnx",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },
@@ -780,6 +840,24 @@
           "npmSpec": "@openclaw/tokenjuice",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.28"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/typesafe",
+      "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "typesafe",
+          "label": "TypeSafe AI"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/typesafe",
+          "npmSpec": "@openclaw/typesafe",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },

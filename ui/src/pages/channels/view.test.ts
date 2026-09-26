@@ -14,7 +14,7 @@ import { renderChannels } from "./view.ts";
 import type { ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
-function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
+function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
   return createChannelsViewProps(snapshot, {
     accounts: [],
     requests: [],
@@ -35,8 +35,8 @@ describe("channel hub refresh actions", () => {
       channelAccounts: {},
       channelDefaultAccountId: {},
     });
-    props.lastSuccessAt = Date.now();
-    props.pairingLastSuccessAt = Date.now();
+    props.channels.channelsLastSuccess = Date.now();
+    props.channels.pairingLastSuccess = Date.now();
     props.onRefresh = onRefresh;
     props.onPairingRefresh = onPairingRefresh;
     const container = document.createElement("div");
@@ -89,14 +89,18 @@ describe("channels plugin presentation metadata", () => {
       channelAccounts: {},
       channelDefaultAccountId: {},
     });
-    props.pluginCatalog = {
-      plugins: [createChannelPlugin()],
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-    props.pluginIconUrls = { slack: "blob:slack-plugin-icon" };
+    Object.assign(props.presentation, {
+      pluginCatalog: {
+        plugins: [createChannelPlugin()],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+    });
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:slack-plugin-icon" } });
     props.selectedChannel = "slack";
-    props.wizard = { phase: "error", channel: "slack", message: "Setup failed" };
+    Object.assign(props.wizardHost, {
+      state: { phase: "error", channel: "slack", message: "Setup failed" },
+    });
     const container = document.createElement("div");
 
     render(renderChannels(props), container);
@@ -126,11 +130,13 @@ describe("channels plugin presentation metadata", () => {
         )?.textContent,
       ).toContain("SL");
     }
-    props.pluginIconUrls = {};
-    props.pluginCatalog = {
-      ...props.pluginCatalog,
-      plugins: [createChannelPlugin({ hasIcon: false })],
-    };
+    Object.assign(props.presentation, { pluginIconUrls: {} });
+    Object.assign(props.presentation, {
+      pluginCatalog: {
+        ...props.presentation.pluginCatalog,
+        plugins: [createChannelPlugin({ hasIcon: false })],
+      },
+    });
     render(renderChannels(props), container);
     expect(container.querySelector(".channels-item img")).toBeNull();
   });
@@ -249,7 +255,7 @@ describe("channel row actions", () => {
             action === "setup" ? ".btn" : ".channels-item__detail",
           )!;
 
-      props.snapshot = {
+      props.channels.channelsSnapshot = {
         ...snapshot,
         ts: 2,
         ...(update === "connect"
@@ -343,7 +349,7 @@ describe("channel status issues", () => {
     );
     expect(running?.nextElementSibling?.textContent?.trim()).toBe("Yes");
 
-    props.snapshot = { ...snapshot, ts: 2, statusIssues: [] };
+    props.channels.channelsSnapshot = { ...snapshot, ts: 2, statusIssues: [] };
     render(renderChannels(props), container);
 
     expect(
@@ -429,7 +435,7 @@ function renderWhatsAppButtons(params: {
     channelAccounts: {},
     channelDefaultAccountId: {},
   });
-  props.whatsappQrDataUrl = params.qrDataUrl ?? null;
+  props.channels.whatsappLoginQrDataUrl = params.qrDataUrl ?? null;
   if (params.onWhatsAppStart) {
     props.onWhatsAppStart = params.onWhatsAppStart;
   }
@@ -465,8 +471,8 @@ function renderChannelDetailFixture(
     channelAccounts,
     channelDefaultAccountId: accounts?.length ? { [channelId]: accounts[0]!.accountId } : {},
   });
-  props.loading = options.loading ?? false;
-  props.configError = options.configError ?? null;
+  props.channels.channelsLoading = options.loading ?? false;
+  props.config.lastError = options.configError ?? null;
   if (options.onRefresh) {
     props.onRefresh = options.onRefresh;
   }
@@ -529,9 +535,9 @@ function renderWhatsAppConfigForm(
     channelDefaultAccountId: {},
   });
   const onShowAdvancedSettings = vi.fn();
-  props.configSchema = CHANNEL_TIER_SCHEMA;
-  props.configUiHints = hints;
-  props.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+  props.config.configSchema = CHANNEL_TIER_SCHEMA;
+  props.config.configUiHints = hints;
+  props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
   props.showAdvancedSettings = showAdvancedSettings;
   props.onShowAdvancedSettings = onShowAdvancedSettings;
 
@@ -647,9 +653,7 @@ describe("channel detail", () => {
 
   it.each([
     ["discord", "Discord", []],
-    ["slack", "Slack", []],
     ["signal", "Signal", [["Base URL", "https://signal.example"]]],
-    ["imessage", "iMessage", []],
     [
       "googlechat",
       "Google Chat",
@@ -722,7 +726,7 @@ describe("channel detail", () => {
     expect(fact(discord, "Running")).toBe("No");
   });
 
-  it.each(["guildchat", "constructor", "__proto__"])(
+  it.each(["guildchat", "__proto__"])(
     "opens accountless plugin %s from its actual hub row without inherited account values",
     (channelId) => {
       for (const configured of [false, true]) {

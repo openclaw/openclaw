@@ -1,4 +1,3 @@
-// Device Pair plugin entrypoint registers its OpenClaw integration.
 import { rm } from "node:fs/promises";
 import { isIP } from "node:net";
 import os from "node:os";
@@ -43,11 +42,6 @@ type SetupPayload = {
 type ResolveUrlResult = {
   url?: string;
   source?: string;
-  error?: string;
-};
-
-type ResolveAuthLabelResult = {
-  label?: "token" | "password" | "trusted-proxy";
   error?: string;
 };
 
@@ -150,16 +144,6 @@ function isLoopbackHost(host: string): boolean {
     return octets[0] === 127;
   }
   return normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
-}
-
-function resolveScheme(
-  cfg: OpenClawPluginApi["config"],
-  opts?: { forceSecure?: boolean },
-): "ws" | "wss" {
-  if (opts?.forceSecure) {
-    return "wss";
-  }
-  return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
 }
 
 function parseIPv4Octets(address: string): [number, number, number, number] | null {
@@ -292,10 +276,6 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
   return null;
 }
 
-function pickTailnetIPv4(): string | null {
-  return pickMatchingIPv4(isTailnetIPv4);
-}
-
 async function resolveTailnetHost(): Promise<string | null> {
   const { resolveTailnetHostWithRunner, runPluginCommandWithTimeout } =
     await loadDevicePairApiModule();
@@ -307,60 +287,12 @@ async function resolveTailnetHost(): Promise<string | null> {
   );
 }
 
-function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
-  const mode = cfg.gateway?.auth?.mode;
-  const token =
-    pickFirstDefined([process.env.OPENCLAW_GATEWAY_TOKEN, cfg.gateway?.auth?.token]) ?? undefined;
-  const password =
-    pickFirstDefined([process.env.OPENCLAW_GATEWAY_PASSWORD, cfg.gateway?.auth?.password]) ??
-    undefined;
-
-  if (mode === "token" || mode === "password") {
-    return resolveRequiredAuthLabel(mode, { token, password });
-  }
-  if (token) {
-    return { label: "token" };
-  }
-  if (password) {
-    return { label: "password" };
-  }
-  // Issuer authorization and bootstrap grants stay separate from ingress auth.
-  if (mode === "trusted-proxy") {
-    return { label: "trusted-proxy" };
-  }
-  return { error: "Gateway auth is not configured (no token or password)." };
-}
-
-function pickFirstDefined(candidates: Array<unknown>): string | null {
-  for (const value of candidates) {
-    const trimmed = normalizeOptionalString(value);
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  return null;
-}
-
-function resolveRequiredAuthLabel(
-  mode: "token" | "password",
-  values: { token?: string; password?: string },
-): ResolveAuthLabelResult {
-  if (mode === "token") {
-    return values.token
-      ? { label: "token" }
-      : { error: "Gateway auth is set to token, but no token is configured." };
-  }
-  return values.password
-    ? { label: "password" }
-    : { error: "Gateway auth is set to password, but no password is configured." };
-}
-
 async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
   const { resolveAdvertisedLanHost, resolveGatewayBindUrl, resolveGatewayPort } =
     await loadDevicePairApiModule();
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
-  const scheme = resolveScheme(cfg);
+  const scheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   const port = resolveGatewayPort(cfg);
 
   const configuredPublicUrl = normalizeOptionalString(pluginCfg.publicUrl);
@@ -397,7 +329,7 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
-    pickTailnetHost: pickTailnetIPv4,
+    pickTailnetHost: () => pickMatchingIPv4(isTailnetIPv4),
     pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
@@ -423,9 +355,7 @@ async function resolveMobilePairingGatewayUrl(api: OpenClawPluginApi): Promise<R
 }
 
 function encodeSetupCode(payload: SetupPayload): string {
-  const json = JSON.stringify(payload);
-  const base64 = Buffer.from(json, "utf8").toString("base64");
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
 function buildPairingFlowLines(stepTwo: string): string[] {
@@ -554,7 +484,9 @@ function buildAccessLines(payload: SetupPayload, markdown = false): string[] {
 async function issueSetupPayload(params: {
   url: string;
   allowFullAccess: boolean;
+  assertCurrent?: () => void;
 }): Promise<SetupPayload> {
+  const assertCurrent = params.assertCurrent;
   const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
     await loadDevicePairApiModule();
   const hasPlaintextRoute = !isFullAccessMobilePairingUrl(params.url);
@@ -562,6 +494,7 @@ async function issueSetupPayload(params: {
   const fullAccess = params.allowFullAccess && !hasPlaintextRoute;
   const accessDowngraded = params.allowFullAccess && hasPlaintextRoute;
   const issuedBootstrap = await issueDeviceBootstrapToken({
+    ...(assertCurrent ? { assertCurrent } : {}),
     profile: fullAccess
       ? {
           roles: [...PAIRING_SETUP_BOOTSTRAP_PROFILE.roles],
@@ -643,6 +576,7 @@ export default definePluginEntry({
       },
       requiredScopes: ["operator.pairing"],
       handler: async (ctx) => {
+        const assertAdmittedOwner = ctx.assertOwnerCurrent;
         const args = normalizeOptionalString(ctx.args) ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0]);
@@ -652,6 +586,7 @@ export default definePluginEntry({
         const {
           buildMissingPairingScopeReply,
           buildMissingSetupHandoffScopeReply,
+          resolveAuthLabel,
           resolvePairingCommandAuthState,
         } = await loadPairCommandAuthModule();
         const authState = resolvePairingCommandAuthState({
@@ -659,6 +594,9 @@ export default definePluginEntry({
           gatewayClientScopes,
           senderIsOwner: ctx.senderIsOwner,
         });
+        const assertOwnerCurrent = authState.isInternalGatewayCaller
+          ? undefined
+          : assertAdmittedOwner;
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -668,6 +606,7 @@ export default definePluginEntry({
         if (authState.isMissingPairingPrivilege) {
           return buildMissingPairingScopeReply();
         }
+        assertOwnerCurrent?.();
 
         if (action === "status" || action === "pending") {
           const [{ listDevicePairing }, { formatPendingRequests }] = await Promise.all([
@@ -675,6 +614,7 @@ export default definePluginEntry({
             loadNotifyModule(),
           ]);
           const list = await listDevicePairing();
+          assertOwnerCurrent?.();
           return { text: formatPendingRequests(list.pending) };
         }
 
@@ -683,7 +623,7 @@ export default definePluginEntry({
           const { handleNotifyCommand } = await loadNotifyModule();
           return await handleNotifyCommand({
             api,
-            ctx,
+            ctx: { ...ctx, assertOwnerCurrent },
             action: notifyAction,
           });
         }
@@ -708,12 +648,13 @@ export default definePluginEntry({
           return await approvePendingPairingRequest({
             requestId: pending.requestId,
             callerScopes: authState.approvalCallerScopes,
+            assertCurrent: assertOwnerCurrent,
           });
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
           const { clearDeviceBootstrapTokens } = await loadDevicePairApiModule();
-          const cleared = await clearDeviceBootstrapTokens();
+          const cleared = await clearDeviceBootstrapTokens({ assertCurrent: assertOwnerCurrent });
           return {
             text:
               cleared.removed > 0
@@ -744,7 +685,10 @@ export default definePluginEntry({
           if (channel === "telegram" && target) {
             try {
               const { armPairNotifyOnce } = await loadNotifyModule();
-              autoNotifyArmed = await armPairNotifyOnce({ api, ctx });
+              autoNotifyArmed = await armPairNotifyOnce({
+                api,
+                ctx: { ...ctx, assertOwnerCurrent },
+              });
             } catch (err) {
               api.logger.warn?.(
                 `device-pair: failed to arm one-shot pairing notify (${(err as Error)?.message ?? err})`,
@@ -755,6 +699,7 @@ export default definePluginEntry({
           let payload = await issueSetupPayload({
             url: urlResult.url,
             allowFullAccess: authState.canIssueFullAccessSetup,
+            assertCurrent: assertOwnerCurrent,
           });
           let setupCode = encodeSetupCode(payload);
 
@@ -802,6 +747,7 @@ export default definePluginEntry({
               payload = await issueSetupPayload({
                 url: urlResult.url,
                 allowFullAccess: authState.canIssueFullAccessSetup,
+                assertCurrent: assertOwnerCurrent,
               });
               setupCode = encodeSetupCode(payload);
             } finally {
@@ -827,6 +773,7 @@ export default definePluginEntry({
               payload = await issueSetupPayload({
                 url: urlResult.url,
                 allowFullAccess: authState.canIssueFullAccessSetup,
+                assertCurrent: assertOwnerCurrent,
               });
               return {
                 text:
@@ -868,6 +815,7 @@ export default definePluginEntry({
         const payload = await issueSetupPayload({
           url: urlResult.url,
           allowFullAccess: authState.canIssueFullAccessSetup,
+          assertCurrent: assertOwnerCurrent,
         });
 
         if (channel === "telegram" && target) {

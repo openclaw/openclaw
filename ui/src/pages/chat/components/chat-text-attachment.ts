@@ -2,11 +2,13 @@ import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -16,12 +18,9 @@ import {
   renderCompactAttachmentCard,
 } from "./chat-attachment-card.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
-import {
-  htmlPreviewElement,
-  isHtmlDocument,
-  LazyCustomElementRequestController,
-  renderHtmlPreview,
-} from "./chat-html-preview.ts";
+import { htmlPreviewElement, isHtmlDocument, renderHtmlPreview } from "./chat-html-preview.ts";
+
+registerFilePreviewEnglish();
 
 export function isTextAttachment(rawMimeType: string, filename: string): boolean {
   const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -71,14 +70,27 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
+  private get htmlDocument(): boolean {
+    return !this.plainText && isHtmlDocument(this.mimeType, this.label);
+  }
+
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("sourceIdentity")) {
       this.source = false;
     }
-    if (changed.has("src") || changed.has("sourceIdentity") || changed.has("sizeBytes")) {
+    // A retained attachment must revalidate bytes when its rendering policy changes.
+    const policyChanged =
+      changed.has("plainText") || changed.has("mimeType") || changed.has("label");
+    if (
+      policyChanged ||
+      changed.has("src") ||
+      changed.has("sourceIdentity") ||
+      changed.has("sizeBytes")
+    ) {
       this.cancelLoad();
       // Ticket refreshes must not detach a focused reader of the same attachment.
       if (
+        policyChanged ||
         !this.src ||
         !this.sourceIdentity ||
         changed.has("sourceIdentity") ||
@@ -104,7 +116,12 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     const controller = new AbortController();
     this.abortController = controller;
     try {
-      const text = await readAttachmentText(this.src, this.sizeBytes, controller.signal);
+      const text = await readAttachmentText(
+        this.src,
+        this.sizeBytes,
+        controller.signal,
+        this.htmlDocument ? "html" : "full",
+      );
       if (version === this.loadVersion && this.isConnected) {
         this.text = text;
       }
@@ -128,7 +145,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    const htmlDocument = !this.plainText && isHtmlDocument(this.mimeType, this.label);
+    const htmlDocument = this.htmlDocument;
     const mimeType = this.mimeType.split(";", 1)[0]?.trim().toLowerCase();
     const markdown =
       !this.plainText &&
@@ -226,7 +243,9 @@ ${this.text}</pre>`,
       }
       ${
         this.failed
-          ? html`<p class="muted" role="status">${t("chat.attachments.textPreviewUnavailable")}</p>`
+          ? html`<p class="muted" role="status">
+              ${t(htmlDocument ? "chat.attachments.htmlPreviewUnavailable" : "chat.attachments.textPreviewUnavailable")}
+            </p>`
           : reader
       }
     `;

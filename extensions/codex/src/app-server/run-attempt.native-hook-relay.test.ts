@@ -346,7 +346,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("auto-answers defensive yolo command and workspace file approvals at their safe scopes", async () => {
+  it("auto-answers defensive yolo command and workspace file approvals once", async () => {
     const approvalSpy = vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest");
     const beforeToolCall = vi.fn(() => undefined);
     initializeGlobalHookRunner(
@@ -403,7 +403,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
           grantRoot: workspaceDir,
         },
       }),
-    ).resolves.toEqual({ decision: "acceptForSession" });
+    ).resolves.toEqual({ decision: "accept" });
 
     expect(beforeToolCall).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "apply_patch" }),
@@ -1055,7 +1055,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
       nativeHookRelay: { enabled: true },
     });
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(abortAgentHarnessRun("session-1")).toBe(true);

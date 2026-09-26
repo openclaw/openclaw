@@ -81,40 +81,18 @@ export type ShortTermLockEntry = {
   ownerStartTime?: number;
 };
 
-type PromotionComponents = {
-  frequency: number;
-  relevance: number;
-  diversity: number;
-  recency: number;
-  consolidation: number;
-  conceptual: number;
-};
-
-export type PromotionCandidate = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  source: "memory";
-  snippet: string;
-  recallCount: number;
+export type PromotionCandidate = Omit<
+  ShortTermRecallEntry,
+  "dailyCount" | "groundedCount" | "totalScore" | "queryHashes" | "userQueryHashes"
+> & {
   dailyCount?: number;
   groundedCount?: number;
   signalCount: number;
   avgScore: number;
-  maxScore: number;
   uniqueQueries: number;
-  claimHash?: string;
-  projectKey?: string;
-  promotedAt?: string;
-  firstRecalledAt: string;
-  lastRecalledAt: string;
   ageDays: number;
   score: number;
-  recallDays: string[];
-  conceptTags: string[];
-  components: PromotionComponents;
-  provenance?: MemoryEntryProvenance;
+  components: PromotionWeights;
 };
 
 export type ShortTermAuditSummary = MemoryShortTermAuditSummary<ConceptTagScriptCoverage>;

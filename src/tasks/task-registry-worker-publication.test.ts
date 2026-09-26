@@ -4,10 +4,13 @@ import * as sqlitePostCommit from "../infra/sqlite-post-commit.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
-import { updateTask, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { commitTaskDeliveryFixture } from "./task-registry-delivery.test-support.js";
+import { updateTask } from "./task-registry-mutation.js";
 import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
-import { deleteTaskRecordById, resetTaskRegistryForTests } from "./task-registry-query.js";
+import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
+import { resetTaskRegistryForTests } from "./task-registry-query.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
+import { captureTaskRetentionSelection } from "./task-registry-retention.operation.js";
 import {
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReadyAsync,
@@ -62,6 +65,158 @@ describe("worker publication scope", () => {
     notifyPolicy: "silent",
     createdAt: 1,
   };
+
+  it.each(["none", "replacement"] as const)(
+    "publishes only the current committed deletion after %s during readback",
+    async (change) => {
+      const expired = {
+        ...task,
+        status: "succeeded" as const,
+        endedAt: task.createdAt,
+        cleanupAfter: 0,
+      };
+      const { store, context, events } = await prepare([expired]);
+      const readStarted = createDeferred();
+      const releaseRead = createDeferred();
+      let deleted = false;
+      const completion = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => new Map(),
+          publicationDeletions: () =>
+            new Map<string, TaskRecord>(deleted ? [[task.taskId, expired]] : []),
+        },
+        async (beginRecovery) => {
+          beginRecovery();
+          const source = await store.prepareRetentionSourceAsync(context, task.taskId);
+          if (!source) {
+            throw new Error("Expected the retained task source");
+          }
+          const result = await store.runInitialMutationAsync(
+            context,
+            {
+              type: "tasks.applyRetention",
+              input: {
+                taskId: task.taskId,
+                selection: captureTaskRetentionSelection(expired),
+                sourceVersion: source.version,
+                now: Date.now(),
+                cronHistoryOverflow: false,
+              },
+            },
+            () => context.admission.assertCurrent(),
+          );
+          expect(result).toMatchObject({ kind: "task-retention-commit", outcome: "pruned" });
+          deleted = true;
+        },
+        async () => {
+          const snapshot = store.loadSnapshot();
+          readStarted.resolve();
+          await releaseRead.promise;
+          return snapshot;
+        },
+      );
+      try {
+        await readStarted.promise;
+        expect(store.loadSnapshot().tasks.has(task.taskId)).toBe(false);
+        expect(tasks.get(task.taskId)).toEqual(expired);
+        expect(events).toEqual([]);
+        if (change !== "none") {
+          const replacement = { ...task, runId: "replacement-run" };
+          store.upsertTaskWithDeliveryState({ task: replacement });
+          publishTaskRecordAfterAtomicStore(replacement);
+        }
+        releaseRead.resolve();
+        await completion;
+        expect(events).toEqual(
+          change === "none"
+            ? ["deleted:existing-task:original-run"]
+            : ["upserted:existing-task:replacement-run"],
+        );
+        expect(tasks.get(task.taskId)?.runId).toBe(
+          change === "replacement" ? "replacement-run" : undefined,
+        );
+      } finally {
+        releaseRead.resolve();
+        await completion;
+      }
+    },
+  );
+
+  it.each(
+    (["before read", "during read", "during effects"] as const).flatMap((phase) =>
+      (["newer write", "ABA"] as const).map((change) => ({ phase, change })),
+    ),
+  )(
+    "does not recover stale committed publication across $change $phase",
+    async ({ phase, change }) => {
+      const { store, context, events } = await prepare([task]);
+      const committed = { ...task, task: "Committed" };
+      const started = createDeferred();
+      const release = createDeferred();
+      const effects = vi.fn();
+      let recovered = false;
+      const outcome = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => new Map(),
+          recoverPublication: (snapshot) => {
+            recovered = true;
+            return snapshot.tasks.get(task.taskId);
+          },
+          beforeObservers: async (assertCurrent) => {
+            if (!recovered) {
+              return;
+            }
+            if (phase === "during effects") {
+              started.resolve();
+              await release.promise;
+            }
+            assertCurrent();
+            effects();
+          },
+        },
+        async () => {
+          store.upsertTaskWithDeliveryState({ task: committed });
+          if (phase === "before read") {
+            started.resolve();
+            await release.promise;
+          }
+          throw new Error("Lost committed result");
+        },
+        async () => {
+          const snapshot = store.loadSnapshot();
+          if (phase === "during read") {
+            started.resolve();
+            await release.promise;
+          }
+          return snapshot;
+        },
+      );
+      const rejected = expect(outcome).rejects.toThrow("Lost committed result");
+      try {
+        await started.promise;
+        expect(updateTask(task.taskId, { task: "Other write" })).not.toBeNull();
+        if (change === "ABA") {
+          expect(updateTask(task.taskId, { task: "Committed" })).not.toBeNull();
+        }
+        release.resolve();
+        await rejected;
+        expect(events).toEqual(
+          change === "ABA"
+            ? ["upserted:existing-task:original-run", "upserted:existing-task:original-run"]
+            : ["upserted:existing-task:original-run"],
+        );
+        expect(tasks.get(task.taskId)?.task).toBe(change === "ABA" ? "Committed" : "Other write");
+        expect(effects).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await rejected;
+      }
+    },
+  );
 
   it.each([
     { selection: "run", registration: "before claim" },
@@ -221,13 +376,14 @@ describe("worker publication scope", () => {
     }
   });
 
-  it.each(
-    (["queued", "read", "effects"] as const).flatMap((phase) =>
+  it.each([
+    ...(["queued", "read", "effects"] as const).flatMap((phase) =>
       (["none", "no-op refresh", "delivery", "unrelated row", "row ABA"] as const).map(
         (change) => ({ phase, change }),
       ),
     ),
-  )(
+    { phase: "effects", change: "overlapping worker ABA" } as const,
+  ])(
     "keeps receipt readiness correct across $change while $phase waits",
     async ({ phase, change }) => {
       const other = { ...task, taskId: "other-task", runId: "other-run" };
@@ -267,6 +423,7 @@ describe("worker publication scope", () => {
             return new Map([[task.taskId, receipt]]);
           },
           forcePublish: () => receipt,
+          ...(change === "overlapping worker ABA" ? { recoverPublication: () => undefined } : {}),
           beforeObservers: async () => {
             if (phase === "effects") {
               started.resolve();
@@ -289,10 +446,36 @@ describe("worker publication scope", () => {
       );
       try {
         await started.promise;
-        if (change === "no-op refresh") {
+        if (change === "overlapping worker ABA") {
+          const bothCommitted = createDeferred();
+          const writes = [{ ...receipt, task: "Other writer" }, receipt].map((row, index) =>
+            runTaskRegistryWorkerMutation(
+              {
+                admission: context.admission,
+                scope: { taskId: task.taskId },
+                publicationRecords: () => new Map([[task.taskId, row]]),
+              },
+              async () => {
+                store.upsertTaskWithDeliveryState({ task: row });
+                if (index === 1) {
+                  bothCommitted.resolve();
+                }
+                await bothCommitted.promise;
+              },
+              async () => store.loadSnapshot(),
+            ),
+          );
+          try {
+            await Promise.all(writes);
+            expect(events).toEqual(["upserted:existing-task:original-run"]);
+          } finally {
+            bothCommitted.resolve();
+            await Promise.allSettled(writes);
+          }
+        } else if (change === "no-op refresh") {
           withTaskRegistryMutation(() => {});
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else if (change === "unrelated row") {
           expect(updateTask(other.taskId, { task: "Other changed" })).not.toBeNull();
         } else if (change === "row ABA") {
@@ -303,7 +486,10 @@ describe("worker publication scope", () => {
         await expect(pending).resolves.toEqual(receipt);
         expect(tasks.get(task.taskId)).toEqual(receipt);
         expect(events).toEqual(
-          change === "delivery" || change === "none" || change === "no-op refresh"
+          change === "delivery" ||
+            change === "none" ||
+            change === "no-op refresh" ||
+            change === "overlapping worker ABA"
             ? ["upserted:existing-task:original-run"]
             : change === "unrelated row"
               ? ["upserted:other-task:other-run", "upserted:existing-task:original-run"]
@@ -315,6 +501,96 @@ describe("worker publication scope", () => {
       }
     },
   );
+
+  it("does not deliver an acknowledged receipt superseded by queued worker readbacks", async () => {
+    const other = { ...task, taskId: "blocking-task", runId: "blocking-run" };
+    const { store, context } = await prepare([task, other]);
+    const receipt = { ...task, task: "Ready" };
+    const predecessorStarted = createDeferred();
+    const releasePredecessor = createDeferred();
+    const written = createDeferred();
+    const acknowledge = createDeferred();
+    const claimed = createDeferred();
+    const published = vi.fn();
+    const publicationError = vi.fn();
+    const owners: Promise<unknown>[] = [];
+    const predecessor = runTaskRegistryWorkerMutation(
+      {
+        admission: context.admission,
+        scope: { taskId: other.taskId },
+        publicationRecords: () => new Map(),
+      },
+      async () => {},
+      async () => {
+        const snapshot = store.loadSnapshot();
+        predecessorStarted.resolve();
+        await releasePredecessor.promise;
+        return snapshot;
+      },
+    );
+    owners.push(predecessor);
+    try {
+      await predecessorStarted.promise;
+      const pending = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => {
+            claimed.resolve();
+            return new Map([[task.taskId, receipt]]);
+          },
+          recoverPublication: () => undefined,
+          forcePublish: () => receipt,
+          onPublished: published,
+          onPublicationError: publicationError,
+        },
+        async (beginRecovery) => {
+          beginRecovery();
+          store.upsertTaskWithDeliveryState({ task: receipt });
+          written.resolve();
+          await acknowledge.promise;
+          return receipt;
+        },
+        async () => store.loadSnapshot(),
+      );
+      owners.push(pending);
+      await written.promise;
+      // Later commits register their readbacks before the held receipt is acknowledged.
+      for (const record of [{ ...receipt, task: "Other writer" }, receipt]) {
+        const competingClaimed = createDeferred();
+        owners.push(
+          runTaskRegistryWorkerMutation(
+            {
+              admission: context.admission,
+              scope: { taskId: task.taskId },
+              publicationRecords: () => {
+                competingClaimed.resolve();
+                return new Map([[task.taskId, record]]);
+              },
+            },
+            async () => {
+              store.upsertTaskWithDeliveryState({ task: record });
+              return record;
+            },
+            async () => store.loadSnapshot(),
+          ),
+        );
+        await competingClaimed.promise;
+      }
+      acknowledge.resolve();
+      await claimed.promise;
+      releasePredecessor.resolve();
+      await expect(pending).resolves.toEqual(receipt);
+      await Promise.all(owners);
+      expect(tasks.get(task.taskId)).toEqual(receipt);
+      expect(publicationError).not.toHaveBeenCalled();
+      expect(published).not.toHaveBeenCalled();
+    } finally {
+      acknowledge.resolve();
+      releasePredecessor.resolve();
+      await Promise.allSettled(owners);
+    }
+  });
 
   it.each(["owner", "requester"] as const)(
     "does not publish a child related only through its %s session",
@@ -349,45 +625,33 @@ describe("worker publication scope", () => {
     },
   );
 
-  it.each(["rebound", "rebound then deleted"] as const)(
-    "publishes known run-scoped records exactly once when %s",
-    async (change) => {
-      const { store, context, events } = await prepare([task]);
-      const scope = { taskId: "requested-task", runId: task.runId };
-      let reads = 0;
+  it("publishes known run-scoped records exactly once when rebound", async () => {
+    const { store, context, events } = await prepare([task]);
+    const scope = { taskId: "requested-task", runId: task.runId };
+    let reads = 0;
 
-      await runTaskRegistryWorkerMutation(
-        {
-          admission: context.admission,
-          scope,
-          publicationRecords: () => new Map([[task.taskId, { ...task, task: "Committed" }]]),
-        },
-        async () => {
-          store.upsertTaskWithDeliveryState({ task: { ...task, task: "Committed" } });
-        },
-        async () => {
-          const snapshot = await store.loadMutationSnapshotAsync(context, scope);
-          if (reads++ === 0) {
-            expect(updateTask(task.taskId, { runId: "replacement-run" })).not.toBeNull();
-            if (change === "rebound then deleted") {
-              expect(deleteTaskRecordById(task.taskId)).toBe(true);
-            }
-          }
-          return snapshot;
-        },
-      );
+    await runTaskRegistryWorkerMutation(
+      {
+        admission: context.admission,
+        scope,
+        publicationRecords: () => new Map([[task.taskId, { ...task, task: "Committed" }]]),
+      },
+      async () => {
+        store.upsertTaskWithDeliveryState({ task: { ...task, task: "Committed" } });
+      },
+      async () => {
+        const snapshot = await store.loadMutationSnapshotAsync(context, scope);
+        if (reads++ === 0) {
+          expect(updateTask(task.taskId, { runId: "replacement-run" })).not.toBeNull();
+        }
+        return snapshot;
+      },
+    );
 
-      expect(events).toEqual(
-        change === "rebound"
-          ? ["upserted:existing-task:replacement-run"]
-          : ["upserted:existing-task:replacement-run", "deleted:existing-task:replacement-run"],
-      );
-      expect(reads).toBe(1);
-      expect(tasks.get(task.taskId)?.runId).toBe(
-        change === "rebound" ? "replacement-run" : undefined,
-      );
-    },
-  );
+    expect(events).toEqual(["upserted:existing-task:replacement-run"]);
+    expect(reads).toBe(1);
+    expect(tasks.get(task.taskId)?.runId).toBe("replacement-run");
+  });
 });
 
 describe("worker publication during canonical reads", () => {
@@ -427,7 +691,7 @@ describe("worker publication during canonical reads", () => {
         if (change === "activity") {
           emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task }));
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else {
           const database = createProjectionTransactionDatabase();
           const lookup = vi
@@ -438,7 +702,7 @@ describe("worker publication during canonical reads", () => {
             .mockImplementation((_db, publication) => {
               publication.stage();
               expect(authoritativeTasks.get(task.taskId)?.task).toBe("Committed");
-              publication.rollback();
+              publication.rollback(new Error("Synthetic projection rollback"));
               expect(authoritativeTasks.get(task.taskId)?.task).toBe("Original");
               return true;
             });
@@ -476,69 +740,59 @@ describe("worker publication during canonical reads", () => {
     },
   );
 
-  it.each(["value", "absent"] as const)(
-    "does not publish a held task snapshot after %s ABA",
-    async (change) => {
-      const task: TaskRecord = {
-        taskId: "aba-task",
-        runtime: "cli",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        task: "Original",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      };
-      const { store, context } = await prepare(change === "value" ? [task] : []);
-      const published: string[] = [];
-      configureTaskRegistryRuntime({
-        observers: {
-          onEvent(event) {
-            if (event.kind === "upserted") {
-              published.push(event.task.task);
-            } else if (event.kind === "deleted") {
-              published.push("deleted");
-            }
-          },
+  it("does not publish a held task snapshot after value ABA", async () => {
+    const task: TaskRecord = {
+      taskId: "aba-task",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Original",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+    };
+    const { store, context } = await prepare([task]);
+    const published: string[] = [];
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind === "upserted") {
+            published.push(event.task.task);
+          } else if (event.kind === "deleted") {
+            published.push("deleted");
+          }
         },
-      });
-      let reads = 0;
-      await expect(
-        runTaskRegistryWorkerMutation(
-          {
-            admission: context.admission,
-            scope: { taskId: task.taskId },
-            publicationRecords: () => new Map([[task.taskId, { ...task, task: "Held snapshot" }]]),
-          },
-          async () => {
-            store.upsertTaskWithDeliveryState({ task: { ...task, task: "Held snapshot" } });
-            return "committed";
-          },
-          async () => {
-            const snapshot = store.loadSnapshot();
-            if (reads++ === 0) {
-              if (change === "value") {
-                expect(updateTask(task.taskId, { task: "Intermediate" })).not.toBeNull();
-                expect(updateTask(task.taskId, { task: "Original" })).not.toBeNull();
-              } else {
-                // The ordinary delete refreshes the committed row before removing it.
-                expect(deleteTaskRecordById(task.taskId)).toBe(true);
-              }
-            }
-            return snapshot;
-          },
-        ),
-      ).resolves.toBe("committed");
+      },
+    });
+    let reads = 0;
+    await expect(
+      runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => new Map([[task.taskId, { ...task, task: "Held snapshot" }]]),
+        },
+        async () => {
+          store.upsertTaskWithDeliveryState({ task: { ...task, task: "Held snapshot" } });
+          return "committed";
+        },
+        async () => {
+          const snapshot = store.loadSnapshot();
+          if (reads++ === 0) {
+            expect(updateTask(task.taskId, { task: "Intermediate" })).not.toBeNull();
+            expect(updateTask(task.taskId, { task: "Original" })).not.toBeNull();
+          }
+          return snapshot;
+        },
+      ),
+    ).resolves.toBe("committed");
 
-      expect(authoritativeTasks.get(task.taskId)?.task).toBe(
-        change === "value" ? "Original" : undefined,
-      );
-      expect(published).toEqual(change === "value" ? ["Intermediate", "Original"] : ["deleted"]);
-      expect(reads).toBe(1);
-    },
-  );
+    expect(authoritativeTasks.get(task.taskId)?.task).toBe("Original");
+    expect(published).toEqual(["Intermediate", "Original"]);
+    expect(reads).toBe(1);
+  });
 
   it.each(["unrelated read", "same-task read", "before observers"] as const)(
     "settles one committed mutation during %s churn without replaying publication effects",

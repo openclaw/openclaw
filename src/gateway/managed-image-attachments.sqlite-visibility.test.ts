@@ -26,6 +26,7 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -38,6 +39,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
   readSessionMessagesMatchingIdAsync,
@@ -335,13 +337,14 @@ describe("managed attachment SQLite visibility", () => {
       seq: number;
       event_json: string;
     };
-    const writer = new DatabaseSync(database.path);
+    // Match runtime connection admission instead of failing immediately on an
+    // unrelated transient lock. The write still commits inside the read snapshot.
+    const writer = new DatabaseSync(database.path, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
     const parse = JSON.parse;
     let rewrote = false;
     const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
       if (!rewrote && value === JSON.stringify(other)) {
         rewrote = true;
-        expect(database.db.isTransaction).toBe(true);
         writer.exec("BEGIN IMMEDIATE");
         try {
           rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: writer }, f.scope, [
@@ -360,7 +363,15 @@ describe("managed attachment SQLite visibility", () => {
       return parse(value, reviver);
     });
     try {
-      expect(await f.download()).not.toBeNull();
+      // Run the worker's reader kernel here so this deterministic competing writer
+      // fires inside its read snapshot; the other cases exercise actual dispatch.
+      const reader = createReadonlySessionHistoryReader({
+        database: { agentId: "main", path: database.path },
+        transcript: { ...f.scope, sessionFile: f.scope.sessionKey },
+      });
+      expect(await reader.readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toMatchObject([
+        { content: [f.block] },
+      ]);
       expect(rewrote).toBe(true);
       expect(database.db.isTransaction).toBe(false);
     } finally {

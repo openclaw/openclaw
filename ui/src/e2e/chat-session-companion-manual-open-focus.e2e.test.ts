@@ -101,7 +101,9 @@ suite.define(() => {
             side = panes.first().getByRole("textbox", { name: "Ask in side chat", exact: true });
           } else {
             await page.keyboard.press("ControlOrMeta+k");
-            foreground = page.getByRole("combobox", { name: "Search chats and commands…" });
+            foreground = page
+              .locator("openclaw-command-palette")
+              .getByRole("textbox", { name: "Search or start a task…" });
           }
           await foreground.click();
           await page.keyboard.type("Keep typing here");

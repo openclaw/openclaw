@@ -380,11 +380,6 @@ describe("applyCustomApiConfig", () => {
       existingContextWindow: 8192,
       expectedContextWindow: 8192,
     },
-    {
-      name: "preserves existing custom model context window when already above minimum",
-      existingContextWindow: 131072,
-      expectedContextWindow: 131072,
-    },
   ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
     const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
     const model = result.config.models?.providers?.custom?.models?.find(

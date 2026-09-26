@@ -64,6 +64,10 @@ function parsePageMetadata(html: string, finalUrl: string) {
     metadata.get("og:title") ??
     metadata.get("twitter:title") ??
     head.querySelector("title")?.textContent;
+  const description =
+    metadata.get("og:description") ??
+    metadata.get("twitter:description") ??
+    metadata.get("description");
   const image = [
     "og:image:secure_url",
     "og:image",
@@ -90,6 +94,9 @@ function parsePageMetadata(html: string, finalUrl: string) {
   }
   return {
     title: title ? truncateUtf16Safe(title.replace(/\s+/gu, " ").trim(), 180) : undefined,
+    description: description
+      ? truncateUtf16Safe(description.replace(/\s+/gu, " ").trim(), 400)
+      : undefined,
     image,
     icons,
   };
@@ -213,6 +220,7 @@ async function loadPreview(url: URL, isEnabled: () => boolean): Promise<ControlU
   return isEnabled()
     ? {
         ...(page?.title ? { title: page.title } : {}),
+        ...(page?.description ? { description: page.description } : {}),
         ...(imageDataUrl ? { imageDataUrl } : {}),
         ...(faviconDataUrl ? { faviconDataUrl } : {}),
       }

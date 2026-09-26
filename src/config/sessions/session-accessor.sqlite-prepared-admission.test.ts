@@ -26,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
@@ -166,6 +167,18 @@ function fixture() {
 }
 
 type Fixture = ReturnType<typeof fixture>;
+
+function closeForIntegrityAdmission(f: Fixture) {
+  expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
+
+async function closeWorkerForIntegrityAdmission(f: Fixture) {
+  await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
 
 function observeAdmission(databasePath: string, hold = false) {
   let parentChecks = 0;
@@ -346,8 +359,7 @@ it.each(cases)(
   async ({ owner, mode }) => {
     const f = fixture();
     if (mode === "cold-preparation") {
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
     }
     const probe = observeAdmission(f.databasePath);
     const entered = createDeferred();
@@ -361,8 +373,11 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        if (owner !== "whole-store") {
+          await closeWorkerForIntegrityAdmission(f);
+        } else {
+          closeForIntegrityAdmission(f);
+        }
       }
     };
     const operation = own<string | SessionEntryLifecycleMutationResult>(
@@ -409,7 +424,7 @@ it.each(cases)(
               ],
             }),
     );
-    expect(callbacks).toBe(mode === "cold-preparation" ? 0 : 1);
+    expect(callbacks).toBe(owner === "whole-store" && mode !== "cold-preparation" ? 1 : 0);
     const later = own(
       runExclusiveSqliteSessionWrite(
         f.scope,
@@ -432,7 +447,7 @@ it.each(cases)(
     });
     expect(callbacks).toBe(1);
     expect(order).toEqual(["update", "later"]);
-    probe.expectHealthy(mode === "warm" ? 0 : 1);
+    probe.expectHealthy(owner === "replacement" || mode === "warm" ? 0 : 1);
   },
 );
 
@@ -442,17 +457,17 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
     const f = fixture();
     const probe = observeAdmission(f.databasePath);
     let callbacks = 0;
-    const close = () => {
+    const close = async () => {
       callbacks += 1;
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
     };
     const operation =
       mode === "persist-false" || mode === "unchanged"
         ? applySessionStoreProjection({
             storePath: f.databasePath,
             skipMaintenance: true,
-            update: (store) => {
-              close();
+            update: async (store) => {
+              await close();
               if (mode === "persist-false") {
                 delete store[f.input.sessionKey];
               }
@@ -465,8 +480,8 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
               mode === "missing-replacement" ? "agent:main:missing" : f.input.sessionKey,
             ],
             skipMaintenance: true,
-            update: () => {
-              close();
+            update: async () => {
+              await close();
               return {
                 result: "no-op",
                 ...(mode === "missing-replacement"
@@ -491,7 +506,7 @@ it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacemen
 );
 
 it.each(["selection", "stale", "denied"] as const)(
-  "preserves replacement $0 error ordering across a cold commit",
+  "refuses replacement $0 before an unauthorized worker commit",
   async (mode) => {
     const f = fixture();
     const probe = observeAdmission(f.databasePath);
@@ -500,7 +515,9 @@ it.each(["selection", "stale", "denied"] as const)(
       throw denied;
     });
     const update = vi.fn(
-      (entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0]) => {
+      async (
+        entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
+      ) => {
         if (mode === "stale") {
           replaceSessionEntrySync(f.input, {
             sessionId: "original",
@@ -508,8 +525,7 @@ it.each(["selection", "stale", "denied"] as const)(
             updatedAt: Date.now(),
           });
         }
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        await closeWorkerForIntegrityAdmission(f);
         return {
           result: undefined,
           replacements: entries.map(({ entry, sessionKey }) => ({
@@ -528,16 +544,14 @@ it.each(["selection", "stale", "denied"] as const)(
         update,
       }),
     );
-    if (mode === "denied") {
-      await expect(work).rejects.toBe(denied);
+    if (mode === "selection") {
+      await expect(work).rejects.toThrow("outside the selected key set");
     } else {
-      await expect(work).rejects.toThrow(
-        mode === "selection" ? "outside the selected key set" : "changed before replacement",
-      );
+      await expect(work).rejects.toBe(denied);
     }
     expect(update).toHaveBeenCalledOnce();
-    expect(guard).toHaveBeenCalledTimes(mode === "denied" ? 1 : 0);
-    probe.expectHealthy(mode === "selection" ? 0 : 1);
+    expect(guard).toHaveBeenCalledTimes(mode === "selection" ? 0 : 1);
+    probe.expectHealthy(0);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe(mode === "stale" ? "newer" : undefined);
   },
 );
@@ -557,8 +571,7 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
         label: "newer",
         updatedAt: Date.now(),
       });
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
       return { ...currentEntry!, label: "uncommitted" };
     },
   );
@@ -594,8 +607,7 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   const probe = observeAdmission(f.databasePath);
   const builder = vi.fn(
     ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -631,8 +643,7 @@ it("reacquires the split lifecycle commit after real archive materialization", a
       },
       "session.transcript.batch",
     );
-    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeForIntegrityAdmission(f);
   };
   const work = own(
     applySessionEntryLifecycleMutation({
@@ -694,8 +705,7 @@ it.each([false, true])(
         },
         "session.transcript.batch",
       );
-      expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeForIntegrityAdmission(f);
     });
     const harness: AgentHarness = {
       id: "prepared-native",
@@ -799,7 +809,7 @@ it.each(
     ([false, true] as const).map((cold) => ({ owner, cold })),
   ),
 )(
-  "keeps $owner maintenance finalization in the writer FIFO (cold: $cold)",
+  "keeps $owner maintenance commits after validation without blocking writers (cold: $cold)",
   async ({ owner, cold }) => {
     const f = maintenanceFixture();
     const probe = observeWorkerAdmission(f.databasePath, cold);
@@ -813,8 +823,11 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        if (owner !== "whole-store") {
+          await closeWorkerForIntegrityAdmission(f);
+        } else {
+          closeForIntegrityAdmission(f);
+        }
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(
@@ -857,18 +870,18 @@ it.each(
           f.scope,
           async () => {
             laterRan = true;
-            expect(loadSessionEntryReadOnly(f.stale)).toBeUndefined();
+            expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
           },
           "session.transcript.batch",
         ),
       );
-      await yieldToEventLoop();
+      // Validation has no writer permit; the finalizer acquires it for its native commit.
+      await later;
       expect(preparationWriterRan).toBe(true);
-      expect(laterRan).toBe(false);
+      expect(laterRan).toBe(true);
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       probe.release.resolve();
       await work;
-      await later;
     } else {
       await work;
     }
@@ -896,8 +909,7 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const plan = maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, true);
   hooks.afterMaterialize = async () => {
-    expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeForIntegrityAdmission(f);
   };
   let current = true;
   const work = own(
@@ -931,8 +943,7 @@ it.each([false, true])(
         throw new Error("unused test harness");
       },
       withSessionDeletion: async (params, run) => {
-        expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
-        invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+        closeForIntegrityAdmission(f);
         params.assertCurrent();
         return await run({ commit, rollback });
       },

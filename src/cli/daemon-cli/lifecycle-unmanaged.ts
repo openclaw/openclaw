@@ -45,13 +45,16 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
     !isRestartEnabled({ commands: probe.configSnapshot.commands })
   ) {
     throw new Error(
-      "Gateway restart is disabled in the running gateway config (commands.restart=false); unmanaged SIGUSR1 restart would be ignored",
+      "Gateway restart is disabled in the running gateway config (commands.restart=false)",
     );
   }
 }
 
-export function resolveVerifiedGatewayListenerPids(port: number): number[] {
-  return findVerifiedGatewayListenerPidsOnPortSync(port).filter(
+export function resolveVerifiedGatewayListenerPids(
+  port: number,
+  env?: NodeJS.ProcessEnv,
+): number[] {
+  return findVerifiedGatewayListenerPidsOnPortSync(port, { env }).filter(
     (pid): pid is number => Number.isFinite(pid) && pid > 0,
   );
 }
@@ -62,16 +65,18 @@ export async function signalGatewayRestart(
     restartIntent?: GatewayRestartIntent;
     enforceRestartConfig: boolean;
     processLabel: string;
-    requireLockIdentity?: boolean;
     auditSource: "cli" | "supervisor";
     ownerLease?: GatewayOwnerLeaseIdentity;
     env?: NodeJS.ProcessEnv;
   },
 ) {
+  const restartIntent = params.restartIntent?.force
+    ? { force: true, drainBudgetMs: params.restartIntent.waitMs }
+    : params.restartIntent;
   if (params.enforceRestartConfig) {
     await assertUnmanagedGatewayRestartEnabled(port);
   }
-  const pids = resolveVerifiedGatewayListenerPids(port);
+  const pids = resolveVerifiedGatewayListenerPids(port, params.env);
   if (pids.length === 0) {
     return null;
   }
@@ -87,41 +92,38 @@ export async function signalGatewayRestart(
     );
   }
   const isWindows = process.platform === "win32";
-  const requiresTargetedDelivery = params.requireLockIdentity === true || isWindows;
-  const previousLockIdentity = requiresTargetedDelivery
-    ? await readActiveGatewayLockIdentity({ env: params.env })
-    : undefined;
+  const previousLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
   if (
-    requiresTargetedDelivery &&
-    (!previousLockIdentity ||
-      previousLockIdentity.pid !== pid ||
-      previousLockIdentity.port !== port)
+    !previousLockIdentity ||
+    previousLockIdentity.pid !== pid ||
+    previousLockIdentity.port !== port
   ) {
     throw new Error(
-      `gateway lock identity does not match the verified listener on port ${port}; refusing an ambiguous restart`,
+      `gateway lock identity does not match the verified listener on port ${port}; use "openclaw gateway status --deep" and restart through its supervisor or original terminal`,
     );
   }
-  const intentWritten = previousLockIdentity?.ownerId
+  const intentWritten = previousLockIdentity.ownerId
     ? false
     : writeGatewayRestartIntentSync({
         targetPid: pid,
         reason: "gateway.restart",
         ...(params.restartIntent ? { intent: params.restartIntent } : {}),
       });
-  if (requiresTargetedDelivery && !previousLockIdentity?.ownerId && !intentWritten) {
+  if (!previousLockIdentity.ownerId && !intentWritten) {
     throw new Error("failed to persist the gateway restart intent");
   }
   try {
-    if (previousLockIdentity) {
-      const currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
-      if (
-        !currentLockIdentity ||
-        !isSameGatewayLockIdentity(previousLockIdentity, currentLockIdentity)
-      ) {
-        throw new Error(
-          `gateway lock owner changed before the restart request could be delivered on port ${port}`,
-        );
-      }
+    const currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
+    if (
+      !currentLockIdentity ||
+      currentLockIdentity.pid !== pid ||
+      currentLockIdentity.port !== port ||
+      currentLockIdentity.ownerId !== previousLockIdentity.ownerId ||
+      !isSameGatewayLockIdentity(previousLockIdentity, currentLockIdentity)
+    ) {
+      throw new Error(
+        `gateway lock owner changed before the restart request could be delivered on port ${port}; run "openclaw gateway status --deep" before retrying`,
+      );
     }
     if (params.ownerLease) {
       const current = readGatewayOwnerLease({ env: params.env });
@@ -133,12 +135,12 @@ export async function signalGatewayRestart(
         current.startedAt !== params.ownerLease.startedAt ||
         current.mode !== "foreground" ||
         current.port !== port ||
-        previousLockIdentity?.ownerId !== current.owner
+        previousLockIdentity.ownerId !== current.owner
       ) {
         throw new Error(`Foreground Gateway owner changed before restart on port ${port}`);
       }
     }
-    if (previousLockIdentity?.ownerId) {
+    if (previousLockIdentity.ownerId) {
       const result = await callGatewayCli<{ pid: number }>({
         method: "gateway.restart.request",
         params: {
@@ -148,7 +150,7 @@ export async function signalGatewayRestart(
             ownerId: previousLockIdentity.ownerId,
             port,
           },
-          ...(params.restartIntent ? { restartIntent: params.restartIntent } : {}),
+          ...(restartIntent ? { restartIntent } : {}),
         },
         localPortOverride: port,
         ignoreEnvUrlOverride: true,
@@ -170,7 +172,9 @@ export async function signalGatewayRestart(
         timeoutMs: 10_000,
       });
     } else {
-      signalVerifiedGatewayPidSync(pid, "SIGUSR1");
+      // Pre-owner-ID releases use SIGUSR1. Current Gateways always publish an
+      // owner ID and receive targeted RPC, leaving SIGUSR1 to Node's debugger.
+      signalVerifiedGatewayPidSync(pid, "SIGUSR1", { env: params.env, port });
     }
   } catch (err) {
     if (intentWritten) {
@@ -181,7 +185,7 @@ export async function signalGatewayRestart(
   appendGatewayLifecycleAudit({
     action: "restart",
     source: params.auditSource,
-    mode: previousLockIdentity?.ownerId || isWindows ? "rpc" : "sigusr1",
+    mode: previousLockIdentity.ownerId || isWindows ? "rpc" : "sigusr1",
     pid,
   });
   return {

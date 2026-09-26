@@ -13,7 +13,7 @@ read_when:
   Targetless actions can launch it (for example, `open`, `navigate`, or `openclaw browser start`). Actions that name a
   tab by `targetId`, tab id, or label never start a stopped browser, because a new browser cannot
   contain that tab; start the browser or open a new tab, then select a current target.
-- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
+- **Remote control (node host):** run a node host (see [Nodes](/nodes) for pairing and [Node host CLI](/cli/node) for `openclaw node run`) on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 - For externally managed CDP services on loopback (for example Browserless in
@@ -76,6 +76,7 @@ Notes:
 - The proxy command never allows persistent profile mutations (`create-profile`, `delete-profile`, `reset-profile`) regardless of `allowProfiles`; make those changes on the node directly.
 - `nodeHost.browserProxy.allowProfiles` is optional. Leave it empty for the legacy/default behavior: all configured profiles remain reachable through the proxy.
 - If you set `nodeHost.browserProxy.allowProfiles`, OpenClaw treats it as a least-privilege boundary limiting which profile names the proxy will target.
+- Requests keep their selected profile while preparing work. The node rechecks proxy and profile access before browser actions, including after startup or upload preparation.
 - Disable if you don't want it:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"` (also accepts `"auto"` to prefer the host and fall back to a single connected browser node, or `"manual"` to require an explicit node selection or configured pin)

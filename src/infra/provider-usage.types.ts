@@ -45,14 +45,8 @@ export type ProviderUsageCostDaily = {
 };
 
 /** Aggregate model activity for the provider history window. */
-export type ProviderUsageModelBreakdown = {
+export type ProviderUsageModelBreakdown = Omit<ProviderUsageCostDaily, "date" | "amount"> & {
   name: string;
-  requests?: number;
-  inputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  outputTokens: number;
-  totalTokens: number;
 };
 
 /** Aggregate provider billing category for the history window. */

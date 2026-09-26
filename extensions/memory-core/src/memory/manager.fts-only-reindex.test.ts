@@ -21,6 +21,7 @@ let providerConstructionError: Error | null = null;
 let providerConstructionGate: Promise<void> | null = null;
 let providerAvailable = false;
 let providerEmbeddingError: Error | null = null;
+let providerQueryError: Error | null = null;
 let providerQueryCalls = 0;
 const createEmbeddingProviderMock = vi.hoisted(() =>
   vi.fn(async () => {
@@ -42,6 +43,9 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
           },
           embed: async () => {
             providerQueryCalls += 1;
+            if (providerQueryError) {
+              throw providerQueryError;
+            }
             return [1, 0];
           },
         },
@@ -93,6 +97,7 @@ describe("memory manager FTS-only reindex", () => {
     providerConstructionGate = null;
     providerAvailable = false;
     providerEmbeddingError = null;
+    providerQueryError = null;
     providerQueryCalls = 0;
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -319,6 +324,36 @@ describe("memory manager FTS-only reindex", () => {
     );
   });
 
+  it.each([undefined, "auto"])(
+    "falls back to keyword results when a runtime query embedding fails with optional provider %s",
+    async (provider) => {
+      providerAvailable = true;
+      const memoryManager = await createManager({ provider });
+      await memoryManager.sync({ force: true });
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBeGreaterThan(0);
+
+      providerQueryError = new Error("query embedding request failed at runtime");
+      const results = await memoryManager.search("Alpha topic");
+
+      expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+    },
+  );
+
+  it("keeps explicit providers fail-closed when a runtime query embedding fails", async () => {
+    providerAvailable = true;
+    const memoryManager = await createManager({ provider: "openai" });
+    await memoryManager.sync({ force: true });
+    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+
+    providerQueryError = new Error("query embedding request failed at runtime");
+
+    await expect(memoryManager.search("Alpha topic")).rejects.toThrow(
+      "query embedding request failed at runtime",
+    );
+  });
+
   it("keeps explicit required providers fail-closed when construction fails", async () => {
     providerConstructionError = Object.assign(
       new Error(
@@ -388,6 +423,7 @@ describe("memory manager FTS-only reindex", () => {
       });
       expect(memoryManager.status()).toMatchObject({
         provider: "none",
+        model: undefined,
         vector: { semanticAvailable: false },
         custom: { indexIdentity: { status: "valid" }, searchMode: "fts-only" },
       });

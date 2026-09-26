@@ -1,6 +1,9 @@
 import type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+
+registerNewSessionSetupEnglish();
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
@@ -39,6 +42,7 @@ export function reconcileChatRunStartup(
 }
 
 const STARTUP_LABEL_KEYS = {
+  waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
   creating_worktree: "chat.startupStatus.creatingWorktree",

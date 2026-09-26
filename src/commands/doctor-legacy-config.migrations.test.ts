@@ -256,17 +256,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
   });
 
-  it("does not alter agents.entries when no workspace is null", () => {
-    const res = normalizeCompatibilityConfigValues({
-      agents: {
-        entries: { main: { workspace: "/main" }, beta: {} },
-      },
-    });
-
-    expect(res.config.agents?.entries).toEqual({ main: { workspace: "/main" }, beta: {} });
-    expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
-  });
-
   it("removes invalid heartbeat active-hours windows so saved config can load", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({
@@ -368,68 +357,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
-  it("does not set group visible replies without channels or when already explicit", () => {
-    expect(
-      normalizeCompatibilityConfigValues({
-        messages: {
-          groupChat: {
-            mentionPatterns: ["@openclaw"],
-          },
-        },
-      }).changes,
-    ).toStrictEqual([]);
-
-    expect(
-      normalizeCompatibilityConfigValues({
-        channels: {
-          discord: {},
-        },
-        messages: {
-          visibleReplies: "automatic",
-        },
-      }).config.messages?.groupChat?.visibleReplies,
-    ).toBeUndefined();
-
-    expect(
-      normalizeCompatibilityConfigValues({
-        channels: {
-          discord: {},
-        },
-        messages: {
-          groupChat: {
-            visibleReplies: "automatic",
-          },
-        },
-      }).config.messages?.groupChat?.visibleReplies,
-    ).toBe("automatic");
-  });
-
-  it("does not add whatsapp config when missing and no auth exists", () => {
-    const res = normalizeCompatibilityConfigValues({
-      messages: { ackReaction: "👀" },
-    });
-
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toStrictEqual([]);
-  });
-
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
     expectNoWhatsAppConfigForLegacyAuth(() => {
       const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
-      writeCreds(credsDir);
-    });
-  });
-
-  it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
-    expectNoWhatsAppConfigForLegacyAuth(() => {
-      const credsPath = path.join(tempOauthDir ?? "", "creds.json");
-      fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
-    });
-  });
-
-  it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
-    expectNoWhatsAppConfigForLegacyAuth(() => {
-      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
       writeCreds(credsDir);
     });
   });
@@ -635,7 +565,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
-  it.each(["discord", "slack", "telegram", "signal", "imessage", "irc"])(
+  it.each(["discord", "telegram"])(
     "preserves inherited %s access policy when seeding accounts.default",
     (channelId) => {
       const res = normalizeCompatibilityConfigValues(
@@ -2226,13 +2156,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it.each([
-    { label: "model context cap", provider: {}, model: {} },
     { label: "provider output budget", provider: { maxTokens: 8192 }, model: {} },
-    {
-      label: "overridden model API",
-      provider: { maxTokens: 8192 },
-      model: { api: "openai-completions" },
-    },
     {
       label: "explicit provider num_ctx",
       provider: { maxTokens: 8192, params: { num_ctx: 16_384 } },

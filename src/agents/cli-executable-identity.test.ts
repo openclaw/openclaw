@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
@@ -206,10 +207,15 @@ describe("CLI executable implementation identity", () => {
       fs.mkdirSync(wrapperDir);
       const entrypoint =
         scenario.artifact === "native"
-          ? path.join(fixture.root, "bin", "verified-cli.exe")
+          ? fs.realpathSync.native(getWindowsCmdExePath())
           : fixture.entrypoint;
+      const shimEntrypoint =
+        scenario.artifact === "native"
+          ? path.join(fixture.root, "native", path.basename(entrypoint))
+          : entrypoint;
       if (scenario.artifact === "native") {
-        fs.copyFileSync(process.execPath, entrypoint);
+        // Borrow the installed image; cleanup must not delete a just-executed Windows binary.
+        fs.symlinkSync(path.dirname(entrypoint), path.dirname(shimEntrypoint), "junction");
       } else {
         const hookRoot = fs.realpathSync.native(
           fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-unbound-hook-")),
@@ -226,7 +232,7 @@ describe("CLI executable implementation identity", () => {
       }
       const posixShim = path.join(wrapperDir, "verified-cli");
       const cmdShim = `${posixShim}.cmd`;
-      const relativeEntrypoint = path.relative(wrapperDir, entrypoint);
+      const relativeEntrypoint = path.relative(wrapperDir, shimEntrypoint);
       fs.writeFileSync(
         posixShim,
         `#!/bin/sh\nexec "$basedir/${relativeEntrypoint.replaceAll("\\", "/")}" "$@"\n`,
@@ -241,7 +247,7 @@ describe("CLI executable implementation identity", () => {
         env,
         runtimeArtifact: {
           ...commandPackagePolicy,
-          nativeExecutableNames: ["verified-cli.exe"],
+          nativeExecutableNames: ["cmd.exe"],
         },
       });
 
@@ -261,7 +267,9 @@ describe("CLI executable implementation identity", () => {
       );
       expect(identity.files.some((file) => file.path === posixShim)).toBe(false);
       const args =
-        scenario.artifact === "native" ? ["-e", 'process.stdout.write("identity-ok")'] : [];
+        scenario.artifact === "native"
+          ? ["/d", "/s", "/c", "<nul set /p =identity-ok&exit /b 0"]
+          : [];
       const child = spawnSync(
         identity.invocation.command,
         [...identity.invocation.leadingArgv, ...args],

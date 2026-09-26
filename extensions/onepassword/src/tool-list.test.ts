@@ -10,7 +10,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordBroker, type StandingGrant } from "./broker.js";
 import type { OnePasswordConfig } from "./config.js";
-import { MemoryKeyedStore, MemorySyncKeyedStore } from "./memory-store.test-support.js";
+import { MemoryKeyedStore } from "./memory-store.test-support.js";
 import { createOnePasswordTool } from "./tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -83,7 +83,7 @@ describe("onepassword list with SQLite grants", () => {
       now: () => NOW,
       resolveConfig: () => configured(slugs),
       opClient: { getItem },
-      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemorySyncKeyedStore() },
+      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },
     });
     const list = (agentId: string | undefined = invocation.agentId) =>
       createOnePasswordTool(broker, { ...invocation, agentId }).execute("list", { action: "list" });

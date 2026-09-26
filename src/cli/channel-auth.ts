@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Channel login/logout command helpers for local config and gateway reconciliation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
@@ -10,6 +10,7 @@ import {
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
+import { parseChannelSelector } from "../commands/channels/channel-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -38,7 +39,10 @@ function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): 
   return mode === "login" ? Boolean(plugin.auth?.login) : Boolean(plugin.gateway?.logoutAccount);
 }
 
-function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
+async function isConfiguredAuthPlugin(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+): Promise<boolean> {
   const key = plugin.id;
   if (isBlockedObjectKey(key)) {
     return false;
@@ -55,7 +59,7 @@ function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boo
 
   for (const accountId of plugin.config.listAccountIds(cfg)) {
     try {
-      const account = plugin.config.resolveAccount(cfg, accountId);
+      const account = await resolveChannelAccount({ plugin, cfg, accountId });
       const enabled = plugin.config.isEnabled
         ? plugin.config.isEnabled(account, cfg)
         : account && typeof account === "object"
@@ -72,13 +76,15 @@ function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boo
   return false;
 }
 
-function resolveConfiguredAuthChannelInput(mode: ChannelAuthMode): string {
+async function resolveConfiguredAuthChannelInput(mode: ChannelAuthMode): Promise<string> {
   // Account callbacks need runtime values; this auto-enabled view is never persisted.
   const cfg = applyPluginAutoEnable({ config: getRuntimeConfig(), env: process.env }).config;
-  const configured = listChannelPlugins()
-    .filter((plugin): plugin is ChannelPlugin => supportsChannelAuthMode(plugin, mode))
-    .filter((plugin) => isConfiguredAuthPlugin(plugin, cfg))
-    .map((plugin) => plugin.id);
+  const configured: string[] = [];
+  for (const plugin of listChannelPlugins()) {
+    if (supportsChannelAuthMode(plugin, mode) && (await isConfiguredAuthPlugin(plugin, cfg))) {
+      configured.push(plugin.id);
+    }
+  }
 
   if (configured.length === 1) {
     return expectDefined(configured[0], "configured entry at 0");
@@ -105,11 +111,7 @@ async function resolveChannelPluginForMode(
   plugin: ChannelPlugin;
 } | null> {
   parseAccountSelector(opts.account);
-  // Only omission infers the channel. A blank value from an unset shell variable must
-  // not redirect login or logout to a channel the caller never named.
-  if (opts.channel !== undefined && !opts.channel.trim()) {
-    throw new Error("--channel must not be blank");
-  }
+  parseChannelSelector(opts.channel);
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return null;
@@ -121,7 +123,7 @@ async function resolveChannelPluginForMode(
   });
   const cfg = autoEnabled.config;
   const explicitChannel = opts.channel?.trim();
-  const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
+  const channelInput = explicitChannel || (await resolveConfiguredAuthChannelInput(mode));
   const normalizedChannelId = normalizeChannelId(channelInput);
 
   const resolved = await resolveInstallableChannelPlugin({
@@ -163,16 +165,6 @@ async function resolveChannelPluginForMode(
     channelId,
     plugin,
   };
-}
-
-function resolveAccountContext(
-  plugin: ChannelPlugin,
-  opts: ChannelAuthOptions,
-  cfg: OpenClawConfig,
-) {
-  const accountId =
-    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
-  return { accountId };
 }
 
 function isChannelMissingFromGatewayRegistry(error: unknown): error is Error {
@@ -297,7 +289,8 @@ export async function runChannelLogin(
   }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
-  const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  const accountId =
+    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
   await login({
     cfg,
     accountId,
@@ -334,7 +327,8 @@ export async function runChannelLogout(
     );
   }
   // Prefer the live gateway so logout also stops any active channel runtime.
-  const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  const accountId =
+    normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
   let result = await logoutViaGatewayRuntime({
     cfg,
     channelId: plugin.id,
@@ -342,7 +336,7 @@ export async function runChannelLogout(
     runtime,
   });
   if (!result) {
-    const account = plugin.config.resolveAccount(cfg, accountId);
+    const account = await resolveChannelAccount({ plugin, cfg, accountId });
     result = await logoutAccount({
       cfg,
       accountId,

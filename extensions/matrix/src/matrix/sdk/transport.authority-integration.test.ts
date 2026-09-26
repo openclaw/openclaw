@@ -20,20 +20,22 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   captureChannelReadAuthority: () => undefined,
 }));
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({ parseMediaContentLength: Number }));
-vi.mock("./read-response-with-limit.js", () => ({
+vi.mock("openclaw/plugin-sdk/response-limit-runtime", () => ({
   readResponseWithLimit: async (response: Response) => {
     const bytes = Buffer.from(await response.arrayBuffer());
     await boundary.afterRead?.();
     return bytes;
   },
 }));
-vi.mock("./transport-runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/extension-shared", () => ({
   buildTimeoutAbortSignal: ({ signal }: { signal?: AbortSignal }) => ({
     signal,
     cleanup() {
       boundary.cleanups++;
     },
   }),
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-dispatcher", () => ({
   closeDispatcher: async (dispatcher?: object) => {
     if (dispatcher) {
       boundary.closed++;
@@ -44,6 +46,8 @@ vi.mock("./transport-runtime-api.js", () => ({
     await boundary.dns?.();
     return {};
   },
+}));
+vi.mock("openclaw/plugin-sdk/runtime-fetch", () => ({
   fetchWithRuntimeDispatcherOrMockedGlobal: async (url: string, init: RequestInit) => {
     boundary.dispatched.push([url, init]);
     return boundary.fetch(url, init);
@@ -166,15 +170,22 @@ test("request authority remains enforced after response read", async () => {
   boundary.afterRead = async () => {
     current = false;
   };
+  const revoked = new Error("response owner revoked");
   const fetch = createMatrixGuardedFetch({
     captureRequestAuthority: () => () => {
       if (!current) {
-        throw new Error("response owner revoked");
+        throw revoked;
       }
     },
     beforeRequest: async () => {},
   });
-  await assert.rejects(fetch(url, init), /response owner revoked/);
+  await assert.rejects(fetch(url, init), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, "AbortError");
+    assert.equal(error instanceof PlatformMessageNotDispatchedError, false);
+    assert.equal(error.cause, revoked);
+    return true;
+  });
   assert.equal(boundary.closed, 1);
 });
 
@@ -198,17 +209,25 @@ test("authority loss during DNS does not stamp persistent dispatch", async () =>
     await Promise.resolve();
     current = false;
   };
+  const revoked = new Error("stale authority");
   const fetch = createMatrixGuardedFetch({
     captureRequestAuthority: () => () => {
       if (!current) {
-        throw new Error("stale authority");
+        throw revoked;
       }
     },
     beforeRequest: async () => {
       stamps++;
     },
   });
-  await assert.rejects(fetch(url, init), /stale authority/);
+  await assert.rejects(fetch(url, init), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, "AbortError");
+    assert.ok(error instanceof PlatformMessageNotDispatchedError);
+    assert.ok(error.cause instanceof Error);
+    assert.equal(error.cause.cause, revoked);
+    return true;
+  });
   assert.equal(stamps, 0);
   assert.equal(boundary.dispatched.length, 0);
   assert.equal(boundary.closed, 1);
@@ -241,17 +260,24 @@ test("redirect DNS revocation does not stamp a second dispatch", async () => {
     }
   };
   boundary.fetch = async () => new Response(null, { status: 307, headers: { location: "/next" } });
+  const revoked = new Error("stale authority");
   const fetch = createMatrixGuardedFetch({
     captureRequestAuthority: () => () => {
       if (!current) {
-        throw new Error("stale authority");
+        throw revoked;
       }
     },
     beforeRequest: async () => {
       stamps++;
     },
   });
-  await assert.rejects(fetch(url, init), /stale authority/);
+  await assert.rejects(fetch(url, init), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, "AbortError");
+    assert.equal(error instanceof PlatformMessageNotDispatchedError, false);
+    assert.equal(error.cause, revoked);
+    return true;
+  });
   assert.equal(stamps, 1);
   assert.equal(boundary.dispatched.length, 1);
   assert.equal(boundary.closed, 2);

@@ -122,7 +122,7 @@ describe("runCodexAppServerAttempt steering", () => {
         void applied.then(acknowledged);
         expect(revokeApprovals).toHaveBeenCalledOnce();
         if (!interruptFails) {
-          await waitForMethod("thread/backgroundTerminals/terminate", fastWait.timeout);
+          await waitForMethod("thread/backgroundTerminals/terminate");
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
@@ -286,6 +286,15 @@ describe("runCodexAppServerAttempt steering", () => {
     async ({ barrierType, isInboundUserMessage, provenance }) => {
       const { requests, completeTurn, notify } = createStartedThreadHarness();
       const params = createSteeringParams();
+      const media = [{ path: "media://inbound/steered.csv", contentType: "text/csv" }];
+      const attachmentNote = "Attachment file: /fixture/managed/steered.csv";
+      const prepareAttachments = vi.fn<
+        NonNullable<typeof params.hostCapabilities.prepareInputAttachments>
+      >(async (request) => (request.turn ? attachmentNote : undefined));
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareInputAttachments: prepareAttachments,
+      };
       const started = createDeferred<void>();
       params.onAgentEvent = (event) => {
         if (event.stream === "lifecycle" && event.data.phase === "start") {
@@ -426,6 +435,7 @@ describe("runCodexAppServerAttempt steering", () => {
       await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
         debounceMs: 0,
         isInboundUserMessage,
+        media,
         toolAuthorityFingerprint: params.toolAuthorityFingerprint,
         taskSuggestionDeliveryMode: "gateway",
         waitForTranscriptCommit: true,
@@ -507,8 +517,14 @@ describe("runCodexAppServerAttempt steering", () => {
       expect(steer?.params).toMatchObject({
         threadId: "thread-1",
         expectedTurnId: "turn-1",
-        input: [{ type: "text", text: "steer this active turn" }],
+        input: [{ type: "text", text: `steer this active turn\n\n${attachmentNote}` }],
       });
+      expect(prepareAttachments).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          placement: "local-host",
+          turn: expect.objectContaining({ media }),
+        }),
+      );
       expect(prefix).toEqual([
         { role: "user", text: params.prompt, mirrorIdentity: "turn-1:prompt" },
         {
@@ -717,13 +733,13 @@ describe("runCodexAppServerAttempt steering", () => {
   });
 
   it("passes session files through active Codex app-server registration for command lookup", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const { requests, completeTurn } = createStartedThreadHarness();
     const params = createSteeringParams();
     activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
     activeRunRegistrationMocks.clearActiveEmbeddedRun.mockClear();
 
     const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
 
     expect(activeRunRegistrationMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
       params.sessionId,

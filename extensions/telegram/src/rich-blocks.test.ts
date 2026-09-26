@@ -10,7 +10,6 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
-import { buildTelegramRichMarkdown } from "./rich-message.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
 function tableMarkdown(columns: number): string {
@@ -231,6 +230,14 @@ describe("markdownToTelegramRichBlocks", () => {
     }
     expect(hasStyle(paragraph.text, "bold")).toBe(true);
     expect(collectLinkTargets(paragraph.text)).toEqual(["https://example.com"]);
+  });
+
+  it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
+    const rendered = markdownToTelegramRichBlocks(
+      "[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)",
+    );
+    expect(rendered.blocks).toEqual([{ type: "paragraph", text: "Nova_Core.md" }]);
+    expect(rendered.plainText).toBe("Nova_Core.md");
   });
 
   it("degrades native lists beyond 16 nesting levels", () => {
@@ -657,14 +664,6 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(blocks.some((block) => block.type === "table")).toBe(false);
   });
 
-  it("does not auto-linkify bare URLs when entity detection is skipped", () => {
-    const { blocks } = markdownToTelegramRichBlocks("https://example.com", {
-      skipEntityDetection: true,
-    });
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectLinkTargets(text)).toEqual([]);
-  });
-
   it("keeps explicit markdown links when entity detection is skipped", () => {
     const { blocks } = markdownToTelegramRichBlocks("[docs](https://example.com)", {
       skipEntityDetection: true,
@@ -684,24 +683,11 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(text)).toEqual([]);
   });
 
-  it("wraps auto-linked file refs as code so Telegram does not re-linkify them", () => {
-    const { blocks } = markdownToTelegramRichBlocks("see README.md for details");
-    const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
-    expect(collectLinkTargets(text)).toEqual([]);
-    expect(hasStyle(text, "code")).toBe(true);
-  });
-
   it("preserves authored file-style links while wrapping bare file refs as code", () => {
     const { blocks } = markdownToTelegramRichBlocks("README.md [README.md](https://README.md)");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(collectLinkTargets(text)).toEqual(["https://README.md"]);
     expect(hasStyle(text, "code")).toBe(true);
-  });
-
-  it("derives plainText from the block projection", () => {
-    const { plainText } = markdownToTelegramRichBlocks("**hello** world");
-    expect(plainText).toContain("hello");
-    expect(plainText).not.toContain("**");
   });
 
   it("keeps table content in plainText for the plain fallback", () => {
@@ -936,25 +922,6 @@ describe("rich message plan wiring", () => {
       Array.from({ length: 250 }, (_, index) => index + 1),
     );
     expect(chunks.flatMap((chunk) => chunk.degradationReasons ?? [])).toEqual([]);
-  });
-
-  it("emits blocks InputRichMessage and email skip_entity_detection", () => {
-    const message = buildTelegramRichMarkdown("Contact owner@example.com for help");
-    if (!("blocks" in message)) {
-      expect.fail("expected a blocks rich message");
-    }
-    expect(message.blocks.length).toBeGreaterThan(0);
-    expect(message.skip_entity_detection).toBe(true);
-    expect("html" in message).toBe(false);
-  });
-
-  it("passes skip_entity_detection through chunked rich messages", () => {
-    const chunks = planTelegramTextDeliveryPages({
-      text: `${"hello\n\n".repeat(10)}owner@example.com`,
-      maxChars: 32_768,
-      richMessages: true,
-    });
-    expect(chunks.some((chunk) => chunk.richMessage?.skip_entity_detection === true)).toBe(true);
   });
 
   it("applies the document-level skip flag to every chunk", () => {

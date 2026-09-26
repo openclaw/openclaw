@@ -10,13 +10,11 @@ import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js"
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
-import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
-import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
-import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
@@ -34,6 +32,7 @@ import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approv
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
+import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -123,6 +122,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtime.providerRuntimeHandle,
   );
 
+  params.assertModelInput?.(effectiveModel);
+
   await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
@@ -184,7 +185,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     workspaceDir,
     agentDir,
     agentId: workspaceResolution.agentId,
-    thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel),
+    thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel, effectiveModel),
     extraParamsOverride: { ...params.streamParams, fastMode: attemptFastMode },
   });
   const trajectoryAttribution = resolveAttemptTrajectoryAttribution({
@@ -273,6 +274,28 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  const assertActiveRun = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    attemptAbortController.signal,
+  );
+  if (!assertActiveRun) {
+    throw new Error("embedded attempt reached dispatch without an active admitted run");
+  }
+  assertActiveRun();
+  const placementSandbox = runtime.pluginHarnessOwnsTransport
+    ? await resolveSessionPlacementSandbox({
+        agentId: workspaceResolution.agentId,
+        config: params.config,
+        sessionId,
+        sessionKey: resolvedSessionKey,
+        workspaceDir,
+      })
+    : null;
+  assertActiveRun();
   const pluginWorkspace = runtime.pluginHarnessOwnsTransport
     ? await resolveAttemptWorkspaceSandbox({
         ...params,
@@ -281,6 +304,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         sessionId,
         sessionKey: resolvedSessionKey,
         workspaceDir,
+        placementSandbox,
       })
     : undefined;
   const promptMedia = pluginWorkspace
@@ -305,60 +329,35 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
-  const pluginSandbox = runtime.pluginHarnessOwnsTransport
-    ? ((await resolveSessionPlacementSandbox({
-        agentId: workspaceResolution.agentId,
-        config: params.config,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        workspaceDir,
-      })) ?? pluginWorkspace?.sandbox)
-    : undefined;
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
+  const pluginSandbox = placementSandbox ?? pluginWorkspace?.sandbox;
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
     params.execOverrides ??= {};
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
-  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
-    agentId: workspaceResolution.agentId,
-    extraSystemPrompt: params.extraSystemPrompt,
-    sessionKey: params.sessionKey,
-    storePath: params.sessionTarget?.storePath,
-  });
-  const extraSystemPrompt = await appendProgressCardSystemPrompt({
+  const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,
     config: params.config,
-    extraSystemPrompt: incognitoSystemPrompt,
+    extraSystemPrompt: params.extraSystemPrompt,
     modelId,
     provider,
-    sessionKey: params.sessionKey,
-    toolsAllow: params.toolsAllow,
-  });
-  const gitCoauthorPrompt = resolveSessionGitCoauthorPrompt({
-    config: params.config,
-    agentId: workspaceResolution.agentId,
+    sessionId,
     sessionKey: params.sessionKey,
     storePath: params.sessionTarget?.storePath,
+    toolsAllow: params.toolsAllow,
   });
+  assertActiveRun();
   let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
   let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
     skillFile: path.join(mount.hostPath, "SKILL.md"),
     readPath: path.posix.join(mount.containerPath, "SKILL.md"),
   }));
   if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
-    const assertActiveRun = resolveAdmittedRunActiveAssertion(
-      admittedRunContext,
-      attemptAbortController.signal,
-    );
     const prepared = await prepareEmbeddedSkills({
       assertCurrent: () => {
         attemptAbortController.signal.throwIfAborted();
-        assertActiveRun?.();
+        assertActiveRun();
       },
       applySkillEnvironment: false,
       includeCodeModeSkills: false,
@@ -394,6 +393,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
@@ -414,10 +414,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sandboxSessionKey: params.sandboxSessionKey,
     sandboxAgentId: params.sandboxAgentId,
     trigger: params.trigger,
+    terminalReplyExpectation: resolveReplyExpectation(params),
     memoryFlushWritePath: params.memoryFlushWritePath,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    bootstrapUserProfileId: params.bootstrapUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
@@ -678,7 +680,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const rawAttempt = await withPreparedEmbeddedGatewayTools(
     attemptParams,
     attemptControls.isCurrent,
-    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
+    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
   )
     .catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;

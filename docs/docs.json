@@ -1,56 +1,6 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
-  "theme": "mint",
-  "icons": {
-    "library": "lucide"
-  },
-  "logo": {
-    "light": "/assets/pixel-lobster.svg",
-    "dark": "/assets/pixel-lobster.svg"
-  },
-  "fonts": {
-    "body": {
-      "family": "Fragment Mono"
-    },
-    "heading": {
-      "family": "DM Sans"
-    }
-  },
-  "favicon": "/assets/pixel-lobster.svg",
-  "colors": {
-    "primary": "#D84A31",
-    "dark": "#E05540",
-    "light": "#F5654A"
-  },
-  "styling": {
-    "codeblocks": {
-      "theme": {
-        "dark": "min-dark",
-        "light": "min-light"
-      }
-    }
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "GitHub",
-        "href": "https://github.com/openclaw/openclaw",
-        "icon": "github"
-      },
-      {
-        "label": "Releases",
-        "href": "https://github.com/openclaw/openclaw/releases",
-        "icon": "package"
-      },
-      {
-        "label": "Discord",
-        "href": "https://discord.com/invite/clawd",
-        "icon": "discord"
-      }
-    ]
-  },
   "redirects": [
     {
       "source": "/cli/commitments",
@@ -886,7 +836,11 @@
     },
     {
       "source": "/showcase",
-      "destination": "/start/showcase"
+      "destination": "https://openclaw.ai/showcase"
+    },
+    {
+      "source": "/start/showcase",
+      "destination": "https://openclaw.ai/showcase"
     },
     {
       "source": "/signal",
@@ -1345,7 +1299,6 @@
                 "group": "Overview",
                 "pages": [
                   "index",
-                  "start/showcase",
                   "start/why-openclaw",
                   "start/why-openclaw/the-trust-boundary",
                   "start/why-openclaw/policy-as-code",
@@ -1807,6 +1760,8 @@
                     "group": "Meetings and calls",
                     "pages": [
                       "plugins/meeting-plugins",
+                      "plugins/facetime",
+                      "plugins/facetime-recovery",
                       "plugins/google-meet",
                       {
                         "group": "Google Meet",
@@ -1839,7 +1794,9 @@
                       "plugins/apple-fm",
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
-                      "plugins/memory-wiki"
+                      "plugins/memory-wiki",
+                      "plugins/onnx",
+                      "plugins/typesafe"
                     ]
                   },
                   {
@@ -1858,7 +1815,6 @@
                       "plugins/logbook",
                       "plugins/oc-path",
                       "plugins/session-share",
-                      "plugins/webhooks",
                       "plugins/workboard",
                       "plugins/zalouser"
                     ]
@@ -2020,6 +1976,7 @@
                         "group": "Code Mode",
                         "pages": [
                           "tools/code-mode/quickstart",
+                          "tools/code-mode/executors",
                           "tools/code-mode/configuration",
                           "tools/code-mode/tool-surface",
                           "tools/code-mode/guest-api",
@@ -2068,6 +2025,7 @@
                           "tools/browser/existing-session",
                           "tools/browser/configuration",
                           "tools/browser/remote",
+                          "tools/browser/lightweight",
                           "tools/browser/security",
                           "tools/browser/isolation",
                           "tools/browser/agent-tools",
@@ -2190,6 +2148,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/decision-models",
                   "concepts/model-providers",
                   {
                     "group": "Model providers",
@@ -2241,6 +2200,7 @@
                         "group": "OpenAI",
                         "pages": [
                           "providers/openai/setup",
+                          "providers/openai/authentication",
                           "providers/openai/models",
                           "providers/openai/runtimes",
                           "providers/openai/coverage-and-cost",
@@ -2258,6 +2218,7 @@
                       "providers/radius",
                       "providers/stepfun",
                       "providers/synthetic",
+                      "providers/telnyx",
                       "providers/tencent",
                       "providers/together",
                       "providers/venice",
@@ -2651,7 +2612,8 @@
                   "gateway/remote",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
-                  "gateway/cloudflare-access"
+                  "gateway/cloudflare-access",
+                  "gateway/team-server"
                 ]
               },
               {
@@ -3201,6 +3163,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.6",
                   "releases/2026.9.5",
                   "releases/2026.9.4",
                   "releases/2026.9.3",

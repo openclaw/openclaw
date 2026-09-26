@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 // Install the shared module mocks before any source imports can load the runtime.
 const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 
+import { getRuntimeConfig } from "../config/config.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
@@ -266,6 +268,8 @@ describe("worker placement move destination", () => {
           reconcileActive: vi.fn(),
         });
         createGatewayWorkerPlacementRuntime({
+          scheduler: createTestGatewayScheduler(),
+          getCommittedRuntimeConfig: getRuntimeConfig,
           cancelSessionWork: vi.fn(async () => {}),
           placements: {
             workspaceResultInstanceId: () => "gateway-test",

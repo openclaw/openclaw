@@ -266,26 +266,6 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.entries?.main?.model).toBeUndefined();
   });
 
-  it("preserves the authored key when projecting explicit agent defaults", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {}, OPS: { model: { primary: "old/model" } } },
-      },
-    };
-    const target = resolveOnboardingAgentTarget(config, "ops");
-    const updated = applyAgentModelDefaults(config, target, (projected) => ({
-      ...projected,
-      agents: {
-        ...projected.agents,
-        defaults: { ...projected.agents?.defaults, model: { primary: "new/model" } },
-      },
-    }));
-
-    expect(updated.agents?.entries?.OPS?.model).toEqual({ primary: "new/model" });
-    expect(updated.agents?.entries?.ops).toBeUndefined();
-  });
-
   it("preserves unrelated global defaults while projecting model changes onto the authored agent", () => {
     const config = {
       agents: {

@@ -59,8 +59,6 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const createReplyMediaContextRuntimeMock = vi.fn();
-const EXPECTED_STEER_QUEUE_IDENTITY =
-  "channel-user:v1:6f3f31084a7a2a6ff17176c0c16682e64d9f21301f64ff7e5bf1173b54fadc33";
 const registeredOperations: ReplyOperation[] = [];
 vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: TestModelFallbackRunnerParams) => runWithModelFallbackMock(params),
@@ -383,7 +381,6 @@ export function cleanupAgentRunnerMediaTestState() {
 }
 
 export {
-  EXPECTED_STEER_QUEUE_IDENTITY,
   createMediaFollowupRun,
   createReplyMediaContextRuntimeMock,
   enqueueFollowupRunMock,

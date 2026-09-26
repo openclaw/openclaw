@@ -34,11 +34,7 @@ const EXIT_DURATION_MS = 100;
 let nextHovercardId = 0;
 
 function sessionHovercardMenuOpen(owner: ParentNode): boolean {
-  return (
-    owner.querySelector(
-      '[data-session-menu][aria-expanded="true"], [data-catalog-session-menu][aria-expanded="true"]',
-    ) !== null
-  );
+  return owner.querySelector("openclaw-session-menu, openclaw-catalog-session-menu") !== null;
 }
 
 export class SessionProgressHovercardProvider extends ReactiveElement {
@@ -428,10 +424,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       row: sidebarRow
         ? {
             label: sidebarRow.label,
+            attention: sidebarRow.attention,
             boardFace: sidebarRow.boardFace,
             hasAutomation: sidebarRow.hasAutomation,
             hasActiveRun: sidebarRow.hasActiveRun,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
+            channelPresentation: sidebarRow.channelPresentation,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
             participants: sidebarRow.participants,

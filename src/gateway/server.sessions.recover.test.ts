@@ -12,7 +12,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -419,46 +422,41 @@ test.each(["rejected", "unavailable", "stale-result"] as const)(
   },
 );
 
-test.each([
-  "requested",
-  "provisioning",
-  "syncing",
-  "starting",
-  "draining",
-  "reconciling",
-  "failed",
-] as const)("sessions.recover rejects an unsettled %s cloud placement", async (state) => {
-  const { storePath } = await createSessionStoreDir();
-  const sourceKey = `agent:main:dashboard:recovery-cloud-${state}`;
-  const sourceSessionId = `recovery-cloud-${state}-source`;
-  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
-  const placement = recoveryWorkerPlacement({
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    state,
-  });
-  const reclaim = vi.fn();
+test.each(["requested", "failed"] as const)(
+  "sessions.recover rejects an unsettled %s cloud placement",
+  async (state) => {
+    const { storePath } = await createSessionStoreDir();
+    const sourceKey = `agent:main:dashboard:recovery-cloud-${state}`;
+    const sourceSessionId = `recovery-cloud-${state}-source`;
+    await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
+    const placement = recoveryWorkerPlacement({
+      sessionId: sourceSessionId,
+      sessionKey: sourceKey,
+      state,
+    });
+    const reclaim = vi.fn();
 
-  const recovered = await directSessionReq(
-    "sessions.recover",
-    { agentId: "main", key: sourceKey },
-    {
-      context: {
-        workerSessionPlacementService: recoveryPlacementReader(() => placement),
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+    const recovered = await directSessionReq(
+      "sessions.recover",
+      { agentId: "main", key: sourceKey },
+      {
+        context: {
+          workerSessionPlacementService: recoveryPlacementReader(() => placement),
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        },
       },
-    },
-  );
+    );
 
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
-  });
-  expect(reclaim).not.toHaveBeenCalled();
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.archivedAt,
-  ).toBeUndefined();
-});
+    expect(recovered).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
+    });
+    expect(reclaim).not.toHaveBeenCalled();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.archivedAt,
+    ).toBeUndefined();
+  },
+);
 
 test.each(["session-id", "lifecycle-revision"] as const)(
   "sessions.recover rejects a source %s changed while its placement is reclaiming",

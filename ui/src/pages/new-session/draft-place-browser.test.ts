@@ -20,8 +20,9 @@ function createBrowser(
   data?: NewSessionRouteData,
   recoveryReady = true,
   isAdmin = false,
+  view?: { host: TestReactiveControllerHost; root: HTMLElement },
 ) {
-  const host = new TestReactiveControllerHost();
+  const host = view?.host ?? new TestReactiveControllerHost();
   const controllers: ReactiveController[] = [];
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = {
@@ -95,9 +96,9 @@ function createBrowser(
       onProjectMissing,
       onSelectProject,
       onApprovedListing: vi.fn(),
-      querySelector: () => null,
-      activeElement: () => null,
-      body: () => null,
+      querySelector: (selector) => view?.root.querySelector(selector) ?? null,
+      activeElement: () => view?.root.ownerDocument.activeElement ?? null,
+      body: () => view?.root.ownerDocument.body ?? null,
     },
   );
   onTestFinished(() => {
@@ -133,6 +134,66 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
+  it.each(["current", "closed", "disconnected", "focus moved", "returned"])(
+    "hands keyboard focus to the current project view after rendering (%s)",
+    async (change) => {
+      const update = createDeferred<boolean>();
+      const host = new (class extends TestReactiveControllerHost {
+        override readonly updateComplete = update.promise;
+      })();
+      const root = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => root.remove());
+      const popover = root.appendChild(document.createElement("div"));
+      popover.className = "new-session-page__project-popover";
+      const browse = popover.appendChild(document.createElement("button"));
+      browse.dataset.value = "browse";
+      browse.textContent = "Browse";
+      const elsewhere = root.appendChild(document.createElement("button"));
+      const { browser } = createBrowser(
+        async () => ({ path: "/workspace", home: "/", entries: [] }),
+        undefined,
+        true,
+        false,
+        { host, root },
+      );
+      browser.onPopoverShow("project");
+      browse.focus();
+      browser.selectGatewayBrowser("/workspace");
+      const path = document.createElement("input");
+      path.className = "new-session-page__browser-path";
+      popover.replaceChildren(path);
+      expect(document.activeElement).toBe(document.body);
+
+      if (change === "closed") {
+        browser.close();
+      } else if (change === "disconnected") {
+        browser.disconnect();
+      } else if (change === "focus moved") {
+        elsewhere.focus();
+      } else if (change === "returned") {
+        browser.showRoot();
+        popover.replaceChildren(browse);
+      }
+      update.resolve(true);
+      await host.updateComplete;
+      expect(document.activeElement).toBe(
+        change === "current"
+          ? path
+          : change === "returned"
+            ? browse
+            : change === "focus moved"
+              ? elsewhere
+              : document.body,
+      );
+      if (change === "current") {
+        browser.showRoot();
+        popover.replaceChildren(browse);
+        await host.updateComplete;
+        expect(document.activeElement).toBe(browse);
+      }
+    },
+  );
+
   it("retains catalog context for a detached draft until its lifetime owner disposes it", async () => {
     const project = { id: "project", displayName: "Project", repoRoot: "/project" };
     const fixture = createBrowser(async () => ({ projects: [project] }));

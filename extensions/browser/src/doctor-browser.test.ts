@@ -5,6 +5,20 @@ import {
   noteChromeMcpBrowserReadiness,
 } from "./doctor-browser.js";
 
+const managedBrowserConfig = {
+  browser: {
+    extensionRelay: { allowLegacyAuth: false },
+    profiles: { openclaw: { color: "#FF4500" } },
+  },
+} satisfies Parameters<typeof noteChromeMcpBrowserReadiness>[0];
+
+const managedHost = {
+  platform: "linux",
+  env: { DISPLAY: ":99" },
+  getUid: () => 1000,
+  resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
+} satisfies NonNullable<Parameters<typeof noteChromeMcpBrowserReadiness>[1]>;
+
 function requireFirstNoteText(noteFn: ReturnType<typeof vi.fn>): string {
   const [call] = noteFn.mock.calls;
   if (!call) {
@@ -25,23 +39,10 @@ function requireNoteTextContaining(noteFn: ReturnType<typeof vi.fn>, expected: s
 describe("browser doctor readiness", () => {
   it("does nothing when Chrome MCP is not configured", async () => {
     const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
-      },
-    );
+    await noteChromeMcpBrowserReadiness(managedBrowserConfig, {
+      noteFn,
+      ...managedHost,
+    });
     expect(noteFn).not.toHaveBeenCalled();
   });
 
@@ -58,10 +59,7 @@ describe("browser doctor readiness", () => {
       },
       {
         noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
+        ...managedHost,
       },
     );
 
@@ -73,23 +71,11 @@ describe("browser doctor readiness", () => {
 
   it("warns when managed browser profiles have no local executable", async () => {
     const noteFn = vi.fn();
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        resolveManagedExecutable: () => null,
-      },
-    );
+    await noteChromeMcpBrowserReadiness(managedBrowserConfig, {
+      noteFn,
+      ...managedHost,
+      resolveManagedExecutable: () => null,
+    });
 
     expect(noteFn).toHaveBeenCalledWith(
       [
@@ -137,25 +123,12 @@ describe("browser doctor readiness", () => {
     const noteFn = vi.fn();
     const configDir = "/tmp/openclaw-home";
 
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
-        configDir,
-        pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
-      },
-    );
+    await noteChromeMcpBrowserReadiness(managedBrowserConfig, {
+      noteFn,
+      ...managedHost,
+      configDir,
+      pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
+    });
 
     expect(noteFn).toHaveBeenCalledTimes(1);
     const note = requireFirstNoteText(noteFn);
@@ -180,12 +153,9 @@ describe("browser doctor readiness", () => {
       },
       {
         noteFn,
-        platform: "linux",
-        env: { DISPLAY: ":99" },
-        getUid: () => 1000,
+        ...managedHost,
         configDir: "/tmp/openclaw-home",
         pathExists: () => true,
-        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
       },
     );
 

@@ -226,12 +226,7 @@ async function preparePendingCodexThreadResume(
       throw fail("its immutable native tool catalog does not match the current OpenClaw tools");
     }
     assertCurrent();
-    return {
-      assertConfigured: observation.assertConfigured,
-      assertCurrent,
-      dispose,
-      settledSystemError: observation.settledSystemError,
-    };
+    return { ...observation, assertCurrent };
   } catch (error) {
     dispose();
     throw error;
@@ -306,6 +301,7 @@ function observeCodexThreadConfiguration(
     }
   });
   return {
+    modelProvider: thread.modelProvider,
     dispose,
     settledSystemError,
     assertConfigured: () => {

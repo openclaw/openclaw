@@ -142,13 +142,11 @@ describe("chat pane reply-source history navigation", () => {
     expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
-      maxBytes: 512 * 1024,
       offset: 4,
     });
     expect(pane.currentReplyNavigationId(state.sessionKey)).toBeNull();

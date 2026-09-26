@@ -58,24 +58,28 @@ const deniedInvocations = [
     environment: () => ({ OPENCLAW_NIX_MODE: "1" }),
     reason: /Nix mode detected/,
     recovery: /service install is disabled/,
+    surfaces,
   },
   {
     name: "global external supervision",
     environment: () => ({ OPENCLAW_SUPERVISOR_MODE: " EXTERNAL " }),
     reason: /managed by an external supervisor/,
     recovery: /Use that supervisor to/,
+    surfaces: surfaces.slice(0, 1),
   },
   {
     name: "relocated invoking HOME",
     environment: (accountHome: string) => ({ HOME: path.join(accountHome, "relocated") }),
     reason: /non-default state dir or config path/,
     recovery: /HOME set to the OS account home/,
+    surfaces: surfaces.slice(0, 1),
   },
 ] satisfies Array<{
   name: string;
   environment: InvocationEnvironment;
   reason: RegExp;
   recovery: RegExp;
+  surfaces: readonly (typeof surfaces)[number][];
 }>;
 
 async function withStatusFixture(
@@ -219,31 +223,55 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.each(deniedInvocations)(
-  "status recovery under $name",
-  ({ environment, reason, recovery }) => {
-    it.each(surfaces)(
-      "retains $name facts without unusable native advice",
-      async ({ kind, fact }) => {
-        await withStatusFixture(environment, async (accountHome, print) => {
-          const status = await createStatus(kind, accountHome);
-          print(status, { json: false });
+it.each(
+  deniedInvocations.flatMap(({ surfaces: invocationSurfaces, ...invocation }) =>
+    invocationSurfaces.map((surface) => ({ ...invocation, surface })),
+  ),
+)(
+  "retains $surface.name facts without unusable native advice under $name",
+  async ({ environment, reason, recovery, surface: { kind, fact } }) => {
+    await withStatusFixture(environment, async (accountHome, print) => {
+      const status = await createStatus(kind, accountHome);
+      print(status, { json: false });
 
-          const output = humanOutput();
-          expectProblemAndLogs(output, fact);
-          expect(output).toMatch(reason);
-          expect(output).toMatch(recovery);
-          expect(output).not.toMatch(/\bgateway\s+install\b/);
-          expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
-          expect(output).not.toContain("launchctl bootout");
-          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        });
-      },
-    );
+      const output = humanOutput();
+      expectProblemAndLogs(output, fact);
+      expect(output).toMatch(reason);
+      expect(output).toMatch(recovery);
+      expect(output).not.toMatch(/\bgateway\s+install\b/);
+      expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
+      expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
+      expect(output).not.toContain("launchctl bootout");
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    });
   },
 );
 
 describe("eligible status recovery", () => {
+  it("directs version-manager runtime findings to Doctor before reinstall", async () => {
+    await withStatusFixture(
+      () => ({}),
+      async (accountHome, print) => {
+        const status = await createStatus("config-audit", accountHome);
+        status.service.configAudit = {
+          ok: false,
+          issues: [
+            {
+              code: "gateway-runtime-node-version-manager",
+              message:
+                "Gateway service uses Node from a version manager; it can break after upgrades.",
+              level: "recommended",
+            },
+          ],
+        };
+        print(status, { json: false });
+        expect(humanOutput()).toContain("openclaw doctor");
+        expect(humanOutput()).toContain("Reinstalling alone may select the same runtime");
+        expect(humanOutput()).not.toContain("openclaw gateway install --force");
+      },
+    );
+  });
+
   it.each([false, true])(
     "keeps remote service-install facts diagnostic-only when install blocked=%s",
     async (blocked) => {
@@ -262,6 +290,7 @@ describe("eligible status recovery", () => {
           expect(output).toContain("The Gateway did not report its own version");
           expect(output).not.toMatch(/\breinstall\b/i);
           expect(output).not.toMatch(/\bgateway\s+install\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
           expect(output).not.toContain("Nix mode detected");
         },
       );
@@ -339,6 +368,9 @@ describe("eligible status recovery", () => {
         print(await createStatus("missing-unit", accountHome), { json: false });
         expect(humanOutput()).toContain("openclaw --profile work gateway install");
         expect(humanOutput()).not.toContain("service management skipped");
+        print(await createStatus("version-mismatch", accountHome), { json: false });
+        expect(humanOutput()).toContain("openclaw --profile work doctor --fix");
+        expect(humanOutput()).toContain("openclaw --profile work gateway install --force");
       },
     );
   });

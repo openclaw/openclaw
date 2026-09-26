@@ -1,6 +1,6 @@
-// Migrate Claude plugin module implements skills behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import {
   createMigrationItem,
   markMigrationItemConflict,
@@ -9,11 +9,11 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import { backupMigrationItemTarget } from "openclaw/plugin-sdk/migration-runtime";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { exists, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 type PlannedSkill = {
   name: string;
@@ -23,24 +23,10 @@ type PlannedSkill = {
   sourceLabel: string;
 };
 
-async function listMarkdownFiles(root: string): Promise<string[]> {
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFiles(fullPath)));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
-
 async function collectSkillDirs(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
@@ -72,13 +58,17 @@ async function collectSkillDirs(
 async function collectCommandFiles(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
     return;
   }
-  for (const file of await listMarkdownFiles(dir)) {
+  const { entries } = await walkDirectory(dir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const { path: file } of entries) {
     const relative = path.relative(dir, file);
     const parsed = path.parse(relative);
     const namespace = sanitizeName(parsed.dir.replaceAll(path.sep, "-"));
@@ -99,7 +89,7 @@ async function collectCommandFiles(
 
 export async function buildSkillItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const planned: PlannedSkill[] = [];

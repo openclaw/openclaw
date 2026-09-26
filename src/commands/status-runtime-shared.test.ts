@@ -1,14 +1,12 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayDiagnosticsSafe,
-  resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
   resolveStatusRuntimeSnapshot,
-  resolveStatusSecurityAudit,
-  resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 
 const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
@@ -67,6 +65,7 @@ function requireProviderUsageCall(): {
 describe("status-runtime-shared", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
     mocks.callGateway.mockResolvedValue({ ok: true });
@@ -75,32 +74,28 @@ describe("status-runtime-shared", () => {
     mocks.resolveModelAuthLabel.mockReturnValue(undefined);
   });
 
-  it("resolves the shared security audit payload", async () => {
-    await resolveStatusSecurityAudit({
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-    });
-
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-      loadPluginSecurityCollectors: false,
-    });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("resolves usage summaries with the provided timeout", async () => {
-    await resolveStatusUsageSummary({
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
+  it("passes the remaining status budget through to provider usage", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(22_000);
+    try {
+      await resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        usage: true,
+        gatewayReachable: true,
+        gatewayProbeDeadlineMs: 60_000,
+      });
 
-    const usageCall = requireProviderUsageCall();
-    expect(usageCall.timeoutMs).toBe(1234);
-    expect(usageCall.config).toEqual({ gateway: {} });
-    expect(usageCall.agentDir).toContain("main");
+      const usageCall = requireProviderUsageCall();
+      expect(usageCall.timeoutMs).toBe(38_000);
+      expect(usageCall.config).toEqual({ gateway: {} });
+      expect(usageCall.agentDir).toContain("main");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("uses the named system agent for agent-scoped usage credentials", async () => {
@@ -115,10 +110,10 @@ describe("status-runtime-shared", () => {
       },
     };
 
-    await resolveStatusUsageSummary({ config });
+    await resolveStatusUsageSummary({ ...createStatusGatewayProbeBudget(), config });
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      timeoutMs: undefined,
+      timeoutMs: 60_000,
       config,
       agentDir: "/tmp/status-ops-agent",
     });
@@ -127,6 +122,7 @@ describe("status-runtime-shared", () => {
   it("requires a system owner for usage credentials in an explicit multi-agent roster", async () => {
     await expect(
       resolveStatusUsageSummary({
+        ...createStatusGatewayProbeBudget(),
         config: {
           agents: {
             ownership: "explicit",
@@ -138,9 +134,54 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
-  it("adds Codex synthetic usage for configured OpenAI Codex runtime routes without profiles", async () => {
-    mocks.loadProviderUsageSummary
-      .mockResolvedValueOnce({
+  it.each([
+    { elapsedMs: 2000, remainingMs: 1456 },
+    { elapsedMs: 3456, remainingMs: 0 },
+  ])(
+    "shares the usage deadline with Codex synthetic usage ($elapsedMs ms spent)",
+    async ({ elapsedMs, remainingMs }) => {
+      mocks.loadProviderUsageSummary
+        .mockImplementationOnce(async () => {
+          vi.spyOn(performance, "now").mockReturnValue(elapsedMs);
+          return {
+            updatedAt: 1,
+            providers: [
+              {
+                provider: "anthropic",
+                displayName: "Claude",
+                windows: [],
+                error: "HTTP 429",
+              },
+            ],
+          };
+        })
+        .mockResolvedValueOnce({
+          updatedAt: 2,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [{ label: "5h", usedPercent: 9 }],
+            },
+          ],
+        });
+
+      await expect(
+        resolveStatusUsageSummary({
+          ...createStatusGatewayProbeBudget(3456),
+          config: {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-5.5" },
+                models: {
+                  "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+                },
+              },
+            },
+          },
+          agentDir: "/tmp/status-agent",
+        }),
+      ).resolves.toEqual({
         updatedAt: 1,
         providers: [
           {
@@ -149,11 +190,6 @@ describe("status-runtime-shared", () => {
             windows: [],
             error: "HTTP 429",
           },
-        ],
-      })
-      .mockResolvedValueOnce({
-        updatedAt: 2,
-        providers: [
           {
             provider: "openai",
             displayName: "OpenAI",
@@ -162,52 +198,21 @@ describe("status-runtime-shared", () => {
         ],
       });
 
-    await expect(
-      resolveStatusUsageSummary({
-        timeoutMs: 3456,
-        config: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-              models: {
-                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              },
-            },
+      expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
+        timeoutMs: remainingMs,
+        providers: ["openai"],
+        auth: [
+          {
+            provider: "openai",
+            token: "codex-app-server",
+            hookProvider: "codex",
           },
-        },
+        ],
+        config: expect.any(Object),
         agentDir: "/tmp/status-agent",
-      }),
-    ).resolves.toEqual({
-      updatedAt: 1,
-      providers: [
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          windows: [],
-          error: "HTTP 429",
-        },
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 9 }],
-        },
-      ],
-    });
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
-      timeoutMs: 3456,
-      providers: ["openai"],
-      auth: [
-        {
-          provider: "openai",
-          token: "codex-app-server",
-          hookProvider: "codex",
-        },
-      ],
-      config: expect.any(Object),
-      agentDir: "/tmp/status-agent",
-    });
-  });
+      });
+    },
+  );
 
   it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
     mocks.loadProviderUsageSummary
@@ -234,7 +239,7 @@ describe("status-runtime-shared", () => {
 
     await expect(
       resolveStatusUsageSummary({
-        timeoutMs: 3456,
+        ...createStatusGatewayProbeBudget(3456),
         config: {
           agents: {
             defaults: {
@@ -261,7 +266,7 @@ describe("status-runtime-shared", () => {
 
   it("does not add Codex synthetic usage for OpenAI routes pinned to OpenClaw runtime", async () => {
     await resolveStatusUsageSummary({
-      timeoutMs: 3456,
+      ...createStatusGatewayProbeBudget(3456),
       config: {
         agents: {
           defaults: {
@@ -283,7 +288,7 @@ describe("status-runtime-shared", () => {
     mocks.resolveModelAuthLabel.mockReturnValue("api-key (openai:api)");
 
     await resolveStatusUsageSummary({
-      timeoutMs: 3456,
+      ...createStatusGatewayProbeBudget(3456),
       config: {
         agents: {
           defaults: {
@@ -310,7 +315,7 @@ describe("status-runtime-shared", () => {
 
   it("resolves usage summaries with explicit agent scope", async () => {
     await resolveStatusUsageSummary({
-      timeoutMs: 2345,
+      ...createStatusGatewayProbeBudget(2345),
       config: { gateway: {} },
       agentDir: "/tmp/status-agent",
     });
@@ -334,7 +339,7 @@ describe("status-runtime-shared", () => {
     };
 
     await resolveStatusUsageSummary({
-      timeoutMs: 2345,
+      ...createStatusGatewayProbeBudget(2345),
       config,
       agentId: "beta",
     });
@@ -349,6 +354,7 @@ describe("status-runtime-shared", () => {
   it("rejects an unknown explicit usage owner", async () => {
     await expect(
       resolveStatusUsageSummary({
+        ...createStatusGatewayProbeBudget(),
         config: {
           agents: {
             ownership: "explicit",
@@ -361,23 +367,10 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
-  it("resolves gateway health with the shared probe call shape", async () => {
-    await resolveStatusGatewayHealth({
-      config: { gateway: {} },
-      timeoutMs: 5000,
-    });
-
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 5000,
-      config: { gateway: {} },
-    });
-  });
-
   it("returns a fallback health error when the gateway is unreachable", async () => {
     await expect(
       resolveStatusGatewayHealthSafe({
+        ...createStatusGatewayProbeBudget(),
         config: { gateway: {} },
         gatewayReachable: false,
         gatewayProbeError: "timeout",
@@ -389,7 +382,7 @@ describe("status-runtime-shared", () => {
   it("passes gateway call overrides through the safe health path", async () => {
     await resolveStatusGatewayHealthSafe({
       config: { gateway: {} },
-      timeoutMs: 4321,
+      ...createStatusGatewayProbeBudget(4321),
       gatewayReachable: true,
       callOverrides: {
         url: "ws://127.0.0.1:18789",
@@ -411,7 +404,7 @@ describe("status-runtime-shared", () => {
     await expect(
       resolveStatusGatewayDiagnosticsSafe({
         config: { gateway: {} },
-        timeoutMs: 4321,
+        ...createStatusGatewayProbeBudget(4321),
         gatewayReachable: true,
         type: "telemetry.exporter",
       }),
@@ -431,7 +424,7 @@ describe("status-runtime-shared", () => {
     await expect(
       resolveStatusGatewayDiagnosticsSafe({
         config: { gateway: {} },
-        timeoutMs: 4321,
+        ...createStatusGatewayProbeBudget(4321),
         gatewayReachable: true,
       }),
     ).resolves.toEqual({
@@ -440,19 +433,12 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("resolves daemon summaries together", async () => {
-    await expect(resolveStatusServiceSummaries()).resolves.toEqual([
-      { label: "LaunchAgent" },
-      { label: "node" },
-    ]);
-  });
-
   it("resolves the shared runtime snapshot with security audit and runtime details", async () => {
     await expect(
       resolveStatusRuntimeSnapshot({
         config: { gateway: {} },
         sourceConfig: { gateway: { mode: "local" } },
-        timeoutMs: 1234,
+        ...createStatusGatewayProbeBudget(1234),
         usage: true,
         deep: true,
         gatewayReachable: true,
@@ -465,6 +451,12 @@ describe("status-runtime-shared", () => {
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "health",
+      params: { probe: true },
+      timeoutMs: 1234,
+      config: { gateway: {} },
     });
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
       config: { gateway: {} },
@@ -481,6 +473,7 @@ describe("status-runtime-shared", () => {
     const resolveUsage = vi.fn(async () => ({ updatedAt: 1, providers: [] }));
 
     await resolveStatusRuntimeSnapshot({
+      ...createStatusGatewayProbeBudget(),
       config: { gateway: {} },
       sourceConfig: { gateway: {} },
       agentId: "beta",
@@ -492,7 +485,8 @@ describe("status-runtime-shared", () => {
     expect(resolveUsage).toHaveBeenCalledWith({
       config: { gateway: {} },
       agentId: "beta",
-      timeoutMs: undefined,
+      timeoutMs: 60_000,
+      gatewayProbeDeadlineMs: 60_000,
     });
   });
 
@@ -501,6 +495,7 @@ describe("status-runtime-shared", () => {
 
     await expect(
       resolveStatusRuntimeSnapshot({
+        ...createStatusGatewayProbeBudget(),
         config: { gateway: {} },
         sourceConfig: { gateway: {} },
         deep: true,
@@ -513,11 +508,63 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("shares the readiness deadline with deep health and skips heartbeat when it expires", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      mocks.callGateway.mockImplementation(async () => {
+        clock.mockReturnValue(38_000);
+        return { ok: true };
+      });
+      const result = await resolveStatusRuntimeSnapshot({
+        config: {},
+        sourceConfig: {},
+        deep: true,
+        gatewayReachable: true,
+        gatewayProbeDeadlineMs: 38_000,
+      });
+
+      expect(result.health).toEqual({ ok: true });
+      expect(result.lastHeartbeat).toBeNull();
+      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
+        method: "health",
+        params: { probe: true },
+        config: {},
+        timeoutMs: 38_000,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([
+    { gatewayStartupPhase: "plugins", health: undefined },
+    { gatewayStartupPhase: undefined, health: { error: "connection refused" } },
+  ])(
+    "uses the completed initial probe for deep health ($gatewayStartupPhase)",
+    async ({ gatewayStartupPhase, health }) => {
+      const snapshot = await resolveStatusRuntimeSnapshot({
+        ...createStatusGatewayProbeBudget(),
+        config: {},
+        sourceConfig: {},
+        deep: true,
+        gatewayReachable: false,
+        gatewayStartupPhase,
+        gatewayProbeError: "connection refused",
+        suppressHealthErrors: true,
+      });
+
+      expect(snapshot.health).toEqual(health);
+      expect(snapshot.lastHeartbeat).toBeNull();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not suppress failed deep health probes for text status", async () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
 
     await expect(
       resolveStatusRuntimeSnapshot({
+        ...createStatusGatewayProbeBudget(),
         config: { gateway: {} },
         sourceConfig: { gateway: {} },
         deep: true,

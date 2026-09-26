@@ -13,6 +13,7 @@ import {
 import { UPDATE_PREFLIGHT_DETAILS } from "./update-preflight-details.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 import type { UpdateFailureFactSchema } from "./update-run-schema.js";
+import { resolvePublicUpdateStepId } from "./update-step-identity.js";
 
 type PublicFailureIdentifiers = Pick<
   z.infer<typeof UpdateFailureFactSchema>,
@@ -43,6 +44,7 @@ const NATIVE_CHECKS = new Set<string>([
   "pluginErrors",
   "channelsReady",
   "settled",
+  "gateway-recovery",
   "node-runtime",
   "managed-service",
   "managed-service-preflight",
@@ -87,6 +89,7 @@ const PUBLIC_CODES = new Set<string>([
   "SQLITE_FULL",
   "command-failed",
   "doctor-failed",
+  "agent-database-lease-active",
   "global-install-failed",
   ...UPDATE_ENVIRONMENT_FAILURE_REASONS,
   "already-current",
@@ -94,6 +97,7 @@ const PUBLIC_CODES = new Set<string>([
   "unmanaged-package-install",
   "package-update-requires-cli",
   "swap-failed",
+  "baseline-scan-failed",
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",
@@ -102,6 +106,7 @@ const PUBLIC_CODES = new Set<string>([
   "readyz-unhealthy",
   "service-not-running",
   "restart-unhealthy",
+  "gateway-probe-failed",
   "restart-health-pending",
   "managed-service-preflight",
   "service-inspection-unavailable",
@@ -124,9 +129,11 @@ const PUBLIC_CODES = new Set<string>([
   "post-update-plugins",
   "post-plugin-doctor-execution-failed",
   "post-plugin-doctor-invalid-config",
+  "post-plugin-config-validation-execution-failed",
   "post-plugin-update-readiness-execution-failed",
   "post-plugin-update-readiness-failed",
   "invalid-config",
+  "config-read-failed",
   "validation",
   "cron-owner-safety",
   "include-ownership",
@@ -182,7 +189,10 @@ export async function projectPublicUpdateFailureIdentifiers(
   fact: PublicFailureIdentifiers,
 ): Promise<PublicFailureIdentifiers> {
   // Admission failures use their reason code as the check ID.
-  const nativeCheck = NATIVE_CHECKS.has(fact.check) || isPublicUpdateFailureCode(fact.check);
+  const nativeCheck =
+    NATIVE_CHECKS.has(fact.check) ||
+    resolvePublicUpdateStepId(fact.check) === fact.check ||
+    isPublicUpdateFailureCode(fact.check);
   // Unavailable metadata cannot establish that an identifier is public.
   const [doctorIds, pluginIds] = await Promise.all([
     nativeCheck ? undefined : loadPublicDoctorCheckIds().catch(() => undefined),

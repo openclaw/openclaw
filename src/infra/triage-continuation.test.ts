@@ -9,15 +9,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  triageRuntimeNodeOptions,
+  useTriageLeaseDatabaseFixture,
+} from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
-import {
-  createTriageBoundary,
-  triageRuntimeNodeOptions,
-} from "./update-managed-service-triage.test-support.js";
+import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -808,9 +811,9 @@ fs.readFileSync = function(file, ...args) {
     expect(events.some((event) => event.kind === "continuation-membership")).toBe(true);
     expect(events.filter((event) => event.kind === "fixer")).toHaveLength(admitted ? 1 : 0);
     if (!admitted) {
-      expect(await boundary.log()).toContain(
-        "automatic triage executor is outside its native scope",
-      );
+      // Native cleanup can terminate the rejected process before its error is flushed.
+      expect(events.some((event) => event.kind === "scope-stopped")).toBe(true);
+      expect(events.filter((event) => event.kind === "branch")).toEqual([]);
     }
   },
 );

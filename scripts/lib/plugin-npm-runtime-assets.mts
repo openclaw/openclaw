@@ -2,7 +2,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePackageStaticAssetEntries } from "./static-extension-assets.mts";
+import {
+  resolvePackageStaticAssetEntries,
+  resolvePackageStaticAssetSource,
+} from "./static-extension-assets.mts";
 
 type PluginRuntimeAssetPlan = {
   packageDir: string;
@@ -36,18 +39,22 @@ function runPackageAssetBuild(plan: PluginRuntimeAssetPlan) {
 /** Uses the selected manifest so private source packages need no Git discovery. */
 export function preparePackageRuntimeAssets(plan: PluginRuntimeAssetPlan) {
   const assetBuildCommand = runPackageAssetBuild(plan);
-  const assets = resolvePackageStaticAssetEntries(plan.packageJson);
+  const assets = resolvePackageStaticAssetEntries(plan.packageJson).map(({ source, output }) => ({
+    source,
+    output,
+    srcPath: resolvePackageStaticAssetSource(plan.packageDir, source),
+  }));
   const missing = assets
-    .filter(({ source }) => !fs.existsSync(path.join(plan.packageDir, source)))
+    .filter(({ srcPath }) => !fs.existsSync(srcPath))
     .map(({ source }) => path.posix.join("extensions", plan.pluginDir, source))
     .toSorted((left, right) => left.localeCompare(right));
   if (missing.length > 0) {
     throw new Error(`${plan.pluginDir} missing static asset source(s): ${missing.join(", ")}`);
   }
-  const copiedStaticAssets = assets.map(({ source, output }) => {
+  const copiedStaticAssets = assets.map(({ srcPath, output }) => {
     const destination = path.join(plan.packageDir, "dist", output);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(path.join(plan.packageDir, source), destination);
+    fs.copyFileSync(srcPath, destination);
     return path.posix.join("dist", output);
   });
   return {

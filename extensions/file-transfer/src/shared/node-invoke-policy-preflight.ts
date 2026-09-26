@@ -13,10 +13,6 @@ import {
   type FilePolicyKind,
 } from "./policy.js";
 
-function readResultPayload(result: { payload?: unknown }): Record<string, unknown> | null {
-  return asNullableRecord(result.payload);
-}
-
 function joinRemotePolicyPath(root: string, relPath: string): string {
   const rel = relPath.replace(/\\/gu, "/").replace(/^\.\//u, "");
   if (!rel || rel === ".") {
@@ -297,7 +293,7 @@ async function invokePreflight(input: {
       },
     };
   }
-  const payload = readResultPayload(preflight);
+  const payload = asNullableRecord(preflight.payload);
   if (payload?.ok === false) {
     const code = typeof payload.code === "string" ? payload.code : "PREFLIGHT_FAILED";
     const canonicalPath =
@@ -350,7 +346,8 @@ async function invokePreflight(input: {
     };
   }
   const binding = readPathBinding(payload?.binding);
-  const expectedBindingKind = input.op === "file.write" ? "write" : "existing";
+  const expectedBindingKind =
+    input.op === "file.write" || input.op === "file.create" ? "write" : "existing";
   if (!binding || binding.kind !== expectedBindingKind) {
     return {
       ok: false,
@@ -528,49 +525,23 @@ export async function runPathPreflight(input: {
     canonicalPath: preflight.canonicalPath,
     startedAt: input.startedAt,
   });
-  return denied
-    ? { ok: false, result: denied }
-    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
-}
-
-export async function runDirFetchPreflight(input: {
-  ctx: OpenClawPluginNodeInvokePolicyContext;
-  op: FileTransferAuditOp;
-  authorization: GrantedAuthorization;
-  params: Record<string, unknown>;
-  requestedPath: string;
-  startedAt: number;
-}): Promise<
-  | { ok: true; canonicalPath: string; binding: PathBinding }
-  | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
-> {
-  const preflight = await invokeAuthorizedPreflight({ ...input, kind: "read" });
-  if (!preflight.ok) {
-    return { ok: false, result: preflight.result };
-  }
-  const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: "read",
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
-  });
   if (denied) {
     return { ok: false, result: denied };
   }
-  const entryDeny = await validateDirFetchEntries({
-    ctx: input.ctx,
-    op: input.op,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    entries: preflight.payload?.entries,
-    startedAt: input.startedAt,
-    phase: "preflight",
-  });
-  return entryDeny
-    ? { ok: false, result: entryDeny }
-    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
+  if (input.op === "dir.fetch") {
+    const entryDeny = await validateDirFetchEntries({
+      ctx: input.ctx,
+      op: input.op,
+      authorization: input.authorization,
+      requestedPath: input.requestedPath,
+      canonicalPath: preflight.canonicalPath,
+      entries: preflight.payload?.entries,
+      startedAt: input.startedAt,
+      phase: "preflight",
+    });
+    if (entryDeny) {
+      return { ok: false, result: entryDeny };
+    }
+  }
+  return { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
 }

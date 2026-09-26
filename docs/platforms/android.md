@@ -117,6 +117,27 @@ Google Play and standalone APK installs use different update channels and may ha
 Building a release artifact (APK or app bundle) from source or a fork requires your own Android signing identity. Debug builds use an automatically generated debug signing key. The official OpenClaw release key is not included in the repository. See [Sign your app](https://developer.android.com/studio/publish/app-signing) for how to generate and configure a signing key for release builds.
 </Note>
 
+## App and Gateway compatibility
+
+The Android app and Gateway do not need matching release version numbers.
+Connection compatibility depends on the Gateway protocol versions they support,
+not the release tag that contains the APK.
+
+Android uses separate connections for chat and UI actions (the operator
+connection) and device capabilities (the node connection). The operator connection
+must support the Gateway's current protocol. An authenticated node connection may
+use the previous protocol within the documented compatibility window; that
+exception does not extend to chat or UI actions. See [Gateway protocol
+versioning](/gateway/protocol/versioning) for the current versions and node
+capability restrictions.
+
+Successful pairing does not guarantee that every feature works across an arbitrary
+app/Gateway version combination. New features may require updates on both sides.
+If a connection reports `protocol mismatch`, check the protocol requirements and
+available updates for both the app and Gateway. For sideloaded apps, use the APK
+selection and verification steps above rather than assuming the latest Gateway
+release contains a newer app.
+
 ## Mirror and control Android from a remote Mac
 
 [scrcpy](https://github.com/Genymobile/scrcpy) mirrors an Android screen in a macOS window and
@@ -311,6 +332,7 @@ In the Android app:
 
 - The app keeps its Gateway connection alive via a **foreground service** (persistent notification).
 - During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
+- After pairing, choose the phone permissions to enable. If the Gateway requires node approval, review the requested capabilities and tap **Approve access and continue** when offered. Setup finishes after the app verifies approval. Otherwise, follow the displayed Gateway approval commands, then tap **I have approved**.
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
@@ -394,15 +416,30 @@ openclaw gateway call node.list --params "{}"
 The draft has its own full-width row above the attachment and voice/send controls,
 so larger text and narrow screens do not squeeze it between buttons. The empty
 hint stays on one line; drafts show up to six lines and scroll when space is limited.
-The composer has narrower side gutters than the transcript, with readable draft
-text and 48dp action targets. Typography still follows system text scaling.
-Model and thinking controls sit together, opposite the microphone and primary
-action. The model name stays on one line and follows system text scaling;
-long names use a middle ellipsis to keep both ends visible. The full name remains
-in the model sheet and accessibility text. The thinking dial opens a menu without
-expanding the composer.
-Context usage is available in the model sheet and the model control's
-accessibility value, leaving more room for the model name in the toolbar.
+The composer has narrower side gutters than the transcript. **+**, model, and
+reasoning stay together on the left; the context ring, microphone, and Talk/send
+stay on the right in one row. Controls remain 48dp tall; very short views use
+narrower icon buttons to make room for **Details** while retaining an editable line.
+The placeholder and typed text share the same alignment.
+
+Open **+** for a compact icon list with Camera, Gallery, Files, Location, and
+Permissions. The Permissions row shows the current access mode. The
+context ring remains directly accessible on narrow screens and opens context
+usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
+permission to change session settings. A reported model-call total remains visible
+when no cost breakdown is available. Missing usage is shown as unknown.
+Tap the model name to open a compact menu above the composer, search by model or
+provider, and expand provider groups. The picker has no settings buttons. The Gateway's
+configured default is labeled on its model row. Selecting a named model pins that
+model to the session; **Default model** separately resets the override to follow the
+Gateway's current default.
+Pinned and recent models remain available. Long model names use a middle
+ellipsis, with the full name available in the picker. The effort dial opens its
+slider and Fast mode without expanding the composer. Dragging the slider previews
+the effort on the dial; releasing it applies the selection.
+
+With an empty draft and no active run, the trailing button starts Talk. Entering
+text changes it to Send; an active run with no draft shows Stop.
 During Talk, the live waveform replaces the microphone and remains tappable to
 end Talk. If a run is also active, a separate, softly tinted Stop button stays at
 the trailing edge to abort that run.
@@ -424,7 +461,7 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Queued message controls: **Delete** removes the local queued copy, including when a reconnect refresh is still finishing. It does not undo a message already accepted by the Gateway; use **Stop** to cancel an active turn.
 - Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, Gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per Gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Completed answers show up to eight compact source cards for cited pages found in that run’s successful web searches and fetches. Tap a card to read its recorded search snippet or page excerpt and open the source. The cards do not fetch page content; favicons come through the Gateway and honor `gateway.controlUi.automaticallyFetchFavicons`, with a globe when disabled or unavailable.
-- Image input works through the picker and Android Sharesheet. Assistant-generated images resolve through the paired Gateway connection, render inline with a full-screen preview, and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
+- Image input works through the picker and Android Sharesheet. Sent photos sit above your text bubble; adjacent photos wrap into compact rows. Assistant photos stay beside their associated text in message order. Tap a photo for the full-screen preview. Messages display at most four image previews at once; **Next images** and **Previous images** reach the rest without keeping every decoded image in memory. Assistant-generated images resolve through the paired Gateway connection and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
@@ -437,15 +474,19 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Navigate through the sidebar's **Pages** menu. Voice input belongs to the Chat
   composer; there is no separate Voice tab.
 - Tap the composer microphone for on-device speech recognition that inserts a
-  transcript into the draft. Long-press the microphone to record a voice-note
-  attachment. The UI reports unavailable recognition, missing permission,
+  transcript into the draft. While listening, a Stop icon replaces the microphone;
+  tap it to finish listening. While starting or transcribing, a Close icon cancels
+  that attempt. Long-press the microphone to open **Voice options**,
+  then choose **Record voice note** to create an attachment. The UI reports
+  unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
   the attempt. If dictation is unavailable and a Gateway is selected,
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
-- Start continuous **Talk** from the Chat waveform. Dictation, voice-note
-  recording, and Talk are mutually exclusive microphone paths.
+- To start continuous **Talk**, tap the trailing Talk button with an empty draft
+  and no active run. The microphone menu contains only dictation and voice notes.
+  Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
 - Your selected agent stays bound to Talk and the main chat when the same Gateway
   reconnects, including while its agent list refreshes. Removing that agent falls
   back to the Gateway default. Switching Gateways or restarting the app clears
@@ -471,7 +512,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 9. Workspace files (read-only)
 
-Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
+Open **Overview** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` Gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the Gateway.
 
 If the app cannot prepare a file or open the share sheet, it shows **Could not share file** and keeps the preview open so you can retry or go back.
 

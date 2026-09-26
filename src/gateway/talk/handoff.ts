@@ -14,7 +14,6 @@ import {
   createTalkSessionController,
   type TalkBrain,
   type TalkEvent,
-  type TalkEventInput,
   type TalkMode,
   type TalkSessionController,
   type TalkTransport,
@@ -39,18 +38,11 @@ type TalkHandoffCreateParams = {
 };
 
 /** Private handoff state, including the hashed room token and event controller. */
-type TalkHandoffRecord = {
+type TalkHandoffRecord = Omit<TalkHandoffCreateParams, "ttlMs" | "mode" | "transport" | "brain"> & {
   id: string;
   roomId: string;
   roomUrl: string;
   tokenHash: string;
-  sessionKey: string;
-  sessionId?: string;
-  channel?: string;
-  target?: string;
-  provider?: string;
-  model?: string;
-  voice?: string;
   mode: TalkMode;
   transport: TalkTransport;
   brain: TalkBrain;
@@ -99,18 +91,14 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
   const id = randomUUID();
   const roomId = `talk_${id}`;
   const token = randomBytes(32).toString("base64url");
-  const room = createTalkHandoffRoom({
-    roomId,
-    mode: params.mode ?? "stt-tts",
-    transport: params.transport ?? "managed-room",
-    brain: params.brain ?? "agent-consult",
-    provider: params.provider,
-  });
+  const mode = params.mode ?? "stt-tts";
+  const transport = params.transport ?? "managed-room";
+  const brain = params.brain ?? "agent-consult";
   const record: TalkHandoffRecord = {
     id,
     roomId,
     roomUrl: `/talk/rooms/${roomId}`,
-    tokenHash: hashTalkHandoffToken(token),
+    tokenHash: sha256Base64Url(token),
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     channel: params.channel,
@@ -118,14 +106,19 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
     provider: params.provider,
     model: params.model,
     voice: params.voice,
-    mode: params.mode ?? "stt-tts",
-    transport: params.transport ?? "managed-room",
-    brain: params.brain ?? "agent-consult",
+    mode,
+    transport,
+    brain,
     createdAt,
     expiresAt,
-    room,
+    room: {
+      talk: createTalkSessionController(
+        { sessionId: roomId, mode, transport, brain, provider: params.provider },
+        { onEvent: recordTalkObservabilityEvent },
+      ),
+    },
   };
-  appendTalkHandoffRoomEvent(record, {
+  record.room.talk.emit({
     type: "session.started",
     payload: { handoffId: id, roomId },
   });
@@ -146,7 +139,7 @@ export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   if (!record) {
     return { revoked: false, events: [] };
   }
-  const event = appendTalkHandoffRoomEvent(record, {
+  const event = record.room.talk.emit({
     type: "session.closed",
     payload: { reason: "revoked", handoffId: id, roomId: record.roomId },
     final: true,
@@ -174,7 +167,7 @@ function pruneExpiredTalkHandoffs(now = Date.now()): void {
   }
   for (const [id, record] of handoffs) {
     if (!isFutureDateTimestampMs(record.expiresAt, { nowMs: validNow })) {
-      appendTalkHandoffRoomEvent(record, {
+      record.room.talk.emit({
         type: "session.closed",
         payload: { reason: "expired", handoffId: id, roomId: record.roomId },
         final: true,
@@ -182,10 +175,6 @@ function pruneExpiredTalkHandoffs(now = Date.now()): void {
       handoffs.delete(id);
     }
   }
-}
-
-function hashTalkHandoffToken(token: string): string {
-  return sha256Base64Url(token);
 }
 
 function toPublicTalkHandoffRecord(record: TalkHandoffRecord): TalkHandoffPublicRecord {
@@ -198,29 +187,4 @@ function toPublicTalkHandoffRecord(record: TalkHandoffRecord): TalkHandoffPublic
       recentTalkEvents: [...record.room.talk.recentEvents],
     },
   };
-}
-
-function createTalkHandoffRoom(params: {
-  roomId: string;
-  mode: TalkMode;
-  transport: TalkTransport;
-  brain: TalkBrain;
-  provider?: string;
-}): TalkHandoffRoomState {
-  return {
-    talk: createTalkSessionController(
-      {
-        sessionId: params.roomId,
-        mode: params.mode,
-        transport: params.transport,
-        brain: params.brain,
-        provider: params.provider,
-      },
-      { onEvent: recordTalkObservabilityEvent },
-    ),
-  };
-}
-
-function appendTalkHandoffRoomEvent(record: TalkHandoffRecord, input: TalkEventInput): TalkEvent {
-  return record.room.talk.emit(input);
 }

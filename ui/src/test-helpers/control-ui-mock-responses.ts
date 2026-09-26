@@ -1,3 +1,4 @@
+import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 import type { createControlUiSessionFixtures } from "./control-ui-session-fixtures.ts";
 
 // Serialized into the page alongside the session fixture owner. Keep runtime
@@ -102,6 +103,38 @@ export function createControlUiMockResponses(
     return { found: true, value: matchingCase.response };
   }
 
+  function sessionListResponse(
+    payload?: Parameters<ControlUiMockGateway["setSessionsListResponse"]>[0],
+  ) {
+    const rows = payload?.sessions ?? sessions.list();
+    const baseline = {
+      count: rows.length,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: rows,
+      ts: Date.now(),
+    };
+    if (!payload) {
+      return baseline;
+    }
+    const configured = configuredResponse("sessions.list", {}, false).value;
+    const previous = isRecord(configured) && Array.isArray(configured.sessions) ? configured : {};
+    return {
+      ...baseline,
+      ...previous,
+      defaults: {
+        ...baseline.defaults,
+        ...(isRecord(previous.defaults) ? previous.defaults : {}),
+      },
+      count: rows.length,
+      ...payload,
+    };
+  }
+
   function scopedSearchResponse(
     params: Record<string, unknown>,
     response: Record<string, unknown>,
@@ -149,7 +182,9 @@ export function createControlUiMockResponses(
           (scope.configuredAgentsOnly === true &&
             key.startsWith("agent:") &&
             !agentIds.has(agentId)) ||
-          (scope.excludeSubagents === true && (key.includes(":subagent:") || row.spawnedBy)) ||
+          (scope.excludeSubagents === true &&
+            (key.includes(":subagent:") ||
+              (row.spawnedBy && !(typeof row.category === "string" && row.category.trim())))) ||
           (cron && (scope.excludeCron === true || key.includes(":run:"))) ||
           (scope.excludeSystem === true && system) ||
           (scope.boardFace && row.boardFace !== scope.boardFace) ||
@@ -183,6 +218,7 @@ export function createControlUiMockResponses(
 
   return {
     select: configuredResponse,
+    sessionList: sessionListResponse,
     cases: responseCases,
     sequence: responseSequence,
     matches: paramsMatch,

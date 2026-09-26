@@ -2,8 +2,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
@@ -13,7 +15,6 @@ import {
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
-  reportRatchetFailures,
   reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
@@ -99,15 +100,20 @@ function collectViolations(
   }
   const report: { diagnostics: OxlintDiagnostic[] } = JSON.parse(result.stdout);
   for (const diagnostic of report.diagnostics) {
+    // JetBrains terminals make oxlint emit file URLs; both forms must match Git paths.
+    const filename = diagnostic.filename.startsWith("file://")
+      ? fileURLToPath(diagnostic.filename)
+      : diagnostic.filename;
+    const file = path.relative(snapshot, path.resolve(snapshot, filename)).replaceAll("\\", "/");
     if (diagnostic.code !== "eslint(max-lines)") {
-      throw new Error(`Cannot measure ${diagnostic.filename}: ${diagnostic.message}`);
+      throw new Error(`Cannot measure ${file}: ${diagnostic.message}`);
     }
     const count = Number(/^File has too many lines \((\d+)\)\.$/u.exec(diagnostic.message)?.[1]);
     const cap = Number(/^Maximum allowed is (\d+)\.$/u.exec(diagnostic.help ?? "")?.[1]);
     if (!Number.isSafeInteger(count) || !Number.isSafeInteger(cap)) {
       throw new Error("Unrecognized oxlint max-lines diagnostic: " + diagnostic.message);
     }
-    violations.set(diagnostic.filename.replaceAll("\\", "/"), { count, cap });
+    violations.set(file, { count, cap });
   }
   if (result.status !== 0 && violations.size === 0) {
     throw new Error(result.stderr || "oxlint failed without line-cap diagnostics");
@@ -172,7 +178,8 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (!config.overrides?.length) {
       throw new Error("No max-lines overrides found in .oxlintrc.json");
     }
-    scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-cap-"));
+    // Child-process cwd resolves symlinks, so diagnostic URLs use this physical root.
+    scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-cap-")));
     // Stop ancestor Git ignores at the snapshot; explicit lint exclusions still apply.
     fs.mkdirSync(path.join(scratch, ".git"));
     const after = collectViolations(path.join(scratch, "head"), headSources, config);
@@ -186,24 +193,21 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     );
     const increased = compareLineCapViolations(after, before, renames);
     if (
-      reportRatchetFailures(
-        [
-          {
-            title: "Line-cap ratchet rejects new violations or growth:",
-            entries: increased.map(
-              ({ entry, allowed, current }) =>
-                `${entry}: ${allowed} -> ${current} counted lines (cap ${after.get(entry)!.cap})`,
-            ),
-          },
-        ],
-        "Extract a coherent sibling module; never trim coverage or disable max-lines.",
+      reportLimitViolations(
+        increased.map(({ entry, allowed, current }) => ({
+          file: entry,
+          title: "Line-cap ratchet rejects new violations or growth:",
+          message: `${allowed} -> ${current} counted lines (cap ${after.get(entry)!.cap}). Extract a coherent sibling module; never trim coverage or disable max-lines.`,
+        })),
       )
     ) {
       return 1;
     }
-    reportRatchetSuccess(
-      `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
-    );
+    if (increased.length === 0) {
+      reportRatchetSuccess(
+        `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
+      );
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

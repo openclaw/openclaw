@@ -278,7 +278,7 @@ export function readSystemDisks(): Promise<SystemDisk[] | undefined> {
         .then((disks) => disks?.toSorted((left, right) => left.path.localeCompare(right.path)))
         .catch(() => undefined)
         .finally(() => {
-          next.expiresAt = Date.now() + 10_000;
+          next.expiresAt = Date.now() + 30_000;
         }),
     };
     snapshot = next;

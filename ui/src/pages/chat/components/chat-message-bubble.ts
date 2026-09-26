@@ -5,6 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -26,17 +27,21 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "./chat-clawhub-card.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
+import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
+import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import {
+  hasUserFileAttachments,
   renderAssistantAttachments,
   renderMessageAttachment,
   renderOmittedMedia,
 } from "./chat-message-attachments.ts";
+import { renderMessageWorkContext } from "./chat-message-context.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import type {
   ChatMessageRenderPreparation,
@@ -50,7 +55,6 @@ import {
   type ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
 import {
-  detectJson,
   renderMessageJson,
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
@@ -64,7 +68,6 @@ import {
   renderToolCard,
   renderToolIcon,
   renderPluginToolResult,
-  renderToolPreview,
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -75,6 +78,7 @@ import {
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
+import { renderToolPreview } from "./widget-card.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -131,17 +135,21 @@ function renderPairingQrExpiryNotices(count: number) {
           <div
             class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired"
           >
-            <div class="chat-assistant-attachment-card__header">
-              <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
-              <span class="chat-assistant-attachment-card__title"
-                >${t("chat.pairingQrExpired.title")}</span
-              >
-              <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                >${t("chat.pairingQrExpired.badge")}</span
-              >
-            </div>
-            <div class="chat-assistant-attachment-card__reason">
-              ${t("chat.pairingQrExpired.reason")}
+            <span class="chat-pairing-qr-expired__icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <div class="chat-pairing-qr-expired__content">
+              <div class="chat-pairing-qr-expired__heading">
+                <span class="chat-pairing-qr-expired__title"
+                  >${t("chat.pairingQrExpired.title")}</span
+                >
+                <span class="chat-pairing-qr-expired__badge"
+                  >${t("chat.pairingQrExpired.badge")}</span
+                >
+              </div>
+              <div class="chat-assistant-attachment-card__reason">
+                ${t("chat.pairingQrExpired.reason")}
+              </div>
             </div>
           </div>
         `,
@@ -222,7 +230,8 @@ export function renderGroupedMessage(
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
-  const hasToolCards = toolCards.length > 0;
+  // Nested cards moved under their parent must not leave empty message shells.
+  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== nothing);
   const {
     images,
     attachments: visibleAttachments,
@@ -241,14 +250,7 @@ export function renderGroupedMessage(
         )
       : [];
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
-  const hasUserFiles =
-    normalizedRole === "user" &&
-    cardAttachments.some(
-      (item) =>
-        item.attachment.kind === "document" &&
-        !isSentCommentAttachment(item) &&
-        !isSentPastedTextAttachment(item),
-    );
+  const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
   const imageRenderOptions = {
     galleryImages: images,
     sessionKey: opts.sessionKey,
@@ -294,8 +296,8 @@ export function renderGroupedMessage(
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
   };
 
-  // Detect pure-JSON messages and render as collapsible block
-  const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
+  // Classify completed bare JSON before Markdown can interpret its literal values.
+  const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
   const onlyPreviewChips =
     normalizedRole === "user" &&
@@ -328,7 +330,7 @@ export function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  // Suppress bubbles with no visible content, including relocated tool cards.
   if (
     !markdown &&
     !asyncQuestions &&
@@ -450,21 +452,16 @@ export function renderGroupedMessage(
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
 
-  if (onlyToolCards && toolCards.every((card) => opts.toolCardOverrides?.get(card) === nothing)) {
-    return nothing;
-  }
-
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   const renderText = () =>
     asyncQuestions
-      ? html`<openclaw-chat-async-question
-          .questions=${asyncQuestions}
-          .presentation=${opts.asyncQuestions}
-        ></openclaw-chat-async-question>`
+      ? renderAsyncQuestionSummary(asyncQuestions, opts.asyncQuestions!)
       : jsonResult
         ? renderMessageJson(
             jsonResult,
-            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
           )
         : bodyMarkdown
           ? renderMessageMarkdown(
@@ -654,6 +651,16 @@ export function renderGroupedMessage(
             : renderBody()
       }
       ${
+        sourceRole === "assistant" && assistantMessageIsInterrupted(message)
+          ? html`<div
+              class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation"
+              role="status"
+            >
+              ${t("chat.composer.runInterrupted")}
+            </div>`
+          : nothing
+      }
+      ${
         duplicateCount > 1 && (!markdown || jsonResult)
           ? html`<div
               class="chat-duplicate-count"
@@ -666,5 +673,6 @@ export function renderGroupedMessage(
           : nothing
       }
     </div>
+    ${renderMessageWorkContext(message)}
   `;
 }

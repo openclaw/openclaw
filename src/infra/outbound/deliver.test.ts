@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { renderMessagePresentationFallbackText } from "../../interactive/payload.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
+import type { PluginHookHandlerMap } from "../../plugins/hook-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -39,6 +40,10 @@ import * as channelResolution from "./channel-resolution.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { matrixOutboundForTest, type MatrixSendFn } from "./deliver.matrix.test-support.js";
+import {
+  registerOutboundImageProjectionTests,
+  registerOutboundPreparationMetadataTests,
+} from "./deliver.projection.test-support.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
@@ -75,12 +80,10 @@ const mocks = vi.hoisted(() => ({
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn<(_hookName?: string) => boolean>(() => false),
-    runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
-      async () => undefined,
-    ),
-    runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
-      async (event) => ({ payload: (event as { payload?: unknown }).payload }),
-    ),
+    runMessageSending: vi.fn<PluginHookHandlerMap["message_sending"]>(async () => undefined),
+    runReplyPayloadSending: vi.fn<PluginHookHandlerMap["reply_payload_sending"]>(async (event) => ({
+      payload: event.payload,
+    })),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
@@ -99,11 +102,11 @@ const queueMocks = vi.hoisted(() => ({
   })),
   loadPendingDelivery: vi.fn(async () => null),
   findDeliveryIntentOwner: vi.fn<
-    () => {
+    () => Promise<{
       namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
       status: "pending" | "failed" | "completed";
-    } | null
-  >(() => null),
+    } | null>
+  >(async () => null),
   ackDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
@@ -525,7 +528,7 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
-      payload: (event as { payload?: unknown }).payload,
+      payload: event.payload,
     }));
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
@@ -539,7 +542,7 @@ describe("deliverOutboundPayloads", () => {
       created: true,
     }));
     queueMocks.loadPendingDelivery.mockResolvedValue(null);
-    queueMocks.findDeliveryIntentOwner.mockReturnValue(null);
+    queueMocks.findDeliveryIntentOwner.mockResolvedValue(null);
     queueMocks.claimReusableDeliveryPlatformSendAttempt.mockResolvedValue("mock-producer-claim");
     queueMocks.renewDeliveryPlatformSendLease.mockImplementation(async () => Date.now() + 30_000);
     queueMocks.withStableDeliveryPreparation.mockReset();
@@ -553,7 +556,7 @@ describe("deliverOutboundPayloads", () => {
           markPublished: () => void;
         }) => Promise<unknown>;
       }) => {
-        if (queueMocks.findDeliveryIntentOwner()) {
+        if (await queueMocks.findDeliveryIntentOwner()) {
           return { status: "existing" };
         }
         const entry = {
@@ -1055,7 +1058,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("does not cross platform I/O when a stable queue intent already exists", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    queueMocks.findDeliveryIntentOwner.mockReturnValue({
+    queueMocks.findDeliveryIntentOwner.mockResolvedValue({
       namespace: "prepared",
       status: "completed",
     });
@@ -1079,7 +1082,7 @@ describe("deliverOutboundPayloads", () => {
   it("never falls back to fresh modifiers after another preparation owner wins", async () => {
     queueMocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
     queueMocks.loadPendingDelivery.mockResolvedValueOnce(null);
-    queueMocks.findDeliveryIntentOwner.mockReturnValueOnce(null);
+    queueMocks.findDeliveryIntentOwner.mockResolvedValueOnce(null);
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
     const sendMatrix = vi.fn();
 
@@ -1212,6 +1215,13 @@ describe("deliverOutboundPayloads", () => {
     expect(onBeforeFirstModifier).not.toHaveBeenCalled();
     expect(hookMocks.runner.runReplyPayloadSending).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+  });
+
+  registerOutboundPreparationMetadataTests({
+    matrixChunkConfig,
+    matrixOutboundForTest,
+    setTestOutbound,
+    hookMocks,
   });
 
   it("revalidates conversation authority after queue admission and before the adapter", async () => {
@@ -4712,78 +4722,13 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/a.png");
   });
 
-  it("keeps markdown images as text for channels that do not opt in", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-text", roomId: "!room" });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
-    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrixCall[0]).toBe("!room:example");
-    expect(sendMatrixCall[1]).toBe("Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)");
-    expect(sendMatrixOptions?.mediaUrl).toBeUndefined();
-  });
-
-  it("extracts markdown images for channels that opt in", async () => {
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
-    setTestOutbound({ ...matrixOutboundForTest, extractMarkdownImages: true });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [{ text: "Chart ![chart](https://example.com/chart.png) now" }],
-      deps: { matrix: sendMatrix },
-    });
-
-    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
-    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrixCall[0]).toBe("!room:example");
-    expect(sendMatrixCall[1]).toBe("Chart now");
-    expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
-  });
-
-  it.each([
-    {
-      name: "MEDIA directives",
-      text: "Caption\nMEDIA:https://example.com/one.png\nMEDIA:https://example.com/two.png",
-      extractMarkdownImages: false,
-    },
-    {
-      name: "Markdown images",
-      text: "Caption ![one](https://example.com/one.png) ![two](https://example.com/two.png)",
-      extractMarkdownImages: true,
-    },
-  ])("delivers explicit attachments and every extracted $name", async (testCase) => {
-    const sendMedia = vi.fn<NonNullable<ChannelOutboundAdapter["sendMedia"]>>(async () => ({
-      channel: "matrix",
-      messageId: "sent",
-    }));
-    setTestOutbound({
-      ...matrixOutboundForTest,
-      sendMedia,
-      extractMarkdownImages: testCase.extractMarkdownImages,
-    });
-
-    await deliverMatrix({
-      cfg: matrixChunkConfig,
-      payloads: [
-        {
-          text: testCase.text,
-          mediaUrl: "https://example.com/primary.png",
-          mediaUrls: ["https://example.com/explicit.png", "https://example.com/one.png"],
-        },
-      ],
-    });
-
-    expect(sendMedia.mock.calls.map(([params]) => params.mediaUrl)).toEqual([
-      "https://example.com/explicit.png",
-      "https://example.com/one.png",
-      "https://example.com/primary.png",
-      "https://example.com/two.png",
-    ]);
+  registerOutboundImageProjectionTests({
+    matrixChunkConfig,
+    matrixOutboundForTest,
+    setTestOutbound,
+    hookMocks,
+    deliverMatrix,
+    requireMatrixSendCall,
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
@@ -5015,8 +4960,7 @@ describe("deliverOutboundPayloads", () => {
       undefined,
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "secret body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -5051,8 +4995,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(1);
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "stopped body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -5072,9 +5015,11 @@ describe("deliverOutboundPayloads", () => {
       deliveryQueueStateDir: "/queue-state",
     });
 
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("recovery-queue-id", "/queue-state", {
-      retainSpoolArtifacts: true,
-    });
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith(
+      "recovery-queue-id",
+      path.resolve("/queue-state"),
+      { retainSpoolArtifacts: true },
+    );
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -5862,7 +5807,7 @@ describe("deliverOutboundPayloads", () => {
       realRunner.hasHooks((hookName ?? "") as never),
     );
     hookMocks.runner.runMessageSending.mockImplementation((event, ctx) =>
-      realRunner.runMessageSending(event as never, ctx as never),
+      realRunner.runMessageSending(event, ctx),
     );
 
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });

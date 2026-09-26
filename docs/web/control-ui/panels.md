@@ -30,7 +30,11 @@ Outside onboarding, this page can show at most one dismissible event chip per vi
 
 Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. Select the **Ask OpenClaw** tab in the same dock for system setup and repair. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
 
-Home can include a bounded, quoted work-context reference with your message. That reference belongs to the page's agent and session, not merely the Home conversation receiving it, and stays current when session titles or visible files change. It is reference data, not permission to access another conversation; you can remove it before sending.
+Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
+
+Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
+
+Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
 
 ## Operator terminal
 
@@ -55,9 +59,15 @@ Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane
 
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
-The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions restores each session's own working layout. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+The unified panel also hosts **Browser**, **Files**, **Tasks**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
+
+Chat and each tool have their own named region for assistive navigation. Swapping Chat with a tool keeps each tab associated with its own content, including when the same conversation is open in multiple split panes.
 
 A connected **Desktop** viewer stays connected for 30 seconds while its tab is hidden, so a quick switch to Chat and back restores the same desktop and sizing mode. Input and remote resizing pause while hidden. After 30 seconds, the viewer disconnects and reconnects when reopened. Closing the Desktop tab, changing its session or machine, or losing the Gateway connection releases it immediately. Hiding Desktop during a mouse or touch drag also disconnects it so pressed remote buttons cannot linger. **Disconnect** keeps it disconnected until you choose **Reconnect**. Desktop uses one centered loading indicator while resolving its source and connecting.
+
+When you open a chat, the panel automatically reveals an available desktop assigned to that exact session and the browser tab from its latest successful browser-tool result, when that tab is still running. Discovery only reads existing resources: it never starts a browser, provisions a desktop, or attaches an unrelated global or child-session resource. Session and inventory events, plus new browser results, refresh discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
+
+Automatic reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered tabs stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Narrow screens use the same bottom-docked layout as manually opened panels. Minimizing the panel or closing a Browser or Desktop tab disables further automatic reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
 Owner-authorized, unsandboxed agents can use the `terminal` tool to list, read, resize, or close terminals an operator already opened from the same Chat session's Terminal panel. Agents cannot open shells, and access remains exact-session scoped: an agent cannot inspect or control standalone operator terminals or terminals belonging to another session. Terminal input follows the effective session and host-exec permission policy: **Full access** (`full`, or YOLO) sends it immediately; **Guarded** (`guarded`) and **Workspace** (`workspace`, including accept-only or Guardian-reviewed flows) require an explicit, one-time approval for that exact input; **Read only** (`read-only`) or `tools.exec.mode: "deny"` forbids input entirely. Approving one input never grants unrestricted access to the terminal.
 
@@ -99,6 +109,11 @@ control the session list instead. Opening the Browser panel does not create or
 expand a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your-agent).
 
 The Control UI ships a **Browser** tab in the unified Chat side panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears in the panel's **+** menu when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe action in **Files** toggles it. In a regular web browser, choosing **Browser** again while its panel tab is already open creates another Agent browser tab. The panel shows a live screencast, with screenshot fallback when streaming is unavailable, plus tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, and forwards clicks, wheel scrolling, and basic typing to the remote page. The remote page follows the shared panel: opening it, resizing it, or switching tabs resizes the remote browser viewport to the panel's available space, so the snapshot fills the panel instead of rendering at whatever size an agent last used.
+
+While the panel or a Browser dashboard is visible, a later remote resize also
+resynchronizes the page to the available space. Hidden panels leave the remote
+viewport alone. A browser that cannot honor a requested size is not repeatedly
+resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
 
@@ -145,13 +160,18 @@ entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
 
+Opening or loading an item keeps keyboard focus where you are typing. The
+**+** button focuses the address bar so you can enter a new URL.
+
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff
 context, and expandable file diffs. Comment timestamps link to their source on
 GitHub. Markdown images and standalone HTML image attachments display inline;
 full-size links remain available when an image cannot load. Inline image
-requests omit cross-origin credentials and referrers, so the image host must
-support anonymous CORS. Scripts and embedded app widgets never run in these
+requests use the reader plugin's anonymous image resolver when available; GitHub
+attachments therefore work without browser CORS headers. Readers without an
+image resolver use anonymous CORS and omit cross-origin credentials and referrers.
+Scripts and embedded app widgets never run in these
 documents.
 
 The resizable panel is read-only and supports public repositories. Long

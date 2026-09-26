@@ -30,24 +30,11 @@ function hasSuccessfulBuzzProbe(payload: unknown, accountId: string, target: str
 function isGatewayNotRunningError(error: unknown): boolean {
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  const identifiesMissingListener =
+  return (
     message.includes("econnrefused") ||
     message.includes("connection refused") ||
-    message.includes("no listener");
-  if (
-    identifiesMissingListener &&
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    "kind" in error &&
-    "code" in error &&
-    (error as { name?: unknown }).name === "GatewayTransportError" &&
-    (error as { kind?: unknown }).kind === "closed" &&
-    (error as { code?: unknown }).code === 1006
-  ) {
-    return true;
-  }
-  return identifiesMissingListener;
+    message.includes("no listener")
+  );
 }
 
 export async function verifyBuzzAfterSetup(params: {

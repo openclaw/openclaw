@@ -45,41 +45,44 @@ it("offers plugin and personal themes from the shared catalog with their descrip
   );
 });
 
-it("shows Claw presentation while preserving an unavailable saved plugin selection", async () => {
-  const missingTheme = "space-pack/xenovessel";
-  const { container, props } = renderConfigView({
-    activeSection: "__appearance__",
-    includeSections: ["__appearance__"],
-    theme: missingTheme,
-    themeOverridden: true,
-    themeProvenance: "profile",
-    themeCatalog: {
-      error: null,
-      themes: [...BUILTIN_THEMES],
-      unavailableId: missingTheme,
-    },
-  });
-  await updatePickers(container);
-  expect(container.textContent).toContain(
-    `${missingTheme} is unavailable. Using Claw until the theme becomes available again.`,
-  );
-  const claw = container.querySelector<HTMLButtonElement>('[data-theme-id="claw"]');
-  expect(claw?.getAttribute("aria-pressed")).toBe("true");
-  expect(container.querySelector('[data-accent-preset="default"]')?.classList).toContain(
-    "settings-accent-theme--claw",
-  );
-  for (const slot of ["ui", "chat"]) {
-    const picker = container
-      .querySelector(`#settings-font-${slot}`)
-      ?.closest("openclaw-select-picker");
-    expect(picker?.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
-      "Claw · Instrument Sans",
+it.each(["profile", "device-local"] as const)(
+  "shows Claw presentation while preserving an unavailable %s plugin selection",
+  async (provenance) => {
+    const missingTheme = "space-pack/xenovessel";
+    const { container, props } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      theme: missingTheme,
+      themeOverridden: true,
+      themeProvenance: provenance,
+      themeCatalog: {
+        error: null,
+        themes: [...BUILTIN_THEMES],
+        ...(provenance === "profile" ? { unavailableId: missingTheme } : {}),
+      },
+    });
+    await updatePickers(container);
+    expect(container.textContent).toContain(
+      `${missingTheme} is unavailable. Using Claw until the theme becomes available again.`,
     );
-  }
-  expect(props.theme).toBe(missingTheme);
-  claw?.click();
-  expect(props.setTheme).toHaveBeenCalledWith("claw", { element: claw });
-});
+    const claw = container.querySelector<HTMLButtonElement>('[data-theme-id="claw"]');
+    expect(claw?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector('[data-accent-preset="default"]')?.classList).toContain(
+      "settings-accent-theme--claw",
+    );
+    for (const slot of ["ui", "chat"]) {
+      const picker = container
+        .querySelector(`#settings-font-${slot}`)
+        ?.closest("openclaw-select-picker");
+      expect(picker?.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
+        "Claw · Instrument Sans",
+      );
+    }
+    expect(props.theme).toBe(missingTheme);
+    claw?.click();
+    expect(props.setTheme).toHaveBeenCalledWith("claw", { element: claw });
+  },
+);
 
 it("offers an explicit retry when the theme catalog cannot load", () => {
   const onRetryThemeCatalog = vi.fn();

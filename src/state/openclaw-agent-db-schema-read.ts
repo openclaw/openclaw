@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -17,7 +18,7 @@ import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-age
 export { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 
 export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): number {
-  const userVersion = readSqliteUserVersion(db);
+  const userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw createNewerSqliteSchemaVersionError(
       "OpenClaw agent database",
@@ -33,7 +34,7 @@ export function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: st
 export function assertCanonicalAgentPersistenceVersion(
   db: DatabaseSync,
   pathname: string,
-  userVersion = readSqliteUserVersion(db),
+  userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db),
 ): void {
   const hasApplicationSchema =
     userVersion === 0 &&

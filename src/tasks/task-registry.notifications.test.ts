@@ -7,17 +7,21 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
 import type { sendMessage } from "./task-registry-delivery-runtime.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
+import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { getTaskById } from "./task-registry.js";
 import {
   createTaskFixture,
   reloadTaskRegistryFromStoreAsync,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
   withTaskRegistryTempDir,
 } from "./task-registry.test-support.js";
 
 const hoisted = vi.hoisted(() => ({ sendMessageMock: vi.fn<typeof sendMessage>() }));
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: hoisted.sendMessageMock,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
+}));
 const GUILDCHAT_ORIGIN = { channel: "guildchat", to: "guildchat:123" } as const;
 let releaseHeartbeat: (() => void) | undefined;
 let heartbeatFlushed = false;
@@ -45,7 +49,6 @@ beforeEach(async () => {
     return { status: "ran", durationMs: 0 };
   });
   await flushHeartbeat();
-  setTaskRegistryDeliveryRuntimeForTests({ sendMessage: hoisted.sendMessageMock });
 });
 
 afterEach(async () => {
@@ -54,7 +57,6 @@ afterEach(async () => {
   releaseHeartbeat = undefined;
   resetSystemEventsForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   hoisted.sendMessageMock.mockReset();
@@ -65,10 +67,9 @@ function waitForFast<T>(callback: () => T | Promise<T>) {
   return vi.waitFor(callback, { interval: 1 });
 }
 
-async function flushAsyncWork() {
-  for (let index = 0; index < 4; index += 1) {
-    await Promise.resolve();
-  }
+async function settleNotifications(deliveries: ReturnType<typeof captureTaskDeliveryWork>) {
+  await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
+  await deliveries.settle();
 }
 
 function sentMessageCall() {
@@ -80,6 +81,7 @@ function sentMessageCall() {
 }
 it("delivers a concise terminal failure message without internal ACP chatter", async () => {
   await withTaskRegistryTempDir(async () => {
+    using deliveries = captureTaskDeliveryWork();
     resetSystemEventsForTest();
     hoisted.sendMessageMock.mockResolvedValue({
       channel: "guildchat",
@@ -107,7 +109,8 @@ it("delivers a concise terminal failure message without internal ACP chatter", a
         error: "Permission denied by ACP runtime",
       },
     });
-    await flushAsyncWork();
+    await settleNotifications(deliveries);
+    expect(hoisted.sendMessageMock).toHaveBeenCalledOnce();
 
     expect(sentMessageCall()).toMatchObject({
       channel: "guildchat",
@@ -124,6 +127,7 @@ it.each(["direct", "parent_session"] as const)(
   async (surface) => {
     await withTaskRegistryTempDir(
       async () => {
+        using deliveries = captureTaskDeliveryWork();
         resetSystemEventsForTest();
         hoisted.sendMessageMock.mockResolvedValue({
           channel: "guildchat",
@@ -150,12 +154,10 @@ it.each(["direct", "parent_session"] as const)(
           stream: "lifecycle",
           data: { phase: "error", endedAt: Date.now(), error },
         });
-        await waitForFast(() => {
-          expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
-            surface === "direct" ? "delivered" : "session_queued",
-          );
-        });
-        await flushAsyncWork();
+        await settleNotifications(deliveries);
+        expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
+          surface === "direct" ? "delivered" : "session_queued",
+        );
 
         const content =
           surface === "direct" ? sentMessageCall().content : peekSystemEvents("agent:main:main")[0];

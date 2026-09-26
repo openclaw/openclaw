@@ -6,12 +6,6 @@ import type { CommandRunner, RunStepOptions } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 
-async function removePathRecursive(target: string) {
-  await fs
-    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
-    .catch(() => {});
-}
-
 async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
     await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
@@ -30,7 +24,10 @@ export async function cleanupGitPreflight(
   // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
   // Keep cleanup commands in the owned process tree with their existing bounded budget.
   const cleanupSignal = new AbortController().signal;
-  const cleanupTimeoutMs = Math.min(options.timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS);
+  const cleanupTimeoutMs = Math.min(
+    options.timeoutMs ?? PREFLIGHT_CLEANUP_TIMEOUT_MS,
+    PREFLIGHT_CLEANUP_TIMEOUT_MS,
+  );
   const runCleanupCommand: CommandRunner = (argv, commandOptions) =>
     options.runCommand(argv, {
       ...commandOptions,
@@ -65,7 +62,9 @@ export async function cleanupGitPreflight(
   await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
     cwd: options.cwd,
   }).catch(() => null);
-  await removePathRecursive(preflightRoot);
+  await fs
+    .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    .catch(() => {});
   options.progress?.onStepComplete?.({
     ...removeStep,
     index: options.stepIndex,

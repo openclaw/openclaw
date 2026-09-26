@@ -13,7 +13,9 @@ const SESSION_STORE_READ_SLICE_MS = 8;
 type SessionStoreSummary = ReturnType<typeof readSessionStoreSummaryReadOnly>;
 export type StatusSessionStores = Awaited<
   ReturnType<
-    typeof readStatusSessionStores<ReturnType<typeof listGatewayAgentsBasic>["agents"][number]>
+    typeof readStatusSessionStores<
+      Awaited<ReturnType<typeof listGatewayAgentsBasic>>["agents"][number]
+    >
   >
 >;
 
@@ -39,6 +41,21 @@ function summarizeProjectionRows(
       entry,
     })),
   });
+  if (recentLimit >= 0) {
+    const byAgent: SessionStoreSummary["byAgent"] = new Map(
+      agentIds.map((agentId) => [agentId, { count: 0, recent: [] }]),
+    );
+    rows.forEach((row) => {
+      const agent = byAgent.get(row.agentId);
+      if (agent) {
+        agent.count += 1;
+        if (agent.count <= recentLimit) {
+          agent.recent.push({ sessionKey: row.key, entry: row.entry });
+        }
+      }
+    });
+    return { count: rows.length, recent: recentLimit === 0 ? [] : summarize(rows).recent, byAgent };
+  }
   return {
     ...summarize(rows),
     byAgent: new Map(
@@ -62,19 +79,6 @@ export function createStatusSessionStoreReader(
 ) {
   const readSummary = options.readSummary ?? readSessionStoreSummaryReadOnly;
   const stores = new Map<string, SessionStoreSummary>();
-  let projectionReady: Promise<void> | undefined;
-  const ensureProjectionReady = async () => {
-    const projection = options.projection;
-    if (!projection) {
-      return;
-    }
-    projectionReady ??= (async () => {
-      do {
-        await projection.ensureMaterialized();
-      } while (projection.needsMaterialization);
-    })();
-    await projectionReady;
-  };
   let sliceStartedAt = performance.now();
   return {
     stores,
@@ -86,7 +90,12 @@ export function createStatusSessionStoreReader(
       let store = stores.get(path);
       if (!store) {
         try {
-          await ensureProjectionReady();
+          const projection = options.projection;
+          if (projection) {
+            do {
+              await projection.ensureMaterialized();
+            } while (projection.needsMaterialization);
+          }
           store = options.projection
             ? summarizeProjectionRows(options.projection, path, agentIds, recentLimit)
             : readSummary(

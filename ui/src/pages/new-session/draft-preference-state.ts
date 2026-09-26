@@ -48,7 +48,7 @@ type PreferenceWriter = { selection: object; write: Promise<void> };
 type PreferenceWrites = {
   agents: Map<string, PreferenceWriter>;
   revision: object;
-  listeners: Set<(agentId: string, preference: NewSessionPreference) => void>;
+  listeners: Set<(agentId: string, preference: NewSessionPreference, consumed: boolean) => void>;
 };
 
 export class DraftPreferenceState {
@@ -95,7 +95,7 @@ export class DraftPreferenceState {
     const { client, connected, recoveryScope, profileId } = scope;
     if (connected) {
       const listeners = this.preferenceWrites(gateway).listeners;
-      const listener = (agentId: string, preference: NewSessionPreference) => {
+      const listener = (agentId: string, preference: NewSessionPreference, consumed: boolean) => {
         const snapshot = gateway.snapshot;
         if (
           this.preferenceScope !== scope ||
@@ -106,7 +106,11 @@ export class DraftPreferenceState {
           return;
         }
         this.identityPreferences = { ...this.identityPreferences, [agentId]: preference };
-        this.adoptPreferences();
+        if (consumed) {
+          this.adoptPreferences();
+        } else {
+          this.callbacks.requestUpdate();
+        }
       };
       listeners.add(listener);
       this.stopPreferencePublication = () => listeners.delete(listener);
@@ -240,7 +244,7 @@ export class DraftPreferenceState {
       }
       // Model controls share persistence, but do not replace the submitted checkout intent.
       const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel"].includes(field),
+        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
       );
       const selection = changesPlacement ? {} : writer.selection;
       writer.selection = selection;
@@ -294,8 +298,10 @@ export class DraftPreferenceState {
                   Object.keys(entries).map((key) => [key, current[key] ?? null]),
                 ),
               });
-              // A newer selection cannot undo a clear that already committed.
-              if (accepted ? !ownsConnection() : !isCurrent()) {
+              // Route disposal cannot undo a committed value. Surviving projections
+              // receive it without adopting another draft’s unsubmitted choices.
+              // Uncommitted retries still belong to the initiating draft.
+              if (!ownsConnection() || (result.status !== "ok" && !isCurrent())) {
                 return undefined;
               }
               if (result.status === "conflict") {
@@ -311,11 +317,9 @@ export class DraftPreferenceState {
               }
               next = loadNewSessionPreference(gatewayUrl, agentId) ?? {};
             }
-            if (accepted) {
-              writes.revision = {};
-              for (const listener of writes.listeners) {
-                listener(agentId, next);
-              }
+            writes.revision = {};
+            for (const listener of writes.listeners) {
+              listener(agentId, next, accepted);
             }
             if (current && this.preferenceScope === scope) {
               this.identityPreferences = { ...this.identityPreferences, [agentId]: next };

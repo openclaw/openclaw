@@ -9,6 +9,27 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+it.each([true, false])("refreshes a failed conversation only while connected=%s", (connected) => {
+  const onRefresh = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderChatComposerNotices({
+      connected,
+      messages: [],
+      runError: { summary: "The conversation changed before your message could run." },
+      onRefresh,
+    }),
+    container,
+  );
+  const refresh = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(".chat-error button"),
+  ).find((button) => button.textContent?.trim() === "Refresh");
+  expect(refresh).toBeDefined();
+  expect(refresh?.disabled).toBe(!connected);
+  refresh?.click();
+  expect(onRefresh).toHaveBeenCalledTimes(connected ? 1 : 0);
+});
+
 it.each([
   ["buffering", "status", "OpenAI is reviewing this response for cyber safety."],
   ["blocked", "alert", "OpenAI blocked this response under its cyber policy."],
@@ -81,3 +102,39 @@ it("offers an explicit discard action with the full warning when unsaved starts 
   expect(discardAndReload).toHaveBeenCalledOnce();
   expect(retry).not.toHaveBeenCalled();
 });
+
+it.each([true, false])(
+  "checks state contention status without retrying while connected=%s",
+  (connected) => {
+    const onRefresh = vi.fn();
+    const onRetrySessionPlacementStartup = vi.fn();
+    const diagnostic =
+      "Temporarily busy. Check status before trying again.\nState contention: session store; attempts exhausted.\n<img src=x onerror=alert(1)>";
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderChatComposerNotices({
+        connected,
+        messages: [],
+        runError: { kind: "state_contention", summary: diagnostic },
+        onRefresh,
+        onRetrySessionPlacementStartup,
+      }),
+      container,
+    );
+    const notice = container.querySelector(".chat-error");
+    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
+    expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
+    expect(notice?.getAttribute("role")).toBe("status");
+    const details = notice?.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("strong")?.textContent).toBe(diagnostic.split("\n")[0]);
+    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(notice?.querySelector("img")).toBeNull();
+    const check = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
+    expect(check?.textContent?.trim()).toBe("Check status");
+    expect(check?.disabled).toBe(!connected);
+    check?.click();
+    expect(onRefresh).toHaveBeenCalledTimes(connected ? 1 : 0);
+    expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+  },
+);

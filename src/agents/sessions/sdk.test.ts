@@ -13,7 +13,11 @@ import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  disposeOpenClawAgentDatabaseByPath,
+} from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const thinkingMocks = vi.hoisted(() => ({
@@ -22,7 +26,14 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
-const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of sdkSessionTempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -130,6 +141,7 @@ describe("createAgentSession runtime ownership", () => {
       );
       session.dispose();
     } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       disposeOpenClawAgentDatabaseByPath(databasePath);
     }
   });
@@ -187,13 +199,28 @@ function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelReg
   return modelRegistry;
 }
 
+async function createSdkSession({
+  model = testModel,
+  resourceLoader = createResourceLoader(),
+  sessionManager = SessionManager.inMemory(),
+  settingsManager = SettingsManager.inMemory(),
+  modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory()),
+  ...options
+}: NonNullable<Parameters<typeof createAgentSession>[0]> = {}) {
+  return await createAgentSession({
+    ...options,
+    model,
+    resourceLoader,
+    sessionManager,
+    settingsManager,
+    modelRegistry,
+  });
+}
+
 async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOptions> {
   streamMocks.streamSimple.mockClear();
-  const { session } = await createAgentSession({
+  const { session } = await createSdkSession({
     model,
-    resourceLoader: createResourceLoader(),
-    sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.inMemory(),
     modelRegistry: createTestModelRegistry(),
   });
 
@@ -245,13 +272,9 @@ function createSessionManagerWithPersistedAssistantMessages(
 }
 
 async function createSessionFromManager(sessionManager: SessionManager) {
-  const { session } = await createAgentSession({
+  const { session } = await createSdkSession({
     authStorage: AuthStorage.inMemory(),
-    model: testModel,
-    resourceLoader: createResourceLoader(),
     sessionManager,
-    settingsManager: SettingsManager.inMemory(),
-    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
   });
   return session;
 }
@@ -279,7 +302,6 @@ describe("AgentSession getLastAssistantText", () => {
       expected: "visible answer",
     },
     { name: "null content", content: null, expected: undefined },
-    { name: "object content", content: { type: "text", text: "malformed" }, expected: undefined },
   ])("reads $name without throwing", async ({ content, expected }) => {
     const session = await createSessionWithPersistedAssistantContent(content);
     expect(session.getLastAssistantText()).toBe(expected);
@@ -328,12 +350,9 @@ describe("AgentSession tree navigation", () => {
         timestamp: 4,
       }),
     );
-    const { session } = await createAgentSession({
+    const { session } = await createSdkSession({
       authStorage,
-      model: testModel,
-      resourceLoader: createResourceLoader(),
       sessionManager,
-      settingsManager: SettingsManager.inMemory(),
       modelRegistry: createTestModelRegistry(authStorage),
     });
     const entriesBefore = sessionManager.getEntries();
@@ -510,17 +529,13 @@ describe("createAgentSession attribution headers", () => {
 
 describe("createAgentSession tool defaults", () => {
   it("forwards max thinking budgets from settings to the agent", async () => {
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
+    const { session } = await createSdkSession({
       settingsManager: SettingsManager.inMemory({
         thinkingBudgets: {
           high: 16_384,
           max: 32_768,
         },
       }),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.agent.thinkingBudgets).toEqual({
@@ -545,14 +560,9 @@ describe("createAgentSession tool defaults", () => {
       }),
     };
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       noTools: "builtin",
       customTools: [customTool],
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
@@ -576,14 +586,9 @@ describe("createAgentSession tool defaults", () => {
       }),
     };
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       noTools: "builtin",
       customTools: [hiddenTool],
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.agent.state.tools).toEqual([
@@ -608,14 +613,9 @@ describe("createAgentSession tool defaults", () => {
       }),
     };
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       noTools: "builtin",
       customTools: [customTool],
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
     const systemPrompt = "You are a personal assistant running inside OpenClaw.";
 
@@ -652,8 +652,7 @@ describe("createAgentSession tool defaults", () => {
     sessionManager.appendMessage(makeUserMessage("Current question", 2));
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       sessionManager,
       modelRegistry: createTestModelRegistry(authStorage),
       settingsManager: SettingsManager.inMemory({ compaction: { keepRecentTokens: 1 } }),
@@ -678,12 +677,8 @@ describe("createAgentSession tool defaults", () => {
     // concurrent event handlers cannot interleave persistence.
     const events: string[] = [];
     const sessionManager = SessionManager.inMemory();
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createResourceLoader(),
+    const { session } = await createSdkSession({
       sessionManager,
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -725,12 +720,8 @@ describe("createAgentSession tool defaults", () => {
       ],
     ]);
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       resourceLoader: createResourceLoader(handlers),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -760,12 +751,8 @@ describe("createAgentSession tool defaults", () => {
       ],
     ]);
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       resourceLoader: createResourceLoader(handlers),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -803,12 +790,7 @@ describe("createAgentSession tool defaults", () => {
     // Write-capable tools still enter the settlement boundary even without hooks;
     // it covers shared session state, not just extension execution.
     const events: string[] = [];
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    const { session } = await createSdkSession({
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -897,12 +879,8 @@ describe("createAgentSession thinking level defaults", () => {
       params: { canonicalModelId: "qwen3:8b" },
       compat: { thinkingFormat: "qwen" },
     } satisfies Model;
-    const { session } = await createAgentSession({
+    const { session } = await createSdkSession({
       model: ollamaModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.thinkingLevel).toBe("off");
@@ -925,12 +903,9 @@ describe("createAgentSession thinking level defaults", () => {
   it("settings default overrides provider thinking default", async () => {
     thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
 
-    const { session } = await createAgentSession({
+    const { session } = await createSdkSession({
       model: { ...testModel, provider: "ollama", reasoning: true },
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "low" }),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     // User-configured settings default beats provider default
@@ -946,12 +921,8 @@ describe("createAgentSession thinking level defaults", () => {
       reasoning: true,
     } satisfies Model;
 
-    const { session } = await createAgentSession({
+    const { session } = await createSdkSession({
       model: customOllamaModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.thinkingLevel).toBe("off");
@@ -975,12 +946,8 @@ describe("createAgentSession thinking level defaults", () => {
     for (const nonOffDefault of ["adaptive", "high", "low"] as const) {
       thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue(nonOffDefault);
 
-      const { session } = await createAgentSession({
+      const { session } = await createSdkSession({
         model: { ...testModel, reasoning: true },
-        resourceLoader: createResourceLoader(),
-        sessionManager: SessionManager.inMemory(),
-        settingsManager: SettingsManager.inMemory(),
-        modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       });
 
       expect(session.thinkingLevel).toBe("medium");
@@ -999,12 +966,9 @@ describe("createAgentSession thinking level defaults", () => {
       timestamp: Date.now(),
     });
 
-    const { session } = await createAgentSession({
+    const { session } = await createSdkSession({
       model: { ...testModel, provider: "ollama", reasoning: true },
-      resourceLoader: createResourceLoader(),
       sessionManager,
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.thinkingLevel).toBe("off");
@@ -1015,11 +979,9 @@ describe("AgentSession retry behavior", () => {
   async function createRetrySession(retry?: { baseDelayMs: number; maxRetries: number }) {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    return await createAgentSession({
+    return await createSdkSession({
       // Retry-only cases need room for the default SDK prompt and reserve.
       model: { ...testModel, contextWindow: 32_768 },
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
       }),

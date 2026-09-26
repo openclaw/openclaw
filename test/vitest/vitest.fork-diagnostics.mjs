@@ -5,6 +5,20 @@ import { isMainThread } from "node:worker_threads";
 
 // Loaded before the fork's tests so blocked teardown cannot hide its last synchronous wait.
 if (isMainThread && process.send && process.report.directory) {
+  const exitPath = path.join(process.report.directory, "exit-entry.json");
+  const exit = process.exit;
+  process.exit = function (...args) {
+    try {
+      fs.writeFileSync(
+        exitPath,
+        JSON.stringify({ operation: "process.exit", pid: process.pid, enteredAt: Date.now() }),
+        { mode: 0o600 },
+      );
+    } catch {
+      // Missing diagnostics must not change exit arguments, listeners, or errors.
+    }
+    return Reflect.apply(exit, this, args);
+  };
   const workers = new Set();
   subscribe("worker_threads", ({ worker }) => {
     workers.add(worker);
@@ -36,7 +50,7 @@ if (isMainThread && process.send && process.report.directory) {
       }
     }
   };
-  process.prependListener("SIGUSR2", () => {
+  process.prependListener("SIGQUIT", () => {
     try {
       const handles = process._getActiveHandles();
       fs.writeFileSync(

@@ -23,8 +23,6 @@ import {
   discoverRestartRecoveryStoreTargets,
 } from "./main-session-restart-recovery-shared.js";
 import {
-  type ExpectedRestartRecoveryClaim,
-  loadExpectedRestartRecoveryClaim,
   loadExpectedRestartRecoveryTarget,
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
@@ -126,31 +124,25 @@ export async function retryRestartAbortedMainSessionRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
-  const expected = {
-    agentId: params.agentId,
-    canonicalSessionKey: params.canonicalSessionKey,
-    sessionId: params.expectedSessionId,
-    sessionKey: params.sessionKey,
-  };
-  const expectedClaim: ExpectedRestartRecoveryClaim | undefined =
-    params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
-      ? {
-          ...expected,
-          recoveryRunId: params.expectedRecoveryRunId,
-          recoverySourceRunId: params.expectedRecoverySourceRunId,
-        }
-      : undefined;
   return await recoverExpectedRestartRecovery({
     ...params,
-    ...(expectedClaim ? { expectedClaim } : { expectedTarget: expected }),
+    expectedTarget: {
+      agentId: params.agentId,
+      canonicalSessionKey: params.canonicalSessionKey,
+      sessionId: params.expectedSessionId,
+      sessionKey: params.sessionKey,
+      claim:
+        params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
+          ? { runId: params.expectedRecoveryRunId, sourceRunId: params.expectedRecoverySourceRunId }
+          : undefined,
+    },
   });
 }
 
 async function recoverExpectedRestartRecovery(
   params: MainSessionRecoveryStoreTarget & {
     cfg?: OpenClawConfig;
-    expectedClaim?: ExpectedRestartRecoveryClaim;
-    expectedTarget?: ExpectedRestartRecoveryTarget;
+    expectedTarget: ExpectedRestartRecoveryTarget;
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     shouldContinue?: () => boolean;
@@ -158,22 +150,12 @@ async function recoverExpectedRestartRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
+  const expected = params.expectedTarget;
   const loadExpected = () =>
-    params.expectedClaim
-      ? loadExpectedRestartRecoveryClaim({
-          expected: params.expectedClaim,
-          storePath: params.storePath,
-        })
-      : params.expectedTarget
-        ? loadExpectedRestartRecoveryTarget({
-            expected: params.expectedTarget,
-            storePath: params.storePath,
-          })
-        : undefined;
+    loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath });
   if (!loadExpected()) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  const expected = (params.expectedClaim ?? params.expectedTarget)!;
   return (
     (await runWithMainSessionRecoveryAdmission({
       ...params,

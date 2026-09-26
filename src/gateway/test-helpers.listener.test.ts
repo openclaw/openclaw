@@ -26,6 +26,7 @@ describe("reserved Gateway test listeners", () => {
       await new Promise<void>((resolve, reject) => {
         reservation.listener.close((error) => (error ? reject(error) : resolve()));
       });
+      await reservation.closeUnadopted();
     }
   });
 
@@ -65,12 +66,13 @@ describe("reserved Gateway test listeners", () => {
         await settled;
         // The synthetic transport returns the listener but does not own its close.
         await Promise.all(
-          reservations.map(
-            ({ listener }) =>
-              new Promise<void>((resolve, reject) => {
-                listener.close((error) => (error ? reject(error) : resolve()));
-              }),
-          ),
+          reservations.map(async (reservation) => {
+            await new Promise<void>((resolve, reject) => {
+              const { listener } = reservation;
+              listener.close((error) => (error ? reject(error) : resolve()));
+            });
+            await reservation.closeUnadopted();
+          }),
         );
       }
     },

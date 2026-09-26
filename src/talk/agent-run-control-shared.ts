@@ -4,7 +4,7 @@
  * This module owns the provider-facing control tool, conservative intent
  * classifier, and user-visible status/queue/cancel messages used by Talk.
  */
-import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNonArrayRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -170,8 +170,7 @@ export function resolveRealtimeVoiceAgentControlIntent(params: {
     };
   }
 
-  const text = params.text;
-  const normalized = text.trim().toLowerCase();
+  const normalized = params.text.trim().toLowerCase();
   // "Stop using X" redirects the active work; it must not be treated as an
   // abort of the whole run just because it starts with "stop".
   if (matchesAnyPattern(normalized, STOP_REDIRECT_CONTROL_PATTERNS)) {
@@ -328,10 +327,7 @@ function isRealtimeVoiceAgentControlToolEvent(event: TalkEvent): boolean {
   if (!event.type.startsWith("tool.")) {
     return false;
   }
-  const payload =
-    event.payload && typeof event.payload === "object"
-      ? (event.payload as Record<string, unknown>)
-      : {};
+  const payload = asRecord(event.payload);
   return normalizeOptionalString(payload.name) === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME;
 }
 
@@ -353,10 +349,7 @@ export function formatRealtimeVoiceAgentStatus(params: {
     (event) => event.type.startsWith("tool.") && !isRealtimeVoiceAgentControlToolEvent(event),
   );
   if (toolEvent) {
-    const payload =
-      toolEvent.payload && typeof toolEvent.payload === "object"
-        ? (toolEvent.payload as Record<string, unknown>)
-        : {};
+    const payload = asRecord(toolEvent.payload);
     const name = normalizeOptionalString(payload.name);
     const phase = normalizeOptionalString(payload.phase);
     if (toolEvent.type === "tool.call") {
@@ -380,9 +373,5 @@ export function formatRealtimeVoiceAgentStatus(params: {
   if (params.activity?.activeWorkKind === "model_call") {
     return "OpenClaw is waiting on the model.";
   }
-  if (params.activity?.activeWorkKind === "embedded_run" || params.activity?.hasActiveEmbeddedRun) {
-    return "OpenClaw is working on the current voice request.";
-  }
-
   return "OpenClaw is working on the current voice request.";
 }

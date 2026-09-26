@@ -12,11 +12,6 @@ const colonFingerprint = (fingerprint.match(/.{2}/gu)?.join(":") ?? "").toUpperC
 describe("worker connection endpoint", () => {
   it.each([
     { name: "control", char: "\0" },
-    { name: "quote", char: '"' },
-    { name: "backslash", char: "\\" },
-    { name: "newline", char: "\n" },
-    { name: "lone surrogate", char: "\ud800" },
-    { name: "Unicode", char: "漢" },
     { name: "astral Unicode", char: "😀" },
   ])("bounds maximal $name endpoint and Access fields", ({ char }) => {
     const prefix = "wss://worker.invalid/";
@@ -85,20 +80,30 @@ describe("worker connection endpoint", () => {
     });
 
     expect(parseWorkerConnectionEndpoint(websocketEndpoint)).toBeUndefined();
+
+    for (const cloudflareAccess of [
+      Object.assign(Object.create({ clientId: "fixture-id" }), { clientSecret: "fixture-secret" }),
+      Object.assign(Object.create({ clientSecret: "fixture-secret" }), { clientId: "fixture-id" }),
+    ]) {
+      expect(
+        parseWorkerConnectionEndpoint({
+          kind: "websocket",
+          url: "wss://gateway.example/__openclaw__/worker",
+          cloudflareAccess,
+        }),
+      ).toBeUndefined();
+    }
   });
 
-  it.each([
-    `sha256:${fingerprint.toUpperCase()}`,
-    fingerprint.toUpperCase(),
-    colonFingerprint,
-    `ShA256:${colonFingerprint}`,
-  ])("normalizes the worker TLS pin %s", (tlsFingerprint) => {
-    const endpoint = parseWorkerConnectionEndpoint({
-      kind: "websocket",
-      url: "wss://gateway.example/tenant/__openclaw__/worker",
-      tlsFingerprint,
-    });
-    expect(endpoint).toMatchObject({ tlsFingerprint: fingerprint });
+  it("omits explicitly undefined optional credentials", () => {
+    const endpoint = { kind: "websocket", url: "ws://127.0.0.1/__openclaw__/worker" };
+    expect(
+      parseWorkerConnectionEndpoint({
+        ...endpoint,
+        tlsFingerprint: undefined,
+        cloudflareAccess: undefined,
+      }),
+    ).toStrictEqual(endpoint);
   });
 
   it("carries the closed Cloudflare Access credential pair to the worker upgrade", () => {

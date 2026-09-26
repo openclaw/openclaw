@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -31,7 +32,6 @@ import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
-  cloudWorkerProfileStatus,
   createCloudWorkerDraft,
   readCloudWorkerProfiles,
   validateCloudWorkerDraft,
@@ -39,6 +39,7 @@ import {
   type ConfiguredCloudWorkerProfile,
 } from "./cloud-worker-config.ts";
 import { renderCloudWorkerRepositories } from "./cloud-worker-repositories.ts";
+import "./cloud-worker-pool.ts";
 import "./cloud-worker-snapshots.ts";
 
 registerSettingsEnglish();
@@ -60,11 +61,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private view: "profiles" | "snapshots" = "profiles";
-  @state() private advertisedProfiles = new Map<string, ProfileSummary>();
-  @state() private catalogLoaded = false;
-  @state() private catalogLoading = false;
-  @state() private catalogError: string | null = null;
+  @state() private view: "profiles" | "pool" | "snapshots" = "profiles";
   @state() private editor: EditorState = null;
   @state() private draft: CloudWorkerProfileDraft = createCloudWorkerDraft();
 
@@ -72,13 +69,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    invalidateRequests: () => this.resetGatewayState(),
-    onSnapshot: (change) => {
-      if (change.initial) {
-        this.resetGatewayState();
-      }
+    invalidateRequests: () => {
+      this.configSave.update({ busy: false });
+      this.catalogTask.abort();
     },
-    ensureInitialData: () => void this.loadCatalog(),
   });
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
@@ -89,53 +83,44 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   );
 
   override disconnectedCallback() {
+    this.catalogTask.abort();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  private resetGatewayState() {
-    this.configSave.update({ busy: false });
-    this.advertisedProfiles = new Map();
-    this.catalogLoaded = false;
-    this.catalogLoading = false;
-    this.catalogError = null;
-  }
-
-  private async loadCatalog() {
-    if (this.catalogLoading || this.catalogLoaded) {
-      return;
-    }
-    const scope = this.gateway.capture();
-    if (
-      !scope ||
-      !canCallGatewayMethod(this.gateway.snapshot, "environments.list", "operator.admin")
-    ) {
-      this.catalogLoaded = true;
-      return;
-    }
-    this.catalogLoading = true;
-    this.catalogError = null;
-    try {
-      const result = await scope.client.request<EnvironmentsListResult>("environments.list", {
-        projection: "profiles",
-      });
-      if (!this.gateway.isCurrent(scope)) {
-        return;
+  private readonly catalogTask = new Task(this, {
+    args: () =>
+      [
+        this.context?.gateway,
+        this.gateway.epoch,
+        this.context?.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+      ] as const,
+    task: async ([_client, _epoch, appliedHash], { signal }) => {
+      const scope = this.gateway.capture();
+      if (
+        !scope ||
+        !canCallGatewayMethod(this.gateway.snapshot, "environments.list", "operator.admin")
+      ) {
+        return initialState;
       }
-      this.advertisedProfiles = new Map(
-        (result.profiles ?? []).map((profile) => [profile.id, profile]),
+      const result = await scope.client.request<EnvironmentsListResult>(
+        "environments.list",
+        {
+          projection: "profiles",
+        },
+        { signal },
       );
-      this.catalogLoaded = true;
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.catalogError = formatUiError(error);
-        this.catalogLoaded = true;
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.catalogLoading = false;
-      }
-    }
+      return this.gateway.isCurrent(scope) &&
+        this.context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
+        ? new Map<string, ProfileSummary>(
+            (result.profiles ?? []).map((profile) => [profile.id, profile]),
+          )
+        : initialState;
+    },
+  });
+
+  private get advertisedProfiles() {
+    return this.catalogTask.status === TaskStatus.COMPLETE ? this.catalogTask.value : undefined;
   }
 
   private editableConfig(): Record<string, unknown> | null {
@@ -222,7 +207,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       failed: () => t("cloudWorkersPage.errors.saveFailed"),
       success: () => {
         this.editor = null;
-        return `${t("labsPage.restartRequired")} ${t("cloudWorkersPage.snapshots.buildAfterRestart")}`;
+        return t("cloudWorkersPage.profileSaved");
       },
     });
   }
@@ -266,7 +251,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         if (this.editor?.kind === "edit" && this.editor.profileId === profile.id) {
           this.editor = null;
         }
-        return t("labsPage.restartRequired");
+        return t("cloudWorkersPage.settingsSaved");
       },
     });
   }
@@ -285,7 +270,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             t("cloudWorkersPage.operatingSystemFact", {
               value:
                 this.advertisedProfiles
-                  .get(profile.id)
+                  ?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -300,17 +285,12 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private renderProfile(profile: ConfiguredCloudWorkerProfile) {
-    const status = cloudWorkerProfileStatus(
-      profile.id,
-      this.advertisedProfiles,
-      this.catalogLoaded,
-    );
     const statusControl =
-      status === "advertised"
-        ? renderSettingsStatus({ kind: "ok", label: t("cloudWorkersPage.advertised") })
-        : status === "restart-required"
-          ? renderSettingsStatus({ kind: "warn", label: t("cloudWorkersPage.restartRequired") })
-          : renderSettingsStatus({ kind: "muted", label: t("common.loading") });
+      this.catalogTask.status === TaskStatus.PENDING
+        ? renderSettingsStatus({ kind: "muted", label: t("common.loading") })
+        : this.advertisedProfiles?.has(profile.id)
+          ? renderSettingsStatus({ kind: "ok", label: t("cloudWorkersPage.advertised") })
+          : renderSettingsStatus({ kind: "warn", label: t("cloudWorkersPage.unavailable") });
     const canManage = this.canManage();
     return renderSettingsRow({
       title: html`<code>${profile.id}</code>`,
@@ -320,6 +300,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         <button
           class="btn btn--sm"
           type="button"
+          aria-label=${`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
           ?disabled=${!canManage}
           @click=${() => this.openEdit(profile)}
         >
@@ -328,6 +309,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         <button
           class="btn btn--sm danger"
           type="button"
+          aria-label=${`${t("common.delete")}: ${profile.id}`}
           ?disabled=${!canManage}
           @click=${() => void this.deleteProfile(profile)}
         >
@@ -380,7 +362,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
     const operatingSystems = editing
-      ? (this.advertisedProfiles.get(this.draft.id)?.operatingSystems ?? [])
+      ? (this.advertisedProfiles?.get(this.draft.id)?.operatingSystems ?? [])
       : [];
     const unadvertisedTarget =
       this.draft.target && !operatingSystems.some((system) => system.id === this.draft.target);
@@ -561,9 +543,9 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           : nothing
       }
       ${
-        this.catalogError
+        this.catalogTask.status === TaskStatus.ERROR
           ? html`<div class="callout warning" role="status">
-              ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
+              ${t("cloudWorkersPage.catalogFailed", { error: formatUiError(this.catalogTask.error) })}
             </div>`
           : nothing
       }
@@ -574,7 +556,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       }
       ${
         this.configSave.state.notice
-          ? html`<div class="callout warning" role="status">${this.configSave.state.notice}</div>`
+          ? html`<div class="callout" role="status">${this.configSave.state.notice}</div>`
           : nothing
       }
       ${renderSettingsSection(
@@ -601,6 +583,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             ariaLabel: t("cloudWorkersPage.snapshots.viewLabel"),
             options: [
               { value: "profiles", label: t("cloudWorkersPage.sectionTitle") },
+              { value: "pool", label: t("cloudWorkersPage.pool.tab") },
               { value: "snapshots", label: t("cloudWorkersPage.snapshots.title") },
             ],
             onChange: (value) => {
@@ -608,7 +591,13 @@ class CloudWorkersPage extends OpenClawLightDomElement {
             },
           }),
         )}
-        ${this.view === "profiles" ? body : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`}
+        ${
+          this.view === "profiles"
+            ? body
+            : this.view === "pool"
+              ? html`<openclaw-cloud-worker-pool></openclaw-cloud-worker-pool>`
+              : html`<openclaw-cloud-worker-snapshots></openclaw-cloud-worker-snapshots>`
+        }
       `)}
     `;
   }

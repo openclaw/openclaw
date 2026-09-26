@@ -3,9 +3,10 @@ import {
   isRecord,
   normalizeOptionalString as normalizeString,
   normalizeStringEntries,
+  normalizeTrimmedStringList,
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { FEISHU_COMMENT_FILE_TYPES, type CommentFileType } from "./comment-target.js";
+import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import { captureFeishuSendAuthority } from "./send-context.js";
 import {
   getFeishuSendRateLimitCode,
@@ -67,12 +68,7 @@ export function formatFeishuApiError(
   const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
 
   return JSON.stringify({
-    message:
-      typeof error.message === "string"
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : JSON.stringify(error),
+    message: typeof error.message === "string" ? error.message : JSON.stringify(error),
     code: readString(error.code),
     method: readString(config?.method),
     url: readString(config?.url),
@@ -85,29 +81,6 @@ export function formatFeishuApiError(
     feishu_troubleshooter:
       readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
   });
-}
-
-function formatFeishuApiFailure(
-  error: unknown,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): string {
-  const details = formatFeishuApiError(error, options);
-  return `${errorPrefix}: ${details || "unknown error"}`;
-}
-
-function createFeishuApiError(
-  error: unknown,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): Error {
-  return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
 const FEISHU_SEND_MAX_RETRIES = 2;
@@ -150,7 +123,8 @@ export async function requestFeishuApi<T>(
       },
     );
   } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
+    const details = formatFeishuApiError(error, options);
+    throw new Error(`${errorPrefix}: ${details || "unknown error"}`, { cause: error });
   }
 }
 
@@ -228,16 +202,6 @@ function readMentionDisplayText(element: Record<string, unknown>, userId: string
   return mentionName ? `@${mentionName}` : `@${userId}`;
 }
 
-function normalizeCommentText(parts: string[]): string | undefined {
-  const text = parts.join("").trim();
-  return text || undefined;
-}
-
-function normalizeCommentSemanticText(parts: string[]): string | undefined {
-  const text = parts.join("").replace(/\s+/g, " ").trim();
-  return text || undefined;
-}
-
 function readElementTextPreservingWhitespace(element: Record<string, unknown>): string | undefined {
   return (
     (isRecord(element.text_run)
@@ -268,14 +232,6 @@ const COMMENT_LINK_KIND_ALIASES = new Map<string, ParsedCommentResolvedDocumentT
   ["bitable", "bitable"],
   ["base", "base"],
 ]);
-
-function isCommentFileType(
-  value: ParsedCommentResolvedDocumentType | "wiki" | undefined,
-): value is CommentFileType {
-  return (
-    typeof value === "string" && (FEISHU_COMMENT_FILE_TYPES as readonly string[]).includes(value)
-  );
-}
 
 function isReasonableFeishuLinkToken(token: string | undefined): token is string {
   return (
@@ -322,7 +278,6 @@ function resolveCommentLinkedDocumentFromUrl(params: {
     const { urlKind, token } = parsedPath;
     link.urlKind = urlKind;
     if (urlKind === "wiki") {
-      link.urlKind = "wiki";
       link.wikiNodeToken = token;
     } else {
       link.resolvedObjType = urlKind;
@@ -331,17 +286,11 @@ function resolveCommentLinkedDocumentFromUrl(params: {
     if (
       link.resolvedObjType &&
       link.resolvedObjToken &&
-      isCommentFileType(link.resolvedObjType) &&
-      params.currentDocument?.fileType === link.resolvedObjType &&
-      params.currentDocument.fileToken === link.resolvedObjToken
+      normalizeCommentFileType(link.resolvedObjType)
     ) {
-      link.isCurrentDocument = true;
-    } else if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      isCommentFileType(link.resolvedObjType)
-    ) {
-      link.isCurrentDocument = false;
+      link.isCurrentDocument =
+        params.currentDocument?.fileType === link.resolvedObjType &&
+        params.currentDocument.fileToken === link.resolvedObjToken;
     }
   } catch {
     return link;
@@ -359,11 +308,7 @@ export function parseCommentContentElements(params: {
   const semanticTextParts: string[] = [];
   const mentions: ParsedCommentMention[] = [];
   const linkedDocuments: ParsedCommentLinkedDocument[] = [];
-  const botIds = new Set(
-    Array.from(params.botOpenIds ?? [])
-      .map((value) => normalizeString(value))
-      .filter((value): value is string => Boolean(value)),
-  );
+  const botIds = new Set(normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])));
   const linkedDocumentKeys = new Set<string>();
   let botMentioned = false;
 
@@ -373,19 +318,6 @@ export function parseCommentContentElements(params: {
     }
     const element = rawElement;
     const type = normalizeString(element.type);
-    const text =
-      (type === "text_run" ? readElementTextPreservingWhitespace(element) : undefined) ||
-      (type === "text" ? readElementTextPreservingWhitespace(element) : undefined) ||
-      (type === "docs_link" || type === "link" ? readDocsLinkUrl(element) : undefined) ||
-      (type === "mention" || type === "mention_user" || type === "person"
-        ? (() => {
-            const userId = readMentionUserId(element);
-            return userId ? readMentionDisplayText(element, userId) : undefined;
-          })()
-        : undefined) ||
-      readElementTextPreservingWhitespace(element) ||
-      undefined;
-
     if (type === "mention" || type === "mention_user" || type === "person") {
       const userId = readMentionUserId(element);
       if (userId) {
@@ -428,6 +360,7 @@ export function parseCommentContentElements(params: {
       }
     }
 
+    const text = readElementTextPreservingWhitespace(element);
     if (text) {
       plainTextParts.push(text);
       semanticTextParts.push(text);
@@ -435,8 +368,8 @@ export function parseCommentContentElements(params: {
   }
 
   return {
-    plainText: normalizeCommentText(plainTextParts),
-    semanticText: normalizeCommentSemanticText(semanticTextParts),
+    plainText: normalizeString(plainTextParts.join("")),
+    semanticText: normalizeString(semanticTextParts.join("").replace(/\s+/g, " ")),
     mentions,
     linkedDocuments,
     botMentioned,

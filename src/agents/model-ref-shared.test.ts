@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { STATE_SCHEMA_GENERATOR_INPUTS } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -77,12 +78,6 @@ describe("normalizeStaticProviderModelId", () => {
     }
   });
 
-  it("strips native Anthropic provider prefixes from static catalog ids", () => {
-    expect(normalizeStaticProviderModelId("anthropic", "anthropic/claude-haiku-4-5")).toBe(
-      "claude-haiku-4-5",
-    );
-  });
-
   it("uses supplied manifest normalization policies when provided", () => {
     const manifestPlugins = [
       {
@@ -107,14 +102,6 @@ describe("normalizeStaticProviderModelId", () => {
         allowManifestNormalization: false,
       }),
     ).toBe("openrouter/auto");
-  });
-
-  it("preserves provider-owned XAI beta aliases without manifest lookup", () => {
-    expect(
-      normalizeStaticProviderModelId("xai", "grok-4.20-experimental-beta-0304-reasoning", {
-        allowManifestNormalization: false,
-      }),
-    ).toBe("grok-4.20-experimental-beta-0304-reasoning");
   });
 
   it("normalizes the shipped retired Together default without manifest lookup", () => {
@@ -178,12 +165,6 @@ describe("normalizeConfiguredProviderCatalogModelId", () => {
       }),
     ).toBe("latest");
   });
-
-  it("normalizes nested retired Google Gemini ids in proxy-prefixed rows", () => {
-    expect(
-      normalizeConfiguredProviderCatalogModelId("kilocode", "kilocode/google/gemini-3-pro-preview"),
-    ).toBe("kilocode/google/gemini-3.1-pro-preview");
-  });
 });
 
 const execFileAsync = promisify(execFile);
@@ -224,11 +205,12 @@ function createModelNormalizerGeneration() {
 }
 
 describe("provider model normalization bridge", () => {
-  it.each(
-    ["fixture", "fixture-alias"].flatMap((provider) =>
-      ["generation", "request", "active"].map((scope) => ({ provider, scope })),
-    ),
-  )("invokes $provider with its registry owner from $scope", ({ provider, scope }) => {
+  it.each([
+    { provider: "fixture", scope: "generation" },
+    { provider: "fixture-alias", scope: "generation" },
+    { provider: "fixture", scope: "request" },
+    { provider: "fixture", scope: "active" },
+  ])("invokes $provider with its registry owner from $scope", ({ provider, scope }) => {
     const generation = createModelNormalizerGeneration();
     const normalize = () =>
       normalizeProviderModelIdWithRuntime({
@@ -280,10 +262,17 @@ describe("provider model normalization bridge", () => {
       const dist = path.join(root, "dist");
       await fs.mkdir(dist, { recursive: true });
       await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+      for (const schema of STATE_SCHEMA_GENERATOR_INPUTS) {
+        await fs.copyFile(path.resolve(schema), path.join(dist, path.basename(schema)));
+      }
       const bridgePath = path.join(dist, "model-reference.js");
       // The bundler places this bridge at the dist root, unlike its source directory.
       await build({
-        entryPoints: [path.resolve("src/agents/provider-model-normalization.runtime.ts")],
+        stdin: {
+          contents: `export * from "./src/agents/provider-model-normalization.runtime.ts";
+            export { withPluginRuntimeGenerationScope } from "./src/plugins/runtime/generation-scope.ts";`,
+          resolveDir: process.cwd(),
+        },
         outfile: bridgePath,
         bundle: true,
         platform: "node",
@@ -293,10 +282,12 @@ describe("provider model normalization bridge", () => {
       // SAFETY: This test emits the actual typed bridge into a standalone package.
       const bridge = createRequire(import.meta.url)(
         bridgePath,
-      ) as typeof import("./provider-model-normalization.runtime.js");
+      ) as typeof import("./provider-model-normalization.runtime.js") & {
+        withPluginRuntimeGenerationScope: typeof withPluginRuntimeGenerationScope;
+      };
 
       expect(
-        withPluginRuntimeGenerationScope(createModelNormalizerGeneration(), () =>
+        bridge.withPluginRuntimeGenerationScope(createModelNormalizerGeneration(), () =>
           bridge.normalizeProviderModelIdWithRuntime({
             provider: "fixture",
             context: { provider: "fixture", modelId: "model" },

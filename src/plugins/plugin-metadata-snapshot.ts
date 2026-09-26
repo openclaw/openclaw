@@ -16,16 +16,13 @@ import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
   selectInstalledPluginManifestRecords,
 } from "./manifest-registry-installed.js";
-import {
-  loadBundledPluginManifestRegistry,
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -52,8 +49,14 @@ import type {
   PluginMetadataSnapshotOwnerMaps,
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
+import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
-import type { preparePluginRegistrySnapshotReader } from "./plugin-registry-snapshot.js";
+import {
+  canReusePluginRegistrySnapshot,
+  getCurrentPluginMetadataSnapshotForRegistry,
+  type LoadPluginRegistryParams,
+  type preparePluginRegistrySnapshotReader,
+} from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { registerProviderPolicyOwnerIndexes } from "./provider-policy-owners.js";
@@ -132,6 +135,7 @@ export function finalizePluginMetadataSnapshot(
   freezeSnapshotValue(snapshot);
   bindPluginMetadataSnapshotCache(snapshot);
   const cache = getPluginMetadataSnapshotCache(snapshot);
+  preparePluginNativeAdmissions(snapshot.index, cache);
   registerProviderPolicyOwnerIndexes(snapshot, cache);
   return snapshot;
 }
@@ -419,6 +423,29 @@ export function loadPluginMetadataSnapshot(
       );
     }
   }
+  return loadCachedPluginMetadataSnapshot(params);
+}
+
+/** Registry readers retain their exact current-snapshot selection without publishing cold loads. */
+export function loadPluginMetadataSnapshotForRegistry(
+  params: LoadPluginRegistryParams,
+): PluginMetadataSnapshot | undefined {
+  if (!canReusePluginRegistrySnapshot(params) || params.artifactPreservingReadOnly !== undefined) {
+    return undefined;
+  }
+  return (
+    getCurrentPluginMetadataSnapshotForRegistry(params) ??
+    loadCachedPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+    })
+  );
+}
+
+function loadCachedPluginMetadataSnapshot(
+  params: LoadPluginMetadataSnapshotParams,
+): PluginMetadataSnapshot {
   const cache = getPluginCache();
   const key = resolvePluginMetadataSnapshotCacheKey(params);
   const cached = cache.metadata.snapshots.get(key);

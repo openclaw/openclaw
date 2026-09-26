@@ -71,6 +71,7 @@ validate config
 setup
 setup workspace ~/path/to/work
 config set gateway.port 19001
+config unset agents.defaults.fastModeDefault
 config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
 gateway status
 configure gateway
@@ -114,16 +115,22 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 `import memory` is copy-only rather than a config write. It detects supported local agent homes, lets you choose the available sources, and copies new memory files into the existing default agent workspace without importing config, credentials, or skills. It requires completed onboarding and reports confirmed imports, nothing-to-import results, provider failures, and failures where some files may already have been copied. No Gateway restart is needed. Use the Control UI's [Import Memory page](/web/control-ui/settings#import-assistant-memory) when you need to target another agent or replace an existing import.
 
-In direct OpenClaw chat, persistent operations require conversational approval (or `--yes` for a one-shot command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
+In direct OpenClaw chat, persistent operations require conversational approval (or `--yes` for a one-shot command): write config, `config set`, `config unset`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
 Changes delegated by a regular agent, including requests from messaging channels,
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
 Full Access applies the exact proposed operation automatically, including when
 Full Access comes from the configured default rather than an explicit session
-mode. Restricted runs still require approval in the OpenClaw operator UI. Replying
-"yes" in the delegated chat cannot authorize a change. When approval is required,
-run `openclaw dashboard` on the Gateway host to review it, or run the change
-directly with `openclaw setup` there. Independent filesystem and sandbox boundaries,
+mode. Restricted runs from messaging channels ask for approval in the chat that
+made the request: channels with native approval cards show **Allow once** and
+**Deny** buttons, and other messaging chats receive the change summary with a
+`/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
+Control UI or the OpenClaw apps, which can also decide any chat's approval.
+Replying "yes" in the delegated chat cannot authorize a change; the button or
+`/approve` command does.
+Channels with their own approver settings decide who may approve; elsewhere only
+a current owner (`commands.ownerAllowFrom`) can approve an OpenClaw change.
+Independent filesystem and sandbox boundaries,
 tool policy, and the operation restrictions below still apply. The host also checks
 that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat
@@ -152,12 +159,30 @@ Doctor repairs are unavailable inside OpenClaw because they can rewrite the prov
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.
 
-`config set` and `config set-ref` propose config changes for approval. Approved
+`config set`, `config unset`, and `config set-ref` propose config changes for approval.
+Use `config unset <path>` to remove an authored setting and let its inherited or
+runtime default apply. The setup agent uses `config_unset` with `path` for the same
+operation; setting a value to `null` does not delete it. Approved
 writes use the existing config validator and writer. Validation or write errors
 return to the assistant for one corrective proposal, which needs fresh approval.
 A failure after saving is reported as such. Config writes do not test whether a
-model route or API key works. Follow your secret storage preference; for environment
-storage, use `config set-ref`. Secret values are not echoed in chat.
+model route or API key works. Masked setup flows keep keys out of the model's
+context. If you paste an API key or token in chat anyway, OpenClaw saves it in the
+[shared secret store](/gateway/secrets/secret-store-and-egress#shared-secret-store),
+points the config key at it with a `store` SecretRef, and does not echo it back.
+The pasted message itself already reached the model provider and the transcript;
+OpenClaw masks the value in later logs and output from that point on. Each save
+creates a new entry named after the config key plus a random suffix (for example
+`GATEWAY_REMOTE_TOKEN_3F9A0C1B7D2E4A68`), so it can never take over a name that
+another config key, an auth profile, or a stale reference to a removed entry
+still uses. OpenClaw never overwrites or deletes an existing entry: replacing a
+key leaves its previous entry in the store. If the config write fails after the
+key was saved, the error names the saved entry and says whether the config key
+points at it. The entry is kept either way, since another config key or auth
+profile may already use it: fix the error and reuse that entry rather than
+pasting the key again, and remove an entry with `openclaw secrets store rm <NAME>`
+only once nothing uses it. For environment storage, use
+`config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
 Plugin installation keeps its source restrictions. Plugin uninstall refuses a
@@ -215,8 +240,8 @@ when it finishes, run `openclaw gateway restart` to apply the saved settings.
 
 `configure model provider` directs you to **Settings → Models → Connect provider**
 without starting a wizard or changing config. Check the connected Gateway and
-selected **System** or agent scope in Settings before signing in. Enter credentials
-only in the protected sign-in controls, never in chat. Connecting another provider
+selected **System** or agent scope in Settings before signing in, and sign in with
+the controls there. Connecting another provider
 does not select it as the active model or require stopping the host. Model selection
 is separate; replacing credentials for a provider already in use can affect work.
 
@@ -382,6 +407,7 @@ Security contract for remote rescue:
 - Rescue is limited to owner DMs.
 - Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local OpenClaw and rescue; run `openclaw plugins uninstall <id>` from a terminal.
 - Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
+- `config unset` is unavailable in remote rescue because that path cannot revalidate owner policy at the final write. Ask your regular agent to remove the setting through the setup helper, or run `openclaw config unset <path>` locally.
 - Persistent writes still require approval, even in rescue mode.
 - Pending approvals are one-use. Any newer rescue command for the same account, channel, and sender revokes the older plan; failed execution also consumes approval, so resend the command to retry.
 - Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.

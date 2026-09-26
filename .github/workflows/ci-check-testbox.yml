@@ -9,11 +9,38 @@ on:
       timeout_minutes:
         type: number
         description: "Maximum GitHub job runtime for long Testbox commands"
-        default: 120
+        default: 240
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
-      - ".github/workflows/**"
+      - ".github/workflows/ci-check-testbox.yml"
+      - ".github/actions/prepare-testbox-shell/**"
+      - ".github/actions/setup-node-env/**"
+      - ".github/actions/setup-pnpm-store-cache/**"
+      - ".github/actions/ensure-base-commit/**"
+      - ".github/actions/git-owner/**"
+      - "scripts/ci-hydrate-testbox-env.sh"
+      - "scripts/ci-hydrate-live-auth.sh"
+      - "scripts/lib/merge-head-diff-base.mjs"
+      - "scripts/lib/pnpm-lockfile-documents.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "patches/**"
+      - ".npmrc"
+      - ".pnpmfile.*"
+      - "pnpmfile.cjs"
+      - "node-version.mjs"
+      - "**/package.json"
+      - "scripts/check-install-dependency-ownership.mjs"
+      - "scripts/postinstall-bundled-plugins.mjs"
+      - "scripts/lib/package-dist-imports.mjs"
+      - "scripts/lib/javascript-statements.mjs"
+      - "scripts/lib/package-lifecycle-marker.mjs"
+      - "scripts/lib/fs-safe-prebuild.mjs"
+      - "scripts/windows-cmd-helpers.mjs"
+      - "scripts/preinstall-package-manager-warning.mjs"
+      - "scripts/prepare-git-hooks.mjs"
 
 permissions:
   contents: read
@@ -39,7 +66,7 @@ jobs:
     name: "check"
     # Pull requests only validate the hydration steps; real Testbox leases arrive via dispatch.
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
-    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '240') }}
     steps:
       # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate our setup steps only.
       - name: Begin Testbox

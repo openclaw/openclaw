@@ -8,12 +8,14 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   releaseSnapshotTempDirectory,
   removeTempDirectory,
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -36,10 +38,15 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     }
   });
 });
-const nodeArguments = ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e"];
-const snapshotModule = new URL("./sqlite-readonly-location.ts", import.meta.url).href;
-const stagingModule = new URL("./sqlite-snapshot-staging.ts", import.meta.url).href;
-const loggerModule = new URL("../logging/logger.ts", import.meta.url).href;
+const snapshotUrl = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.snapshot);
+const nodeArguments = [
+  ...resolveRuntimeWorkerArgv(snapshotUrl).slice(0, -1),
+  "--input-type=module",
+  "-e",
+];
+const snapshotModule = snapshotUrl.href;
+const stagingModule = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.staging).href;
+const loggerModule = resolveRuntimeWorkerUrl(sqliteSnapshotStagingEntrypoints.logger).href;
 
 beforeAll(async () => {
   // Prepare worker artifacts before measuring the reclamation operation.
@@ -152,7 +159,8 @@ it("reconciles a released fresh token without waiting for idle reclamation", () 
     expect(() =>
       openOpenClawStateReadConnection(source, location, undefined, owned.directory),
     ).toThrow("parent retired");
-    expect(fs.readFileSync(location)).toEqual(fs.readFileSync(source));
+    // Reconciliation owns payload cleanup after the staging worker has exited.
+    expect(fs.existsSync(location)).toBe(false);
   } finally {
     owned.release();
     removeTempDirectory(owned.directory);
@@ -344,14 +352,17 @@ it.each(["sync", "async"] as const)(
   },
 );
 
-it("stops reclamation before exceeding its copied-byte budget", () => {
+it("reclaims one oversized abandoned snapshot per pass without starving the next pass", () => {
   const { cache } = createFixture();
-  const abandoned = createSqliteSnapshotStagingDirectorySync(cache);
-  const payload = path.join(abandoned, "database.sqlite");
-  fs.closeSync(fs.openSync(payload, "w", 0o600));
-  fs.truncateSync(payload, 512 * 1024 * 1024 + 1);
-  releaseSnapshotTempDirectory(abandoned);
-  ageSnapshotTree(abandoned);
+  const abandoned = Array.from({ length: 2 }, () => {
+    const directory = createSqliteSnapshotStagingDirectorySync(cache);
+    const payload = path.join(directory, "database.sqlite");
+    fs.closeSync(fs.openSync(payload, "w", 0o600));
+    fs.truncateSync(payload, 512 * 1024 * 1024 + 1);
+    releaseSnapshotTempDirectory(directory);
+    ageSnapshotTree(directory);
+    return directory;
+  });
   const reports: Array<{ error?: unknown; message: string }> = [];
   try {
     for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message, error) => {
@@ -359,18 +370,18 @@ it("stops reclamation before exceeding its copied-byte budget", () => {
     })) {
       // Drain the bounded reclamation pass.
     }
-    expect(fs.existsSync(payload)).toBe(true);
-    expect(fs.statSync(payload).size).toBe(512 * 1024 * 1024 + 1);
-    expect(reports).toEqual([
-      {
-        message: "Skipped SQLite snapshot reclamation: owner live, recent, or unverified.",
-        error: expect.objectContaining({
-          message: "Snapshot reclamation byte budget exhausted",
-        }),
-      },
-    ]);
+    expect(abandoned.filter((directory) => fs.existsSync(directory))).toHaveLength(1);
+    expect(reports.map(({ message }) => message)).toContain(
+      `Reclaimed ${512 * 1024 * 1024 + 1} bytes of interrupted SQLite snapshot data.`,
+    );
+    for (const _ of reclaimAbandonedSqliteSnapshots(cache, () => {})) {
+      // A new pass must make progress on the remaining oversized directory.
+    }
+    expect(abandoned.some((directory) => fs.existsSync(directory))).toBe(false);
   } finally {
-    removeTempDirectory(abandoned);
+    for (const directory of abandoned) {
+      removeTempDirectory(directory);
+    }
   }
 });
 

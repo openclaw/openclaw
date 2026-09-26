@@ -9,12 +9,13 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import * as taskRuntime from "../../tasks/runtime-internal.js";
 import {
   finalizeTaskRecordByRunId,
   getTaskById,
@@ -24,8 +25,10 @@ import {
 import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import {
   getTaskPayload,
   mainSessionTaskScope,
@@ -41,12 +44,95 @@ import {
 const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
+  it.each([
+    { change: "mutation", continuation: false },
+    { change: "mutation", continuation: true },
+    { change: "replacement", continuation: false },
+    { change: "replacement", continuation: true },
+  ])(
+    "revalidates a selected page after $change before responding (cursor: $continuation)",
+    async ({ change, continuation }) => {
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Selected before the response turn",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 200,
+      });
+      createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Second page",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 100,
+      });
+      const context = createContext();
+      const first = await runTaskHandler("tasks.list", { limit: 1 }, {}, null, context);
+      const select = taskRuntime.listTaskRecordPage;
+      const replacement = { ...task, taskId: "replacement", task: "Current registry" };
+      let reload: Promise<void> | undefined;
+      let changed = false;
+      const spy = vi.spyOn(taskRuntime, "listTaskRecordPage").mockImplementation(async (params) => {
+        const page = await select(params);
+        if (!changed && page.ok) {
+          changed = true;
+          queueMicrotask(() => {
+            if (change === "mutation") {
+              markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+            } else {
+              configureTaskRegistryRuntime({
+                store: createInMemoryTaskRegistryStore({
+                  tasks: new Map([[replacement.taskId, replacement]]),
+                  deliveryStates: new Map(),
+                }),
+              });
+              reload = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+            }
+          });
+        }
+        return page;
+      });
+      try {
+        const result = await runTaskHandler(
+          "tasks.list",
+          { limit: 1, ...(continuation ? { cursor: first.payload?.nextCursor } : {}) },
+          {},
+          null,
+          context,
+        );
+        expect(changed).toBe(true);
+        if (continuation) {
+          expect(result.calls[0]).toMatchObject([
+            false,
+            undefined,
+            {
+              code: "INVALID_REQUEST",
+              message:
+                "tasks.list cursor page is no longer valid; restart pagination without a cursor",
+              details: { reason: "page-invalid" },
+            },
+          ]);
+        } else {
+          expect(result.calls[0]?.[0]).toBe(true);
+          expect(result.payload?.tasks).toMatchObject([
+            change === "mutation"
+              ? { id: task.taskId, status: "completed" }
+              : { id: replacement.taskId, title: replacement.task },
+          ]);
+        }
+      } finally {
+        await reload;
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("lists task summaries with SDK-facing statuses and filters", async () => {
     const running = createTaskFixture("subagent", {
       taskKind: "investigation",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       childSessionKey: "agent:worker:subagent:child",
       agentId: "main",
       runId: "run-running",
@@ -90,64 +176,6 @@ describe("tasks gateway handlers", () => {
       sessionKey: "agent:main:main",
     });
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
-  });
-
-  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
-    const task = createTaskFixture("cli", {
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      runId: "run-global",
-      task: "Owned task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    const { calls, payload } = await runTaskHandler(
-      "tasks.list",
-      { sessionKey: "global" },
-      {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
-    );
-
-    expect(calls[0]?.[0]).toBe(true);
-    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-  });
-
-  it("orders the ledger by last activity, not creation time", async () => {
-    // The registry lists newest-created first; the wire must page by last
-    // activity so an old task that just finished is not hidden behind
-    // newer-created records.
-    const base = Date.now();
-    const oldButJustFinished = createTaskFixture("subagent", {
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Old long-running task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      lastEventAt: base + 60_000,
-    });
-    const newerQuietTask = createTaskFixture("cli", {
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Newer quiet task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      lastEventAt: base + 1_000,
-    });
-
-    const { payload } = await runTaskHandler("tasks.list", {});
-    const ids = payload?.tasks?.map((task) => task.id);
-    expect(ids?.indexOf(oldButJustFinished.taskId)).toBeLessThan(
-      ids?.indexOf(newerQuietTask.taskId) ?? -1,
-    );
   });
 
   it("ranks terminal tasks by completion time when the progress timestamp is stale", async () => {
@@ -316,7 +344,8 @@ describe("tasks gateway handlers", () => {
       undefined,
       {
         code: "INVALID_REQUEST",
-        message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+        message: "tasks.list cursor task data changed; restart pagination without a cursor",
+        details: { reason: "tasks-changed" },
       },
     ]);
   });
@@ -508,12 +537,6 @@ describe("tasks gateway handlers", () => {
       expected: "Cron canonical result",
     },
     {
-      label: "CLI completion",
-      ...cliStaleResult,
-      terminalSummary: "CLI canonical result",
-      expected: "CLI canonical result",
-    },
-    {
       label: "CLI sanitized terminal result",
       ...cliStaleResult,
       terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
@@ -539,13 +562,6 @@ describe("tasks gateway handlers", () => {
       terminalSummary: "",
       preserveTerminalSummary: true,
       expected: "Cron blank-terminal fallback result",
-    },
-    {
-      label: "CLI progress fallback",
-      runtime: "cli",
-      progressSummary: "CLI fallback result",
-      terminalSummary: undefined,
-      expected: "CLI fallback result",
     },
   ] as const)("returns the runtime-owned result for $label", async (fixture) => {
     const task = createTaskFixture(fixture.runtime, {

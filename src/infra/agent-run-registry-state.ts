@@ -19,6 +19,23 @@ export function getAgentRunRegistryState(): AgentRunRegistryState {
   }));
 }
 
+export function getAgentRunContextOwnerStatus(
+  runId: string,
+  claimId: string,
+  lifecycleGeneration: string,
+): "active" | "clear-requested" | undefined {
+  const state = getAgentRunRegistryState();
+  const owners = state.owners.get(runId);
+  if (
+    lifecycleGeneration !== state.lifecycleGeneration ||
+    owners?.lifecycleGeneration !== lifecycleGeneration ||
+    !owners.claimIds.has(claimId)
+  ) {
+    return undefined;
+  }
+  return owners.clearRequested ? "clear-requested" : "active";
+}
+
 export function bumpAgentRunIndexVersion(
   context?: AgentRunContext,
   previous?: AgentRunContext,
@@ -29,6 +46,8 @@ export function bumpAgentRunIndexVersion(
     ? [previous, context]
     : [context]) {
     const { sessionKey, agentId } = target ?? {};
-    sessionChanges.emit(sessionKey ? { sessionKey, agentId } : { all: true, scope: "agent-runs" });
+    sessionChanges.emit(
+      sessionKey ? { sessionKey, agentId, scope: "runtime" } : { all: true, scope: "agent-runs" },
+    );
   }
 }

@@ -1,10 +1,10 @@
 // Qa Channel tests cover gateway lifecycle behavior.
 import { createServer } from "node:http";
+import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { startQaGatewayAccount } from "./gateway.js";
 import { handleQaInbound } from "./inbound.js";
-import type { ChannelGatewayContext } from "./runtime-api.js";
 import type { ResolvedQaChannelAccount } from "./types.js";
 
 vi.mock("./inbound.js", () => ({

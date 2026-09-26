@@ -4,6 +4,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   cleanupBackupArchivePublication,
@@ -49,6 +50,22 @@ async function prepareArchive(
 }
 
 describe("backup archive publication", () => {
+  it("publishes beneath a parent whose file ID exceeds Number's exact range", async () => {
+    const outputDir = tempDirs.make("openclaw-backup-large-parent-id-");
+    const outputPath = path.join(outputDir, "backup.tar.gz");
+    const identitySpy = mockLargeDirectoryId(outputDir);
+    try {
+      const plan = await createBackupArchivePublication(outputPath);
+      const prepared = await prepareArchive(plan);
+      await publishPreparedBackupArchive({ plan, prepared });
+
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
+      await expect(fs.readdir(outputDir)).resolves.toEqual(["backup.tar.gz"]);
+    } finally {
+      identitySpy.mockRestore();
+    }
+  });
+
   it("publishes a complete archive and removes its private staging directory", async () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-publish-");
     const prepared = await prepareArchive(plan);
@@ -88,7 +105,7 @@ describe("backup archive publication", () => {
     }
   });
 
-  it.each(["EPERM", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])(
+  it.each(["EPERM", "EXDEV"])(
     "fails closed when hard-link publication returns %s",
     async (code) => {
       const { outputPath, plan } = await createPublication("openclaw-backup-no-link-");

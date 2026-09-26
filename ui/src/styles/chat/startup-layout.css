@@ -20,8 +20,8 @@
     z-index: 3;
     isolation: isolate;
     min-height: var(--chat-mobile-pane-header-height);
-    padding-inline: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px))
-      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
+    padding-inline: max(var(--chat-mobile-edge-inset), var(--safe-area-left, 0px))
+      max(var(--chat-mobile-edge-inset), var(--safe-area-right, 0px));
     overflow: visible;
   }
   .chat-main__conversation {
@@ -99,17 +99,28 @@
   padding: 0;
 }
 
+/* Flex sizes the frame, not the query container. A definite containing block
+   keeps editor autosizing from re-evaluating height queries at intermediate
+   flex sizes and rebuilding the footer's layout tree on every keystroke. */
+.chat-main__conversation-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-main__conversation {
   --chat-composer-top-margin: 8px;
   --chat-transcript-fade-height: 24px;
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
-  position: relative;
+  position: absolute;
+  inset: 0;
   container: chat-conversation / size;
   display: flex;
   min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
 }
@@ -150,22 +161,32 @@
   -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
-/* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared turn gap directly. Footer-bearing groups reserve that
-   gap in the footer row, which grows for wrapped metadata and touch controls
-   without subtracting an assumed footer height. */
+/* --chat-turn-gap is the only space between consecutive groups of any kind. */
 .chat-group {
   --chat-avatar-column: 36px;
   --chat-avatar-gap: 10px;
   --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 8px;
-  --chat-turn-gap: 28px;
+  --chat-turn-gap: 16px;
+  /* Every group ends in one footer row of this size, visible or not. */
+  --chat-footer-offset: 2px;
+  --chat-footer-row: 24px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
-  padding-bottom: var(--chat-turn-gap);
+  margin-block: 0 var(--chat-turn-gap);
   margin-inline: 4px 16px;
+}
+
+@media (hover: none),
+  (max-width: 768px),
+  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Touch targets grow up over their own group, never into the turn gap. */
+  .chat-group {
+    --chat-touch-target: 44px;
+    --chat-turn-gap: 12px;
+  }
 }
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
@@ -210,7 +231,7 @@
   font-weight: 600;
   font-size: 13px;
   flex-shrink: 0;
-  align-self: flex-end;
+  align-self: flex-start;
   margin-bottom: 4px;
   border: 1px solid var(--border);
 }
@@ -479,7 +500,7 @@
 @media (display-mode: standalone) and (max-width: 768px),
   (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .sidebar-region__header > .chat-pane__header {
-    padding-inline: var(--chat-mobile-edge-inset, 4px);
+    padding-inline: var(--chat-mobile-edge-inset);
   }
 }
 
@@ -788,7 +809,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .chat {
     --chat-thread-gutter: var(--chat-mobile-edge-inset);
     --chat-thread-side-inset: 0px;
-    --chat-mobile-edge-inset: 4px;
   }
 }
 

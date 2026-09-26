@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-utils.js";
+import { getHeader } from "./http-header-value.js";
 import {
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant,
@@ -28,31 +28,22 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   if (!raw) {
     return fallback;
   }
-  if (!/^\d+$/u.test(raw)) {
-    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
-  }
   const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+  if (!/^\d+$/u.test(raw) || !Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;
 }
 
-function shouldLogMcpLoopbackHttp(): boolean {
-  return (
-    isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
-    isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
-  );
-}
-
-function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): void {
-  if (!shouldLogMcpLoopbackHttp()) {
+export function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): void {
+  if (
+    !isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) &&
+    !isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
+  ) {
     return;
   }
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
-
-type McpRequestContext = McpLoopbackRequestContext;
 
 type McpLoopbackRequestAuth = {
   senderIsOwner: boolean;
@@ -93,19 +84,12 @@ function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefin
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
-    // No Origin header → not a browser request. Native MCP clients
-    // (curl, codex CLI, scripted MCP clients) never set Origin; let
-    // them through to the bearer check.
+    // Native MCP clients use bearer authentication without a browser Origin.
     return false;
   }
 
-  // Defer to checkBrowserOrigin. It already treats loopback peers
-  // talking to a loopback Origin as `local-loopback`, which covers
-  // the legitimate `localhost`↔`127.0.0.1` mismatch that browsers
-  // flag as `Sec-Fetch-Site: cross-site` even though both ends are
-  // local. A blanket cross-site early-return here would block that
-  // flow even with a valid bearer; the helper's isLocalClient +
-  // isLoopbackHost gating is the authoritative check.
+  // The origin owner accepts localhost ↔ 127.0.0.1 only for loopback peers,
+  // including when the browser describes those names as cross-site.
   return !checkBrowserOrigin({
     requestHost: getHeader(req, "host"),
     origin,
@@ -163,7 +147,7 @@ export function validateMcpLoopbackRequest(params: {
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
   } catch {
-    logMcpLoopbackHttp("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
+    logMcpLoopbackTraffic("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
     params.res.writeHead(400, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "bad_request" }));
     return null;
@@ -176,7 +160,7 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   if (url.pathname !== "/mcp") {
-    logMcpLoopbackHttp("reject", {
+    logMcpLoopbackTraffic("reject", {
       reason: "not_found",
       method: params.req.method ?? "",
       path: url.pathname,
@@ -186,50 +170,12 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (params.req.method === "GET" || params.req.method === "DELETE") {
-    // Origin validation first (matches the POST path): a browser loopback request is
-    // rejected before bearer auth, so the local-loopback Origin boundary holds even for
-    // unauthenticated browser requests.
-    if (rejectsBrowserLoopbackRequest(params.req)) {
-      params.res.writeHead(403, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "forbidden" }));
-      return null;
-    }
-    const sender = resolveMcpSender(params);
-    if (!sender) {
-      params.res.writeHead(401, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "unauthorized" }));
-      return null;
-    }
-    if (params.req.method === "GET") {
-      logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
-      params.res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      params.res.flushHeaders();
-      params.res.write(":\n\n");
-      params.onSseResponse?.(params.res);
-      params.req.on("close", () => {
-        if (!params.res.writableEnded) {
-          params.res.end();
-        }
-      });
-      return null;
-    }
-
-    // Streamable HTTP session teardown. The loopback server is stateless — it owns no
-    // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
-    // send DELETE when closing the transport get a clean 200 rather than a 405.
-    logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
-    params.res.writeHead(200, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify({ ok: true }));
-    return null;
-  }
-
-  if (params.req.method !== "POST") {
-    logMcpLoopbackHttp("reject", {
+  if (
+    params.req.method !== "GET" &&
+    params.req.method !== "DELETE" &&
+    params.req.method !== "POST"
+  ) {
+    logMcpLoopbackTraffic("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
@@ -239,12 +185,15 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
+  // Check browser origin before bearer authentication for every supported method.
   if (rejectsBrowserLoopbackRequest(params.req)) {
-    logMcpLoopbackHttp("reject", {
-      reason: "forbidden_origin",
-      method: params.req.method ?? "",
-      origin: getHeader(params.req, "origin") ?? "",
-    });
+    if (params.req.method === "POST") {
+      logMcpLoopbackTraffic("reject", {
+        reason: "forbidden_origin",
+        method: params.req.method,
+        origin: getHeader(params.req, "origin") ?? "",
+      });
+    }
     params.res.writeHead(403, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "forbidden" }));
     return null;
@@ -252,19 +201,46 @@ export function validateMcpLoopbackRequest(params: {
 
   const sender = resolveMcpSender(params);
   if (!sender) {
-    logMcpLoopbackHttp("reject", {
-      reason: "unauthorized",
-      method: params.req.method ?? "",
-      hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
-    });
+    if (params.req.method === "POST") {
+      logMcpLoopbackTraffic("reject", {
+        reason: "unauthorized",
+        method: params.req.method,
+        hasAuthorization: (getHeader(params.req, "authorization") ?? "").length > 0,
+      });
+    }
     params.res.writeHead(401, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ error: "unauthorized" }));
     return null;
   }
 
+  if (params.req.method === "GET") {
+    logMcpLoopbackTraffic("sse-open", { method: "GET", path: url.pathname });
+    params.res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    params.res.flushHeaders();
+    params.res.write(":\n\n");
+    params.onSseResponse?.(params.res);
+    params.req.on("close", () => {
+      if (!params.res.writableEnded) {
+        params.res.end();
+      }
+    });
+    return null;
+  }
+  if (params.req.method === "DELETE") {
+    // This stateless listener owns no session lifecycle; authenticated teardown is a no-op.
+    logMcpLoopbackTraffic("session-delete", { method: "DELETE", path: url.pathname });
+    params.res.writeHead(200, { "Content-Type": "application/json" });
+    params.res.end(JSON.stringify({ ok: true }));
+    return null;
+  }
+
   const contentType = getHeader(params.req, "content-type") ?? "";
   if (!contentType.startsWith("application/json")) {
-    logMcpLoopbackHttp("reject", {
+    logMcpLoopbackTraffic("reject", {
       reason: "unsupported_media_type",
       method: params.req.method ?? "",
       contentType,
@@ -302,7 +278,7 @@ export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
   auth: McpLoopbackRequestAuth,
-): McpRequestContext {
+): McpLoopbackRequestContext {
   if (auth.boundClientGrant) {
     // Gateway-launched CLI clients receive an immutable context grant. The
     // child process can replay the token, but cannot scope-shop by rewriting

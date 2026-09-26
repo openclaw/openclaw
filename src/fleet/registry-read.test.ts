@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -12,9 +11,10 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   deleteFleetCell,
   getFleetCell,
@@ -24,14 +24,7 @@ import {
 } from "./registry.js";
 import { withFleetCellOperation } from "./service-support.runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 
 function fixture() {
   const root = tempDirs.make("openclaw-fleet-reader-");
@@ -54,14 +47,8 @@ function seed(env: NodeJS.ProcessEnv, root: string) {
 }
 
 function watchNativeSql() {
-  const { DatabaseSync, StatementSync } = requireNodeSqlite();
-  return [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  return observeMainThreadSql();
 }
 
 it.each(["cached", "fresh"] as const)(
@@ -79,7 +66,7 @@ it.each(["cached", "fresh"] as const)(
     try {
       expect(await listFleetCells(env)).toEqual([record]);
       expect(await getFleetCell(env, record.tenantId)).toEqual(record);
-      const mainThreadSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+      const mainThreadSqlCalls = calls.count();
       console.info("fleet registry read", {
         mode,
         mainThreadSqlCalls,
@@ -106,7 +93,7 @@ it("prepares and retires an artifact registry snapshot without main-thread SQL",
   };
   try {
     await withArtifactPreservingStateReads(read);
-    const mainThreadSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    const mainThreadSqlCalls = calls.count();
     console.info("fleet snapshot lifecycle", {
       mode: "artifact",
       mainThreadSqlCalls,
@@ -153,7 +140,7 @@ it("reads current committed registry rows while a cached native iterator retains
       const committed = { ...beta, image: "fixture:committed" };
       expect(await listFleetCells(env)).toEqual([alpha, committed]);
       expect(await getFleetCell(env, beta.tenantId)).toEqual(committed);
-      expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+      calls.expectIdle();
       expect(source.db.isOpen).toBe(true);
       expect(source.db.isTransaction).toBe(false);
     } finally {
@@ -188,7 +175,7 @@ it("commits a complete leased registry operation off the main thread and reopens
         await updateFleetCellImage(env, "alpha", "fixture:committed");
       },
     });
-    const mainThreadSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    const mainThreadSqlCalls = calls.count();
     console.info("fleet registry operation", {
       mainThreadSqlCalls,
       elapsedMs: Math.round(performance.now() - startedAt),
@@ -238,7 +225,7 @@ it("preserves a maintenance-created cached writer after an independent admitted 
     const calls = watchNativeSql();
     try {
       expect(await getFleetCell(env, record.tenantId)).toEqual(record);
-      expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+      calls.expectIdle();
     } finally {
       vi.restoreAllMocks();
     }

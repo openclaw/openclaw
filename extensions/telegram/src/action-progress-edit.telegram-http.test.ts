@@ -29,7 +29,7 @@ beforeAll(async () => {
             message_id: 42,
             date: 1_700_000_000,
             chat: { id: 123, type: "private" },
-            text: body.text,
+            ...(body.caption !== undefined ? { caption: body.caption } : { text: body.text }),
           },
         }),
       );
@@ -216,3 +216,42 @@ it.each([false, true])(
     });
   },
 );
+
+it.each([
+  { name: "nonempty", caption: "Updated **caption**", expected: "Updated <b>caption</b>" },
+  { name: "empty", caption: "", expected: "" },
+])("routes registered $name caption edits to Telegram captions", async ({ caption, expected }) => {
+  await withOpenClawTestState({ prefix: "telegram-action-caption-edit-" }, async () => {
+    resetTelegramClientOptionsCacheForTests();
+    requests.length = 0;
+
+    await telegramPlugin.actions?.handleAction?.({
+      channel: "telegram",
+      action: "edit",
+      cfg: {
+        channels: {
+          telegram: { botToken: "123456:caption-edit", apiRoot, richMessages: true },
+        },
+      },
+      params: {
+        to: "123",
+        messageId: "42",
+        message: "The caption must take precedence over text.",
+        caption,
+      },
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(requests).toEqual([
+      {
+        method: "editMessageCaption",
+        fields: {
+          chat_id: "123",
+          message_id: 42,
+          caption: expected,
+          parse_mode: "HTML",
+        },
+      },
+    ]);
+  });
+});

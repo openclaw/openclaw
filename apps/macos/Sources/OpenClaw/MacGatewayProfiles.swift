@@ -103,6 +103,7 @@ actor MacGatewayProfileStore {
     /// catalog refreshes fire per control-channel state change. Cache the one
     /// registry for the process lifetime; saves keep it coherent.
     private var cachedRegistry: Registry?
+    private var keychainAccess = GatewayKeychainAccess()
     private var browserSignInAttempts: [String: BrowserSignInAttempt] = [:]
     private struct CommitState {
         let removesProfile: Bool
@@ -146,6 +147,7 @@ actor MacGatewayProfileStore {
         // Cancelled callers must not migrate state or revoke another sign-in.
         try Task.checkCancellation()
         let url = try Self.canonicalURL(url)
+        self.keychainAccess.allowRetry()
         // Finish legacy import before capturing ownership; a late callback may
         // replace only this attempt, never a subsequently edited or forgotten profile.
         _ = try self.loadRegistryMigratingLegacyPrimary()
@@ -332,7 +334,11 @@ actor MacGatewayProfileStore {
         try Self.sortedProfiles(self.loadRegistryMigratingLegacyPrimary().profiles.map(\.profile))
     }
 
-    func catalogProfiles() throws -> [MacGatewayCatalogProfile] {
+    func catalogProfiles(retryKeychainAccess: Bool = false) throws -> [MacGatewayCatalogProfile] {
+        if retryKeychainAccess {
+            try Task.checkCancellation()
+            self.keychainAccess.allowRetry()
+        }
         let stored = try self.loadRegistryMigratingLegacyPrimary().profiles
         return Self.sortedProfiles(stored.map(\.profile)).compactMap { profile in
             guard let item = stored.first(where: { $0.profile.id == profile.id }) else { return nil }
@@ -360,6 +366,8 @@ actor MacGatewayProfileStore {
 
     @discardableResult
     func remove(profileID: String) async throws -> UUID {
+        try Task.checkCancellation()
+        self.keychainAccess.allowRetry()
         guard let stored = try self.loadRegistry().profiles.first(where: { $0.profile.id == profileID }) else {
             throw MacGatewayProfileError.profileNotFound
         }
@@ -428,7 +436,7 @@ actor MacGatewayProfileStore {
 
     private func loadRegistry() throws -> Registry {
         if let cachedRegistry { return cachedRegistry }
-        let registry: Registry = if let data = try Self.load(account: Self.registryAccount) {
+        let registry: Registry = if let data = try self.load(account: Self.registryAccount) {
             try Self.decodeRegistry(data)
         } else {
             Registry()
@@ -440,7 +448,8 @@ actor MacGatewayProfileStore {
     private func loadRegistryMigratingLegacyPrimary() throws -> Registry {
         let registry = try self.loadRegistry()
         // Keep the receipt in the registry so removing the imported profile is durable.
-        // A failed Keychain commit leaves both changes unapplied and retries on the next read.
+        // A failed commit leaves both changes unapplied. Denied Keychain access
+        // waits for an explicit retry instead of prompting on each catalog refresh.
         guard (registry.legacyPrimaryMigrationVersion ?? 0) < Self.currentLegacyPrimaryMigrationVersion else {
             return registry
         }
@@ -453,7 +462,7 @@ actor MacGatewayProfileStore {
     }
 
     private func saveRegistry(_ registry: Registry) throws {
-        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+        try self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
         self.cachedRegistry = registry
     }
 
@@ -545,12 +554,12 @@ actor MacGatewayProfileStore {
         return value?.isEmpty == false ? value : nil
     }
 
-    private static func load(account: String) throws -> Data? {
-        var query = self.baseQuery(account: account)
+    private func load(account: String) throws -> Data? {
+        var query = Self.baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = self.keychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &result) }
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else {
             throw MacGatewayProfileError.keychain(status)
@@ -558,17 +567,19 @@ actor MacGatewayProfileStore {
         return data
     }
 
-    private static func save(_ data: Data, account: String) throws {
-        let query = self.baseQuery(account: account)
-        let update = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary)
+    private func save(_ data: Data, account: String) throws {
+        let query = Self.baseQuery(account: account)
+        let update = self.keychainAccess.perform {
+            SecItemUpdate(
+                query as CFDictionary,
+                [kSecValueData as String: data] as CFDictionary)
+        }
         if update == errSecSuccess { return }
         guard update == errSecItemNotFound else { throw MacGatewayProfileError.keychain(update) }
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let status = self.keychainAccess.perform { SecItemAdd(add as CFDictionary, nil) }
         guard status == errSecSuccess else { throw MacGatewayProfileError.keychain(status) }
     }
 

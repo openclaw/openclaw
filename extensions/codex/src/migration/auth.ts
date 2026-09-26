@@ -1,4 +1,3 @@
-// Codex plugin module implements auth behavior.
 import { createHash } from "node:crypto";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -187,19 +186,6 @@ function replaceConfigDraft(draft: OpenClawConfig, next: OpenClawConfig): void {
   Object.assign(draft, next);
 }
 
-function existingAuthProfileConfigIsCompatible(
-  existing: NonNullable<NonNullable<OpenClawConfig["auth"]>["profiles"]>[string],
-  profile: CodexAuthProfileConfig,
-): boolean {
-  if (existing.provider !== profile.provider || existing.mode !== profile.mode) {
-    return false;
-  }
-  if (existing.email && profile.email && existing.email !== profile.email) {
-    return false;
-  }
-  return true;
-}
-
 function hasAuthProfileConfigConflict(
   config: OpenClawConfig,
   profile: CodexAuthProfileConfig,
@@ -209,7 +195,12 @@ function hasAuthProfileConfigConflict(
     return false;
   }
   const existing = config.auth?.profiles?.[profile.profileId];
-  return Boolean(existing && !existingAuthProfileConfigIsCompatible(existing, profile));
+  return Boolean(
+    existing &&
+    (existing.provider !== profile.provider ||
+      existing.mode !== profile.mode ||
+      (existing.email && profile.email && existing.email !== profile.email)),
+  );
 }
 
 function hasCurrentAuthProfileConfigConflict(
@@ -250,44 +241,6 @@ function applyDefaultModelIfMissing(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
   };
-}
-
-function applyOAuthConfigToConfig(
-  cfg: OpenClawConfig,
-  credential: Extract<CodexAuthCredential, { kind: "oauth" }>,
-  profileId: string,
-): OpenClawConfig {
-  let next = mergeMigrationConfigValue(cfg, credential.result.configPatch) as OpenClawConfig;
-  const profile = credential.result.profiles[0];
-  if (profile) {
-    next = applyAuthProfileConfig(next, {
-      profileId,
-      provider: profile.credential.provider,
-      mode: "oauth",
-      ...("email" in profile.credential && profile.credential.email
-        ? { email: profile.credential.email }
-        : {}),
-      ...("displayName" in profile.credential && profile.credential.displayName
-        ? { displayName: profile.credential.displayName }
-        : {}),
-      preferProfileFirst: false,
-    });
-  }
-  return applyDefaultModelIfMissing(next);
-}
-
-function applyApiKeyConfigToConfig(
-  cfg: OpenClawConfig,
-  credential: Extract<CodexAuthCredential, { kind: "api_key" }>,
-  profileId: string,
-): OpenClawConfig {
-  return applyAuthProfileConfig(cfg, {
-    profileId,
-    provider: credential.provider,
-    mode: "api_key",
-    displayName: CODEX_IMPORT_DISPLAY_NAME,
-    preferProfileFirst: false,
-  });
 }
 
 export function resolveCodexConfigPatchMode(ctx: MigrationProviderContext): CodexConfigPatchMode {
@@ -360,28 +313,20 @@ async function applyCodexAuthProfileConfig(
   }
 }
 
-async function applyCodexAuthConfig(
-  ctx: MigrationProviderContext,
-  credential: CodexAuthCredential,
-  profileId: string,
-): Promise<CodexAuthConfigApplyResult> {
-  const profile = authProfileConfigForCredential(credential, profileId);
-  if (!profile) {
-    return "unavailable";
-  }
-  return applyCodexAuthProfileConfig(ctx, profile, (config) =>
-    applyCredentialConfig(config, credential, profileId),
-  );
-}
-
 function applyCredentialConfig(
   config: OpenClawConfig,
   credential: CodexAuthCredential,
   profileId: string,
 ): OpenClawConfig {
-  return credential.kind === "oauth"
-    ? applyOAuthConfigToConfig(config, credential, profileId)
-    : applyApiKeyConfigToConfig(config, credential, profileId);
+  let next =
+    credential.kind === "oauth"
+      ? (mergeMigrationConfigValue(config, credential.result.configPatch) as OpenClawConfig)
+      : config;
+  const profile = authProfileConfigForCredential(credential, profileId);
+  if (profile) {
+    next = applyAuthProfileConfig(next, { ...profile, preferProfileFirst: false });
+  }
+  return credential.kind === "oauth" ? applyDefaultModelIfMissing(next) : next;
 }
 
 export async function buildCodexAuthItems(params: {
@@ -631,7 +576,9 @@ async function applyCodexAuthItem(
   const configResult =
     configPatchMode !== "apply"
       ? "unavailable"
-      : await applyCodexAuthConfig(ctx, credential, profileId);
+      : await applyCodexAuthProfileConfig(ctx, configProfile, (config) =>
+          applyCredentialConfig(config, credential, profileId),
+        );
   if (configResult === "conflict") {
     return [markMigrationItemConflict(item, CODEX_REASON_AUTH_PROFILE_EXISTS)];
   }

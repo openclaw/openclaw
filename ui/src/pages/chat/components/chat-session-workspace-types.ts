@@ -78,6 +78,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   connectionEpoch: number;
   hello: GatewayHelloOk | null;
+  resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;
@@ -89,6 +90,3 @@ export type SessionWorkspaceHost = {
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };
-
-/** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. */

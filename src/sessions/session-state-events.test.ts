@@ -1,21 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+} from "../state/openclaw-state-schema-compatibility.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
@@ -30,78 +34,27 @@ import {
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
   recordSubagentSpawned,
-  recordSubagentTerminalState,
   registerMainSessionGroupWatch,
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
+import {
+  child,
+  cleanupSessionStateTestState,
+  createDatabaseOptions,
+  eventInput,
+  nestedWatcher,
+  readCursor,
+  seedChild,
+  watcher,
+} from "./session-state-events.test-support.js";
+import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const tempDirs: string[] = [];
-const watcher = "agent:main:main";
-const nestedWatcher = "agent:main:subagent:parent";
-const child = "agent:main:subagent:child";
 const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
 let disposeHeartbeatWakeHandler: (() => void) | undefined;
-
-function createDatabaseOptions() {
-  const stateDir = makeTempDir(tempDirs, "openclaw-session-state-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
-
-function eventInput(
-  overrides: Partial<Parameters<typeof recordSessionStateEvent>[0]> = {},
-): Parameters<typeof recordSessionStateEvent>[0] {
-  return {
-    sessionKey: child,
-    sessionId: "session-child",
-    agentId: "main",
-    kind: "human_direct_message",
-    actorType: "human",
-    summary: "human message via test",
-    watcherSessionKeys: [watcher],
-    ...overrides,
-  };
-}
-
-function readCursor(
-  database: ReturnType<typeof createDatabaseOptions>,
-  watcherSessionKey = watcher,
-  targetSessionKey = child,
-) {
-  return openOpenClawStateDatabase(database)
-    .db.prepare(
-      `SELECT last_seen_sequence, notified_sequence, material_sequence
-       FROM session_watch_cursors
-       WHERE watcher_session_key = ? AND target_session_key = ?`,
-    )
-    .get(watcherSessionKey, targetSessionKey) as
-    | {
-        last_seen_sequence: number;
-        notified_sequence: number;
-        material_sequence: number;
-      }
-    | undefined;
-}
-
-function seedChild(
-  database: ReturnType<typeof createDatabaseOptions>,
-  watcherSessionKey = watcher,
-) {
-  return recordSessionStateEvent(
-    eventInput({
-      kind: "child_spawned",
-      actorType: "agent",
-      actorId: watcherSessionKey,
-      dedupeKey: `child-spawned:${watcherSessionKey}`,
-      watcherSessionKeys: [watcherSessionKey],
-    }),
-    database,
-  );
-}
 
 async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
@@ -116,16 +69,78 @@ async function createWatcherSession(
 afterEach(async () => {
   disposeHeartbeatWakeHandler?.();
   disposeHeartbeatWakeHandler = undefined;
-  vi.useRealTimers();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  resetSystemEventsForTest();
-  cleanupTempDirs(tempDirs);
-  vi.unstubAllEnvs();
+  await cleanupSessionStateTestState();
 });
 
 describe("session state events", () => {
+  it("does not advance a replacement watch from older producer facts", () => {
+    const database = createDatabaseOptions();
+    resetHeartbeatEventsForTest();
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
+    const readBinding = () =>
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          "SELECT * FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+        )
+        .get(watcher, child);
+    const original = readBinding();
+    const event = recordSessionStateEvent(
+      eventInput({
+        watcherStorePaths: { [watcher]: "/synthetic/retired-store.sqlite" },
+      }),
+      database,
+    );
+    expect(event?.sequence).toBeGreaterThan(0);
+    expect(readBinding()).toEqual(original);
+    expect(peekSystemEventEntries(watcher)).toEqual([]);
+    expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
+  });
+  it("preserves older readers and version markers when watcher provenance is first written", () => {
+    const database = createDatabaseOptions();
+    const before = openOpenClawStateDatabase(database);
+    before.db.exec("ALTER TABLE session_watch_cursors DROP COLUMN watcher_store_path");
+    const userVersion = before.db.prepare("PRAGMA user_version").get();
+    closeOpenClawStateDatabaseForTest();
+    const reopened = openOpenClawStateDatabase(database);
+    const schemaBeforeRead = reopened.db.prepare("PRAGMA schema_version").get();
+    expect(getSessionStateVersion(child, "main", database)).toBe(0);
+    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name FROM pragma_table_info('session_watch_cursors') WHERE name = 'watcher_store_path'",
+        )
+        .get(),
+    ).toBeUndefined();
+
+    seedChild(database);
+    assertSqliteSchemaContains(
+      reopened.db,
+      reopened.path,
+      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }).replace(
+        /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
+        "",
+      ),
+      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    );
+    reopened.db
+      .prepare(
+        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
+      )
+      .run(watcher, "legacy-target", Date.now());
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT last_seen_sequence, watcher_store_path FROM session_watch_cursors WHERE target_session_key = 'legacy-target'",
+        )
+        .get(),
+    ).toEqual({ last_seen_sequence: 0, watcher_store_path: null });
+    const installedSchema = reopened.db.prepare("PRAGMA schema_version").get();
+    recordSessionStateEvent(eventInput(), database);
+    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(installedSchema);
+    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(userVersion);
+  });
+
   it("bumps a durable head that survives pruning all retained rows", () => {
     const database = createDatabaseOptions();
     const now = Date.now();
@@ -630,6 +645,30 @@ describe("session state events", () => {
     });
   });
 
+  it.each(["ambient", "explicit"])("rebinds a replaced %s watch on the next group turn", (kind) => {
+    const database = createDatabaseOptions();
+    if (kind === "explicit") {
+      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    } else {
+      registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
+    }
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("UPDATE session_watch_cursors SET watcher_store_path = ?").run(
+      "/retired/store.sqlite",
+    );
+    expect(registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database)).toBe(
+      true,
+    );
+    expect(
+      db.prepare("SELECT watcher_store_path, provenance FROM session_watch_cursors").get(),
+    ).toEqual({
+      watcher_store_path: expect.not.stringContaining("/retired/"),
+      provenance: "ambient-group",
+    });
+    recordSessionStateEvent(eventInput({ sessionKey: group, watcherSessionKeys: [] }), database);
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+  });
+
   it("registers one ambient main watcher for a distinct group session", () => {
     const database = createDatabaseOptions();
     expect(
@@ -697,7 +736,7 @@ describe("session state events", () => {
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
     for (const actorId of ["human-1", "human-2"]) {
-      recordSessionHumanDirectMessage(
+      await recordSessionHumanDirectMessage(
         {
           sessionKey: group,
           entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -718,7 +757,7 @@ describe("session state events", () => {
     expect(wakes).not.toHaveBeenCalled();
   });
 
-  it("prunes dormant ambient cursors while retaining active cursors", () => {
+  it("prunes dormant ambient cursors while retaining active cursors", async () => {
     const database = createDatabaseOptions();
     const dormantGroup = "agent:main:slack:channel:dormant";
     const registeredAt = 100;
@@ -732,7 +771,7 @@ describe("session state events", () => {
     );
 
     const activeAt = registeredAt + SESSION_STATE_RETENTION_MS + 1;
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: activeAt, chatType: "group" },
@@ -764,7 +803,7 @@ describe("session state events", () => {
       database,
     );
 
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -803,7 +842,7 @@ describe("session state events", () => {
     // Later inbound group registration must not downgrade the explicit watch.
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
 
-    recordSessionHumanDirectMessage(
+    await recordSessionHumanDirectMessage(
       {
         sessionKey: group,
         entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
@@ -819,10 +858,10 @@ describe("session state events", () => {
     expect(wakes).toHaveBeenCalledTimes(1);
   });
 
-  it("gates unparented human turns on registered watchers", () => {
+  it("gates unparented human turns on registered watchers", async () => {
     const database = createDatabaseOptions();
     const entry = { sessionId: "session-child", updatedAt: Date.now() };
-    recordSessionHumanDirectMessage({
+    await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
       agentId: "main",
@@ -832,7 +871,7 @@ describe("session state events", () => {
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toHaveLength(0);
 
     registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
-    recordSessionHumanDirectMessage({
+    await recordSessionHumanDirectMessage({
       sessionKey: child,
       entry,
       agentId: "main",
@@ -865,24 +904,35 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       agentId: "main",
     });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child",
-      requesterSessionKey: watcher,
-      outcomeStatus: "ok",
-    });
-    recordSubagentTerminalState({
-      childSessionKey: child,
-      runId: "run-child-cancelled",
-      requesterSessionKey: watcher,
-      outcomeStatus: "cancelled",
-    });
+    const terminalContext = captureOpenClawStateWorkerContext(database);
+    const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child",
+        requesterSessionKey: watcher,
+        outcomeStatus: "ok",
+      },
+      assertTerminalCurrent,
+    );
+    await recordSubagentTerminalState(
+      {
+        childSessionKey: child,
+        runId: "run-child-cancelled",
+        requesterSessionKey: watcher,
+        outcomeStatus: "cancelled",
+      },
+      assertTerminalCurrent,
+    );
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {

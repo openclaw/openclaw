@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { reportLimitViolations } from "../../../lib/check-limits.mts";
 
 const [summaryPath, phase, separator, command, ...args] = process.argv.slice(2);
 if (!summaryPath || !phase || separator !== "--" || !command) {
@@ -82,12 +83,13 @@ const clockTicks = readPositiveIntEnvOrGetconf("OPENCLAW_PROC_CLK_TCK", "CLK_TCK
 
 function readProcSnapshot() {
   const stats = new Map();
-  for (const entry of fs.readdirSync("/proc", { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) {
+  // Dirent resolution can lstat a process that exits during enumeration.
+  for (const entry of fs.readdirSync("/proc")) {
+    if (!/^\d+$/u.test(entry)) {
       continue;
     }
-    const pid = Number.parseInt(entry.name, 10);
-    const statPath = path.join("/proc", entry.name, "stat");
+    const pid = Number.parseInt(entry, 10);
+    const statPath = path.join("/proc", entry, "stat");
     try {
       const raw = fs.readFileSync(statPath, "utf8");
       const closeParen = raw.lastIndexOf(")");
@@ -181,6 +183,7 @@ let forwardedParentSignal = null;
 let killTimer;
 let parentSignalTimer;
 let parentSignalPollTimer;
+let parentSignalDeadline = null;
 let childGroupDrainTimer;
 // The leader can exit before descendants in its detached process group.
 // Keep the wrapper alive so timeout cleanup still owns those descendants.
@@ -273,8 +276,18 @@ function clearRuntimeTimers() {
   }
 }
 
-function rethrowParentSignal(signal) {
+function rethrowParentSignal(signal, reason) {
+  const exitedAt = performance.now();
   clearRuntimeTimers();
+  // Flush the exit decision before rethrowing a signal can discard buffered output.
+  try {
+    fs.writeSync(
+      2,
+      `plugin lifecycle termination: phase=${phase} reason=${reason} signal=${signal} exit_ms=${exitedAt} grace_deadline_ms=${parentSignalDeadline}\n`,
+    );
+  } catch {
+    // Closed stderr must not prevent propagation of the original signal.
+  }
   process.removeAllListeners(signal);
   process.kill(process.pid, signal);
   process.exit(128);
@@ -283,26 +296,27 @@ function rethrowParentSignal(signal) {
 function handleParentSignal(signal) {
   if (parentSignalInFlight) {
     terminateChildGroup("SIGKILL");
-    rethrowParentSignal(signal);
+    rethrowParentSignal(signal, "signalled");
     return;
   }
   parentSignalInFlight = true;
   if (finished) {
-    rethrowParentSignal(signal);
+    rethrowParentSignal(signal, "signalled");
     return;
   }
   finished = true;
   forwardedParentSignal = signal;
   clearRuntimeTimers();
   terminateChildGroup(signal);
+  parentSignalDeadline = performance.now() + timeoutKillGraceMs;
   parentSignalTimer = setTimeout(() => {
     terminateChildGroup("SIGKILL");
-    rethrowParentSignal(signal);
+    rethrowParentSignal(signal, "grace-elapsed");
   }, timeoutKillGraceMs);
   parentSignalPollTimer = setInterval(
     () => {
       if (!childGroupExists()) {
-        rethrowParentSignal(signal);
+        rethrowParentSignal(signal, "descendants-drained");
       }
     },
     Math.min(50, timeoutKillGraceMs),
@@ -344,7 +358,14 @@ function finish(code, signal) {
   if (cpuCoreRatio > maxCpuCoreRatio) {
     violations.push(`cpu_core_ratio=${cpuCoreRatio.toFixed(3)} > ${maxCpuCoreRatio}`);
   }
-  if (violations.length > 0) {
+  const limitsFailed = reportLimitViolations(
+    violations.map((message) => ({
+      file: "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
+      title: "Plugin lifecycle resource budget",
+      message: `phase=${phase} ${message}`,
+    })),
+  );
+  if (limitsFailed) {
     console.error(
       `plugin lifecycle resource ceiling exceeded: phase=${phase} ${violations.join("; ")}`,
     );
@@ -374,7 +395,7 @@ child.on("error", (error) => {
 child.on("exit", (code, signal) => {
   if (parentSignalInFlight && forwardedParentSignal) {
     if (!childGroupExists()) {
-      rethrowParentSignal(forwardedParentSignal);
+      rethrowParentSignal(forwardedParentSignal, "descendants-drained");
     }
     return;
   }

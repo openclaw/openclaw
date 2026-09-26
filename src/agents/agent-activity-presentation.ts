@@ -1,6 +1,25 @@
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { groupToolCalls, type ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
+
+/** Only recorded, unambiguous children replace a successfully completed wrapper. */
+export function resolveCompletedActivityWrappers<
+  Call extends ToolCallIdentity & { activity?: { status?: string } },
+>(calls: readonly Call[]): Set<Call> {
+  const wrappers = new Set<Call>();
+  const pending = groupToolCalls(calls);
+  while (pending.length > 0) {
+    const group = pending.pop()!;
+    if (group.children.length > 0 && group.card.activity?.status === "completed") {
+      wrappers.add(group.card);
+    }
+    for (const child of group.children) {
+      pending.push(child);
+    }
+  }
+  return wrappers;
+}
 
 export function projectAgentActivityItem<
   Item extends {
@@ -53,28 +72,74 @@ export function summarizeAgentActivity(
     itemId: string;
     toolCallId?: string;
     title: string;
+    name?: string;
+    commandBearing?: boolean;
     status?: string;
     hideFromChannelProgress?: boolean;
     suppressChannelProgress?: boolean;
   }[],
-): string {
+) {
   const operations = new Map(
     items
       .filter((item) => !item.suppressChannelProgress)
       .map((item) => [item.toolCallId ?? item.itemId, item]),
   );
-  const titles = new Map<string, number>();
+  const counts = { commands: 0, reads: 0, edits: 0, writes: 0, searches: 0, fetches: 0, other: 0 };
+  const outcomes = { failed: 0, blocked: 0, unknown: 0 };
+  let total = 0;
   for (const item of operations.values()) {
     if (item.hideFromChannelProgress || item.suppressChannelProgress) {
       continue;
     }
-    const title =
-      item.status === "failed" || item.status === "blocked"
-        ? `${item.title} (${item.status})`
-        : item.title;
-    titles.set(title, (titles.get(title) ?? 0) + 1);
+    // Prepared names describe operations, not successful effects or distinct
+    // files. Free-form titles and metadata belong only in individual details.
+    const name = normalizeLowercaseStringOrEmpty(item.name);
+    const category = item.commandBearing ? "commands" : (ACTIVITY_CATEGORIES.get(name) ?? "other");
+    counts[category] += 1;
+    total += 1;
+    if (item.status === "failed" || item.status === "blocked") {
+      outcomes[item.status] += 1;
+    } else if (!item.status) {
+      outcomes.unknown += 1;
+    }
   }
-  return [...titles]
-    .map(([title, count]) => (count === 1 ? title : `${title} ×${count}`))
-    .join(", ");
+  return { total, counts, outcomes };
 }
+
+const ACTIVITY_CATEGORIES = new Map<
+  string,
+  "commands" | "reads" | "edits" | "writes" | "searches" | "fetches"
+>([
+  ["exec", "commands"],
+  ["bash", "commands"],
+  ["shell", "commands"],
+  ["run_command", "commands"],
+  ["run_terminal_cmd", "commands"],
+  ["read", "reads"],
+  ["read_file", "reads"],
+  ["readfile", "reads"],
+  ["notebookread", "reads"],
+  ["notebook_read", "reads"],
+  ["edit", "edits"],
+  ["apply_patch", "edits"],
+  ["applypatch", "edits"],
+  ["patch", "edits"],
+  ["edit_file", "edits"],
+  ["multiedit", "edits"],
+  ["multi_edit", "edits"],
+  ["notebookedit", "edits"],
+  ["notebook_edit", "edits"],
+  ["write", "writes"],
+  ["write_file", "writes"],
+  ["create_file", "writes"],
+  ["grep", "searches"],
+  ["glob", "searches"],
+  ["find", "searches"],
+  ["ls", "searches"],
+  ["list", "searches"],
+  ["codebase_search", "searches"],
+  ["web_search", "searches"],
+  ["web_fetch", "fetches"],
+  ["webfetch", "fetches"],
+  ["fetch", "fetches"],
+]);

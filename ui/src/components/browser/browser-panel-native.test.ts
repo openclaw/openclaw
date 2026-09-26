@@ -1,196 +1,23 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type {
-  NativeBrowserMessage,
-  NativeBrowserState,
-  NativeBrowserTab,
-} from "../../app/native-browser-bridge.ts";
 import { startNativeLinkRouting } from "../../app/native-link-routing.ts";
 import { acquireNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { promoteToPopoverTopLayer } from "../menu-surface.ts";
 import {
-  createBrowserClient,
   createInspectedNode,
   createPointer,
   flushBrowserResponses,
-  stubScreenshotMedia,
-  TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
-import "./browser-panel.ts";
+import {
+  fakeNativeBrowser,
+  mountSessionPanel,
+  nativeTab,
+  setupNativeBrowserPanelTests,
+} from "./test-helpers/native-browser.ts";
 
-const nativeTab = (
-  id: string,
-  url = "https://example.test/page",
-  sessionKey = "",
-): NativeBrowserTab => ({
-  id,
-  sessionKey,
-  url,
-  title: "Example page",
-  loading: false,
-  canGoBack: true,
-  canGoForward: false,
-  openedBy: "web",
-});
-
-function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false) {
-  let state: NativeBrowserState = { revision: 0, tabs };
-  const publish = (nextTabs: NativeBrowserTab[]) => {
-    state = { revision: state.revision + 1, tabs: nextTabs };
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
-    window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: state }));
-  };
-  const postMessage = vi.fn(async (message: NativeBrowserMessage) => {
-    switch (message.type) {
-      case "open": {
-        const tab = nativeTab(message.tabId, message.url, message.sessionKey);
-        if (legacy) {
-          delete tab.sessionKey;
-        }
-        publish([...state.tabs, tab]);
-        return { ok: true, tabId: message.tabId };
-      }
-      case "close":
-        publish(state.tabs.filter((tab) => tab.id !== message.tabId));
-        break;
-      case "snapshot":
-        return {
-          ok: true,
-          dataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
-          cssWidth: 100,
-          cssHeight: 100,
-        };
-      case "inspect":
-        return { ok: true, node: createInspectedNode("Save") };
-      case "download":
-        return { ok: true, cancelled: false };
-      case "back":
-      case "forward":
-      case "navigate":
-      case "present":
-      case "release-scope":
-      case "reload":
-      case "stop":
-        break;
-    }
-    return { ok: true };
-  });
-  vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage } } });
-  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
-  return {
-    publish,
-    postMessage,
-    messages: () => postMessage.mock.calls.map(([message]) => message),
-  };
-}
-
-const controllers: BrowserPanelController[] = [];
-let hit: Element | null;
-let frames: Map<number, FrameRequestCallback>;
-let nextFrame: number;
-
-function controllerFixture(screencast = false, sessionKey = "") {
-  let remoteOpen = true;
-  const { client, request } = createBrowserClient(
-    async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/remote") {
-        remoteOpen = false;
-        return { ok: true };
-      }
-      if (envelope.path === "/tabs" && !remoteOpen) {
-        return { running: true, tabs: [] };
-      }
-      if (envelope.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [
-            { tabId: "remote", targetId: "remote", title: "Remote", url: "https://remote.test/" },
-          ],
-        };
-      }
-      if (envelope.path === "/screencast") {
-        return {
-          token: "token",
-          wsPath: "/browser/screencast?token=token",
-          targetId: "remote",
-          url: "https://remote.test/",
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        return { path: "/fresh.png", targetId: "remote", url: "https://remote.test/" };
-      }
-      if (envelope.path === "/download") {
-        return { download: { path: "/managed/remote.png", suggestedFilename: "remote.png" } };
-      }
-      if (envelope.path === "/act") {
-        return {
-          result: { cssWidth: 100, cssHeight: 100, title: "Remote", url: "https://remote.test/" },
-        };
-      }
-      return { ok: true };
-    },
-    { screencast },
-  );
-  const host = new TestBrowserPanelHost(client);
-  host.sessionKey = sessionKey;
-  document.body.append(host.renderRoot);
-  hit = host.renderRoot.querySelector(".bp-stage");
-  const controller = new BrowserPanelController(host);
-  controllers.push(controller);
-  controller.hostConnected();
-  return { controller, host, request };
-}
-
-function flushFrames() {
-  const pending = [...frames.values()];
-  frames.clear();
-  for (const frame of pending) {
-    frame(0);
-  }
-}
-
-beforeEach(() => {
-  frames = new Map();
-  nextFrame = 0;
-  hit = null;
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("ResizeObserver", undefined);
-  vi.stubGlobal("IntersectionObserver", undefined);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
-  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => hit });
-  stubScreenshotMedia();
-});
-
-afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
-  }
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  Reflect.deleteProperty(document, "elementFromPoint");
-});
-
-async function mountSessionPanel(sessionKey: string) {
-  const panel = document.createElement("openclaw-browser-panel");
-  panel.sessionKey = sessionKey;
-  panel.available = true;
-  panel.remoteAvailable = false;
-  panel.embedded = true;
-  panel.presented = true;
-  document.body.append(panel);
-  await panel.updateComplete;
-  return panel;
-}
+const { controllerFixture, flushFrames, setHit } = setupNativeBrowserPanelTests();
 
 describe("native Browser panel ownership", () => {
   it("keeps tabs local when opening Browser in another chat session", async () => {
@@ -514,7 +341,7 @@ describe("native Browser panel ownership", () => {
       const stage = panel.shadowRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();
       vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
-      hit = panel;
+      setHit(panel);
       flushFrames();
       expect(native.messages()).toContainEqual(
         expect.objectContaining({ type: "open", url: link.href }),
@@ -547,7 +374,7 @@ describe("native Browser panel ownership", () => {
       const stage = panel.shadowRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();
       vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
-      hit = panel;
+      setHit(panel);
       window.dispatchEvent(new Event("resize"));
       flushFrames();
       expect(native.messages().at(-1)).toMatchObject({
@@ -757,7 +584,7 @@ describe("native Browser panel ownership", () => {
     second();
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
-    hit = document.body;
+    setHit(document.body);
     window.dispatchEvent(new Event("resize"));
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
@@ -783,7 +610,7 @@ describe("native Browser panel ownership", () => {
         first.controller.native.presentation.scope,
       );
       native.postMessage.mockClear();
-      hit = first.host.renderRoot.querySelector(".bp-stage");
+      setHit(first.host.renderRoot.querySelector(".bp-stage"));
 
       if (action === "select") {
         await first.controller.selectTab("mac-one");

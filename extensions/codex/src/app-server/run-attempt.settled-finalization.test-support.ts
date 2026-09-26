@@ -219,7 +219,7 @@ export function registerSettledFinalizationTests({
             name: "bash",
             arguments: JSON.stringify({ command: "echo sent-to-alice", cwd: workspaceDir }),
           },
-          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice" },
+          { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
         ]);
         expect(Object.isFrozen(context)).toBe(true);
       }
@@ -294,7 +294,7 @@ export function registerSettledFinalizationTests({
       promptError: "remote compaction failed",
       promptErrorSource: "compaction",
     });
-    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+    expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 1, activeCount: 0 });
     expect(result.settledTurnFinalizationContext).toMatchObject({
       source: "harness",
       data: [

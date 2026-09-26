@@ -51,6 +51,7 @@ class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
   private readonly framesQuery;
+  private readonly frameMetadataQuery;
   private readonly batchesQuery;
   private readonly cardsQuery;
   private readonly statements;
@@ -94,6 +95,10 @@ class LogbookDatabaseStore {
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
       const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
       this.framesQuery = framesQuery;
+      // Keep native integer overflow rejection while omitting unused frame strings.
+      this.frameMetadataQuery = framesQuery
+        .clearSelect()
+        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"]);
       this.batchesQuery = this.query
         .selectFrom("batches")
         .select(["id", "day", "start_ms", "end_ms", "status", "error", "frame_count", "model"]);
@@ -279,13 +284,7 @@ class LogbookDatabaseStore {
   unbatchedActiveFrames(limit: number): Pick<LogbookFrame, "id" | "capturedAtMs">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery
-        .clearSelect()
-        // Preserve native integer overflow rejection while omitting unused frame strings.
-        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"])
-        .where("batch_id", "is", null)
-        .where("idle", "=", 0)
-        .limit(limit),
+      this.frameMetadataQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
     ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
   }
 
@@ -306,11 +305,20 @@ class LogbookDatabaseStore {
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(startMs: number, endMs: number): LogbookFrame[] {
+  framesInRange(
+    startMs: number,
+    endMs: number,
+  ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery
+        .where("captured_at_ms", ">=", startMs)
+        .where("captured_at_ms", "<", endMs),
+    ).rows.map((row) => ({
+      id: row.id,
+      capturedAtMs: row.captured_at_ms,
+      idle: row.idle === 1,
+    }));
   }
 
   createBatch(params: LogbookBatchInput): number {
@@ -477,18 +485,7 @@ class LogbookDatabaseStore {
         const frames = selectKeyframes
           ? executeSqliteQuerySync(
               this.db,
-              this.framesQuery
-                .clearSelect()
-                // Keep every numeric field so native overflow still rejects before deletion.
-                .select([
-                  "id",
-                  "captured_at_ms",
-                  "screen_index",
-                  "width",
-                  "height",
-                  "byte_size",
-                  "idle",
-                ])
+              this.frameMetadataQuery
                 .where("captured_at_ms", ">=", startMs)
                 .where("captured_at_ms", "<", endMs),
             ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))

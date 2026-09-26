@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -34,8 +35,10 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
 import { settleWorkspaceRuns } from "./server.sessions.create.projects.test-support.js";
-import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
+import { agentDiscoveryMock, dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -48,7 +51,12 @@ const projectCloneMocks = vi.hoisted(() => ({
 }));
 vi.mock("../projects/project-clone.js", () => projectCloneMocks);
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+let createRepository: ReturnType<typeof createWorktreeSpawnRepositoryFixture>;
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness(async (makeTempDir) => {
+  createRepository = createWorktreeSpawnRepositoryFixture(
+    makeTempDir("openclaw-spawn-repo-seeds-"),
+  );
+});
 const execFileAsync = promisify(execFile);
 const parentKey = "agent:main:dashboard:project-parent";
 const parentCreateParams = {
@@ -82,33 +90,6 @@ type CreatedWorktreeSession = {
   entry: SessionEntry;
   worktree: { id: string; path: string };
 };
-
-async function createRepository(name: string): Promise<string> {
-  const root = path.join(state.root, name);
-  await fs.mkdir(path.join(root, ".openclaw"), { recursive: true });
-  await fs.writeFile(path.join(root, "README.md"), `${name}\n`);
-  await fs.writeFile(
-    path.join(root, ".openclaw", "worktree-setup.sh"),
-    "#!/bin/sh\ntouch setup-marker.txt\n",
-    { mode: 0o755 },
-  );
-  await execFileAsync("git", ["init", "-b", "main", root]);
-  await execFileAsync("git", ["-C", root, "add", "."]);
-  await execFileAsync("git", [
-    "-C",
-    root,
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-m",
-    "Initialize fixture",
-  ]);
-  return await fs.realpath(root);
-}
 
 function spawnClient(admin = false, requesterSessionKey = parentKey) {
   return {
@@ -175,14 +156,23 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "openclaw-spawn-repo-" });
   const defaultWorkspace = path.join(state.root, "non-git-workspace");
   await fs.mkdir(defaultWorkspace);
-  repository = await createRepository("selected-project");
+  repository = await createRepository(state.root, "selected-project");
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const { provider, model } = resolveDefaultModelForAgent({
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+  });
+  agentDiscoveryMock.models = [
+    { provider, id: model, name: "Default fixture model", reasoning: false },
+  ];
 });
 
 afterEach(async () => {
+  await disposeSessionReadContexts();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   projectCloneMocks.materializeProjectClone.mockReset();
@@ -215,7 +205,7 @@ test.each([
     }
     const projectName =
       required && !worktree ? "non-git-workspace/tool-selected-project" : "tool-selected-project";
-    const otherRepository = await createRepository(projectName);
+    const otherRepository = await createRepository(state.root, projectName);
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
     const { getRuntimeConfig } = await getGatewayConfigModule();
@@ -306,7 +296,7 @@ test.each([
       { agentId: "main", sessionKey: parentKey, storePath },
       { ...parent, sandbox: "required" },
     );
-    const otherRepository = await createRepository("sandbox-external-project");
+    const otherRepository = await createRepository(state.root, "sandbox-external-project");
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
     const { getRuntimeConfig } = await getGatewayConfigModule();
@@ -585,7 +575,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("already bound") },
     });
   }
-  const otherRepository = await createRepository("other-replay-project");
+  const otherRepository = await createRepository(state.root, "other-replay-project");
   const wrongRepository = await directSessionReq(
     "sessions.create",
     { ...params, cwd: otherRepository },
@@ -631,7 +621,7 @@ test.each([
       source === "direct"
         ? (await createDirectProjectParent()).key
         : (await createManagedProjectParent()).key;
-    const otherRepository = await createRepository("other-project");
+    const otherRepository = await createRepository(state.root, "other-project");
     let params: Record<string, unknown>;
     if (selection === "project") {
       const project = await registerProjectRegistry({ path: otherRepository });
@@ -705,9 +695,13 @@ test("publishes a failed worktree spawn only after its durable session failure",
   const key = "agent:main:dashboard:failed-worktree-child";
   const target = { agentId: "main", sessionKey: key, storePath };
   const preparation = createDeferredCore<never>();
+  const preparationStarted = createDeferredCore();
   const createWorktree = vi
     .spyOn(managedWorktrees, "createWithOutcome")
-    .mockReturnValueOnce(preparation.promise);
+    .mockImplementationOnce(() => {
+      preparationStarted.resolve();
+      return preparation.promise;
+    });
   const failure = new Error(
     "git ls-tree -r --format=%(objectsize) c79ad267ba623c1a323f1f6e8b60228bd5a30ce5 -- failed (timed out after 120 seconds; signal SIGTERM):\n4514\n4168\nCheck repository access and disk space.",
   );
@@ -794,7 +788,8 @@ test("publishes a failed worktree spawn only after its durable session failure",
   const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
   expect(released).toBeDefined();
   expect(loadSessionEntry(target)?.pendingWorktree?.workspace).toBe(repository);
-  await vi.waitFor(() => expect(createWorktree).toHaveBeenCalledOnce());
+  await preparationStarted.promise;
+  expect(createWorktree).toHaveBeenCalledOnce();
   preparation.reject(failure);
   await withTimeout(released!, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS, "failed workspace proof");
   await registryProjection;

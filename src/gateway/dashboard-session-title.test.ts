@@ -185,29 +185,35 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("preserves the configured primary auth profile for explicit utility models", async () => {
-    const profiledCfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5@personal" },
-          utilityModel: "openai/gpt-5.6-luna",
+  it.each([false, true])(
+    "preserves the native primary auth profile for utility models (ACP=%s)",
+    async (acp) => {
+      const profiledCfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5@personal" },
+            utilityModel: "openai/gpt-5.6-luna",
+          },
+          entries: {
+            main: acp ? { model: "harness-only@harness-profile", runtime: { type: "acp" } } : {},
+          },
         },
-      },
-    } as OpenClawConfig;
-    resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
+      } as OpenClawConfig;
+      resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
 
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
-    ).resolves.toBe(true);
+      await expect(
+        maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
+      ).resolves.toBe(true);
 
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        utilityModelRef: "openai/gpt-5.6-luna",
-        regularModelRef: "openai/gpt-5.5@personal",
-        preferredProfile: "personal",
-      }),
-    );
-  });
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          utilityModelRef: "openai/gpt-5.6-luna",
+          regularModelRef: "openai/gpt-5.5@personal",
+          preferredProfile: "personal",
+        }),
+      );
+    },
+  );
 
   it("goes directly to the regular model when utility routing is disabled", async () => {
     resolveUtilityModelRefForAgent.mockReturnValue(undefined);
@@ -361,16 +367,23 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("persists a deterministic goal title when model labeling fails", async () => {
-    generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+  it.each(["failure", "empty"])(
+    "persists a two-word name after model labeling %s",
+    async (outcome) => {
+      if (outcome === "failure") {
+        generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+      } else {
+        generateConversationLabelWithFallback.mockResolvedValueOnce(null);
+      }
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(1);
-    const update = updateSessionEntry.mock.calls[0]?.[1];
-    expect(await update?.({ ...baseEntry })).toEqual({
-      displayName: "Help me plan the release",
-    });
-  });
+      await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(1);
+      const update = updateSessionEntry.mock.calls[0]?.[1];
+      expect(await update?.({ ...baseEntry })).toEqual({
+        displayName: expect.stringMatching(/^[a-z]+-[a-z]+$/),
+      });
+    },
+  );
 
   it("does not persist a deterministic title when utility-only speculation fails", async () => {
     generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
@@ -446,7 +459,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       onError,
       onPersisted,
     });
-    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     await expect(worktree).resolves.toBeUndefined();
     expect(onError).toHaveBeenCalledOnce();
     naming.resolve("Release Planning");
@@ -455,6 +468,68 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(onPersisted).not.toHaveBeenCalled();
     expect(loadSessionEntry()).toMatchObject({ displayName: "Release Planning" });
   });
+
+  it.each(["generated", "fallback"])(
+    "persists a late %s title after the worktree caller stops waiting",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const naming = createDeferredCore<string>();
+      generateConversationLabelWithFallback.mockReturnValue(naming.promise);
+      const params = titleParams();
+      const onError = vi.fn();
+      const onPersisted = vi.fn();
+      const worktree = generateWorktreeSessionTitle({ ...params, onError, onPersisted });
+      const background = maybeGenerateDashboardSessionTitle(params);
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(onError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(22_000);
+      await expect(worktree).resolves.toBeUndefined();
+      expect(onError).toHaveBeenCalledOnce();
+      expect(updateSessionEntry).not.toHaveBeenCalled();
+      if (outcome === "generated") {
+        naming.resolve("Release Planning");
+      } else {
+        naming.reject(new Error("model attempts exhausted"));
+      }
+      await background;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(loadSessionEntry()).toMatchObject({
+        displayName:
+          outcome === "generated" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
+      });
+      expect(onPersisted).toHaveBeenCalledOnce();
+      expect(updateSessionEntry).toHaveBeenCalledOnce();
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([1, 2])(
+    "retries a joined title failure only once (%s failed writes)",
+    async (failures) => {
+      const naming = createDeferredCore<string>();
+      generateConversationLabelWithFallback.mockReturnValueOnce(naming.promise);
+      const params = titleParams();
+      for (let attempt = 0; attempt < failures; attempt++) {
+        updateSessionEntry.mockRejectedValueOnce(new Error("temporary write failure"));
+      }
+      const onPersisted = vi.fn();
+      const worktree = generateWorktreeSessionTitle({ ...params, onError: vi.fn(), onPersisted });
+      const background = maybeGenerateDashboardSessionTitle(params);
+      const expected =
+        failures === 1
+          ? expect(background).resolves.toBe(true)
+          : expect(background).rejects.toThrow("temporary write failure");
+      naming.resolve("Release Planning");
+      await Promise.all([worktree, expected]);
+
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
+      expect(updateSessionEntry).toHaveBeenCalledTimes(2);
+      expect(onPersisted).not.toHaveBeenCalled();
+      expect(loadSessionEntry().displayName).toBe(failures === 1 ? "Release Planning" : undefined);
+    },
+  );
 
   it("revalidates worktree authority inside the final title commit", async () => {
     const writePrepared = createDeferredCore();
@@ -498,11 +573,15 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
 
     const first = maybeGenerateDashboardSessionTitle(titleParams());
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(false);
+    const duplicate = maybeGenerateDashboardSessionTitle(titleParams());
     resolveLabel("Release Planning");
     await expect(first).resolves.toBe(true);
+    await expect(duplicate).resolves.toBe(false);
 
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+    expect(updateSessionEntry).toHaveBeenCalledOnce();
+    expect(loadSessionEntry).toHaveBeenCalledOnce();
+    expect(readSessionTitleFieldsFromTranscript).toHaveBeenCalledOnce();
   });
 });
 

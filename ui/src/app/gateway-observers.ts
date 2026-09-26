@@ -5,6 +5,7 @@ import type {
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   clearModelCatalogCache,
@@ -80,6 +81,9 @@ export function createGatewayEventLog() {
     get revision() {
       return revision;
     },
+    clear() {
+      entries = [];
+    },
     resetConnection() {
       recoveryScope = null;
       return retire();
@@ -126,6 +130,7 @@ export function createGatewayMetadataObserver(
           (previous.phase === "connected" && next.phase !== "connected"))
       ) {
         invalidateUserPreferences(previous.client);
+        invalidateCronCatalog(previous.client);
         invalidateModelAuthStatusRequests(previous.client);
         clearModelCatalogCache(previous.client);
         invalidateChatMetadataStore(previous.client);
@@ -153,7 +158,13 @@ export function createGatewayMetadataObserver(
         : undefined;
       return true;
     },
-    receive(event: GatewayEventFrame, host: UiSessionDefaultsHost): GatewayEventFrame | undefined {
+    receive(
+      event: GatewayEventFrame,
+      host: UiSessionDefaultsHost & Pick<ApplicationGatewaySnapshot, "client">,
+    ): GatewayEventFrame | undefined {
+      if (host.client && (event.event === "cron" || event.event === "config.changed")) {
+        invalidateCronCatalog(host.client);
+      }
       if (event.event !== "models.snapshot") {
         return event;
       }

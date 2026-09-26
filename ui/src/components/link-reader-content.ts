@@ -5,11 +5,12 @@ import { guard } from "lit/directives/guard.js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
+import { icons } from "./icons.ts";
+import { linkReaderAuthorHref } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
-export { linkReaderContentStyles } from "./link-reader-content.styles.ts";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
@@ -30,6 +31,10 @@ for (const kind of ["html_inline", "html_block"] as const) {
   const original = markdown.renderer.rules[kind]!;
   markdown.renderer.rules[kind] = (tokens, index, options, env, renderer) => {
     const source = tokens[index]?.content ?? "";
+    // Reader documents hide comment metadata; code examples never enter these HTML rules.
+    if (source.trimStart().startsWith("<!--")) {
+      return escapeMarkdownHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
+    }
     return /^<img\s[^<>]*>\s*$/iu.test(source)
       ? source
       : original(tokens, index, options, env, renderer);
@@ -100,7 +105,9 @@ function externalAnchor(url: string, label: string): HTMLAnchorElement {
   return anchor;
 }
 
-function prepareImage(source: HTMLImageElement, base: string): void {
+type LoadImage = (url: string) => Promise<string>;
+
+function prepareImage(source: HTMLImageElement, base: string, loadImage?: LoadImage): void {
   const url = documentUrl(source.getAttribute("src") ?? "", base);
   const label = source.alt.trim() || t("linkReader.image");
   const wrapper = document.createElement("span");
@@ -132,15 +139,12 @@ function prepareImage(source: HTMLImageElement, base: string): void {
     image.referrerPolicy = "no-referrer";
     image.loading = "lazy";
     image.decoding = "async";
-    image.addEventListener(
-      "error",
-      () => {
-        image.hidden = true;
-        status.textContent = t("linkReader.imageUnavailable", { title: label });
-        status.setAttribute("role", "status");
-      },
-      { once: true },
-    );
+    const unavailable = () => {
+      image.hidden = true;
+      status.textContent = t("linkReader.imageUnavailable", { title: label });
+      status.setAttribute("role", "status");
+    };
+    image.addEventListener("error", unavailable, { once: true });
     if (linkedImage) {
       wrapper.append(image);
     } else {
@@ -149,7 +153,15 @@ function prepareImage(source: HTMLImageElement, base: string): void {
       open.append(image);
       wrapper.append(open);
     }
-    image.src = url.href;
+    if (loadImage) {
+      void loadImage(url.href).then((imageUrl) => {
+        if (image.isConnected) {
+          image.src = imageUrl;
+        }
+      }, unavailable);
+    } else {
+      image.src = url.href;
+    }
   } else {
     status.textContent = t("linkReader.imageUnavailable", { title: label });
   }
@@ -162,8 +174,8 @@ function prepareImage(source: HTMLImageElement, base: string): void {
   }
 }
 
-function renderMarkdown(body: string, base: string) {
-  return guard([body, base, i18n.getLocale()], () => {
+function renderMarkdown(body: string, base: string, loadImage?: LoadImage) {
+  return guard([body, base, loadImage, i18n.getLocale()], () => {
     let rendered: string;
     try {
       rendered = markdown.render(body, documentOptions);
@@ -204,7 +216,7 @@ function renderMarkdown(body: string, base: string) {
       input.disabled = true;
     }
     for (const image of fragment.querySelectorAll<HTMLImageElement>("img")) {
-      prepareImage(image, base);
+      prepareImage(image, base, loadImage);
     }
     return fragment;
   });
@@ -264,7 +276,7 @@ function renderFile(file: ControlUiLinkReaderFile, expanded: boolean) {
   </details>`;
 }
 
-function renderComment(comment: ControlUiLinkReaderComment, base: string) {
+function renderComment(comment: ControlUiLinkReaderComment, base: string, loadImage?: LoadImage) {
   const context = comment.context;
   const location = [context?.path, context?.lineLabel].filter(Boolean).join(":");
   const permalink = documentUrl(comment.url, base)?.href;
@@ -320,7 +332,7 @@ function renderComment(comment: ControlUiLinkReaderComment, base: string) {
           </details>`
         : nothing
     }
-    <div class="lr-markdown">${renderMarkdown(comment.body, base)}</div>
+    <div class="lr-markdown">${renderMarkdown(comment.body, base, loadImage)}</div>
     ${
       comment.bodyTruncated
         ? html`<p class="lr-note">${t("linkReader.bodyTruncated")}</p>`
@@ -329,40 +341,195 @@ function renderComment(comment: ControlUiLinkReaderComment, base: string) {
   </article>`;
 }
 
-export function renderLinkReaderContent(
-  detail: ControlUiLinkReaderDocument,
-  target: LinkReaderTarget,
-) {
-  return html`<div class="lr-meta">${detail.subtitle ?? target.reader.label}</div>
-    <h1>${detail.title}</h1>
-    <div class="lr-meta lr-item-meta">
+type ReaderChecks = NonNullable<ControlUiLinkReaderDocument["checks"]>;
+
+function checkIcon(state: ReaderChecks["state"]) {
+  switch (state) {
+    case "success":
+      return icons.check;
+    case "failure":
+      return icons.circleX;
+    case "pending":
+      return icons.clock;
+    case "unavailable":
+      return icons.circleQuestionMark;
+    default:
+      return icons.circle;
+  }
+}
+
+function checkLabel(state: ReaderChecks["items"][number]["state"]) {
+  const labels = {
+    success: "linkReader.checkSuccess",
+    failure: "linkReader.checkFailure",
+    pending: "linkReader.checkPending",
+    neutral: "linkReader.checkNeutral",
+  } as const;
+  return t(labels[state]);
+}
+
+function renderChecks(checks: ReaderChecks, base: string) {
+  const labels = {
+    success: "linkReader.checksSuccess",
+    failure: "linkReader.checksFailure",
+    pending: "linkReader.checksPending",
+    neutral: "linkReader.checksNeutral",
+    unavailable: "linkReader.checksUnavailable",
+  } as const;
+  const source = checks.url ? documentUrl(checks.url, base)?.href : undefined;
+  return html`<details
+    class=${"lr-checks lr-checks--" + checks.state}
+    data-reader-section="checks"
+    tabindex="-1"
+    ?open=${checks.state === "failure"}
+  >
+    <summary>
+      <span class="lr-checks-icon" aria-hidden="true">${checkIcon(checks.state)}</span>
+      <span class="lr-checks-heading"
+        ><strong>${t(labels[checks.state])}</strong
+        ><span class="lr-meta">${checks.summary}</span></span
+      >
+      <span class="lr-checks-chevron" aria-hidden="true">${icons.chevronDown}</span>
       ${
-        detail.badge
-          ? html`<span class=${"lr-state lr-state--" + detail.badge.tone}
-              >${detail.badge.label}</span
+        !checks.truncated &&
+        checks.state !== "unavailable" &&
+        checks.items.length === checks.total &&
+        checks.total > 0
+          ? html`<span class="lr-checks-meter" aria-hidden="true"
+              >${checks.items.map((item) => html`<span class=${"lr-check-segment lr-check-segment--" + item.state}></span>`)}</span
             >`
           : nothing
       }
+    </summary>
+    <ul class="lr-check-list">
+      ${checks.items.map((item) => {
+        const url = item.url ? documentUrl(item.url, base)?.href : undefined;
+        return html`<li class=${"lr-check lr-check--" + item.state}>
+          <span class="lr-check-symbol" role="img" aria-label=${checkLabel(item.state)}
+            >${checkIcon(item.state)}</span
+          >
+          <span class="lr-check-copy"
+            >${
+              url
+                ? html`<a
+                    href=${url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    referrerpolicy="no-referrer"
+                    data-link-reader-external
+                    >${item.name}${icons.externalLink}</a
+                  >`
+                : html`<span>${item.name}</span>`
+            }
+            <span class="lr-meta">${item.detail ?? checkLabel(item.state)}</span>
+          </span>
+        </li>`;
+      })}
+    </ul>
+    ${checks.truncated ? html`<p class="lr-note">${t("linkReader.checksTruncated")}</p>` : nothing}
+    <footer class="lr-checks-footer">
+      ${checks.commit ? html`<code title=${t("linkReader.checksCommit", { commit: checks.commit })}>${checks.commit.slice(0, 7)}</code>` : nothing}
+      ${source ? html`<a href=${source} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" data-link-reader-external>${t("linkReader.checksSource")}${icons.externalLink}</a>` : nothing}
+    </footer>
+  </details>`;
+}
+
+function renderSectionLink(section: string, label: string, count?: number) {
+  return html`<button
+    type="button"
+    @click=${(event: MouseEvent) => {
+      const button = event.currentTarget;
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+      const destination = button
+        .closest(".lr-document")
+        ?.querySelector<HTMLElement>(`[data-reader-section="${section}"]`);
+      if (destination instanceof HTMLDetailsElement) {
+        destination.open = true;
+      }
+      destination?.focus({ preventScroll: true });
+      destination?.scrollIntoView({ block: "start" });
+    }}
+  >
+    ${label}${count !== undefined ? html`<span class="lr-count">${count}</span>` : nothing}
+  </button>`;
+}
+
+export function renderLinkReaderContent(
+  detail: ControlUiLinkReaderDocument,
+  target: LinkReaderTarget,
+  loadImage?: LoadImage,
+) {
+  const authorHref = linkReaderAuthorHref(detail.authorUrl, detail.url);
+  const coAuthors = detail.coAuthors ?? [];
+  const unnamed = Math.max(coAuthors.length, detail.coAuthorCount ?? 0) - coAuthors.length;
+  const coAuthorNames =
+    coAuthors.map((author) => author.name).join(", ") + (unnamed ? " +" + unnamed : "");
+  return html`<article class="lr-document">
+    <header class="lr-document-header">
+      <div class="lr-eyebrow">${detail.subtitle ?? target.reader.label}</div>
+      <h1>${detail.title}</h1>
+      <div class="lr-meta lr-item-meta">
+        ${
+          detail.badge
+            ? html`<span class=${"lr-state lr-state--" + detail.badge.tone}
+                >${detail.badge.label}</span
+              >`
+            : nothing
+        }
+        ${
+          detail.author
+            ? authorHref
+              ? html`<a
+                  href=${authorHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-link-reader-external
+                  >${t("linkReader.byAuthor", { author: detail.author })}</a
+                >`
+              : html`<span>${t("linkReader.byAuthor", { author: detail.author })}</span>`
+            : nothing
+        }
+        ${coAuthorNames.trim() ? html`<span class="lr-coauthors">${t("linkReader.coAuthors", { authors: coAuthorNames.trim() })}</span>` : nothing}
+        ${renderDate(detail.badge?.timestamp ?? detail.createdAt)}
+      </div>
       ${
-        detail.author
-          ? html`<span>${t("linkReader.byAuthor", { author: detail.author })}</span>`
+        detail.metadata?.length
+          ? html`<dl class="lr-metadata">
+              ${detail.metadata.map(
+                ({ label, value, tone }) =>
+                  html`<div class=${"lr-metric lr-metric--" + (tone ?? "neutral")}>
+                    <dt>${label}</dt>
+                    <dd>${value}</dd>
+                  </div>`,
+              )}
+            </dl>`
           : nothing
       }
-      ${renderDate(detail.createdAt)}
-      ${detail.metadata?.map(
-        ({ label, value }) => html`<span>${label ? label + ": " : ""}${value}</span>`,
-      )}
-    </div>
+    </header>
+    <nav class="lr-section-nav" aria-label=${t("linkReader.navigation")}>
+      ${renderSectionLink("overview", t("linkReader.overview"))}
+      ${detail.checks ? renderSectionLink("checks", t("linkReader.checks"), detail.checks.total) : nothing}
+      ${detail.files ? renderSectionLink("files", t("linkReader.filesShort"), detail.filesTotal ?? detail.files.length) : nothing}
+      ${detail.comments ? renderSectionLink("comments", t("linkReader.discussion"), detail.commentsTotal ?? detail.comments.length) : nothing}
+    </nav>
+    ${detail.checks ? renderChecks(detail.checks, detail.url) : nothing}
     ${
       detail.partial
         ? html`<p class="lr-note" role="status">${t("linkReader.partial")}</p>`
         : nothing
     }
-    <section aria-label=${t("linkReader.description")} class="lr-description">
+    <section
+      aria-label=${t("linkReader.description")}
+      class="lr-description"
+      data-reader-section="overview"
+      tabindex="-1"
+    >
       <div class="lr-markdown">
         ${
           detail.body
-            ? renderMarkdown(detail.body, detail.url)
+            ? renderMarkdown(detail.body, detail.url, loadImage)
             : html`<p class="lr-meta">${t("linkReader.noDescription")}</p>`
         }
       </div>
@@ -374,13 +541,17 @@ export function renderLinkReaderContent(
     </section>
     ${
       detail.files
-        ? html`<section aria-label=${t("linkReader.files")} class="lr-files" id="files">
+        ? html`<section
+            aria-label=${t("linkReader.files")}
+            class="lr-files"
+            id="files"
+            data-reader-section="files"
+            tabindex="-1"
+          >
             <h2>
               ${t("linkReader.files")}
-              <span class="lr-meta"
-                >${detail.files.length}${
-                  detail.filesTotal !== undefined ? " / " + detail.filesTotal : ""
-                }</span
+              <span class="lr-count"
+                >${detail.files.length}${detail.filesTotal !== undefined && detail.filesTotal !== detail.files.length ? " / " + detail.filesTotal : ""}</span
               >
             </h2>
             ${detail.files.map((file) => renderFile(file, detail.filesExpanded === true))}
@@ -399,16 +570,19 @@ export function renderLinkReaderContent(
     }
     ${
       detail.comments
-        ? html`<section aria-label=${t("linkReader.comments")} class="lr-comments">
+        ? html`<section
+            aria-label=${t("linkReader.comments")}
+            class="lr-comments"
+            data-reader-section="comments"
+            tabindex="-1"
+          >
             <h2>
               ${t("linkReader.comments")}
-              <span class="lr-meta"
-                >${detail.comments.length}${
-                  detail.commentsTotal !== undefined ? " / " + detail.commentsTotal : ""
-                }</span
+              <span class="lr-count"
+                >${detail.comments.length}${detail.commentsTotal !== undefined && detail.commentsTotal !== detail.comments.length ? " / " + detail.commentsTotal : ""}</span
               >
             </h2>
-            ${detail.comments.map((comment) => renderComment(comment, detail.url))}
+            ${detail.comments.map((comment) => renderComment(comment, detail.url, loadImage))}
             ${
               detail.commentsTruncated
                 ? html`<p class="lr-note">${t("linkReader.commentsTruncated")}</p>`
@@ -421,5 +595,6 @@ export function renderLinkReaderContent(
             }
           </section>`
         : nothing
-    }`;
+    }
+  </article>`;
 }

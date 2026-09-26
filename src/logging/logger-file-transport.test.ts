@@ -2,9 +2,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { appendRegularFile } from "@openclaw/fs-safe/advanced";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { appendRegularFile } from "../infra/regular-file.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";

@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { createPlacementSessionRetirement } from "./placement-session-retirement.js";
 import {
@@ -164,7 +162,7 @@ describe("placement session retirement", () => {
     );
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    const requested = placements.startDispatch({
+    const requested = await placements.startDispatch({
       sessionId: "session-requested",
       sessionKey: "agent:main:session-requested",
       agentId: "main",
@@ -174,13 +172,13 @@ describe("placement session retirement", () => {
       sessionKey: "agent:main:session-owned-requested",
       agentId: "main",
     };
-    const ownedClaim = placements.claimTurn({
+    const ownedClaim = await placements.claimTurn({
       ...ownedIdentity,
       owner: { kind: "local" },
       claimId: "requested-owner-claim",
       runId: "requested-owner-run",
     });
-    const ownedRequested = placements.startDispatch(ownedIdentity);
+    const ownedRequested = await placements.startDispatch(ownedIdentity);
     const retireSessionPlacement = vi.fn((input: WorkerSessionPlacementRetirement) =>
       placements.retireSessionPlacement(input),
     );
@@ -222,7 +220,7 @@ describe("placement session retirement", () => {
       );
       expect(forceDestroyEnvironment).not.toHaveBeenCalled();
     } finally {
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       await fs.rm(root, { recursive: true, force: true });
     }
   });

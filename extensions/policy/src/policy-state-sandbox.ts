@@ -265,13 +265,7 @@ function sandboxScopeIsShared(
 ): boolean {
   const localScope = readString(sandbox.scope);
   const inheritedScope = readString(inheritedSandbox.scope);
-  const configuredScope = localScope ?? inheritedScope;
-  if (configuredScope !== undefined) {
-    return configuredScope === "shared";
-  }
-  const localPerSession = readBoolean(sandbox.perSession);
-  const inheritedPerSession = readBoolean(inheritedSandbox.perSession);
-  return (localPerSession ?? inheritedPerSession) === false;
+  return (localScope ?? inheritedScope) === "shared";
 }
 
 function pushSandboxPostureValue(

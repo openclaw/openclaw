@@ -17,6 +17,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
   private reportDir?: string;
   private stopRequested = false;
   private stopAcknowledged = false;
+  private exitEntryReset = false;
   private diagnosticTimer?: NodeJS.Timeout;
   private diagnostics?: Promise<void>;
   private files: string[] = [];
@@ -35,7 +36,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         this.execArgv = [
           ...this.execArgv,
           "--report-on-signal",
-          "--report-signal=SIGUSR2",
+          "--report-signal=SIGQUIT",
           `--report-directory=${this.reportDir}`,
           "--report-filename=diagnostic.json",
           "--report-exclude-env",
@@ -52,7 +53,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         children.push(message.process);
       }
     };
-    // Vitest 5.0.0 + patches/vitest@5.0.0.patch (pnpm hash 5e7c1655) starts
+    // Vitest 5.0.1 + patches/vitest@5.0.1.patch (pnpm hash 90ba2969) starts
     // forks synchronously and calls stop() after its deadline or joined exit.
     // Recheck that contract on upgrades; the transport remains Vitest-owned.
     subscribe("child_process", observe);
@@ -79,6 +80,17 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         path.relative(this.project.config.root, filepath),
       );
     }
+    if (message.type === "stop") {
+      this.exitEntryReset = false;
+      if (this.reportDir) {
+        try {
+          fs.rmSync(path.join(this.reportDir, "exit-entry.json"), { force: true });
+          this.exitEntryReset = true;
+        } catch {
+          // A stale marker must not become evidence for this stop request.
+        }
+      }
+    }
     super.send(message);
   }
 
@@ -96,7 +108,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
           ? collectVitestForkOsDiagnostics(child.pid)
           : Promise.resolve("OS process diagnostics unavailable.");
         let report = "Node diagnostic report unavailable on this runtime or host.";
-        if (this.reportDir && child.kill("SIGUSR2")) {
+        if (this.reportDir && child.kill("SIGQUIT")) {
           report = await collectNodeDiagnosticReport(path.join(this.reportDir, "diagnostic.json"));
         }
         const boundedReport =
@@ -106,13 +118,18 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         this.project.vitest.logger.error(
           `[vitest-pool-diagnostics] pid=${child.pid} project=${JSON.stringify(this.project.name)} stopAcknowledged=${this.stopAcknowledged} files=${JSON.stringify(this.files)}\n${boundedReport}\n[/vitest-pool-diagnostics]`,
         );
-        const resources = ["active-resources.json", "synchronous-wait.json"].map((name) => {
-          try {
-            return `${name}: ${fs.readFileSync(path.join(this.reportDir!, name), "utf8").slice(0, 8_192)}`;
-          } catch {
-            return `${name}: unavailable`;
-          }
-        });
+        const resources = ["active-resources.json", "synchronous-wait.json", "exit-entry.json"].map(
+          (name) => {
+            if (name === "exit-entry.json" && !this.exitEntryReset) {
+              return `${name}: unavailable (stop reset failed)`;
+            }
+            try {
+              return `${name}: ${fs.readFileSync(path.join(this.reportDir!, name), "utf8").slice(0, 8_192)}`;
+            } catch {
+              return `${name}: unavailable`;
+            }
+          },
+        );
         this.project.vitest.logger.error(
           `[vitest-pool-resources] pid=${child.pid}\n${resources.join("\n")}\n${await osReport}\n[/vitest-pool-resources]`,
         );

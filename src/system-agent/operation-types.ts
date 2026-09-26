@@ -15,6 +15,7 @@ export type SystemAgentOperation =
   | { kind: "config-validate" }
   | { kind: "config-get"; path: string }
   | { kind: "config-schema"; path?: string }
+  | { kind: "config-unset"; path: string }
   | { kind: "config-set"; path: string; value: string }
   | {
       kind: "config-set-ref";
@@ -22,6 +23,8 @@ export type SystemAgentOperation =
       source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
+      /** Value the owner supplied; stored as secret-store entry `id` before the ref is written. */
+      secret?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | SystemAgentNavigationOperation
@@ -43,6 +46,7 @@ export type SystemAgentOperation =
       kind: "create-agent";
       agentId: string;
       name?: string;
+      purpose?: string;
       role?: AgentRoleId;
       workspace?: string;
       model?: string;

@@ -12,6 +12,7 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnInput,
@@ -138,13 +139,16 @@ export type AgentCommandOpts = {
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
-  assertSourceCurrent?: () => void;
+  assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Original operator restriction; host-only and never accepted from public ingress. */
+  operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
-  /** Called once when the selected runtime actually admits the prompt for execution. */
-  onExecutionStarted?: () => void;
+  /** Startup awaits returned work; incidental synchronous return values are ignored. */
+  onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
@@ -215,7 +219,9 @@ export type AgentCommandOpts = {
   /** Private owner binding hook invoked only after exact admission has resolved. */
   onPostAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
-  ) => void;
+  ) => void | Promise<void>;
+  /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
+  beforeTerminalDelivery?: () => Promise<void>;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -244,15 +250,18 @@ type AgentCommandGatewayOnlyKey =
   | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "operatorAuthority"
+  | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
-  | "onPostAdmittedRunContext";
+  | "onPostAdmittedRunContext"
+  | "beforeTerminalDelivery";
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride" | "assertSourceCurrent"
+  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
   /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;

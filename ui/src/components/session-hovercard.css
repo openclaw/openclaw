@@ -64,6 +64,42 @@
   white-space: normal;
 }
 
+.session-hovercard__channel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+}
+
+.session-hovercard__channel svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.session-hovercard__conversation {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__section--attribution {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.session-hovercard__attribution-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
 .session-hovercard__attribution {
   display: inline-flex;
   align-items: center;
@@ -418,6 +454,28 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.session-hovercard__error {
+  display: grid;
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-hovercard__error-icon {
+  white-space: normal;
+}
+
+.session-hovercard__error-icon svg {
+  display: block;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
 }
 
 .session-hovercard__notepad {

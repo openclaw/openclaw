@@ -1,12 +1,44 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { FastMode } from "../../api/types.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const STORAGE_KEY_PREFIX = "openclaw.new-session.preferences.v1:";
 const IDENTITY_KEY_PREFIX = "new-session.v1:";
 export const PREFS_MIGRATION_KEY = "new-session.migration.v1";
+// users.prefs is already authenticated-user and Gateway scoped. Null deletes this key.
+export const PALETTE_PREFERENCE_KEY = "new-session.palette.v1";
+
+export type PaletteSessionPreference = {
+  agentId: string;
+  selection: NewSessionPreference;
+};
+
+export function decodePalettePreference(value: unknown): PaletteSessionPreference | null {
+  if (!isRecord(value) || typeof value.agentId !== "string" || !value.agentId.trim()) {
+    return null;
+  }
+  const selection = normalizePreference(value.selection);
+  if (!selection || !isRecord(value.selection)) {
+    return null;
+  }
+  // Empty placement fields are explicit overrides, not permission to inherit a /new choice.
+  for (const key of ["folder", "projectId", "baseRef"] as const) {
+    const field = value.selection[key];
+    if (typeof field === "string") {
+      selection[key] = field.trim();
+    }
+  }
+  // The palette owns placement knobs; model/thinking continue to follow ordinary defaults.
+  delete selection.model;
+  delete selection.agentRuntime;
+  delete selection.thinkingLevel;
+  delete selection.fastMode;
+  delete selection.worktreeName;
+  return { agentId: normalizeAgentId(value.agentId), selection };
+}
 
 export type NewSessionWhere =
   | { kind: "local" }
@@ -40,7 +72,16 @@ export type NewSessionPreference = {
   model?: string;
   agentRuntime?: string;
   thinkingLevel?: string;
+  fastMode?: FastMode;
 };
+
+export function hasNewSessionModelPreference(
+  preference: NewSessionPreference | null | undefined,
+): preference is NewSessionPreference {
+  return Boolean(
+    preference?.model || preference?.thinkingLevel || preference?.fastMode !== undefined,
+  );
+}
 
 export function resolveNewSessionFolderPreference(
   preference: NewSessionPreference | null,
@@ -91,6 +132,9 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   const agentRuntime = normalizeOptionalString(value.agentRuntime);
   if (preference.model && agentRuntime) {
     preference.agentRuntime = agentRuntime;
+  }
+  if (typeof value.fastMode === "boolean" || value.fastMode === "auto") {
+    preference.fastMode = value.fastMode;
   }
   if (typeof value.worktree === "boolean") {
     preference.worktree = value.worktree;

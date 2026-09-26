@@ -18,6 +18,11 @@ Most days:
 - Docker-backed QA site: `pnpm qa:lab:up`
 - Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
+The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
+running Docker daemon and a source checkout, because the npm tarball omits QA
+Lab, and the `multipass` runner needs Multipass installed. See
+[QA-specific runners](/help/testing/qa-runners).
+
 When you touch tests or want extra confidence:
 
 - Informational V8 coverage report: `pnpm test:coverage`
@@ -101,20 +106,27 @@ Native dependency policy:
 
   <Accordion title="Vitest pool and isolation defaults">
 
-    - Base Vitest config defaults to `threads`.
+    - Base Vitest config defaults to `forks` on Windows and `threads` elsewhere.
+      Windows workers need separate native handle tables: concurrent thread
+      spawns can inherit another worker's temporary output pipe handles and
+      prevent that worker's child cleanup from observing EOF. Worker counts
+      and file parallelism remain unchanged.
     - The shared Vitest config fixes `isolate: false` and uses the
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
       shared non-isolated runner too.
-    - Each `pnpm test` shard inherits the same `threads` + `isolate: false`
-      defaults from the shared Vitest config.
+    - Provider plugin shards reuse workers with the shared cleanup runner.
+      Track global replacements with `vi.stubGlobal` so cleanup can restore them
+      before the next file.
+    - Each `pnpm test` shard inherits the platform pool and `isolate: false`
+      defaults from the shared Vitest config unless its owner selects otherwise.
     - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node
       processes by default to reduce V8 compile churn during big local runs.
       Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
       behavior.
     - `scripts/run-vitest.mjs` terminates explicit non-watch Vitest runs
       when their configured no-output deadline expires. Expiry fails the run
-      even when the child shuts down with exit code zero. Set
+      without retrying the shard, even when the child shuts down with exit code zero. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
     - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
@@ -162,6 +174,26 @@ Native dependency policy:
     - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on
       supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path`
       for one explicit cache location for direct profiling.
+    - Local Node runs also reuse compiled runtime-worker outputs from
+      `.artifacts/vitest-worker-cache`. The runner reserves an exclusive
+      checkout-local output slot and transfers verified artifacts into that slot.
+      After its borrowers and resources join, it transfers completed artifacts
+      back to the cache and removes the invocation directory. Occupied or
+      uncertain generations are never reclaimed automatically.
+      Content, compiler, configuration, or resolution changes invalidate the
+      seed; timestamp-only touches do not. Build provenance and resource receipts
+      are refreshed for each invocation, and source/output verification still
+      runs before lending and after completion. Cold cache-enabled preparation overlaps
+      the independent worker and finalizer builds when at least 8 GiB of memory
+      is available; smaller hosts keep sequential compilation. CI keeps fresh compilation
+      unless its workflow enables `OPENCLAW_VITEST_WORKER_CACHE=1` after restoring
+      a protected cache. Only the protected warmer publishes shared generations;
+      ordinary CI jobs remain remote-cache readers. Reuse requires the same
+      absolute checkout and reserved output paths, Node version, compiler options,
+      and verified inputs. Incompatible or missing generations compile normally.
+      Bun and custom Node loader runs keep fresh compilation.
+      This cache does not share Vitest's writable
+      filesystem module cache with another checkout.
 
   </Accordion>
 
@@ -256,7 +288,7 @@ Native dependency policy:
   - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
 
-The dedicated real-Gateway CI job uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts` completes in a clean checkout. Keep source and built outputs unchanged until all workers and children finish. Files outside the prebuilt config’s shared-reader/writer allowlist run serially first. Audited fixtures own their HOME, state, ports, and cleanup, and share at most two workers in the same invocation, with no extra jobs or shards. Readiness failures stop execution without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets without the prebuilt config keep their original serial command. See [CI](/ci) for the resource policy and bounded timing evidence.
+The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated canonical Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
 
 ### Network-isolated local E2E
 

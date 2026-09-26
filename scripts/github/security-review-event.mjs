@@ -6,6 +6,7 @@ import {
   parseApprovalCommands,
   publishGuardStatus,
   readSecurityReviewHistory,
+  withSecurityReviewRecovery,
 } from "./guard-shared.mjs";
 
 const shaPattern = /^[a-f0-9]{40}$/u;
@@ -106,10 +107,8 @@ async function resolvePullRequests(api, event, eventName, repository) {
   if (!positiveInteger(runId)) {
     throw new Error("CI event has no valid workflow run identifier.");
   }
-  const [run, workflow] = await Promise.all([
-    api.request(`${prefix}/actions/runs/${runId}`),
-    api.request(`${prefix}/actions/workflows/ci.yml`),
-  ]);
+  const run = await api.request(`${prefix}/actions/runs/${runId}`);
+  const workflow = await api.request(`${prefix}/actions/workflows/ci.yml`);
   if (
     run.id !== runId ||
     !positiveInteger(workflow.id) ||
@@ -191,7 +190,7 @@ async function main() {
         context: "openclaw/ci-gate",
         runUrl: `https://github.com/${owner}/${repo}/actions/runs/${GITHUB_RUN_ID}`,
       },
-      "failure",
+      "pending",
       "Review scheduled; CI and security review have not completed",
     );
   }
@@ -202,7 +201,7 @@ async function main() {
   console.log(matrix);
 }
 
-main().catch(
+withSecurityReviewRecovery(main).catch(
   /** @param {unknown} error */ (error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

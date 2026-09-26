@@ -20,6 +20,7 @@ export default definePluginEntry({
           hosts: ["github.com"],
           pathPattern: reader.pathPattern,
           detailMethod: "github.detail",
+          imageMethod: "github.image",
           ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
         },
         requiredScopes: ["operator.read"],
@@ -29,7 +30,7 @@ export default definePluginEntry({
     // descriptors and methods; HTTP readers load only on their first request.
     // The shipped controlUi.githubPreview host adapter retains managed identity
     // selection and calls this plugin's public data API; it is not re-registered.
-    for (const method of ["github.preview", "github.detail"] as const) {
+    for (const method of ["github.preview", "github.detail", "github.image"] as const) {
       api.registerGatewayMethod(
         method,
         async (options) => {

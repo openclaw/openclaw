@@ -16,10 +16,8 @@ import {
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
-import {
-  getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
-} from "../../state/session-repository-workspaces.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import {
   createNodeRegistryRuntime,
@@ -59,12 +57,11 @@ const FEATURES = [
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
 ];
 
-function preparedHarness(
+async function preparedHarness(
   options: {
     reserve?: boolean;
     protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
-    liveBindingFails?: boolean;
     repository?: SessionRepositoryWorkspaceRecord;
     boundWorkspace?: Pick<
       NodeWorkerPreparedWorkspaceResult,
@@ -137,7 +134,7 @@ function preparedHarness(
     },
   };
   const store = support.testState.store;
-  store.createIntent({
+  await store.createIntent({
     environmentId,
     profileId: REQUEST.profileId,
     providerId: intent.providerId,
@@ -154,8 +151,8 @@ function preparedHarness(
         }
       : {}),
   });
-  store.transition({ environmentId, from: "requested", to: "provisioning" });
-  const ready = store.transition({
+  await store.transition({ environmentId, from: "requested", to: "provisioning" });
+  const ready = await store.transition({
     environmentId,
     from: "provisioning",
     to: "ready",
@@ -173,10 +170,7 @@ function preparedHarness(
     ...support.BUNDLE_ARTIFACT,
     protocolFeatures,
   });
-  const liveEvents = support.createLiveEvents({
-    bindSession: vi.fn(() => !options.liveBindingFails),
-  });
-  const workerService = support.createService(support.createProvider(), { liveEvents });
+  const workerService = support.createService(support.createProvider());
   const projected = workerService.get(environmentId)!;
   const ordinaryGet = vi.mocked(harness.environments.get).getMockImplementation()!;
   vi.mocked(harness.environments.get).mockImplementation(
@@ -210,7 +204,7 @@ function preparedHarness(
     return { ...(await ordinaryBind(request)), ...options.boundWorkspace };
   });
   if (!reserve) {
-    vi.mocked(harness.environments.create).mockResolvedValue(projected);
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(projected);
   }
   const node: NodeWorkerSupervisorNodeProof = {
     nodeId: "prepared-node",
@@ -301,7 +295,6 @@ function preparedHarness(
     ready,
     intent,
     request,
-    liveEvents,
     transport,
     resolveAvailability,
     setHostingAvailable,
@@ -317,7 +310,9 @@ describe("prepared worker dispatch", () => {
   it.each(["worker-turn", "remote-exec"] as const)(
     "consumes the existing environment and binds its workspace for %s",
     async (executionMode) => {
-      const { harness, placements, store, ready, request } = preparedHarness({ executionMode });
+      const { harness, placements, store, ready, request } = await preparedHarness({
+        executionMode,
+      });
       vi.mocked(harness.environments.schedulePreparedRefill).mockImplementation(() => {
         expect(placements.get(request.sessionId)?.state).toBe("active");
         throw new Error("refill scheduling failed");
@@ -330,8 +325,7 @@ describe("prepared worker dispatch", () => {
         environmentId: ready.environmentId,
         executionMode,
       });
-      expect(harness.environments.create).not.toHaveBeenCalled();
-      expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
       expect(store.getCredential(ready.environmentId)).toMatchObject({
         sessionId: request.sessionId,
@@ -349,22 +343,18 @@ describe("prepared worker dispatch", () => {
   );
 
   it("binds a freshly prepared cold workspace without turning its ordinary row into a reserve", async () => {
-    const { harness, store, ready, intent, request } = preparedHarness({ reserve: false });
+    const { harness, store, ready, intent, request } = await preparedHarness({ reserve: false });
 
     const active = await harness.service.dispatch(request);
 
     expect(active.environmentId).toBe(ready.environmentId);
-    expect(harness.environments.create).toHaveBeenCalledWith(
-      request.profileId,
-      expect.any(String),
-      undefined,
-      request.executionMode,
-      "/gateway/workspace",
-      undefined,
-      undefined,
-      undefined,
-      intent,
-    );
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: request.profileId,
+      idempotencyKey: expect.any(String),
+      executionMode: request.executionMode,
+      projectPath: "/gateway/workspace",
+      admittedIntent: intent,
+    });
     expect(store.get(ready.environmentId)?.preparation).toBeNull();
     expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
     expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
@@ -375,7 +365,7 @@ describe("prepared worker dispatch", () => {
   it.each(["build", "node", "exec-authority"] as const)(
     "uses the cold path when a candidate's %s proof is stale",
     async (stale) => {
-      const { harness, store, ready, request, revokeNode } = preparedHarness({
+      const { harness, store, ready, request, revokeNode } = await preparedHarness({
         protocolFeatures:
           stale === "exec-authority" ? [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE] : undefined,
       });
@@ -395,7 +385,7 @@ describe("prepared worker dispatch", () => {
 
       expect(active.environmentId).toBe(harness.ready.environmentId);
       expect(active.environmentId).not.toBe(ready.environmentId);
-      expect(harness.environments.create).toHaveBeenCalledOnce();
+      expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
       expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
     },
@@ -409,7 +399,7 @@ describe("prepared worker dispatch", () => {
   ] as const)(
     "keeps a $executionMode reserve unconsumed after session hosting is disabled (reconnect=$reconnect)",
     async ({ executionMode, reconnect }) => {
-      const { harness, store, ready, request, setHostingAvailable } = preparedHarness({
+      const { harness, store, ready, request, setHostingAvailable } = await preparedHarness({
         executionMode,
       });
       setHostingAvailable(false, reconnect);
@@ -417,7 +407,7 @@ describe("prepared worker dispatch", () => {
       const active = await harness.service.dispatch(request);
 
       expect(active.environmentId).toBe(harness.ready.environmentId);
-      expect(harness.environments.create).toHaveBeenCalledOnce();
+      expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
       expect(store.getCredential(ready.environmentId)?.sessionId).toBeNull();
       expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
@@ -435,7 +425,7 @@ describe("prepared worker dispatch", () => {
         transport,
         resolveAvailability,
         setHostingAvailable,
-      } = preparedHarness({ executionMode });
+      } = await preparedHarness({ executionMode });
       const admitted = createDeferred();
       const release = createDeferred();
       resolveAvailability.mockImplementationOnce(async () => {
@@ -452,7 +442,7 @@ describe("prepared worker dispatch", () => {
         const active = await dispatch;
 
         expect(active.environmentId).toBe(harness.ready.environmentId);
-        expect(harness.environments.create).toHaveBeenCalledOnce();
+        expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
         expect(store.getCredential(ready.environmentId)?.sessionId).toBeNull();
         expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
@@ -464,7 +454,7 @@ describe("prepared worker dispatch", () => {
   );
 
   it("does not mint attachment authority after request revocation during build validation", async () => {
-    const { harness, store, ready, request, liveEvents } = preparedHarness();
+    const { harness, store, ready, request } = await preparedHarness();
     let authorized = true;
     vi.mocked(support.testState.prepareInstallation).mockImplementation(async () => {
       authorized = false;
@@ -479,14 +469,13 @@ describe("prepared worker dispatch", () => {
       }),
     ).rejects.toThrow("request revoked");
 
-    expect(liveEvents.bindSession).not.toHaveBeenCalled();
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
   });
 
   it("uses the cold path when pool policy removes a candidate during node admission", async () => {
-    const { harness, store, ready, request } = preparedHarness();
+    const { harness, store, ready, request } = await preparedHarness();
     const candidates = vi.mocked(harness.environments.getPreparedCandidates);
     const selected = candidates.getMockImplementation()!;
     candidates.mockImplementationOnce(selected).mockReturnValue([]);
@@ -494,13 +483,13 @@ describe("prepared worker dispatch", () => {
     const active = await harness.service.dispatch(request);
 
     expect(active.environmentId).toBe(harness.ready.environmentId);
-    expect(harness.environments.create).toHaveBeenCalledOnce();
+    expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
     expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
   });
 
   it("rejects direct attachment without the prepared placement reservation", async () => {
-    const { store, workerService, ready, request, liveEvents } = preparedHarness();
+    const { store, workerService, ready, request } = await preparedHarness();
 
     await expect(
       workerService.attachSession({
@@ -515,11 +504,10 @@ describe("prepared worker dispatch", () => {
       preparation: { consumedAtMs: null },
     });
     expect(store.getCredential(ready.environmentId)?.sessionId).toBeNull();
-    expect(liveEvents.bindSession).not.toHaveBeenCalled();
   });
 
   it("fences a profile change after node eligibility before consuming its reserve", async () => {
-    const { harness, store, ready, request } = preparedHarness();
+    const { harness, store, ready, request } = await preparedHarness();
     vi.mocked(harness.environments.assertPreparedIntentCurrent)
       .mockImplementationOnce(() => {})
       .mockImplementation(() => {
@@ -530,31 +518,11 @@ describe("prepared worker dispatch", () => {
 
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.create).not.toHaveBeenCalled();
-  });
-
-  it("cannot recycle a consumed environment after live attachment rollback", async () => {
-    const { harness, store, ready, request, workerService } = preparedHarness({
-      liveBindingFails: true,
-    });
-
-    await expect(harness.service.dispatch(request)).rejects.toThrow(
-      "Attached session target is unavailable",
-    );
-
-    expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
-    expect(
-      workerService.getPreparedCandidates({
-        providerId: ready.providerId,
-        profileSnapshot: ready.profileSnapshot,
-        preparationKey: PREPARATION_KEY,
-      }),
-    ).toEqual([]);
-    expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
   });
 
   it("fences workspace upload when node authority closes during prepared binding", async () => {
-    const { harness, store, ready, request, revokeNode } = preparedHarness();
+    const { harness, store, ready, request, revokeNode } = await preparedHarness();
     const bind = vi.mocked(harness.environments.bindPreparedWorkspace);
     const ordinaryBind = bind.getMockImplementation()!;
     bind.mockImplementation(async (binding) => {
@@ -637,7 +605,7 @@ describe("prepared worker dispatch", () => {
         sourceManifestRef: base.manifestRef,
         preparedManifestRef: base.manifestRef,
       };
-      const { harness, store, ready, request } = preparedHarness({
+      const { harness, store, ready, request } = await preparedHarness({
         repository: accepted,
         boundWorkspace,
       });
@@ -697,8 +665,7 @@ describe("prepared worker dispatch", () => {
         remoteWorkspaceDir: boundWorkspace.workspaceDir,
         workspaceBaseManifestRef: current.manifestRef,
       });
-      expect(harness.environments.create).not.toHaveBeenCalled();
-      expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
       expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
         harness.log.indexOf("sync"),

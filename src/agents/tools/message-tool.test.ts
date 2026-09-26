@@ -515,37 +515,36 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
-  it("reports model-authored send normalization without inviting a retry", async () => {
-    const notice =
-      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: { ok: true },
-      normalization: { locationOmitted: true, notice },
-      toolResult: {
-        content: [{ type: "text", text: "sent" }],
-        details: { ok: true },
-      },
-      dryRun: false,
-    } satisfies MessageActionResult);
+  it.each([false, true])(
+    "reports normalization guidance only after an actual send (dryRun=%s)",
+    async (dryRun) => {
+      const notice = "The normalized message was delivered; do not retry.";
+      const receipt = dryRun ? "Prepared reply" : "Sent reply";
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: "telegram:123",
+        handledBy: "plugin",
+        payload: { ok: true },
+        normalization: { locationOmitted: true, notice },
+        toolResult: {
+          content: [{ type: "text", text: receipt }],
+          details: { dryRun },
+        },
+        dryRun,
+      } satisfies MessageActionResult);
 
-    const { call, result } = await executeSendWithResult({
-      action: { channel: "telegram", target: "telegram:123", message: "hello" },
-    });
+      const { result } = await executeSendWithResult({
+        action: { channel: "telegram", target: "telegram:123", message: "hello", dryRun },
+      });
 
-    expect(call?.actionOrigin).toBe("message-tool");
-    expect(result).toEqual({
-      content: [
-        { type: "text", text: "sent" },
-        { type: "text", text: notice },
-      ],
-      details: { ok: true },
-    });
-  });
+      expect(result.content).toEqual([
+        { type: "text", text: receipt },
+        ...(dryRun ? [] : [{ type: "text", text: notice }]),
+      ]);
+    },
+  );
 
   it("carries core send settlement in private result details", async () => {
     const sendResult = {
@@ -735,7 +734,7 @@ describe("message tool gateway timeout", () => {
   it("advertises scoped source-reply finality without exposing idempotency controls", () => {
     expect(getToolProperties(createMessageTool()).final).toMatchObject({
       type: "boolean",
-      description: expect.stringContaining("Ignored for other sends"),
+      description: expect.stringContaining("user explicitly requested the reaction"),
     });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
@@ -1316,7 +1315,7 @@ describe("message tool secret scoping", () => {
       toolOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "webchat",
-        agentSessionKey: "agent:main",
+        agentSessionKey: "agent:main:main",
       },
     });
 
@@ -4189,7 +4188,7 @@ describe("message tool description", () => {
 
   it("describes userId as required directly for member-info, not via target", () => {
     const tool = createMessageTool({
-      config: {} as never,
+      config: { tools: { message: { actions: { allow: ["member-info"] } } } },
     });
     const properties = getToolProperties(tool);
     const userId = properties.userId as { description?: string } | undefined;
@@ -4790,7 +4789,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   afterEach(() => {
-    clearBootEchoContextForSession("agent:main");
+    clearBootEchoContextForSession("agent:main:main");
   });
 
   it("delivers a distinct surrogate collision once and suppresses an identical boot echo", async () => {
@@ -4837,7 +4836,7 @@ describe("message tool boot-echo guard", () => {
   ] as const)(
     "preserves %s after sanitizing boot echo in %s: %j",
     async (mediaField, textField, media) => {
-      setBootEchoContextForSession("agent:main", longBootPrompt);
+      setBootEchoContextForSession("agent:main:main", longBootPrompt);
       mockSendResult({ channel: "telegram", to: "telegram:123" });
 
       const echoedText =
@@ -4848,7 +4847,7 @@ describe("message tool boot-echo guard", () => {
           [textField]: echoedText,
           [mediaField]: structuredClone(media),
         },
-        toolOptions: { agentSessionKey: "agent:main" },
+        toolOptions: { agentSessionKey: "agent:main:main" },
       });
       expect(call?.params?.[textField]).toBe("");
       expect(call?.params?.[mediaField]).toEqual(media);
@@ -4856,7 +4855,7 @@ describe("message tool boot-echo guard", () => {
   );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 
     const call = await executeSend({
@@ -4864,7 +4863,7 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Good morning! Project status looks healthy today.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
   });
@@ -4877,13 +4876,13 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Any message goes through unchanged.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Any message goes through unchanged.");
   });
 
   it("collapses presentation fields that echo a substantial chunk of the registered boot prompt (#53732)", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedBootText =
@@ -4908,7 +4907,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.presentation).toEqual({
@@ -4929,7 +4928,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   it("sanitizes boot echo text from presentation button links before dispatch", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedText =
@@ -4968,7 +4967,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.message).toBe("Visible");

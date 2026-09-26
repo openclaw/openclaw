@@ -98,7 +98,7 @@ function runGuard(options: Options = {}) {
     ...options.routes,
   };
   writeFileSync(eventPath, JSON.stringify(options.event ?? { pull_request: pr }));
-  writeFileSync(fixturePath, JSON.stringify({ routes, logPath }));
+  writeFileSync(fixturePath, JSON.stringify({ routes, logPath, clock: true }));
   writeFileSync(logPath, "");
   const script = options.script ?? "security-sensitive-guard";
   let scriptPath = path.resolve(`scripts/github/${script}.mjs`);
@@ -146,7 +146,7 @@ function runGuard(options: Options = {}) {
       (line) =>
         JSON.parse(line) as {
           method: string;
-          path: string;
+          path?: string;
           body?: { state?: string; context?: string; body?: string; labels?: string[] };
         },
     );
@@ -154,12 +154,12 @@ function runGuard(options: Options = {}) {
     ...result,
     requests,
     statuses: requests
-      .filter((request) => request.path.includes("/statuses/"))
+      .filter((request) => request.path?.includes("/statuses/"))
       .map((request) => request.body?.state),
     comment: requests.findLast(
       (request) =>
-        (request.method === "POST" && request.path.endsWith("/comments")) ||
-        (request.method === "PATCH" && request.path.includes("/issues/comments/")),
+        (request.method === "POST" && request.path?.endsWith("/comments")) ||
+        (request.method === "PATCH" && request.path?.includes("/issues/comments/")),
     )?.body?.body,
   };
 }
@@ -317,9 +317,9 @@ describe("security-sensitive guard entry point", () => {
     },
   ])("requires a fresh command for $name", ({ options }) => {
     const result = runGuard(options);
-    expect(result.status).toBe(1);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.statuses).toEqual(["failure", "failure"]);
-    expect(result.stderr).toContain("A maintainer must approve");
+    expect(result.comment).toContain("/allow-security-sensitive-change");
     expect(
       result.requests.some((request) => request.body?.labels?.includes("security-review-required")),
     ).toBe(true);
@@ -335,8 +335,8 @@ describe("security-sensitive guard entry point", () => {
       expect(result.comment).toContain(`- Approval comment: ${approval.html_url}`);
       expect(
         result.requests
-          .filter((request) => request.path.includes("/statuses/"))
-          .every((request) => request.path.endsWith(headSha)),
+          .filter((request) => request.path?.includes("/statuses/"))
+          .every((request) => request.path?.endsWith(headSha)),
       ).toBe(true);
     },
   );
@@ -392,6 +392,7 @@ describe("security-sensitive guard entry point", () => {
       comments: [approvedNotice],
       event: { ...commentEvent, action: "deleted" },
     });
+    expect(revoked.status, revoked.stderr).toBe(0);
     expect(revoked.statuses).toEqual(["failure", "failure"]);
   });
 
@@ -424,29 +425,40 @@ describe("security-sensitive guard entry point", () => {
     expect(result.statuses).toEqual(["failure"]);
   });
 
-  it("refuses success if the PR changes after approval is read", () => {
-    const pr = {
-      number: 7,
-      state: "open",
-      draft: false,
-      created_at: "2026-01-01T00:00:00Z",
-      user: author,
-      changed_files: 1,
-      head: { sha: headSha, ref: "change", repo: { id: 2 } },
-      base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
-    };
-    const result = runGuard({
-      comments: [notice, approval],
-      routes: {
-        [`GET ${pullPath}`]: {
-          responses: [pr, pr, { ...pr, head: { ...pr.head, sha: "c".repeat(40) } }],
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s skips a superseded head after approval is read",
+    (script) => {
+      const pr = {
+        number: 7,
+        state: "open",
+        draft: false,
+        created_at: "2026-01-01T00:00:00Z",
+        user: author,
+        changed_files: 1,
+        head: { sha: headSha, ref: "change", repo: { id: 2 } },
+        base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
+      };
+      const result = runGuard({
+        script,
+        files: [
+          {
+            filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts",
+          },
+        ],
+        authorRole: "maintain",
+        comments: [notice, approval],
+        routes: {
+          [`GET ${pullPath}`]: {
+            responses: [pr, pr, { ...pr, head: { ...pr.head, sha: "c".repeat(40) } }],
+          },
         },
-      },
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("pull request changed");
-    expect(result.statuses).toEqual(["failure"]);
-  });
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Superseded");
+      expect(result.statuses).toEqual(["failure"]);
+      expect(result.comment).toBeUndefined();
+    },
+  );
 
   it("leaves hard-tier approval to CODEOWNERS and ignores ordinary changes", () => {
     const result = runGuard({
@@ -497,7 +509,7 @@ describe("security-sensitive guard entry point", () => {
             },
           },
         });
-        expect(result.status).toBe(1);
+        expect(result.status, result.stderr).toBe(0);
         expect(result.statuses.at(-1)).toBe("failure");
         expect(result.comment).toContain("/allow-");
       });

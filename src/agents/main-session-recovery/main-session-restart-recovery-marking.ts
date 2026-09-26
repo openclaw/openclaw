@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../../config/paths.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -19,13 +20,11 @@ import {
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
-import {
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-} from "../embedded-agent-runner/active-run-projections.js";
+import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
+  isMainSessionRecoveryReconciliationCandidate,
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
@@ -37,10 +36,7 @@ import {
 } from "./main-session-restart-recovery-diagnostics.js";
 import {
   discoverRestartRecoveryStoreTargets,
-  hasCurrentProcessOwner,
   mainSessionRecoveryLog,
-  normalizeFiniteTimestamp,
-  normalizeStringSet,
 } from "./main-session-restart-recovery-shared.js";
 import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
@@ -217,7 +213,7 @@ export async function markRestartAbortedMainSessions(params: {
                 run.sessionId === entry.sessionId &&
                 (entry.status === "running" ||
                   run.observedAt === undefined ||
-                  normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
+                  asFiniteNumber(entry.updatedAt) === undefined ||
                   (entry.updatedAt < run.observedAt &&
                     run.lifecycleGeneration !== currentLifecycleGeneration)) &&
                 params.isActiveRun?.(run) !== false,
@@ -310,25 +306,13 @@ async function markOrphanedMainSessionStore(
     assertCommitAllowed?: () => void;
   },
 ): Promise<{ marked: number; skipped: number }> {
-  const providedActiveSessionIds =
-    params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
-  const providedActiveSessionKeys =
-    params.activeSessionKeys === undefined
-      ? undefined
-      : normalizeStringSet(params.activeSessionKeys);
-  const updatedBeforeMs = normalizeFiniteTimestamp(params.updatedBeforeMs);
-  // Lifecycle rotation synchronously evicts stale owners, so this same registry
-  // view drives both operational routing and recovery suppression. Re-read it at
-  // each check so a newer owner can still fence an older async recovery scan.
-  const resolveActiveSessionIds = () =>
-    providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
-  const resolveActiveSessionKeys = () =>
-    providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+  const hasCurrentProcessOwner = createCurrentProcessOwnerLookup(params);
+  const updatedBeforeMs = asFiniteNumber(params.updatedBeforeMs);
 
   const orphanChecks: Array<() => boolean> = [];
   return await markRecoveryStore({
     ...params.target,
-    statuses: ["running"],
+    statuses: params.target.sessionKey ? undefined : ["running"],
     assertCommitAllowed: () => {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.assertCommitAllowed?.();
@@ -339,14 +323,14 @@ async function markOrphanedMainSessionStore(
     plan: (entry, sessionKey) => {
       params.assertCommitAllowed?.();
       if (
-        entry.status !== "running" ||
+        (entry.status !== "running" && !isMainSessionRecoveryReconciliationCandidate(entry)) ||
         (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
         (params.expectedLifecycleRevision !== undefined &&
           entry.lifecycleRevision !== params.expectedLifecycleRevision)
       ) {
         return undefined;
       }
-      const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
+      const updatedAt = asFiniteNumber(entry.updatedAt);
       if (updatedBeforeMs !== undefined && updatedAt !== undefined && updatedAt > updatedBeforeMs) {
         return undefined;
       }
@@ -360,12 +344,7 @@ async function markOrphanedMainSessionStore(
         listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }).some(({ runId }) =>
           hasLiveAgentRunContext(runId),
         ) ||
-        hasCurrentProcessOwner({
-          activeSessionIds: resolveActiveSessionIds(),
-          activeSessionKeys: resolveActiveSessionKeys(),
-          entry,
-          sessionKey,
-        });
+        hasCurrentProcessOwner(entry, sessionKey);
       if (hasLiveOwner()) {
         return undefined;
       }
@@ -400,7 +379,7 @@ async function markOrphanedMainSessionStore(
       orphanChecks.push(hasLiveOwner);
       return isMainRestartRecoveryAggregateTerminalOnly(entry)
         ? { action: "retire_terminal" }
-        : { action: "mark" };
+        : { action: "mark", resetRuntime: entry.status !== "running" };
     },
   });
 }

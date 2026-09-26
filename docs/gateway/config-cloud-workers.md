@@ -21,13 +21,14 @@ Node-backed providers return an authenticated node device id for either `worker-
 
 ### Crabbox profile
 
-In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. These changes require a Gateway restart. After saving a profile, the restart notice points to **Snapshots → Build snapshot**. Saving does not start a build.
+In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. Changes apply without restarting the Gateway. To prepare an image after saving a profile, use **Snapshots → Build snapshot**. Saving does not start a build.
 
 Snapshot retention is plugin-wide, separate from profile settings. Configure
 `plugins.entries.crabbox.config.warmImages.refreshAfter` (default `24h`, minimum
 `1h`), `retainUnused` (default `14d`, minimum `1d`), and `keepPrevious` (`0` or `1`,
 default `0`) in the **Snapshots → Retention policy** card or config. Durations
-accept whole minutes, hours, or days. Changes require a Gateway restart. See
+accept whole minutes, hours, or days. Changes reload the Crabbox plugin without
+restarting the Gateway. See
 [Retention policy](/gateway/cloud-workers/warm-images#retention-policy) for the
 complete syntax, pinned exemptions, and previous-generation behavior.
 
@@ -71,6 +72,8 @@ The bundled `crabbox` provider provisions a disposable machine through the local
 - `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`. The plugin requires Crabbox 0.56.0 or newer for every target, including Daytona fixed-ID preparation, replay, and confirmed cleanup. If the selected binary is missing, outdated, or cannot report a supported version, the plugin downloads the supported release into its own versioned directory under `$OPENCLAW_STATE_DIR/tools/crabbox` (by default `~/.openclaw/tools/crabbox`). It verifies the official release checksum and executable version before using the copy. Existing binaries and profile settings are preserved. Later commands reuse the managed installation without another download. Damaged managed installations are replaced automatically; the previous directory is retained beside the replacement with a `.recovery-<id>` suffix for inspection. `openclaw doctor --fix` installs the managed copy ahead of the first worker operation. An installation failure stops the operation before allocation and reports the cause.
 - `readyWorkers`: non-negative integer target per eligible local project or repository and profile; defaults to `1`. Set `0` to disable this profile's reserves while keeping warm-image reuse.
 - `cloudWorkers.preparedPool.maxTotal`: non-negative integer Gateway-wide reserve cap; defaults to `4`. Preparing workers and unconfirmed cleanup count toward both limits. Set `0` to drain unused reserves and stop refill. Reserves incur running-machine charges and expire from successful project demand using the provider's existing idle policy. See [Ready workers](/gateway/cloud-workers/warm-images#ready-workers).
+
+Managed release archives stream into private staging files, bounded to 128 MiB, before checksum verification and extraction. Download progress has a 30-second idle limit and a separate ten-minute total limit; failed downloads are cleaned up before acquisition returns.
 
 The supported CLI is also required to inspect and stop existing leases. On hosts with restricted release-download access or managed-tool write permissions, provision the supported executable at the exact path used by existing profiles, or stage the managed distribution before rolling out an OpenClaw update. Supported executables and installed managed copies do not need release-download access. If neither is available, acquisition must succeed before lease inspection or teardown can continue; teardown stops heartbeats before attempting acquisition.
 
@@ -122,7 +125,13 @@ Node-backed `worker-turn` launches the self-contained worker loop and proxies mo
 
 Each durable environment record retains its validated provider settings and resolved install method in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
-Profile changes require a Gateway restart. With the default `gateway.reload.mode: "hybrid"`, the config watcher performs the restart automatically; `"off"` mode requires a manual restart.
+With the default `gateway.reload.mode: "hybrid"`, profile and pool changes apply
+without restarting the Gateway. New allocations use the updated profile; existing
+allocations keep their admitted provider settings. Unused reserves are checked
+against the current profile and pool limits, and incompatible or excess workers
+retire after their provider work settles. Suspend-after changes apply to existing
+idle sessions before their next automatic drain. With reload mode `"off"`, restart
+the Gateway to load configuration changes.
 
 <Warning>
   The `static-ssh` provider is a source-tree QA Lab `remote-exec` harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.

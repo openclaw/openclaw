@@ -84,18 +84,12 @@ export function recordLobsterVisit(
       if (existing.firstSeenAt !== null && existing.name !== null && !shinyNews) {
         return;
       }
-      entries.set(paletteId, {
-        firstSeenAt: existing.firstSeenAt ?? Date.now(),
-        name: existing.name ?? details.name ?? null,
-        shinySeenAt: existing.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
-      });
-    } else {
-      entries.set(paletteId, {
-        firstSeenAt: Date.now(),
-        name: details.name ?? null,
-        shinySeenAt: details.shiny === true ? Date.now() : null,
-      });
     }
+    entries.set(paletteId, {
+      firstSeenAt: existing?.firstSeenAt ?? Date.now(),
+      name: existing?.name ?? details.name ?? null,
+      shinySeenAt: existing?.shinySeenAt ?? (details.shiny === true ? Date.now() : null),
+    });
     writeDex(entries);
   } catch {
     // best-effort — a full or blocked storage must not break visits

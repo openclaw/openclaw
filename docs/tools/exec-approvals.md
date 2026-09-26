@@ -65,15 +65,23 @@ for matching, prompting, and binding restrictions.
 
 ## Inspecting the effective policy
 
-| Command                                                          | What it shows                                                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                           |
-| `openclaw exec-policy show`                                      | Local-machine merged view.                                                                 |
-| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step. |
+| Command                                                          | What it shows                                                                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                                      |
+| `openclaw exec-policy show`                                      | Terminal tool policies and local command approvals; add `--session <key>` for a session tool preview. |
+| `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step.            |
 
 <Note>
 Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-%2Fexec).
 </Note>
+
+Tool availability and command approvals are separate: a `messaging` tool
+profile can exclude `exec` and `process` even when approvals permit commands.
+`exec-policy show` explains local exclusions offline and identifies the policy
+source. `--session <key>` previews tools from saved session settings. Inclusion
+does not guarantee execution, and absence does not prove a tool is disabled.
+Verify execution in a run; command approvals still apply.
+Use `--agent <id>` to select an agent and `--verbose` for all approval scopes.
 
 Full CLI reference (flags, JSON output, allowlist add/remove): [Approvals CLI](/cli/approvals).
 
@@ -404,7 +412,10 @@ EOF
 
 - `openclaw exec-policy` does not synchronize node approvals.
 - `openclaw exec-policy set --host node` is rejected.
-- Node exec approvals are fetched from the node at runtime, so node-targeted updates must use `openclaw approvals --node ...`.
+- Node exec approvals are fetched from the node at runtime. Inspect them with
+  `openclaw approvals get --node <id|name|ip>` and replace them with
+  `openclaw approvals set --node <id|name|ip> --file <path>` (or `--stdin`); see the
+  [Approvals CLI](/cli/approvals).
 
 </Note>
 
@@ -565,15 +576,16 @@ Always allow will mint.
 
 ### What a grant covers, and when it stops
 
-A grant fails closed back to a normal prompt whenever anything changed: the
-job was edited or deleted (any configuration change invalidates it), the
-command, working directory, or environment differs by even one byte, the
-grant was revoked or expired, or the original approval record is gone. The
-check runs immediately before the process spawns, so a revocation or job
-edit that lands mid-flight still wins. Mutable file operands and commands
-that require explicit review (heredocs, strict inline eval, audit
-suppression) keep prompting per occurrence. Non-automation approvals are
-unchanged.
+A grant fails closed back to a normal prompt when the job is deleted or its
+substantive definition changes, even if a later edit restores the earlier
+definition. Pausing and re-enabling the unchanged automation preserves the
+grant. The grant also stops matching when the command, working directory, or
+environment differs by even one byte, when it is revoked or expired, or when
+the original approval record is gone. The check runs immediately before the
+process spawns, so a revocation or job edit that lands mid-flight still wins.
+Mutable file operands and commands that require explicit review (heredocs,
+strict inline eval, audit suppression) keep prompting per occurrence.
+Non-automation approvals are unchanged.
 
 ### Grant lifetime
 
@@ -602,8 +614,9 @@ Every standing grant is visible and revocable:
   `openclaw approvals grants revoke <grant-id>` revokes one grant. Revocation
   is idempotent and takes effect at the next occurrence's spawn boundary —
   that occurrence prompts again.
-- Deleting or editing the automation, or reversing the minting approval,
-  also invalidates the grant without touching the grants surface.
+- Deleting or substantively editing the automation, or reversing the minting
+  approval, also invalidates the grant without touching the grants surface.
+  Pausing and re-enabling the unchanged automation does not.
 
 The minting `operator_approvals` row remains the sole authorization owner: a
 grant is derivative correlation, revalidated against the live approval row,

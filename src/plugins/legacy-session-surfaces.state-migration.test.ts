@@ -29,14 +29,18 @@ function writeSessionSurfacePlugin(params: {
   rootDir: string;
   pluginId: string;
   channelId: string;
+  bundledDir?: string;
 }) {
   const packageName = `@fixture/${params.pluginId}`;
-  const pluginDir = writeManagedNpmPlugin({
-    stateDir: params.stateDir,
-    packageName,
-    pluginId: params.pluginId,
-    version: "1.0.0",
-  });
+  const pluginDir = params.bundledDir
+    ? path.join(params.bundledDir, params.pluginId)
+    : writeManagedNpmPlugin({
+        stateDir: params.stateDir,
+        packageName,
+        pluginId: params.pluginId,
+        version: "1.0.0",
+      });
+  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
   const marker = (name: string) => path.join(params.rootDir, `${params.pluginId}-${name}.marker`);
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),
@@ -48,7 +52,14 @@ function writeSessionSurfacePlugin(params: {
         extensions: ["./dist/index.js"],
         setupEntry: "./dist/setup-entry.js",
         setupFeatures: { legacySessionSurfaces: true },
-        channel: { id: params.channelId },
+        channel: {
+          id: params.channelId,
+          ...(params.bundledDir
+            ? {
+                persistedAuthState: { specifier: "./dist/auth-presence.js", exportName: "hasAuth" },
+              }
+            : {}),
+        },
       },
     }),
     "utf8",
@@ -108,10 +119,58 @@ export default defineBundledChannelSetupEntry({
 `,
     "utf8",
   );
+  if (params.bundledDir) {
+    fs.writeFileSync(
+      path.join(pluginDir, "dist", "auth-presence.js"),
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(marker("auth-probe"))}, "loaded");
+export function hasAuth() { return false; }
+`,
+    );
+  }
   return { pluginDir, marker };
 }
 
 describe("installed channel legacy session surfaces", () => {
+  it("loads an eligible bundled migration owner without probing its authentication", () => {
+    const rootDir = makeTrackedTempDir("openclaw-session-surface-bundled", tempDirs);
+    const stateDir = path.join(rootDir, "state");
+    fs.mkdirSync(stateDir);
+    const bundledDir = path.join(rootDir, "bundled");
+    const fixture = writeSessionSurfacePlugin({
+      stateDir,
+      rootDir,
+      bundledDir,
+      pluginId: "bundled-session-owner",
+      channelId: "bundled-chat",
+    });
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "");
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    const env = {
+      HOME: rootDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "",
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      VITEST: "true",
+    } as NodeJS.ProcessEnv;
+    const prepared = prepareLegacySessionSurfaces({ config: {}, env });
+
+    expect(prepared.failures).toEqual([]);
+    expect(prepared.surfaces).toHaveLength(1);
+    expect(
+      prepared.surfaces[0]?.canonicalizeLegacySessionKey?.({
+        key: "fixture-group:Room",
+        agentId: "main",
+      }),
+    ).toBe("agent:main:bundled-chat:group:room");
+    expect(fs.existsSync(fixture.marker("sidecar"))).toBe(true);
+    expect(fs.existsSync(fixture.marker("setup-plugin"))).toBe(false);
+    expect(fs.existsSync(fixture.marker("full"))).toBe(false);
+    expect(fs.existsSync(fixture.marker("auth-probe"))).toBe(false);
+  });
+
   it("loads only the selected setup sidecar and canonicalizes its legacy group key", async () => {
     const rootDir = makeTrackedTempDir("openclaw-session-surface", tempDirs);
     const stateDir = path.join(rootDir, "state");

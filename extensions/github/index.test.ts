@@ -27,25 +27,8 @@ function registered() {
   });
   return fixture.registry;
 }
-function response(value: unknown, status = 200) {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-function issue(overrides: Record<string, unknown> = {}) {
-  return {
-    title: "Plugin reader",
-    body: "**Public**",
-    state: "open",
-    created_at: date,
-    updated_at: date,
-    user: { login: "octocat" },
-    comments: 0,
-    review_comments: 0,
-    changed_files: 0,
-    ...overrides,
-  };
+function document(url = "https://github.com/octocat/repo/pull/1") {
+  return { url, title: "Plugin reader", body: "**Public**", author: "octocat" };
 }
 function preview(overrides: Partial<ControlUiGitHubPreview> = {}): ControlUiGitHubPreview {
   return {
@@ -109,6 +92,12 @@ describe("GitHub plugin ownership and RPC migration", () => {
           profileAccess: "independent",
         }),
         expect.objectContaining({
+          name: "github.image",
+          owner: { kind: "plugin", pluginId: "github" },
+          scope: "operator.read",
+          profileAccess: "independent",
+        }),
+        expect.objectContaining({
           name: "github.detail",
           owner: { kind: "plugin", pluginId: "github" },
           scope: "operator.read",
@@ -129,6 +118,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
             linkReader: expect.objectContaining({
               hosts: ["github.com"],
               detailMethod: "github.detail",
+              imageMethod: "github.image",
               previewMethod: "github.preview",
             }),
           }),
@@ -148,9 +138,122 @@ describe("GitHub plugin ownership and RPC migration", () => {
   });
 
   it.each([
+    {},
+    { url: "https://github.com/login" },
+    { url: "https://github-production-user-asset-6210df.s3.amazonaws.com/image.png" },
+    { url: "https://example.com/image.png" },
+    { url: "https://user:password@user-images.githubusercontent.com/image.png" },
+  ])("rejects invalid image params without a request: %j", async (params) => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await request("github.image", params)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "invalid github.image params" }),
+      undefined,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("loads anonymous attachment redirects without browser CORS headers", async () => {
+    const url = "https://github.com/user-attachments/assets/3c11071f-21b8-4123-b9b2-711dc7ca47fd";
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7WQAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: {
+            location:
+              "https://github-production-user-asset-6210df.s3.amazonaws.com/image.png?signature=fixture",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(png, { headers: { "content-type": "image/png" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const respond = await request("github.image", { url });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        url,
+        dataUrl: `data:image/png;base64,${png.toString("base64")}`,
+      },
+      undefined,
+      undefined,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.has("authorization")).toBe(false);
+      expect(headers.has("cookie")).toBe(false);
+      expect(init?.credentials).toBe("omit");
+    }
+  });
+
+  it.each([
+    "https://evil.example/image.png?signature=private",
+    "http://user-images.githubusercontent.com/image.png",
+    "https://user-images.githubusercontent.com:444/image.png",
+    "https://user:password@user-images.githubusercontent.com/image.png",
+    "https://github.com/login",
+    "https://127.0.0.1/image.png",
+  ])("blocks unsafe image redirect %s before fetching it", async (location) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const respond = await request("github.image", {
+      url: "https://user-images.githubusercontent.com/image.png",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "GitHub image is unavailable",
+      }),
+      undefined,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/png"],
+    ["<html>not an image</html>", "image/png"],
+    ["x".repeat(2 * 1024 * 1024 + 1), "image/jpeg"],
+  ])("rejects unsupported or oversized image content", async (body, contentType) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(body, {
+          headers: { "content-type": contentType },
+        }),
+      ),
+    );
+    expect(
+      await request("github.image", {
+        url: "https://user-images.githubusercontent.com/image.png",
+      }),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "GitHub image is unavailable",
+      }),
+      undefined,
+    );
+  });
+
+  it.each([
     ["github.detail", { url: "https://example.com/owner/repo/issues/1" }],
     ["github.detail", { url: "https://github.com/owner/repo/pull/1/checks" }],
     ["github.detail", { url: "https://github.com/owner/repo/commit/main" }],
+    ["github.preview", { url: "https://github.com/owner/repo/commit/abcdef0" }],
     ["github.preview", { url: "https://github.com/owner/repo/issues/1", refresh: "true" }],
     ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: " " }],
     ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: 1 }],
@@ -177,15 +280,11 @@ describe("GitHub plugin ownership and RPC migration", () => {
         "https://github.com/octocat/identity-" + ++sequence + "/pull/1/files?view=split#diff-one";
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
         ok: true,
-        payload: preview({ repo: new URL(url).pathname.split("/")[2] }),
+        payload:
+          method === "github.preview"
+            ? preview({ repo: new URL(url).pathname.split("/")[2] })
+            : document(url.split("/files")[0]),
       });
-      vi.stubGlobal(
-        "fetch",
-        vi
-          .fn<typeof fetch>()
-          .mockResolvedValueOnce(response({ private: false }))
-          .mockResolvedValueOnce(response(issue())),
-      );
       const respond = await request(method, { url });
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -215,50 +314,48 @@ describe("GitHub plugin ownership and RPC migration", () => {
     },
   );
 
-  it("serves generic public detail, preserves files-page expansion, and redacts upstream failures", async () => {
+  it("uses the host identity adapter for documents and preserves files-page expansion", async () => {
     vi.stubEnv("GH_TOKEN", "unused-ambient-token");
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(response({ private: false }))
-      .mockResolvedValueOnce(response(issue()))
-      .mockResolvedValueOnce(response({ message: "private upstream text" }, 429));
+    const fetchMock = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+      ok: true,
+      payload: document(),
+    });
     const respond = await request("github.detail", {
-      url: "https://github.com/octocat/rpc-" + ++sequence + "/pull/1/files#diff-example",
+      url: "https://github.com/octocat/repo/pull/1/files#diff-example",
+      agentId: "selected-agent",
+      refresh: true,
     });
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({
-        title: "Plugin reader",
-        author: "octocat",
-        body: "**Public**",
-        badge: { label: "Open", tone: "positive" },
-        filesExpanded: true,
-        partial: false,
-      }),
+      expect.objectContaining({ title: "Plugin reader", body: "**Public**", filesExpanded: true }),
       undefined,
       undefined,
     );
-    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("kind");
-    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
-    for (const [, options] of fetchMock.mock.calls) {
-      expect(options?.headers).not.toHaveProperty("Authorization");
-    }
-    const failed = await request("github.detail", {
-      url: "https://github.com/octocat/rpc-" + ++sequence + "/issues/1",
+    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubDetail", {
+      kind: "pull",
+      owner: "octocat",
+      repo: "repo",
+      number: 1,
+      agentId: "selected-agent",
+      refresh: true,
     });
-    expect(failed).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("GitHub API rate limit exceeded (HTTP 429)"),
-        retryable: true,
-        retryAfterMs: expect.any(Number),
-      }),
-      undefined,
-    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, {}, { ...document(), url: "https://github.com/octocat/private/pull/1" }])(
+    "rejects an invalid host document before delivery: %#",
+    async (payload) => {
+      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload });
+      expect(await request("github.detail", { url: document().url })).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+        undefined,
+      );
+    },
+  );
 
   it.each([
     [{ state: "open" }, { label: "Open", tone: "positive" }],
@@ -268,9 +365,25 @@ describe("GitHub plugin ownership and RPC migration", () => {
     ],
     [
       { state: "closed", mergedAt: date },
-      { label: "Merged", tone: "accent" },
+      { label: "Merged", tone: "accent", timestamp: date },
     ],
     [{ state: "closed" }, { label: "Closed", tone: "negative" }],
+    [
+      { state: "closed", closedAt: "2026-09-03T12:00:00Z" },
+      { label: "Closed", tone: "negative", timestamp: "2026-09-03T12:00:00Z" },
+    ],
+    [
+      { state: "closed", draft: true, closedAt: "2026-09-03T12:00:00Z" },
+      { label: "Closed", tone: "negative", timestamp: "2026-09-03T12:00:00Z" },
+    ],
+    [
+      { state: "open", closedAt: "2026-09-03T12:00:00Z" },
+      { label: "Open", tone: "positive" },
+    ],
+    [
+      { state: "closed", mergedAt: "2026-09-03T12:00:00Z", closedAt: date },
+      { label: "Merged", tone: "accent", timestamp: "2026-09-03T12:00:00Z" },
+    ],
   ] as const)(
     "maps the host preview into generic badges and metadata %#",
     async (fields, badge) => {
@@ -290,11 +403,11 @@ describe("GitHub plugin ownership and RPC migration", () => {
         expect.objectContaining({
           badge,
           author: "octocat",
-          metadata: expect.arrayContaining([
-            { label: "Additions", value: "+3" },
-            { label: "Deletions", value: "−1" },
-            { label: "Files", value: "2" },
-          ]),
+          authorUrl: "https://github.com/octocat",
+          metadata: [
+            { label: "", value: "+3", tone: "positive" },
+            { label: "", value: "−1", tone: "negative" },
+          ],
         }),
         undefined,
         meta,
@@ -307,6 +420,50 @@ describe("GitHub plugin ownership and RPC migration", () => {
       });
       expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("kind");
       expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["completed", "accent"],
+    ["not_planned", "negative"],
+  ] as const)("shows the closure date for %s issues", async (stateReason, tone) => {
+    const closedAt = "2026-09-03T12:00:00Z";
+    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+      ok: true,
+      payload: preview({ kind: "issue", state: "closed", stateReason, closedAt }),
+    });
+    const respond = await request("github.preview", {
+      url: "https://github.com/octocat/repo/issues/1",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        createdAt: date,
+        badge: { label: "Closed", tone, timestamp: closedAt },
+      }),
+      undefined,
+      undefined,
+    );
+  });
+
+  it.each([undefined, 0, 7])(
+    "only shows an issue comment count when it is known: %s",
+    async (comments) => {
+      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+        ok: true,
+        payload: preview({ kind: "issue", comments }),
+      });
+      const respond = await request("github.preview", {
+        url: "https://github.com/octocat/repo/issues/1",
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          metadata: comments === undefined ? [] : [{ label: "Comments", value: String(comments) }],
+        }),
+        undefined,
+        undefined,
+      );
     },
   );
 
@@ -326,7 +483,8 @@ describe("GitHub plugin ownership and RPC migration", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
-        metadata: expect.arrayContaining([{ label: "Co-authors", value: "ada +1" }]),
+        coAuthors: [{ name: "ada", imageUrl: "data:image/png;base64,iVBORw==" }],
+        coAuthorCount: 2,
       }),
       undefined,
       undefined,
@@ -390,7 +548,7 @@ describe("GitHub plugin ownership and RPC migration", () => {
       const payload = { status: "unavailable" };
       const meta = { source: "host-preview" };
       vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: false, payload, error, meta });
-      const respond = await request("github.preview", {
+      const respond = await request("github.detail", {
         url: "https://github.com/octocat/repo/issues/1",
         agentId: "alternate",
       });

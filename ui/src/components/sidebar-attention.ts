@@ -7,6 +7,7 @@ import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -14,16 +15,13 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/sidebar-attention-floating.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
-import {
-  sidebarInboxTabCounts,
-  type SidebarAttentionItem,
-  type SidebarInboxEntry,
-} from "./sidebar-attention-entries.ts";
+import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 import "./tooltip.ts";
+
+registerSidebarAttentionEnglish();
 
 type SidebarAttentionPanelRenderer =
   typeof import("./sidebar-attention-panel.runtime.ts").renderSidebarAttentionPanel;
@@ -46,7 +44,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   @state() private overflowBelow = false;
 
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private panelTrigger: HTMLElement | null = null;
@@ -106,14 +104,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     if (this.panelOpen) {
       this.syncOverflowCue();
     }
-  }
-
-  private dismiss(dismissal: SidebarAttentionDismissal) {
-    this.context?.sidebarAttention.dismiss(dismissal);
-  }
-
-  private currentInboxEntries(): SidebarInboxEntry[] {
-    return [...(this.context?.sidebarAttention.entries ?? [])];
   }
 
   private readonly handleOutsideInteraction = (event: PointerEvent | KeyboardEvent) => {
@@ -289,10 +279,13 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.context?.gateway.snapshot.phase !== "connected") {
+    if (!this.context) {
       return nothing;
     }
-    const entries = this.currentInboxEntries();
+    const entries = [...(this.context.sidebarAttention.entries ?? [])];
+    if (this.context.gateway.snapshot.phase !== "connected" && entries.length === 0) {
+      return nothing;
+    }
     const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
@@ -339,11 +332,11 @@ class SidebarAttention extends OpenClawLightDomElement {
               onApprovalDecision: (event, approvalId, decision) =>
                 void this.decideApproval(event, approvalId, decision),
               onClose: (restoreFocus) => this.closePanel(restoreFocus),
-              onDismiss: (dismissal) => this.dismiss(dismissal),
+              onDismiss: (dismissal) => this.context?.sidebarAttention.dismiss(dismissal),
               onKeydown: this.handlePanelKeydown,
-              onNavigate: (routeId) => {
+              onNavigate: (routeId, options) => {
                 this.closePanel(false);
-                (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+                (this.onNavigate ?? this.context?.navigate)?.(routeId, options);
               },
               onOpen: (item) => void this.open(item),
               onScroll: this.syncOverflowCue,

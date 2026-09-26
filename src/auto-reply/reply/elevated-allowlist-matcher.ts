@@ -62,10 +62,6 @@ export function parseExplicitElevatedAllowEntry(
   };
 }
 
-function slugAllowToken(value?: string): string {
-  return normalizeAtHashSlug(value);
-}
-
 function addTokenVariants(tokens: Set<string>, value: string): void {
   if (!value) {
     return;
@@ -121,7 +117,7 @@ export function buildMutableTokens(value?: string): Set<string> {
     return tokens;
   }
   addTokenVariants(tokens, trimmed);
-  const slugged = slugAllowToken(trimmed);
+  const slugged = normalizeAtHashSlug(trimmed);
   if (slugged) {
     addTokenVariants(tokens, slugged);
   }
@@ -135,7 +131,7 @@ export function matchesMutableTokens(value: string, tokens: Set<string>): boolea
   }
   const probes = new Set<string>();
   addTokenVariants(probes, value);
-  const slugged = slugAllowToken(value);
+  const slugged = normalizeAtHashSlug(value);
   if (slugged) {
     addTokenVariants(probes, slugged);
   }

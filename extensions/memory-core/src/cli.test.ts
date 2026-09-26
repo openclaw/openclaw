@@ -17,7 +17,6 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
-  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   firstWrittenJsonArg,
@@ -33,6 +32,7 @@ import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
+  seedMemoryIndexWithOrphanedProvenance,
   shortTermTestState as shortTermTesting,
 } from "./test-helpers.js";
 
@@ -89,50 +89,16 @@ async function seedCliBackfillTranscript(
 
 vi.mock("./memory-forget.js", () => ({ forgetMemoryEntries }));
 
-vi.mock("./cli.host.runtime.js", async () => {
-  const [
-    {
-      defaultRuntime,
-      formatErrorMessage,
-      formatCliJsonFailure,
-      getMemoryEmbeddingCommandSecretTargetIds,
-      setVerbose,
-      shortenHomeInString,
-      shortenHomePath,
-      theme,
-      withManager,
-      withProgress,
-      withProgressTotals,
-    },
-    { resolveSessionTranscriptsDirForAgent, resolveStateDir },
-    { listMemoryFiles, normalizeExtraMemoryPaths },
-  ] = await Promise.all([
-    import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
-    import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
-    import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
-  ]);
-  return {
-    defaultRuntime,
-    formatErrorMessage,
-    formatCliJsonFailure,
-    getMemoryEmbeddingCommandSecretTargetIds,
-    getMemorySearchManager,
-    listMemoryFiles,
-    getRuntimeConfig,
-    normalizeExtraMemoryPaths,
-    resolveCommandSecretRefsViaGateway,
-    resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent,
-    resolveStateDir,
-    setVerbose,
-    shortenHomeInString,
-    shortenHomePath,
-    theme,
-    withManager,
-    withProgress,
-    withProgressTotals,
-  };
-});
+vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),
+  resolveCommandSecretRefsViaGateway,
+}));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
+  getRuntimeConfig,
+  resolveDefaultAgentId,
+}));
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
@@ -2368,22 +2334,7 @@ describe("memory cli", () => {
     const stateDir = path.join(fixtureRoot, `corrupt-state-${workspaceCaseId++}`);
     const workspaceDir = path.join(fixtureRoot, `corrupt-workspace-${workspaceCaseId++}`);
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const agentDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
-    agentDatabase.db.exec(`
-      PRAGMA foreign_keys = OFF;
-      INSERT INTO memory_index_chunks (
-        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-      ) VALUES (
-        'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
-        'hash', 'none', 'orphaned memory', '[]', 1
-      );
-      INSERT INTO memory_index_chunk_provenance (
-        chunk_id, origin_class, session_kind, observed_at
-      ) VALUES ('orphaned-chunk', 'agent', 'unknown', 1);
-      DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
-      PRAGMA foreign_keys = ON;
-    `);
-    closeOpenClawAgentDatabasesForTest();
+    const databasePath = await seedMemoryIndexWithOrphanedProvenance(env);
 
     const cfg = {
       memory: {
@@ -2413,7 +2364,7 @@ describe("memory cli", () => {
     const error = spyRuntimeErrors(defaultRuntime);
     await runMemoryCli(args);
 
-    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(agentDatabase.path);
+    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(databasePath);
     expect(process.exitCode).toBe(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
   });

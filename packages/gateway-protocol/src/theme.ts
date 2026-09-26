@@ -1,4 +1,4 @@
-import type { ThemeId } from "./theme-ids.js";
+import type { ThemeId } from "./theme-ids.ts";
 export {
   BUILTIN_THEME_IDS,
   THEME_LOCAL_ID_MAX_LENGTH,
@@ -9,7 +9,7 @@ export {
   type BuiltinThemeId,
   type ThemeId,
   type ThemeMode,
-} from "./theme-ids.js";
+} from "./theme-ids.ts";
 
 /** Portable theme data shared by profile preferences, plugins, and the Control UI. */
 export type ThemeColorMode = "light" | "dark";
@@ -36,6 +36,21 @@ export const THEME_COLOR_KEYS = [
   "ring",
 ] as const;
 export const THEME_FONT_KEYS = ["font-sans", "font-mono"] as const;
+export const THEME_MASCOT_VALUES = ["claw", "none"] as const;
+export type ThemeMascot = (typeof THEME_MASCOT_VALUES)[number];
+export const THEME_CRITTER_IDS = ["penguin", "fedora"] as const;
+export type ThemeCritterId = (typeof THEME_CRITTER_IDS)[number];
+export function isThemeCritterId(value: unknown): value is ThemeCritterId {
+  return THEME_CRITTER_IDS.some((id) => id === value);
+}
+export const THEME_AVATAR_HAT_IDS = ["fedora", "crown", "santa", "party", "pumpkin"] as const;
+export type ThemeAvatarHatId = (typeof THEME_AVATAR_HAT_IDS)[number];
+export function isThemeAvatarHatId(value: unknown): value is ThemeAvatarHatId {
+  return THEME_AVATAR_HAT_IDS.some((id) => id === value);
+}
+export const THEME_ARTWORK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+export const THEME_WORKING_PHRASES_MAX = 24;
+export const THEME_WORKING_PHRASE_MAX_LENGTH = 24;
 export const MAX_THEME_DEFINITION_BYTES = 4096;
 export const THEME_NAME_MAX_LENGTH = 80;
 export const THEME_DESCRIPTION_MAX_LENGTH = 320;
@@ -46,8 +61,16 @@ export type ThemePalette = Record<(typeof THEME_COLOR_KEYS)[number], string> &
 export type ThemeDefinition = {
   name: string;
   description: string;
+  mascot?: ThemeMascot;
+  workingPhrases?: string[];
+  critters?: string[];
+  avatarHat?: string;
   light?: ThemePalette;
   dark?: ThemePalette;
+};
+export type ThemeArtwork = {
+  hats?: Record<string, { url: string }>;
+  critters?: Record<string, { url: string; title?: string; crossMs?: number }>;
 };
 export type ThemeDescriptor = {
   id: ThemeId;
@@ -56,8 +79,36 @@ export type ThemeDescriptor = {
   source: "builtin" | "plugin" | "user";
   modes: ThemeColorMode[];
   pluginId?: string;
+  mascot?: ThemeMascot;
+  workingPhrases?: readonly string[];
+  critters?: readonly string[];
+  avatarHat?: string;
+  artwork?: ThemeArtwork;
 };
 export type ThemeCatalogEntry = ThemeDescriptor & { definition?: ThemeDefinition };
+export type ThemeBranding = {
+  mascot: ThemeMascot;
+  workingPhrases?: readonly string[];
+  critters: readonly string[];
+  avatarHat?: string;
+  artwork?: ThemeArtwork;
+};
+
+const DEFAULT_THEME_CRITTERS: readonly ThemeCritterId[] = [];
+
+export function resolveThemeBranding(
+  source:
+    | Pick<ThemeDescriptor, "mascot" | "workingPhrases" | "critters" | "avatarHat" | "artwork">
+    | undefined,
+): ThemeBranding {
+  return {
+    mascot: source?.mascot ?? "claw",
+    workingPhrases: source?.workingPhrases,
+    critters: source?.critters ?? DEFAULT_THEME_CRITTERS,
+    avatarHat: source?.avatarHat,
+    ...(source?.artwork ? { artwork: source.artwork } : {}),
+  };
+}
 
 export const BUILTIN_THEMES: readonly ThemeDescriptor[] = (
   [
@@ -163,24 +214,68 @@ function requireText(value: unknown, label: string, maxLength: number): string {
   return value.trim();
 }
 
-const NUMBER = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)";
+const NUMBER = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
 const COMPONENT = `${NUMBER}%?`;
 const HUE = `${NUMBER}(?:deg|grad|rad|turn)?`;
-const COMPONENT_SEPARATOR = "(?:\\s*,\\s*|\\s+)";
+const LEGACY_COLOR_FUNCTION = new RegExp(
+  `^(?:(?:rgb|rgba)\\( *(?:${NUMBER} *, *${NUMBER} *, *${NUMBER}|${NUMBER}% *, *${NUMBER}% *, *${NUMBER}%)|(?:hsl|hsla)\\( *${HUE} *, *${NUMBER}% *, *${NUMBER}%)(?: *, *${COMPONENT})? *\\)$`,
+  "i",
+);
 const COLOR_FUNCTION = new RegExp(
-  `^(?:(?:rgb|rgba|oklab|lab)\\(\\s*${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}|(?:hsl|hsla)\\(\\s*${HUE}${COMPONENT_SEPARATOR}${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}|(?:oklch|lch)\\(\\s*${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}${COMPONENT_SEPARATOR}${HUE})(?:(?:\\s*[,/]\\s*|\\s+)${COMPONENT})?\\s*\\)$`,
+  `^(?:(?:rgb|rgba|oklab|lab)\\( *${COMPONENT} +${COMPONENT} +${COMPONENT}|(?:hsl|hsla)\\( *${HUE} +${COMPONENT} +${COMPONENT}|(?:oklch|lch)\\( *${COMPONENT} +${COMPONENT} +${HUE})(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
 const COLOR_SPACE_FUNCTION = new RegExp(
-  `^color\\(\\s*(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65)\\s+${COMPONENT}\\s+${COMPONENT}\\s+${COMPONENT}(?:\\s*/\\s*${COMPONENT})?\\s*\\)$`,
+  `^color\\( *(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65) +${COMPONENT} +${COMPONENT} +${COMPONENT}(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
+const FONT_IDENTIFIER = "(?:--[a-z0-9_-]*|-?[a-z_][a-z0-9_-]*)";
+const FONT_FAMILY = `(?:"[a-z0-9 ,'._-]*"|'[a-z0-9 ,"._-]*'|${FONT_IDENTIFIER}(?: +${FONT_IDENTIFIER})*)`;
+const FONT_FAMILY_LIST = new RegExp(`^${FONT_FAMILY}(?: *, *${FONT_FAMILY})*$`, "i");
+const CSS_WIDE_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
+const GENERIC_FONT_FAMILIES = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace",
+  "ui-rounded",
+  "emoji",
+  "math",
+  "fangsong",
+  "-webkit-body",
+]);
+
+function isFontFamilyList(value: string): boolean {
+  if (!FONT_FAMILY_LIST.test(value)) {
+    return false;
+  }
+  // Quoted names may contain commas or match reserved keywords.
+  return value
+    .replace(/"[^"]*"|'[^']*'/g, "")
+    .split(",")
+    .every((family) => {
+      const normalized = family.trim().toLowerCase();
+      const words = normalized.split(/ +/);
+      return words.every(
+        (word) =>
+          !CSS_WIDE_KEYWORDS.has(word) &&
+          word !== "default" &&
+          (words.length === 1 || !GENERIC_FONT_FAMILIES.has(word)),
+      );
+    });
+}
 
 function requireColor(value: unknown, label: string): string {
   const color = requireText(value, label, THEME_TOKEN_MAX_LENGTH);
   if (
     !/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color) &&
     !/^(?:transparent|black|white)$/i.test(color) &&
+    !LEGACY_COLOR_FUNCTION.test(color) &&
     !COLOR_FUNCTION.test(color) &&
     !COLOR_SPACE_FUNCTION.test(color)
   ) {
@@ -204,7 +299,7 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
       continue;
     }
     const font = requireText(palette[key], `theme.${mode}.${key}`, THEME_TOKEN_MAX_LENGTH);
-    if (!/^[a-z0-9 ,'"._-]+$/i.test(font)) {
+    if (!isFontFamilyList(font)) {
       throw new Error(`theme.${mode}.${key} must contain only font family names`);
     }
     result[key] = font;
@@ -213,15 +308,71 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
 }
 
 /** Rejects executable CSS and incomplete palettes before they reach storage or a stylesheet. */
-export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
-  const record = requireRecord(value, "theme");
-  requireKeys(record, ["name", "description", "light", "dark"], "theme");
+export function normalizeThemeDefinition(
+  input: unknown,
+  options?: { hatIds?: readonly string[]; critterIds?: readonly string[] },
+): ThemeDefinition {
+  const record = requireRecord(input, "theme");
+  requireKeys(
+    record,
+    ["name", "description", "mascot", "workingPhrases", "critters", "avatarHat", "light", "dark"],
+    "theme",
+  );
   const definition: ThemeDefinition = {
     name: requireText(record.name, "theme.name", THEME_NAME_MAX_LENGTH),
     description: requireText(record.description, "theme.description", THEME_DESCRIPTION_MAX_LENGTH),
     ...(record.light !== undefined ? { light: normalizePalette(record.light, "light") } : {}),
     ...(record.dark !== undefined ? { dark: normalizePalette(record.dark, "dark") } : {}),
   };
+  if (record.mascot !== undefined) {
+    const mascot = THEME_MASCOT_VALUES.find((candidate) => candidate === record.mascot);
+    if (!mascot) {
+      throw new Error(`theme.mascot must be one of ${THEME_MASCOT_VALUES.join(", ")}`);
+    }
+    definition.mascot = mascot;
+  }
+  if (record.workingPhrases !== undefined) {
+    if (
+      !Array.isArray(record.workingPhrases) ||
+      record.workingPhrases.length > THEME_WORKING_PHRASES_MAX
+    ) {
+      throw new Error(
+        `theme.workingPhrases must be an array of at most ${THEME_WORKING_PHRASES_MAX} entries`,
+      );
+    }
+    const phrases = Array.from(record.workingPhrases, (phrase, index) =>
+      requireText(phrase, `theme.workingPhrases[${index}]`, THEME_WORKING_PHRASE_MAX_LENGTH),
+    );
+    if (new Set(phrases).size !== phrases.length) {
+      throw new Error("theme.workingPhrases must not contain duplicate entries after trimming");
+    }
+    definition.workingPhrases = phrases;
+  }
+  if (record.critters !== undefined) {
+    if (!Array.isArray(record.critters) || record.critters.length > 8) {
+      throw new Error("theme.critters must be an array of at most 8 entries");
+    }
+    const allowedIds = [...THEME_CRITTER_IDS, ...(options?.critterIds ?? [])];
+    const critters = Array.from(record.critters, (entry, index) => {
+      const critter = allowedIds.find((id) => id === entry);
+      if (!critter) {
+        throw new Error(`theme.critters[${index}] must be one of ${allowedIds.join(", ")}`);
+      }
+      return critter;
+    });
+    if (new Set(critters).size !== critters.length) {
+      throw new Error("theme.critters must not contain duplicate entries");
+    }
+    definition.critters = critters;
+  }
+  if (record.avatarHat !== undefined) {
+    const allowedIds = [...THEME_AVATAR_HAT_IDS, ...(options?.hatIds ?? [])];
+    const avatarHat = allowedIds.find((id) => id === record.avatarHat);
+    if (!avatarHat) {
+      throw new Error(`theme.avatarHat must be one of ${allowedIds.join(", ")}`);
+    }
+    definition.avatarHat = avatarHat;
+  }
   if (!definition.light && !definition.dark) {
     throw new Error("theme must provide at least one light or dark palette");
   }

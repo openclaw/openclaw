@@ -1,5 +1,9 @@
 // Markdown block-reply chunking and fence preservation.
 import { describe, expect, it, vi } from "vitest";
+import {
+  readReplyPayloadSourceOccurrence,
+  type ReplyPayloadSourceOccurrence,
+} from "../auto-reply/reply-payload.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import {
   createParagraphChunkedBlockReplyHarness,
@@ -88,7 +92,8 @@ describe("oversized fenced block chunking", () => {
       await subscription.waitForPendingEvents();
       expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
         "Intro",
-        "~~~xml\n<final>literal</final>\n~~~\n\nAfter",
+        "~~~xml\n<final>literal</final>\n~~~",
+        "After",
       ]);
     } finally {
       emit({
@@ -234,6 +239,7 @@ describe("oversized fenced block chunking", () => {
         delivered.push(payload.text ?? "");
       },
       timeoutMs: 5000,
+      coalescing: { minChars: 1, maxChars: 30, idleMs: 0, joiner: "\n\n" },
     });
     const { emit } = createParagraphChunkedBlockReplyHarness({
       chunking: { minChars: 8, maxChars: 20 },
@@ -247,6 +253,55 @@ describe("oversized fenced block chunking", () => {
     expect(pipeline.hasSentPayload({ text })).toBe(true);
     expect(pipeline.hasSentPayload({ text: "```ts\nabcdefghijklmnopq\n```" })).toBe(false);
   });
+
+  it.each([
+    { name: "without coalescing", coalescing: undefined },
+    {
+      name: "with coalescing",
+      coalescing: { minChars: 1, maxChars: 30, idleMs: 0, joiner: "\n\n" },
+    },
+  ])(
+    "delivers identical fenced chunks as distinct source occurrences $name",
+    async ({ coalescing }) => {
+      const delivered: string[] = [];
+      const sourceOccurrences: ReplyPayloadSourceOccurrence[] = [];
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply: (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        timeoutMs: 5000,
+        coalescing,
+      });
+      const { emit } = createParagraphChunkedBlockReplyHarness({
+        chunking: { minChars: 10, maxChars: 30 },
+        onBlockReply: (payload) => {
+          const occurrence = readReplyPayloadSourceOccurrence(payload);
+          if (occurrence) {
+            sourceOccurrences.push(occurrence);
+          }
+          pipeline.enqueue(payload);
+        },
+      });
+      const text = `\`\`\`txt\n${"a".repeat(80)}\n\`\`\``;
+
+      emitAssistantTextDeltaAndEnd({ emit, text });
+      await pipeline.flush({ force: true });
+
+      expect(delivered.length).toBeGreaterThan(2);
+      expect(pipeline.hasSentPayload({ text })).toBe(true);
+      expect(
+        sourceOccurrences.some((occurrence, index) =>
+          sourceOccurrences
+            .slice(index + 1)
+            .some(
+              (candidate) =>
+                candidate.sourceText === occurrence.sourceText &&
+                candidate.sourceRange[0] !== occurrence.sourceRange[0],
+            ),
+        ),
+      ).toBe(true);
+    },
+  );
 
   const cases = [
     {

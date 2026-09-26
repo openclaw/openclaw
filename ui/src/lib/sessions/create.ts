@@ -11,7 +11,7 @@ export type SessionCreateOutcome = {
   initialRun:
     | { status: "idle" }
     | { status: "started"; runId?: string }
-    | { status: "rejected"; error: string };
+    | { status: "rejected"; error: string; errorDetails?: unknown };
 };
 
 export type SessionCreateParams = SessionsCreateParams & {
@@ -54,6 +54,7 @@ export async function requestSessionCreate(
     initialRun = {
       status: "rejected",
       error: message || "The session was created, but its first message could not be sent.",
+      ...(result.runError?.details !== undefined ? { errorDetails: result.runError.details } : {}),
     };
   }
   return { key, entry: result.entry, initialRun };

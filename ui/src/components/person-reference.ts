@@ -3,9 +3,27 @@ import { html, nothing, render, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { buildControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { selectApplicationSession } from "../app/agent-selection.ts";
 import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
-import type { PresenceViewer } from "../lib/presence-users.ts";
+import {
+  presenceMatchesProfile,
+  projectPresencePayload,
+  type PresenceViewer,
+} from "../lib/presence-users.ts";
+import {
+  prepareSessionNavigationHandoff,
+  runSessionNavigationIntent,
+} from "../lib/sessions/navigation-handoff.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
+} from "../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
@@ -13,7 +31,8 @@ import {
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
 } from "./identity-avatar-view.ts";
-import { renderPersonIdentityCard } from "./person-activity-card.ts";
+import { renderPersonActivityCard } from "./person-activity-card.ts";
+import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import "../styles/chat/person-reference.css";
@@ -36,6 +55,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
   private readonly portal = new PortaledHovercardController(() => this.close());
   private stopRoute: (() => void) | undefined;
   private person: PresenceViewer | null | undefined;
+  private activity: ReturnType<typeof observePersonActivityData> | undefined;
 
   override createRenderRoot() {
     // The sanitized HTML carries a readable fallback until this element upgrades.
@@ -74,6 +94,8 @@ class PersonReference extends OpenClawLightDomContentsElement {
     if (PersonReference.active.get(this.ownerDocument) === this) {
       PersonReference.active.delete(this.ownerDocument);
     }
+    this.activity?.dispose();
+    this.activity = undefined;
     this.stopRoute?.();
     this.stopRoute = undefined;
     document.removeEventListener("pointerdown", this.outside, true);
@@ -126,7 +148,11 @@ class PersonReference extends OpenClawLightDomContentsElement {
     document.addEventListener("pointerdown", this.outside, true);
     document.addEventListener("focusin", this.outside, true);
     document.addEventListener("keydown", this.escape, true);
-    this.stopRoute = this.context.value?.router.subscribe(() => this.close());
+    const context = this.context.value;
+    this.stopRoute = context?.router.subscribe(() => this.close());
+    if (context) {
+      this.activity = observePersonActivityData(context, () => this.renderCard());
+    }
     this.person = this.connection.capture() ? undefined : null;
     this.renderCard();
     void this.loadPerson(card);
@@ -189,13 +215,79 @@ class PersonReference extends OpenClawLightDomContentsElement {
       "aria-label",
       t("presence.card.ariaLabel", { name: this.person?.name ?? this.label }),
     );
-    render(
-      this.person && context
-        ? renderPersonIdentityCard(this.person, personActivityRouting(context, this.close))
-        : html`<div class="person-reference__status" role="status">
-            ${this.person === undefined ? t("common.loading") : t("chat.mentions.unavailable")}
-          </div>`,
-      card,
+    const data = this.activity?.data;
+    const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
+      presenceMatchesProfile(user, this.person?.identity),
+    );
+    const user = this.person && {
+      ...this.person,
+      name: presence?.name ?? this.person.name,
+      avatarUrl: presence?.avatarUrl ?? this.person.avatarUrl,
+      watchedSessions: presence?.watchedSessions ?? [],
+      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
+    };
+    const defaults = {
+      agentsList: context?.agents.state.agentsList,
+      hello: context?.gateway.snapshot.hello,
+    };
+    const scope = this.connection.capture();
+    const route = context?.router.getState().location;
+    this.portal.renderContents(card, () =>
+      render(
+        user && context
+          ? renderPersonActivityCard({
+              user,
+              sessionData: data,
+              watchAgentId: resolveUiDefaultAgentId(defaults),
+              mainKey: resolveUiConfiguredMainKey(defaults),
+              globalScope: isUiGlobalScopeConfigured(defaults),
+              routing: personActivityRouting(context, this.close),
+              openSession: (row, agentId) => {
+                const face = resolveSessionPreferredFace(row);
+                const target = sessionNavigationTarget({
+                  face,
+                  sessionKey: row.key,
+                  row,
+                  fallbackAgentId: agentId,
+                  basePath: context.basePath,
+                  mainKey: resolveUiConfiguredMainKey(defaults),
+                });
+                this.close();
+                runSessionNavigationIntent(this, {
+                  agentId,
+                  face,
+                  sessionKey: row.key,
+                  commit: () => {
+                    if (
+                      !scope ||
+                      this.context.value !== context ||
+                      context.router.getState().location !== route ||
+                      !this.connection.isCurrent(scope)
+                    ) {
+                      return false;
+                    }
+                    prepareSessionNavigationHandoff(
+                      context.gateway,
+                      target.options.pathname,
+                      row.key,
+                    );
+                    context.navigate(face, target.options);
+                    selectApplicationSession({
+                      selection: context.agentSelection,
+                      gateway: context.gateway,
+                      sessionKey: row.key,
+                      agentId,
+                    });
+                    return true;
+                  },
+                });
+              },
+            })
+          : html`<div class="person-reference__status" role="status">
+              ${this.person === undefined ? t("common.loading") : t("chat.mentions.unavailable")}
+            </div>`,
+        card,
+      ),
     );
     this.portal.position();
   }

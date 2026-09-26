@@ -1,5 +1,6 @@
 // Synology Chat plugin module implements channel mocks behavior.
 import type { IncomingMessage } from "node:http";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -114,22 +115,6 @@ async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<st
   });
 }
 
-vi.mock("openclaw/plugin-sdk/setup", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/setup");
-  return {
-    ...actual,
-    DEFAULT_ACCOUNT_ID: "default",
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/channel-config-schema", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/channel-config-schema");
-  return {
-    ...actual,
-    buildChannelConfigSchema: vi.fn((schema: unknown) => ({ schema })),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   const actual = await vi.importActual<object>("openclaw/plugin-sdk/webhook-ingress");
   return {
@@ -198,15 +183,8 @@ vi.mock("./runtime.js", () => ({
       routing: {
         resolveAgentRoute: resolveAgentRouteMock,
       },
-      reply: {
-        finalizeInboundContext: finalizeInboundContextMock,
-        dispatchReplyWithBufferedBlockDispatcher,
-      },
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
-        recordInboundSession: vi.fn(async () => undefined),
-      },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         run: channelInboundRunMock,
         buildContext: buildChannelInboundEventContextMock,
       },

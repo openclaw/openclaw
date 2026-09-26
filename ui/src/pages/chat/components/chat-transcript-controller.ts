@@ -17,6 +17,7 @@ export class ChatTranscriptController implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
+    private readonly scrollPaneId: () => string,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
     host.addController(this);
@@ -27,7 +28,6 @@ export class ChatTranscriptController implements ReactiveController {
   }
 
   renderSession(
-    paneId: string,
     sessionKey: string,
     render: (transcript: ChatTranscriptSession) => TemplateResult,
   ): TemplateResult {
@@ -37,6 +37,9 @@ export class ChatTranscriptController implements ReactiveController {
       !areUiSessionKeysEquivalent(this.activeSessionKey, sessionKey)
     ) {
       this.sessionVirtualizer?.dispose();
+      // Presentation identities include the session; the cache is instead
+      // bounded by physical panes, with a separate session LRU inside each pane.
+      const paneId = this.scrollPaneId();
       const savedPosition = getChatSessionScrollPosition(paneId, sessionKey);
       const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = sessionKey;
@@ -59,6 +62,10 @@ export class ChatTranscriptController implements ReactiveController {
 
   get isProgrammaticScroll(): boolean {
     return this.sessionVirtualizer?.isProgrammaticScroll ?? false;
+  }
+
+  get isManualScroll(): boolean {
+    return this.sessionVirtualizer?.isManualScroll ?? false;
   }
 
   scrollToEnd(options: ChatScrollToEndOptions = {}): boolean {
@@ -84,6 +91,10 @@ export class ChatTranscriptController implements ReactiveController {
   hostConnected(): void {
     this.connected = true;
     this.sessionVirtualizer?.connect();
+  }
+
+  hostUpdate(): void {
+    this.sessionVirtualizer?.prepareUpdate();
   }
 
   hostUpdated(): void {

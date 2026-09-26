@@ -13,7 +13,11 @@ import {
   renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
+import {
+  renderSessionEditorOptions,
+  renderSessionGroupOptions,
+  sessionArchiveShortcut,
+} from "./session-menu-options.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
@@ -84,6 +88,7 @@ type SessionMenuActionsState = {
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
+  archiveShortcut?: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
@@ -319,6 +324,8 @@ export class SessionMenuActions {
     icon: TemplateResult,
     options: { shortcut?: string; inline?: boolean; title?: string } = {},
   ) {
+    const state = this.readState();
+    const archiveShortcut = kind === "toggle-archived" ? sessionArchiveShortcut(state) : undefined;
     return html`<wa-dropdown-item
       slot=${options.inline === false ? "submenu" : nothing}
       class=${`session-menu__item${kind === "delete" ? " session-menu__item--destructive" : ""}`}
@@ -328,11 +335,11 @@ export class SessionMenuActions {
       aria-keyshortcuts=${options.shortcut?.toUpperCase() ?? nothing}
       ?data-new-tab-action=${kind === "open-new-tab" || kind === "open-new-window"}
       ?disabled=${this.actionDisabled(kind, this.actionExtraDisabled(kind))}
-      title=${this.readState().actionDisabledReasons[kind] ?? options.title ?? nothing}
+      title=${state.actionDisabledReasons[kind] ?? options.title ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
-      ${options.shortcut ? menuShortcutHint(options.shortcut) : nothing}
+      ${options.shortcut ? menuShortcutHint(options.shortcut, archiveShortcut) : nothing}
     </wa-dropdown-item>`;
   }
 

@@ -1,4 +1,3 @@
-// Together provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
@@ -10,20 +9,18 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
-  fetchProviderDownloadResponse,
+  normalizeBaseUrl,
   pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
@@ -61,15 +58,11 @@ function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
   const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
   if (
     !configuredBaseUrl ||
-    stripTrailingSlash(configuredBaseUrl) === stripTrailingSlash(TOGETHER_BASE_URL)
+    normalizeBaseUrl(configuredBaseUrl) === normalizeBaseUrl(TOGETHER_BASE_URL)
   ) {
     return TOGETHER_VIDEO_BASE_URL;
   }
   return configuredBaseUrl;
-}
-
-function stripTrailingSlash(value: string): string {
-  return value.replace(/\/+$/u, "");
 }
 
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
@@ -103,62 +96,6 @@ function resolveTogetherDurationSeconds(value: unknown): string | undefined {
     max: TOGETHER_MAX_DURATION_SECONDS,
   });
   return duration === undefined ? undefined : String(duration);
-}
-
-async function pollTogetherVideo(params: {
-  videoId: string;
-  headers: Headers;
-  timeoutMs?: number;
-  baseUrl: string;
-  fetchFn: typeof fetch;
-}): Promise<TogetherVideoResponse> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: `Together video generation task ${params.videoId}`,
-  });
-  return await pollProviderOperationJson<TogetherVideoResponse>({
-    url: `${params.baseUrl}/videos/${params.videoId}`,
-    headers: params.headers,
-    deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
-    maxAttempts: MAX_POLL_ATTEMPTS,
-    pollIntervalMs: POLL_INTERVAL_MS,
-    requestFailedMessage: "Together video status request failed",
-    timeoutMessage: `Together video generation task ${params.videoId} did not finish in time`,
-    isComplete: (payload) => payload.status === "completed",
-    getFailureMessage: readTogetherVideoFailureMessage,
-  });
-}
-
-async function downloadTogetherVideo(params: {
-  url: string;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  maxBytes: number;
-}): Promise<GeneratedVideoAsset> {
-  return await downloadGeneratedVideoAsset({
-    url: params.url,
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
-    provider: "together",
-    label: "Together generated video download",
-    requestFailedMessage: "Together generated video download failed",
-    maxBytes: params.maxBytes,
-    validateBinaryResponse: true,
-    chunkTimeoutMs: 0,
-    fetchResponse: async ({ deadline }) => ({
-      response: await fetchProviderDownloadResponse({
-        url: params.url,
-        init: { method: "GET" },
-        deadline,
-        fetchFn: params.fetchFn,
-        provider: "together",
-        requestFailedMessage: "Together generated video download failed",
-      }),
-    }),
-  });
 }
 
 export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider {
@@ -286,28 +223,43 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         const completed =
           submitted.status === "completed"
             ? submitted
-            : await pollTogetherVideo({
-                videoId,
+            : await pollProviderOperationJson<TogetherVideoResponse>({
+                url: `${baseUrl}/videos/${videoId}`,
                 headers,
-                timeoutMs: resolveProviderOperationTimeoutMs({
-                  deadline,
-                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                deadline: createProviderOperationDeadline({
+                  timeoutMs: resolveProviderOperationTimeoutMs({
+                    deadline,
+                    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                  }),
+                  label: `Together video generation task ${videoId}`,
                 }),
-                baseUrl,
+                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
                 fetchFn,
+                maxAttempts: MAX_POLL_ATTEMPTS,
+                pollIntervalMs: POLL_INTERVAL_MS,
+                requestFailedMessage: "Together video status request failed",
+                timeoutMessage: `Together video generation task ${videoId} did not finish in time`,
+                isComplete: (payload) => payload.status === "completed",
+                getFailureMessage: readTogetherVideoFailureMessage,
               });
         const videoUrl = extractTogetherVideoUrl(completed);
         if (!videoUrl) {
           throw new Error("Together video generation completed without an output URL");
         }
-        const video = await downloadTogetherVideo({
+        const video = await downloadGeneratedVideoAsset({
           url: videoUrl,
           timeoutMs: createProviderOperationTimeoutResolver({
             deadline,
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          provider: "together",
+          label: "Together generated video download",
+          requestFailedMessage: "Together generated video download failed",
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          validateBinaryResponse: true,
+          chunkTimeoutMs: 0,
         });
         return {
           videos: [video],

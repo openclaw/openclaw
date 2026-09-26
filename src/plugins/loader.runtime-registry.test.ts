@@ -13,9 +13,7 @@ import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wa
 import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { VERSION } from "../version.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -24,8 +22,6 @@ import {
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
-import * as loaderModule from "./loader-module-runtime.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
@@ -46,11 +42,12 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
+import * as nativeModule from "./native-module-require.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { setActiveDegradedPlugins } from "./runtime-degraded-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
@@ -69,6 +66,7 @@ import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  setActiveDegradedPlugins([]);
   resetPluginStateStoreForTests();
   resetPluginLoaderTestStateForTest();
   clearRuntimeConfigSnapshot();
@@ -142,23 +140,22 @@ it.each(["cjs", "ts"])(
             "resolvePluginRuntimeModulePathWithDiagnostics",
           );
           let fullRuntime: typeof import("./runtime/index.js") | null = null;
-          const createLoader = loaderModule.createPluginModuleLoader;
+          const nativeLoad = nativeModule.tryNativeRequireModule;
           const factories = vi.fn(
             (...args: Parameters<typeof import("./runtime/index.js").createPluginRuntime>) =>
               fullRuntime!.createPluginRuntime(...args),
           );
-          vi.spyOn(loaderModule, "createPluginModuleLoader").mockImplementation((options) => {
-            const load = createLoader(options);
-            return (modulePath) => {
+          vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation(
+            (modulePath, options) => {
               if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
                 if (!fullRuntime) {
                   throw new Error("broad runtime requested before state registration completed");
                 }
-                return { createPluginRuntime: factories };
+                return { ok: true, moduleExport: { createPluginRuntime: factories } };
               }
-              return load(modulePath);
-            };
-          });
+              return nativeLoad(modulePath, options);
+            },
+          );
           const modelAuth = resolveNativePluginModelAuth();
           const modelConfig = resolveNativePluginModelConfig();
           const hooks = {
@@ -191,7 +188,6 @@ it.each(["cjs", "ts"])(
           );
           expect(fs.existsSync(observed)).toBe(false);
           expect(resolveRuntime).not.toHaveBeenCalled();
-          const loaderStats = getPluginModuleLoaderStats();
           const registry = loadPluginRegistryHandle({
             config,
             cache: false,
@@ -201,17 +197,6 @@ it.each(["cjs", "ts"])(
           expect(registry.plugins).toContainEqual(
             expect.objectContaining({ id: plugin.id, status: "loaded" }),
           );
-          const loadedStats = getPluginModuleLoaderStats();
-          if (process.versions.bun && extension === "cjs") {
-            expect(loadedStats.nativeHits).toBeGreaterThan(loaderStats.nativeHits);
-          } else {
-            expect(loadedStats.sourceTransformForced).toBeGreaterThan(
-              loaderStats.sourceTransformForced,
-            );
-            expect(loadedStats.topSourceTransformTargets).toContainEqual(
-              expect.objectContaining({ target: toSafeImportPath(plugin.file) }),
-            );
-          }
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
             entries: [],
             selection: { ref: { provider: "fixture", model: "allowed" }, key: "fixture/allowed" },
@@ -427,73 +412,6 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
   expect(getActivePluginRegistry()).toBe(root);
 });
 
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
-  const gateway = {} as PluginRuntime["gateway"];
-  const hooks = {
-    dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
-  };
-  const nodes = {} as PluginRuntime["nodes"];
-  const subagent = {} as PluginRuntime["subagent"];
-  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-    throw new Error("broad runtime should stay lazy");
-  });
-  const runtime = createLazyPluginRuntime({
-    loadPluginModule,
-    runtimeOptions: { gateway, hooks, nodes, subagent },
-  });
-
-  expect(runtime.version).toBe(VERSION);
-  expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
-  const descriptors = Object.getOwnPropertyDescriptors(runtime);
-  expect(Object.keys(runtime)).toEqual([
-    "version",
-    "gateway",
-    "config",
-    "agent",
-    "subagent",
-    "system",
-    "media",
-    "mediaUnderstanding",
-    "tts",
-    "channel",
-    "events",
-    "logging",
-    "state",
-    "modelAuth",
-    "imageGeneration",
-    "videoGeneration",
-    "musicGeneration",
-    "llm",
-    "hooks",
-    "nodes",
-    "sandbox",
-    "worktrees",
-    "webSearch",
-    "tasks",
-    "modelConfig",
-  ]);
-  expect(Reflect.ownKeys(runtime)).toEqual(Object.keys(descriptors));
-  for (const key of Object.keys(descriptors)) {
-    expect(key in runtime).toBe(true);
-    expect(descriptors[key]).toMatchObject({ configurable: true, enumerable: true });
-  }
-  for (const [key, instance] of [
-    ["gateway", gateway],
-    ["hooks", hooks],
-    ["nodes", nodes],
-    ["subagent", subagent],
-  ] as const) {
-    expect(runtime[key]).toBe(instance);
-    expect(descriptors[key]?.get?.()).toBe(instance);
-    expect(Reflect.get(runtime, key, null)).toBe(instance);
-    expect(Reflect.get(runtime, key, undefined)).toBe(instance);
-  }
-  expect(loadPluginModule).not.toHaveBeenCalled();
-  // Object.prototype names are not declared runtime metadata.
-  expect(() => Reflect.has(runtime, "toString")).toThrow("broad runtime should stay lazy");
-  expect(loadPluginModule).toHaveBeenCalledTimes(1);
-});
-
 it("reuses discovered registrations through prepared load options until invalidated", () => {
   useNoBundledPlugins();
   const plugin = writePlugin({
@@ -620,6 +538,72 @@ describe("cached plugin load failures", () => {
       error: expect.stringContaining("new replacement failure"),
     });
     expect(failure.registry.diagnostics).toEqual(expect.arrayContaining(previous.diagnostics));
+  });
+
+  it("does not reject an unrelated replacement for a re-evaluated startup quarantine", () => {
+    useNoBundledPlugins();
+    const broken = writePlugin({
+      id: "startup-quarantined",
+      body: 'throw new Error("quarantined plugin must not execute");',
+    });
+    const healthy = writePlugin({
+      id: "healthy-replacement",
+      body: "module.exports = { register() {} };",
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [broken.id, healthy.id],
+          load: { paths: [broken.file, healthy.file] },
+          slots: { memory: "none" },
+        },
+      },
+      cache: false,
+    };
+    setActiveDegradedPlugins([
+      {
+        pluginId: broken.id,
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-openclaw-peer-link",
+          detail:
+            'Plugin declares peerDependency "openclaw", but its host peer link is missing or invalid.',
+          installPath: broken.dir,
+        },
+      },
+    ]);
+    const previous = loadPluginRegistryHandle(options);
+    const previousError = previous.plugins.find((entry) => entry.id === broken.id)?.error;
+    expect(previousError).toContain("missing-openclaw-peer-link");
+
+    const replacement = loadPluginRegistryHandle({
+      ...options,
+      config: {
+        plugins: {
+          ...options.config.plugins,
+          entries: { [broken.id]: { enabled: true } },
+        },
+      },
+      previousRegistry: previous,
+      replacePluginIds: [healthy.id],
+      throwOnLoadError: true,
+    });
+    expect(replacement.plugins.find((entry) => entry.id === broken.id)).toMatchObject({
+      status: "error",
+      error: previousError,
+    });
+    expect(replacement.plugins.find((entry) => entry.id === healthy.id)).toMatchObject({
+      status: "loaded",
+    });
+    expect(() =>
+      loadPluginRegistryHandle({
+        ...options,
+        previousRegistry: previous,
+        replacePluginIds: [broken.id],
+        throwOnLoadError: true,
+      }),
+    ).toThrow(PluginLoadFailureError);
   });
 
   it("continues to reuse healthy cached registries for strict loads", () => {

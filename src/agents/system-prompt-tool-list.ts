@@ -21,11 +21,10 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     find: "Find files by glob",
     ls: "List directories",
     exec: params.codeModeActive
-      ? "Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      ? "Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
       : promptSurface === "cli_backend"
         ? "Run shell on connected node; sync; host=node"
         : "Run shell; pty for TTY CLIs",
-    wait: "Resume a suspended Code Mode exec",
     process: "Control background exec",
     web_search: "Web search",
     web_fetch: "Fetch/extract URL",
@@ -62,61 +61,24 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
     skill_workshop: "Author reusable skills",
-    image: "Analyze images",
+    view_image: "",
     image_generate: "Generate/edit images",
   };
 
-  const toolOrder = [
-    "read",
-    "write",
-    "edit",
-    "apply_patch",
-    "grep",
-    "find",
-    "ls",
-    "exec",
-    "process",
-    "web_search",
-    "web_fetch",
-    "browser",
-    "screen",
-    "theme",
-    "terminal",
-    "canvas",
-    "nodes",
-    AUTOMATIONS_TOOL_NAME,
-    "message",
-    "conversations_list",
-    "conversations_send",
-    "conversations_turn",
-    "openclaw",
-    "gateway",
-    "agents_list",
-    "sessions_list",
-    "sessions_history",
-    "sessions_search",
-    "sessions_send",
-    "sessions_spawn",
-    "sessions_yield",
-    "subagents",
-    "session_status",
-    "skill_workshop",
-    "view_image",
-    "image_generate",
-  ];
+  const toolOrder = Object.keys(coreToolSummaries);
+  // These summaries retain alphabetical extra-tool placement after the ordered core list.
+  const summaries: Record<string, string> = {
+    ...coreToolSummaries,
+    wait: "Resume a suspended Code Mode exec",
+    image: "Analyze images",
+  };
 
   const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const extraTools = [...visibleTools.keys()].filter((tool) => !toolOrder.includes(tool));
   const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
-  const toolLines = enabledTools.map((tool) => {
-    const summary = coreToolSummaries[tool];
+  return [...enabledTools, ...extraTools.toSorted()].map((tool) => {
+    const summary = summaries[tool];
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
-  for (const tool of extraTools.toSorted()) {
-    const summary = coreToolSummaries[tool];
-    const name = resolveToolName(tool);
-    toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
-  }
-  return toolLines;
 }

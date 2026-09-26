@@ -115,8 +115,10 @@ Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
 `workflow_ref` as trusted current harness code unless the release process says
 otherwise.
 
-For extended-stable, branch-owned Full Release Validation is publication
-evidence; Package Acceptance is a post-publish selector smoke:
+For extended-stable shared publication, require complete exact-target Full
+Release Validation from the trusted main-pinned `release-ci/*` harness. Direct
+canonical-branch or `main` producers do not satisfy the protected publisher.
+Package Acceptance is a post-publish selector smoke:
 
 ```bash
 gh workflow run package-acceptance.yml \
@@ -163,6 +165,10 @@ Record the final artifact name and digest separately. The manifest uses
 `openclaw.plugin-publication-artifact/v1` and records the target SHA, package
 manifest hashes, publication route and policy, and tarball hashes and inventory.
 This proof is validation-only; it does not authorize or stage publication.
+The separate `trusted_publisher_preflight=true` OIDC check requires a protected
+`release-publish/<tooling-sha12>-<epoch>` dispatch tag and runs in `npm-publish`.
+Real publication also requires that tooling tag; a direct human dispatch waits
+for its `npm-release` approval job before publishing.
 For an already-published version,
 require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
 Treat only missing or provably older dist-tags as repairable; newer or

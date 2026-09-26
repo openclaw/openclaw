@@ -346,6 +346,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
 -- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
+  watcher_store_path TEXT,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
@@ -567,6 +568,12 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
 
 CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
   ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
+  grant_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
+  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
@@ -1460,6 +1467,9 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   agent_id TEXT,
   payload_kind TEXT NOT NULL,
   job_json TEXT NOT NULL,
+  grant_definition_revision TEXT,
+  grant_definition_generation INTEGER,
+  grant_definition_updated_at INTEGER,
   state_json TEXT NOT NULL DEFAULT '{}',
   runtime_updated_at_ms INTEGER,
   schedule_identity TEXT,
@@ -1624,6 +1634,7 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_requester_session_key ON task_runs(requester_session_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
   ON task_runs(runtime, source_id, ended_at, created_at, task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
@@ -1633,7 +1644,9 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
   child_session_key TEXT NOT NULL,
   controller_session_key TEXT,
+  controller_store_path TEXT,
   requester_session_key TEXT NOT NULL,
+  requester_store_path TEXT,
   created_at INTEGER NOT NULL,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
@@ -1839,7 +1852,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER,
-  run_end_cleanup_json TEXT
+  run_end_cleanup_json TEXT,
+  gc_protection_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -2062,6 +2076,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   request_digest TEXT NOT NULL,
   session_id TEXT NOT NULL,
   session_lifecycle_revision TEXT,
+  requester_authority_json TEXT,
   session_key TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
@@ -2231,6 +2246,10 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_worker_session_placements_environment
+  ON worker_session_placements(environment_id)
+  WHERE environment_id IS NOT NULL;
 
 -- Planned placement moves retain their exact source CAS and bounded target
 -- without widening the stable placement-state vocabulary. The opaque operation
@@ -2496,6 +2515,7 @@ CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
   publication_kind TEXT NOT NULL CHECK (publication_kind IN ('shared', 'personal')),
   request_id TEXT NOT NULL,
   lifecycle_revision TEXT,
+  requester_authority_json TEXT,
   PRIMARY KEY (publication_kind, request_id)
 ) STRICT;
 
@@ -2670,6 +2690,21 @@ CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, name)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);
 
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,

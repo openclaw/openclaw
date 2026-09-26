@@ -85,6 +85,9 @@ describe("renderSkills", () => {
         (button) => normalizeText(button) === "Save key",
       );
       expect(input?.required).toBe(true);
+      expect(normalizeText(expectDefined(input?.labels?.[0], "API key label"))).toBe(
+        "API key (OPENAI_API_KEY)",
+      );
       expect(save?.disabled).toBe(disabled);
 
       save?.click();
@@ -112,6 +115,259 @@ describe("renderSkills", () => {
     expect(normalizeText(group!.querySelector(".settings-group .settings-row")!)).toContain(
       "Repo Skill",
     );
+  });
+
+  it.each([true, false])(
+    "preserves retained group open=%s when an earlier group is filtered away",
+    async (retainedOpen) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+
+      const workspaceSkill = createSkill({
+        skillKey: "ws-skill",
+        name: "Workspace Skill",
+        source: "openclaw-workspace",
+      });
+      const builtInSkill = createSkill({
+        skillKey: "bi-skill",
+        name: "Weather",
+        bundled: true,
+      });
+      const report: SkillStatusReport = {
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        skills: [workspaceSkill, builtInSkill],
+      };
+
+      const onDetailOpen = vi.fn();
+      render(renderSkills(createProps({ report, onDetailOpen })), container);
+      await Promise.resolve();
+
+      const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+      expect(groups).toHaveLength(2);
+      expect(groups[0]!.open).toBe(true);
+      expect(groups[1]!.open).toBe(true);
+
+      groups[0]!.open = false;
+      groups[1]!.open = retainedOpen;
+      const row = groups[1]!.querySelector(".settings-row");
+
+      render(renderSkills(createProps({ report, filter: "weather", onDetailOpen })), container);
+      await Promise.resolve();
+
+      const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
+      expect(remaining[0]).toBe(groups[1]);
+      expect(remaining[0]!.open).toBe(retainedOpen);
+      expect(remaining[0]!.querySelector(".settings-row")).toBe(row);
+      remaining[0]!.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+      expect(onDetailOpen).toHaveBeenCalledExactlyOnceWith("bi-skill");
+    },
+  );
+
+  it("preserves retained group expansion when a middle group is filtered away", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Keep Workspace",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const installedSkill = createSkill({
+      skillKey: "inst-skill",
+      name: "Keep Installed",
+      source: "openclaw-managed",
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill, installedSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(groups).toHaveLength(3);
+    groups[1]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "keep" })), container);
+    await Promise.resolve();
+
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(2);
+    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Keep Workspace");
+    expect(remaining[0]).toBe(groups[0]);
+    expect(remaining[1]).toBe(groups[2]);
+    expect(remaining[0]!.open).toBe(true);
+    expect(remaining[1]!.open).toBe(true);
+    expect(remaining[1]!.textContent).toContain("Keep Installed");
+  });
+
+  it("restores a removed group as initially open after filter is cleared", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "weather" })), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll("details.skills-group")).toHaveLength(1);
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const restored = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(restored).toHaveLength(2);
+    expect(restored[0]!.open).toBe(true);
+    expect(restored[1]!.open).toBe(true);
+  });
+
+  it("preserves built-in group expansion when status filtering removes the workspace group", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+      blockedByAgentFilter: true,
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(groups).toHaveLength(2);
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
+    await Promise.resolve();
+
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
+    expect(remaining[0]!.open).toBe(true);
+  });
+
+  it("recovers from empty filter results and restores groups as initially open", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "zzzz-no-match" })), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll("details.skills-group")).toHaveLength(0);
+
+    render(renderSkills(createProps({ report })), container);
+    await Promise.resolve();
+
+    const restored = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(restored).toHaveLength(2);
+    expect(restored[0]!.open).toBe(true);
+    expect(restored[1]!.open).toBe(true);
+  });
+
+  it("preserves built-in group expansion when an earlier group is filtered away with retained query", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const workspaceSkill = createSkill({
+      skillKey: "ws-skill",
+      name: "Workspace Skill",
+      source: "openclaw-workspace",
+    });
+    const builtInSkill = createSkill({
+      skillKey: "bi-skill",
+      name: "Weather",
+      bundled: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [workspaceSkill, builtInSkill],
+    };
+
+    render(renderSkills(createProps({ report, filter: "skill" })), container);
+    await Promise.resolve();
+
+    const groups = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(groups).toHaveLength(2);
+    groups[0]!.open = false;
+
+    render(renderSkills(createProps({ report, filter: "weather" })), container);
+    await Promise.resolve();
+
+    const remaining = container.querySelectorAll<HTMLDetailsElement>("details.skills-group");
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.querySelector(".settings-row")?.textContent).toContain("Weather");
+    expect(remaining[0]!.open).toBe(true);
   });
 
   it("renders alternative missing binaries and exposes their installer", async () => {

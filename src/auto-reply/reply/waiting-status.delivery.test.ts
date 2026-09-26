@@ -49,7 +49,7 @@ function createContext(): FinalizeReplyAgentRunInput {
   const sessionKey = "agent:main:waiting-progress";
   const followupRun = createMockFollowupRun({
     originatingChannel: "discord",
-    run: { sessionKey, messageProvider: "discord" },
+    run: { sessionKey, messageProvider: "discord", terminalReplyExpectation: "required" },
   });
   return {
     activeIsNewSession: false,
@@ -139,7 +139,7 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
 
 beforeEach(() => {
   settleRequester.mockReset().mockReturnValue(true);
-  createContinuation.mockReset().mockImplementation((params) => {
+  createContinuation.mockReset().mockImplementation(async (params) => {
     let open = true;
     return {
       adopt: async () => {
@@ -177,6 +177,7 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
         context.execution.result.payloads = [selected];
       } else {
         context.execution.result.acceptedSessionSpawns = undefined;
+        context.execution.result.meta = { durationMs: 0 };
         context.execution = {
           ...context.execution,
           status: "failed",
@@ -203,32 +204,19 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
     },
   );
 
-  it.each([
-    "heartbeat",
-    "subagent session",
-    "internal turn",
-    "silentExpected turn",
-    "delivered message",
-    "silent reply",
-  ])("does not deliver a waiting status for a %s", async (suppression) => {
-    const context = createContext();
-    if (suppression === "heartbeat") {
-      context.isHeartbeat = true;
-    } else if (suppression === "subagent session") {
-      context.sessionKey = "agent:main:subagent:internal";
-      context.followupRun.run.sessionKey = context.sessionKey;
-    } else if (suppression === "internal turn") {
-      context.followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "test" };
-    } else if (suppression === "silentExpected turn") {
-      context.followupRun.run.silentExpected = true;
-    } else if (suppression === "delivered message") {
-      context.execution.result.didDeliverSourceReplyViaMessageTool = true;
-    } else {
-      context.execution.result.meta.finalAssistantVisibleText = "NO_REPLY";
-    }
-    expect(await prepare(lane, context)).toEqual([]);
-    expect(createContinuation).not.toHaveBeenCalled();
-  });
+  it.each(["optional turn", "delivered message"])(
+    "does not deliver a waiting status for a %s",
+    async (suppression) => {
+      const context = createContext();
+      if (suppression === "optional turn") {
+        context.followupRun.run.terminalReplyExpectation = "optional";
+      } else {
+        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+      }
+      expect(await prepare(lane, context)).toEqual([]);
+      expect(createContinuation).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not offer adoption for a yield without accepted children", async () => {
     const context = createContext();

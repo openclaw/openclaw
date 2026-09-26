@@ -61,6 +61,7 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
   const presentation = pane as TestChatPane & {
     progressCard: SessionProgressCardController;
     readonly progressCardPresentation: { card: ProgressCard; identity: string } | null;
+    readonly progressCardInitialLoading: boolean;
   };
   const progress = presentation.progressCard;
   onTestFinished(() => progress.hostDisconnected());
@@ -126,6 +127,44 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       expectedRevision: 2,
     });
     expect(progress.card).toBeNull();
+  });
+
+  it("hides progress and its loading slot without clearing saved progress, then restores updates", async () => {
+    let card = progressCard();
+    const request = vi.fn(async (method: string) =>
+      method === "chat.history" ? history : { card },
+    );
+    const { state, progress, emit, presentation } = createHistoryProgressPane(request);
+    state.settings.chatShowTaskProgress = false;
+    expect(presentation.progressCardInitialLoading).toBe(false);
+    await loadChatHistory(state, { deferBranches: true });
+    progress.hostUpdate();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+    expect(presentation.progressCardPresentation).toBeNull();
+
+    state.settings.chatShowTaskProgress = true;
+    progress.hostUpdate();
+    await vi.waitFor(() => expect(presentation.progressCardPresentation?.card).toEqual(card));
+
+    state.settings.chatShowTaskProgress = false;
+    progress.hostUpdate();
+    expect(presentation.progressCardPresentation).toBeNull();
+    expect(presentation.progressCardInitialLoading).toBe(false);
+    card = progressCard(2);
+    emit(card);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.history",
+      "progressCard.get",
+    ]);
+
+    state.settings.chatShowTaskProgress = true;
+    progress.hostUpdate();
+    await vi.waitFor(() => expect(presentation.progressCardPresentation?.card).toEqual(card));
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.history",
+      "progressCard.get",
+      "progressCard.get",
+    ]);
   });
 
   it.each([

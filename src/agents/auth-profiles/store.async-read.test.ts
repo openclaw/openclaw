@@ -12,6 +12,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   clearRuntimeAuthProfileStoreSnapshotCore,
   noteRuntimeAuthProfileStorePersistedMutation,
+  setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import * as sqliteRead from "./sqlite-read.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
@@ -226,54 +227,60 @@ it("does not extend the probe interval by time spent awaiting a cold read", asyn
   expect(reader.read).toHaveBeenCalledTimes(2);
 });
 
-it.each(["rotation", "all-clear", "owner-clear"] as const)(
-  "rejects cached rows after %s during inherited preparation",
-  async (change) => {
-    const root = tempDirs.make("openclaw-auth-cached-rotation-");
-    const localDir = path.join(root, "agents/worker/agent");
-    const inheritedDir = path.join(root, "agents/main/agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    reader.assertCurrent.mockReset();
-    reader.read.mockReset().mockResolvedValue({
+it.each([
+  "rotation",
+  "all-clear",
+  "owner-clear",
+  "all-clear-and-publish",
+  "owner-clear-and-publish",
+] as const)("rejects cached rows after %s during inherited preparation", async (change) => {
+  const root = tempDirs.make("openclaw-auth-cached-rotation-");
+  const localDir = path.join(root, "agents/worker/agent");
+  const inheritedDir = path.join(root, "agents/main/agent");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  reader.assertCurrent.mockReset();
+  reader.read.mockReset().mockResolvedValue({
+    store: { status: "readable", raw: { version: 1, profiles: {} } },
+    state: { status: "missing", reason: "row" },
+    cacheable: true,
+  });
+  const runtime = createAuthProfileStoreRuntime({
+    listRuntimeExternalAuthProfiles: () => [],
+    overlayExternalAuthProfiles: (store) => store,
+  });
+  await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
+    inheritedAuthDir: localDir,
+    externalCli: { mode: "none" },
+  });
+  reader.read.mockImplementationOnce(async () => {
+    if (change === "all-clear" || change === "all-clear-and-publish") {
+      clearRuntimeAuthProfileStoreSnapshots();
+    } else if (change === "owner-clear" || change === "owner-clear-and-publish") {
+      clearRuntimeAuthProfileStoreSnapshotCore(localDir);
+    } else {
+      noteRuntimeAuthProfileStorePersistedMutation(localDir, {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: ["custom:local"],
+      });
+    }
+    if (change.endsWith("-and-publish")) {
+      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, localDir);
+    }
+    return {
       store: { status: "readable", raw: { version: 1, profiles: {} } },
       state: { status: "missing", reason: "row" },
       cacheable: true,
-    });
-    const runtime = createAuthProfileStoreRuntime({
-      listRuntimeExternalAuthProfiles: () => [],
-      overlayExternalAuthProfiles: (store) => store,
-    });
-    await runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-      inheritedAuthDir: localDir,
+    };
+  });
+  await expect(
+    runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
+      inheritedAuthDir: inheritedDir,
       externalCli: { mode: "none" },
-    });
-    reader.read.mockImplementationOnce(async () => {
-      if (change === "all-clear") {
-        clearRuntimeAuthProfileStoreSnapshots();
-      } else if (change === "owner-clear") {
-        clearRuntimeAuthProfileStoreSnapshotCore(localDir);
-      } else {
-        noteRuntimeAuthProfileStorePersistedMutation(localDir, {
-          credentialsChanged: true,
-          stateChanged: false,
-          profileIds: ["custom:local"],
-        });
-      }
-      return {
-        store: { status: "readable", raw: { version: 1, profiles: {} } },
-        state: { status: "missing", reason: "row" },
-        cacheable: true,
-      };
-    });
-    await expect(
-      runtime.loadAuthProfileStoreForRuntimeAsync(localDir, {
-        inheritedAuthDir: inheritedDir,
-        externalCli: { mode: "none" },
-      }),
-    ).rejects.toThrow("Auth profile store changed during its runtime read");
-    expect(reader.read).toHaveBeenCalledTimes(2);
-  },
-);
+    }),
+  ).rejects.toThrow("Auth profile store changed during its runtime read");
+  expect(reader.read).toHaveBeenCalledTimes(2);
+});
 
 it.each([false, true])(
   "rechecks retired files after an inherited read with populated local SQLite: %s",

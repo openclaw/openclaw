@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import {
+  matchesAgentHarnessTaskAssignment,
+  type AgentHarnessTaskRecord,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -24,7 +27,10 @@ import type {
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentCompletion } from "./native-subagent-notification.js";
 import {
+  normalizeIdentifier,
   readNativeTaskAssignment,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
   type NativeSubagentAssignment,
 } from "./native-subagent-task-ids.js";
 import type { JsonObject } from "./protocol.js";
@@ -253,10 +259,10 @@ export class CodexNativeSubagentHistoryRecovery {
     if (
       tasks.length !== 1 ||
       !task ||
-      task.taskId !== candidate.taskId ||
+      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask) ||
       !this.acceptsTask(task, candidate.parentState) ||
       !this.shouldReconcileTask(task, now) ||
-      (child?.completionTaskId && child.completionTaskId !== candidate.taskId)
+      (child?.expectedTask && !matchesAgentHarnessTaskAssignment(task, child.expectedTask))
     ) {
       return undefined;
     }
@@ -287,8 +293,8 @@ export class CodexNativeSubagentHistoryRecovery {
     if (
       currentTasks.length !== 1 ||
       !current ||
-      current.taskId !== candidate.taskId ||
-      task.taskId !== candidate.taskId
+      !matchesAgentHarnessTaskAssignment(current, candidate.expectedTask) ||
+      !matchesAgentHarnessTaskAssignment(task, candidate.expectedTask)
     ) {
       return false;
     }
@@ -591,20 +597,15 @@ function readThreadTurnRecovery(
   childThreadId: string,
 ): Pick<ThreadRecovery, "completion" | "resumable" | "nativeTurnId" | "nativeTurnState"> {
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (!isJsonObject(turn)) {
-      continue;
-    }
-    const status = normalizeIdentifier(readString(turn, "status"));
-    return {
-      nativeTurnId: readString(turn, "id"),
-      nativeTurnState: readNativeTurnState(turn),
-      completion: readTurnCompletion(turn, childThreadId),
-      resumable: status === "interrupted",
-    };
-  }
-  return { resumable: false };
+  const turn = turns.findLast(isJsonObject);
+  return turn
+    ? {
+        nativeTurnId: readString(turn, "id"),
+        nativeTurnState: readNativeTurnState(turn),
+        completion: readTurnCompletion(turn, childThreadId),
+        resumable: normalizeIdentifier(readString(turn, "status")) === "interrupted",
+      }
+    : { resumable: false };
 }
 
 export function readNativeTurnEnd(
@@ -624,7 +625,7 @@ function readNativeTurnState(
     : readNativeTurnEnd(turn);
 }
 
-export function readTurnErrorMessage(turn: JsonObject): string | undefined {
+function readTurnErrorMessage(turn: JsonObject): string | undefined {
   const error = isJsonObject(turn.error) ? turn.error : undefined;
   return (
     normalizeOptionalString(readString(error, "message")) ??
@@ -643,9 +644,10 @@ export function systemErrorFallbackCompletion(childThreadId: string): RecoveredC
   };
 }
 
-function readTurnCompletion(
+export function readTurnCompletion(
   turn: JsonObject,
   childThreadId: string,
+  source: "history" | "notification" = "history",
 ): RecoveredCompletion | undefined {
   const status = normalizeIdentifier(readString(turn, "status"));
   if (status === "inprogress" || !status) {
@@ -653,15 +655,24 @@ function readTurnCompletion(
   }
   const result = readLastAgentMessage(turn);
   const completedAtSeconds = asFiniteNumber(turn.completedAt);
-  const completedAt =
-    completedAtSeconds === undefined ? undefined : Math.round(completedAtSeconds * 1_000);
+  const timestamp =
+    source === "history"
+      ? {
+          completedAt:
+            completedAtSeconds === undefined ? undefined : Math.round(completedAtSeconds * 1_000),
+        }
+      : {};
   if (status === "completed") {
     return {
       childThreadId,
       status: "succeeded",
-      statusLabel: result ? "task_complete" : "completed_without_final_message",
+      statusLabel: result
+        ? source === "history"
+          ? "task_complete"
+          : "turn_completed"
+        : "completed_without_final_message",
       result: result ?? "Subagent completed without a final assistant message.",
-      completedAt,
+      ...timestamp,
     };
   }
   // Codex keeps interrupted subagents resumable. They remain a running task
@@ -673,15 +684,18 @@ function readTurnCompletion(
     return {
       childThreadId,
       status: "failed",
-      statusLabel: "task_failed",
-      result: readTurnErrorMessage(turn) ?? result ?? "Subagent failed.",
-      completedAt,
+      statusLabel: source === "history" ? "task_failed" : "turn_failed",
+      result:
+        readTurnErrorMessage(turn) ??
+        (source === "history" ? result : undefined) ??
+        "Subagent failed.",
+      ...timestamp,
     };
   }
   return undefined;
 }
 
-export function readLastAgentMessage(turn: JsonObject): string | undefined {
+function readLastAgentMessage(turn: JsonObject): string | undefined {
   const items = Array.isArray(turn.items) ? turn.items : [];
   let legacyResult: string | undefined;
   for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -712,21 +726,4 @@ export function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): 
     completion.status === "succeeded" &&
     completion.statusLabel === "completed_without_final_message"
   );
-}
-
-export function readThreadParentThreadId(thread: JsonObject | undefined): string | undefined {
-  return (
-    readString(thread, "parentThreadId")?.trim() ??
-    readString(readThreadSpawnSource(thread), "parent_thread_id")?.trim()
-  );
-}
-
-export function readThreadSpawnSource(thread: JsonObject | undefined): JsonObject | undefined {
-  const source = isJsonObject(thread?.source) ? thread.source : undefined;
-  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
-  return isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
-}
-
-export function normalizeIdentifier(value: string | undefined): string | undefined {
-  return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
 }

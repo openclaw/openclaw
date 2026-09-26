@@ -10,10 +10,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { createSecretFileAtomic, tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { extractErrorCode } from "../../infra/errors.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 

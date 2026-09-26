@@ -19,6 +19,7 @@ import type {
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
 import { icons } from "../../components/icons.ts";
@@ -31,6 +32,7 @@ import {
   renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import { renderUpdateGitRevisions } from "../../components/update-git-revisions.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
@@ -55,6 +57,7 @@ type UpdatesViewProps = {
   canCheckStatus: boolean;
   canHoldUpdate: boolean;
   canReport: boolean;
+  canDiagnose: boolean;
   updateBusy: boolean;
   nowMs?: number;
   onChannelChange: (channel: UpdatesChannel) => void;
@@ -64,6 +67,7 @@ type UpdatesViewProps = {
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<boolean>;
   onReportFailure: (attemptId: string) => Promise<void>;
+  onDiagnoseFailure: (attemptId: string) => void;
 };
 
 function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null | undefined) {
@@ -146,6 +150,19 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
               >
                 ${t("updates.page.checkStatus")}
               </button>
+              ${
+                props.update.diagnosableUpdateFailureId
+                  ? html`<button
+                      class="btn btn--sm"
+                      type="button"
+                      title=${props.canDiagnose ? "" : t("updates.adminRequired")}
+                      ?disabled=${!props.canDiagnose || props.updateBusy || props.update.updateStatusRefreshing || props.update.updateFailureReportBusy}
+                      @click=${() => props.onDiagnoseFailure(props.update.diagnosableUpdateFailureId!)}
+                    >
+                      ${t("updates.page.diagnoseFailure")}
+                    </button>`
+                  : nothing
+              }
               ${
                 failed
                   ? html`<button
@@ -330,12 +347,17 @@ function renderBuildFacts(props: UpdatesViewProps) {
 }
 
 function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
+  const run = props.update.updateRun;
+  const running = run?.status === "running";
   const campaign = props.update.updateSchedule?.campaign;
   const campaignLabel = formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs);
   const target = formatUpdateTargetLabel(props.update.updateSchedule, props.update.updateAvailable);
   let kind: Parameters<typeof renderSettingsStatus>[0]["kind"] = "muted";
   let label: string;
-  if (props.update.updateStatusRefreshing && !props.updateBusy) {
+  if (running) {
+    kind = "accent";
+    label = t("updates.page.activePhase", { phase: t(`updates.run.phase.${run.phase}`) });
+  } else if (props.update.updateStatusRefreshing && !props.updateBusy) {
     label = t("updates.page.checking");
   } else if (props.update.updateStatusCheckBanner && !props.updateBusy) {
     kind = "warn";
@@ -398,7 +420,8 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
     props.update.updateStatusCheckBanner &&
     !props.update.updateStatusRefreshing &&
     !props.updateBusy;
-  const countdown = campaign?.state === "waiting-for-idle" || campaign?.state === "countdown";
+  const countdown =
+    !running && (campaign?.state === "waiting-for-idle" || campaign?.state === "countdown");
   return html`<span
     class=${checkFailed ? "updates-status-check-failed" : nothing}
     role=${countdown ? "timer" : nothing}
@@ -409,23 +432,13 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
 
 function readGitCommits(props: UpdatesViewProps) {
   const update = props.update.updateAvailable;
-  const gitUpdate =
-    props.update.updateSchedule?.target?.kind === "git" || Boolean(update?.currentSha);
-  const comparedBehind = props.update.updateSchedule?.install?.git;
-  if (
-    comparedBehind &&
-    comparedBehind.status !== "behind" &&
-    comparedBehind.status !== "diverged"
-  ) {
-    return [];
-  }
-  const comparedBehindCount =
-    comparedBehind?.status === "behind" || comparedBehind?.status === "diverged"
-      ? comparedBehind.commitsBehind
-      : undefined;
+  const comparison = getUpdateGitComparison(props.update.updateSchedule, update);
   const commitsMatch =
-    comparedBehindCount === undefined || comparedBehindCount === update?.commitsBehind;
-  return gitUpdate && commitsMatch ? (update?.commits ?? []) : [];
+    comparison &&
+    comparison.commitsBehind === update?.commitsBehind &&
+    comparison.currentSha === update?.currentSha &&
+    comparison.upstreamSha === update?.upstreamSha;
+  return commitsMatch ? (update?.commits ?? []) : [];
 }
 
 function renderCommitList(props: UpdatesViewProps) {
@@ -452,6 +465,14 @@ function renderCommitList(props: UpdatesViewProps) {
 }
 
 export function renderUpdates(props: UpdatesViewProps): TemplateResult {
+  const run = props.update.updateRun?.status === "running" ? props.update.updateRun : null;
+  const step = run?.steps.findLast(
+    (entry) =>
+      entry.status === "in_progress" &&
+      entry.step !== run.phase &&
+      !entry.step.startsWith("notice:"),
+  );
+  const runTarget = run?.target.sha ?? run?.target.version ?? run?.target.tag;
   const settings = readUpdatesSettings(props.configObject, props.update.updateSchedule);
   const channelOptions: Array<{ value: UpdatesChannel; label: string }> = [
     { value: "stable", label: t("updates.channel.stable") },
@@ -469,9 +490,11 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
   const devPackageInstall =
     settings.channel === "dev" && props.update.updateSchedule?.install?.kind === "package";
   const campaign = props.update.updateSchedule?.campaign;
+  const separateCampaign = run && campaign && run.origin.campaignId !== campaign.id;
   const holdActive =
     campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > (props.nowMs ?? Date.now());
   const showHold = Boolean(
+    !run &&
     campaign &&
     campaign.state !== "applying" &&
     props.canUpdate &&
@@ -546,9 +569,16 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
         renderSettingsSection({ title: t("updates.page.statusTitle") }, [
           renderSettingsRow({
             title: t("updates.page.scheduleStatus"),
+            description:
+              run && props.update.updateStatusBanner?.source === "read"
+                ? props.update.updateStatusBanner.text
+                : undefined,
             control: html`
               <div class="updates-status-control">
-                ${renderScheduleStatus(props)}
+                <div>
+                  ${renderScheduleStatus(props)}
+                  ${!run && !props.update.updateStatusRefreshing ? renderUpdateGitRevisions(props.update.updateSchedule, props.update.updateAvailable) : nothing}
+                </div>
                 ${
                   props.update.updateStatusCheckBanner
                     ? html`
@@ -581,7 +611,40 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
               </div>
             `,
           }),
-          renderCommitList(props),
+          step
+            ? renderSettingsRow({
+                title: t("updates.page.currentStep"),
+                control: renderSettingsValue(step.step),
+              })
+            : nothing,
+          runTarget
+            ? renderSettingsRow({
+                title: t("updates.page.runTarget"),
+                control: renderSettingsValue(
+                  html`<code dir="ltr" title=${runTarget}
+                    >${run?.target.sha ? runTarget.slice(0, 12) : runTarget}</code
+                  >`,
+                ),
+              })
+            : nothing,
+          run
+            ? renderSettingsRow({
+                title: t("updates.page.lastProgress"),
+                control: renderTimestamp(run.updatedAtMs, props.nowMs),
+              })
+            : nothing,
+          separateCampaign
+            ? renderSettingsRow({
+                title: t("updates.page.scheduledUpdate"),
+                control: html`<div>
+                  <span role="timer" aria-live="off"
+                    >${formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs)}</span
+                  >
+                  ${renderUpdateGitRevisions(props.update.updateSchedule, props.update.updateAvailable)}
+                </div>`,
+              })
+            : nothing,
+          !run ? renderCommitList(props) : nothing,
           renderSettingsRow({
             title: t("updates.page.updateNow"),
             description: t("updates.page.updateNowDescription"),

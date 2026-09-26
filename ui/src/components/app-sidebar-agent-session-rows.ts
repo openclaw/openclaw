@@ -16,7 +16,7 @@ import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {
   collectCategorizedChildRootRows,
   collectSidebarSessionRowsByKey,
-  someSidebarSessionInTree,
+  findSidebarSessionInTree,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import {
@@ -24,11 +24,11 @@ import {
   collectSidebarSessionChildKeys,
 } from "./app-sidebar-session-parent.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
-import type {
-  SidebarKnownSessionAttention,
-  SidebarRecentSession,
-  SidebarSessionStatusFilter,
-  SidebarSessionAttention,
+import {
+  SIDEBAR_SESSION_NO_ATTENTION,
+  summarizeSidebarSessionAttention,
+  type SidebarRecentSession,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
@@ -53,7 +53,7 @@ export function projectSidebarAgentSessionRows({
   agentIds,
   result,
   compareSessions,
-  knownSessionAttention,
+  resolveAttention,
 }: {
   host: AgentSessionRowsHost;
   navigationState: SidebarSessionNavigationState;
@@ -61,7 +61,7 @@ export function projectSidebarAgentSessionRows({
   agentIds: readonly string[];
   result?: SessionsListResult | null;
   compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
-  knownSessionAttention: readonly SidebarKnownSessionAttention[];
+  resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarRecentSession[] {
   const grouped = result !== undefined;
   const defaultAgentId = resolveUiDefaultAgentId({
@@ -91,13 +91,16 @@ export function projectSidebarAgentSessionRows({
     showSystem: host.sessionsShowSystem,
     archivedFilter: host.sessionsStatusFilter,
   } as const;
-  const { childSessionRowsByParent, isSessionHidden, rows } = projectSidebarArchiveVisibility({
+  const visibility = projectSidebarArchiveVisibility({
     sessionData: grouped
       ? {
           sessionsAgentId: selected,
           sessionsResult: result,
           sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
           childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
+          loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
+          loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
+          childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
         }
       : host.sessionData,
     selectedAgentId: selected,
@@ -111,6 +114,7 @@ export function projectSidebarAgentSessionRows({
       ),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
+  const { childSessionRowsByParent, isSessionHidden, isChildSessionVisible, rows } = visibility;
   const rowsByKey = new Map(rows.map((row) => [row.key, row]));
   const sessionRowsByKey = collectSidebarSessionRowsByKey({
     rows,
@@ -257,14 +261,15 @@ export function projectSidebarAgentSessionRows({
     ),
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
-    knownSessionAttention,
+    isChildSessionVisible,
+    resolveAttention,
     toSidebarSession: navigationState.toSidebarSession,
   });
   if (
     selectedFallback &&
     !isSubagentSessionKey(selectedFallback.key) &&
     (!grouped || visibleRowsByKey.has(selectedFallback.key)) &&
-    !someSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
+    !findSidebarSessionInTree(projected, (row) => row.key === selectedFallback.key)
   ) {
     projected.unshift(navigationState.toSidebarSession(selectedFallback));
   }
@@ -278,22 +283,23 @@ export function projectSidebarHomeSession({
   agentId,
   result,
   navigationState,
-  knownSessionAttention,
+  resolveAttention,
 }: {
-  host: AgentSessionRowsHost & {
-    resolveHomeSessionAttention(key: string, row: GatewaySessionRow): SidebarSessionAttention;
-  };
+  host: AgentSessionRowsHost;
   row: GatewaySessionRow;
   agentId: string;
   result?: SessionsListResult | null;
   navigationState: SidebarSessionNavigationState;
-  knownSessionAttention: readonly SidebarKnownSessionAttention[];
+  resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarRecentSession {
-  const { rows, childSessionRowsByParent } = projectSidebarArchiveVisibility({
+  const visibility = projectSidebarArchiveVisibility({
     sessionData:
       result !== undefined
         ? {
             childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
+            loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
+            loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
+            childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
             sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
             sessionsAgentId: agentId,
             sessionsResult: result,
@@ -304,20 +310,21 @@ export function projectSidebarHomeSession({
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
-  const own = navigationState.toSidebarSession(row);
+  const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
+  const scopedRow = { ...row, agentId };
+  const own = navigationState.toSidebarSession(scopedRow);
   const home = projectSessionTree({
-    roots: [row],
+    roots: [scopedRow],
     mainSessionKeys: new Set([row.key, host.selectedAgentMainSessionKey(agentId)]),
     rowsByKey: collectSidebarSessionRowsByKey({
-      rows: [...rows, row],
+      rows: [...rows, scopedRow],
       childRowsByParent: childSessionRowsByParent,
     }),
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
-    knownSessionAttention,
+    isChildSessionVisible,
+    resolveAttention,
     toSidebarSession: (session, isChild) =>
-      isChild
-        ? navigationState.toSidebarSession(session, true)
-        : { ...own, attention: host.resolveHomeSessionAttention(row.key, row) },
+      isChild ? navigationState.toSidebarSession(session, true) : own,
   })[0]!;
   if (result === undefined) {
     return home;
@@ -326,6 +333,10 @@ export function projectSidebarHomeSession({
   return {
     ...home,
     ...home.subagentSummary,
+    attention: summarizeSidebarSessionAttention([
+      own.attention,
+      home.subagentSummary?.attention ?? SIDEBAR_SESSION_NO_ATTENTION,
+    ]),
     workspaceConflictCount:
       (own.workspaceConflictCount ?? 0) + (home.subagentSummary?.workspaceConflictCount ?? 0) ||
       undefined,

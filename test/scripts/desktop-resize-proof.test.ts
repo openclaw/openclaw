@@ -35,12 +35,17 @@ import {
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
   observeDesktopEndpointPackets,
   observeDesktopProofRfbLifecycle,
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -360,12 +365,14 @@ describe("desktop proof identity and public evidence", () => {
     if (!address || typeof address === "string") {
       throw new Error("missing fixture address");
     }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    // Reserve the upstream port until the tap binds so it cannot connect back to itself.
     const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
     const clients: net.Socket[] = [];
     try {
+      expect(tap.port).not.toBe(address.port);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
       for (let index = 0; index < 10; index++) {
         const client = net.connect({ host: "127.0.0.1", port: tap.port });
         client.on("error", () => {});
@@ -448,16 +455,17 @@ describe("desktop proof identity and public evidence", () => {
 
   it("retains node close categories from the existing JSON file logger", async () => {
     const file = path.join(dirs.make("desktop-node-log-"), "node.log");
+    const loggerUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.logger);
+    const subsystemUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.subsystemLogger);
     execFileSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(loggerUrl, process.execPath).slice(0, -1),
         "--input-type=module",
         "--eval",
         `
-          import { flushLogger, setLoggerOverride } from "./src/logging/logger.ts";
-          import { createSubsystemLogger } from "./src/logging/subsystem.ts";
+          import { flushLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl.href)};
+          import { createSubsystemLogger } from ${JSON.stringify(subsystemUrl.href)};
           setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
           const log = createSubsystemLogger("node-host/stream");
           log.info("node stream closed", {

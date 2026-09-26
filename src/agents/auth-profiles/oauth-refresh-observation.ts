@@ -1,4 +1,5 @@
 import path from "node:path";
+import { retainCurrentWorkerNativeSection } from "../../infra/worker-task-native-sections.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "./constants.js";
 import { observeOAuthRefreshSettlement } from "./oauth-refresh-fence.js";
@@ -39,6 +40,9 @@ export function beginOAuthRefreshObservation(params: {
     settling: false,
     settled: completion.promise,
   };
+  // Retirement must not discard the only process holding the real refresh token.
+  // Admission is synchronous so a canceled worker cannot publish a new fence.
+  const releaseNativeSection = retainCurrentWorkerNativeSection();
   activeRefreshes.add(refresh);
   return {
     includeDatabase: (databasePath: string) => {
@@ -57,6 +61,7 @@ export function beginOAuthRefreshObservation(params: {
     finish: () => {
       activeRefreshes.delete(refresh);
       completion.resolve();
+      releaseNativeSection();
     },
   };
 }
@@ -95,7 +100,7 @@ export function captureOAuthRefreshSettlement(params: {
   profileId?: string;
   matchesProvider: (provider: string) => boolean;
   localPin?: { databasePath: string; generation?: string };
-}): (() => Promise<void>) | undefined {
+}): ((signal?: AbortSignal) => Promise<void>) | undefined {
   const paths = new Set(params.databasePaths.map((databasePath) => path.resolve(databasePath)));
   const pending = [...activeRefreshes].flatMap((refresh) => {
     if (
@@ -118,11 +123,12 @@ export function captureOAuthRefreshSettlement(params: {
     return undefined;
   }
   const settled = Promise.all(pending).then(() => {});
-  return async () => {
+  return async (signal) => {
     await observeOAuthRefreshSettlement(
       "runtime auth profile read",
       OAUTH_REFRESH_CALL_TIMEOUT_MS,
       settled,
+      signal,
     );
   };
 }

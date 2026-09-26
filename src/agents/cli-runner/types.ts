@@ -39,13 +39,14 @@ import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
-  EmbeddedRunTrigger,
   ResolvedToolPromptFinalizer,
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import type { RootedExecutionRequest } from "../rooted-run-params.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
@@ -110,6 +111,7 @@ export type RunCliAgentParams = {
   provider: string;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
+  terminalReplyExpectation?: ReplyExpectation;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -160,7 +162,9 @@ export type RunCliAgentParams = {
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: () => void;
-  onExecutionStarted?: () => void;
+  /** Internal completion caller's representation of operator authorization failures. */
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
+  onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -227,6 +231,10 @@ export type CliSessionBindingFacts = {
   requireExplicitMessageTarget?: boolean;
 };
 
+export function captureCliRunStartTime() {
+  return { started: Date.now(), startedMonotonicMs: performance.now() };
+}
+
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
@@ -237,10 +245,14 @@ export type PreparedCliRunContext = {
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
+  /** Monotonic anchor for elapsed-budget measurements, immune to wall-clock steps. */
+  startedMonotonicMs: number;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
+  /** Enforced timeout of this run's managed Claude MCP server, when present. */
+  managedMcpToolTimeoutMs?: number;
   executionTarget: CliExecutionTarget;
   /** Keeps a plugin-owned turn admitted on its backend instance across a plugin hot reload. */
   pluginExecutionConsumer?: PluginInstanceConsumer;
@@ -257,6 +269,7 @@ export type PreparedCliRunContext = {
   promptForHooks?: string;
   modelId: string;
   normalizedModel: string;
+  providerThinkingLevel?: import("../../plugins/cli-backend.types.js").CliBackendThinkingLevel;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;

@@ -48,6 +48,7 @@ export type TaskProgressPublication = {
 
 async function prepareTaskProgressTarget(
   params: Omit<TaskProgressPublication, "content" | "snapshot">,
+  action: "edit" | "delete" = "edit",
 ) {
   const cfg = getRuntimeConfig();
   const channel = params.origin.channel;
@@ -86,7 +87,7 @@ async function prepareTaskProgressTarget(
     return "suppressed" as const;
   }
   if (
-    !plugin.actions?.writeAuthorityActions?.includes("edit") ||
+    !plugin.actions?.writeAuthorityActions?.includes(action) ||
     hooks?.hasHooks("message_sending")
   ) {
     // Match the existing preview policy: modifiers must see each full-message update.
@@ -251,11 +252,33 @@ export function readTaskProgressSnapshot(
     : undefined;
 }
 
+export type TaskProgressMutationResult =
+  | "sent"
+  | "unchanged"
+  | "suppressed"
+  | "unknown"
+  | "unsupported";
+
 /** Edits only the previously adopted card; an absent or uncertain receipt cannot create one. */
-export async function publishTaskProgressMessage(
+export function publishTaskProgressMessage(
   params: TaskProgressPublication,
-): Promise<"sent" | "unchanged" | "suppressed" | "unknown" | "unsupported"> {
-  const prepared = await prepareTaskProgressTarget(params);
+): Promise<TaskProgressMutationResult> {
+  return mutateTaskProgressMessage(params, params);
+}
+
+/** Deletes only the previously adopted card after the caller drains its pending edits. */
+export function deleteTaskProgressMessage(
+  params: Omit<TaskProgressPublication, "content" | "snapshot" | "previousContent">,
+): Promise<TaskProgressMutationResult> {
+  return mutateTaskProgressMessage(params);
+}
+
+async function mutateTaskProgressMessage(
+  params: Omit<TaskProgressPublication, "content" | "snapshot" | "previousContent">,
+  update?: Pick<TaskProgressPublication, "content" | "snapshot" | "previousContent">,
+): Promise<TaskProgressMutationResult> {
+  const action = update ? "edit" : "delete";
+  const prepared = await prepareTaskProgressTarget(params, action);
   if (typeof prepared === "string") {
     return prepared;
   }
@@ -294,26 +317,28 @@ export async function publishTaskProgressMessage(
     }
     assertReceipt(current);
   };
-  await runConversationDatabaseWrite(scope, (writeScope) =>
-    updateConversationProgressSnapshot(writeScope, {
-      operationId: params.operationId,
-      progressSnapshot: params.snapshot,
-      assertCurrent,
-    }),
-  );
-  assertCurrent();
-  if (params.previousContent === params.content) {
-    return "unchanged";
+  if (update) {
+    await runConversationDatabaseWrite(scope, (writeScope) =>
+      updateConversationProgressSnapshot(writeScope, {
+        operationId: params.operationId,
+        progressSnapshot: update.snapshot,
+        assertCurrent,
+      }),
+    );
+    assertCurrent();
+    if (update.previousContent === update.content) {
+      return "unchanged";
+    }
   }
-  const edited = await runMessageAction({
+  const result = await runMessageAction({
     cfg,
-    action: "edit",
-    progressSnapshot: params.snapshot,
+    action,
+    progressSnapshot: update?.snapshot,
     params: {
       channel,
       to: route.to,
       messageId,
-      message: params.content,
+      ...(update ? { message: update.content } : {}),
       threadId: route.threadId,
     },
     agentId: params.agentId,
@@ -335,19 +360,14 @@ export async function publishTaskProgressMessage(
     suppressTranscriptMirror: true,
     gatewayOwnedDelivery: true,
   });
-  return !edited.dryRun && resolveMessageActionOutcome(edited).ok ? "sent" : "unknown";
+  return !result.dryRun && resolveMessageActionOutcome(result).ok ? "sent" : "unknown";
 }
 
 export type TaskProgressTyping = Pick<
   TaskProgressPublication,
-  | "operationId"
-  | "requesterSessionId"
-  | "sessionKey"
-  | "agentId"
-  | "origin"
-  | "signal"
-  | "assertCurrent"
+  "operationId" | "requesterSessionId" | "sessionKey" | "agentId" | "origin" | "signal"
 > & {
+  prepareCurrent: () => Promise<() => void>;
   isExecutionActive: () => boolean;
   onStopped: () => void;
   onError: (error: unknown) => void;
@@ -378,9 +398,9 @@ export function startTaskProgressTyping(params: TaskProgressTyping): boolean {
   }
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const assertCurrent = () => {
+  const assertCurrent = (assertTaskCurrent: () => void) => {
     signal.throwIfAborted();
-    params.assertCurrent();
+    assertTaskCurrent();
     const currentConfig = getRuntimeConfig();
     const requester = loadSessionEntryReadOnly({
       storePath: scope.storePath,
@@ -410,14 +430,16 @@ export function startTaskProgressTyping(params: TaskProgressTyping): boolean {
   const callbacks = createTypingCallbacks({
     start: async () => {
       await runWithGatewayDetachedWorkContinuation(async () => {
-        assertCurrent();
+        const assertTaskCurrent = await params.prepareCurrent();
+        const assertAuthorized = () => assertCurrent(assertTaskCurrent);
+        assertAuthorized();
         await sendTyping({
           cfg: getRuntimeConfig(),
           to,
           accountId,
           threadId: params.origin.threadId,
           signal,
-          assertPlatformSendAuthorized: assertCurrent,
+          assertPlatformSendAuthorized: assertAuthorized,
         });
       }, "tasks:progress-typing");
     },

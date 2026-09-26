@@ -78,6 +78,9 @@ Tune queue and model capacity around the business value of each lane:
 }
 ```
 
+`maxConcurrent` caps the shared main lane; `subagents.maxConcurrent` gives each
+spawning session its own child execution budget.
+
 Use direct/personal chats and production-ops agents for high-priority work. Let
 research, drafting, and batch coding move to background tasks when the system is
 busy. `subagents.delegationMode` is prompt guidance only; see

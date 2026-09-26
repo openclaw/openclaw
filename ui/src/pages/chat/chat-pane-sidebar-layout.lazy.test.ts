@@ -36,6 +36,7 @@ describe("chat pane lazy sidebar failures", () => {
     const renderCurrent = () => {
       render(
         renderSidebarRegion({
+          presentationId: "sidebar-layout-fixture",
           availableWidth: 1_400,
           availableSlots: ["detail"],
           callbacks: {

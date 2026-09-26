@@ -307,6 +307,7 @@
 .agent-chat__capability-menu-item {
   --wa-color-text-normal: var(--text);
 
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);
@@ -947,6 +948,14 @@
 
 /* Sole content of the popover when no input can be selected, so it carries the
    row's own weight instead of reading as a footnote under the heading. */
+.chat-talk-input-picker__notice {
+  padding: 0;
+  opacity: 1;
+  color: inherit;
+  line-height: inherit;
+  cursor: default;
+}
+
 .chat-talk-input-picker__empty {
   padding: 4px 8px 8px;
   color: var(--muted);
@@ -965,22 +974,28 @@
   padding-top: 8px;
 }
 
-.chat-talk-input-picker__capabilities {
-  display: grid;
-  gap: 6px;
-  margin-top: 5px;
-  padding: 8px 9px 3px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-}
-
 .chat-talk-input-picker__capability {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-top: 5px;
+  padding: 8px 9px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.chat-talk-input-picker__capability + .chat-talk-input-picker__capability {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 3px;
+}
+
+.chat-talk-input-picker__capability[disabled] {
+  opacity: 1;
+  cursor: default;
 }
 
 .chat-talk-input-picker__capability-copy {
@@ -1042,6 +1057,10 @@
   color: var(--text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.chat-talk-input-picker__preference::part(checkmark) {
+  display: none;
 }
 
 .chat-send-btn--hold-enabled {
@@ -1408,17 +1427,23 @@
 }
 
 .chat-attachments-preview {
+  /* Ease across most of a thumbnail and clear the frame before clipping, so a
+     partially visible image does not read as a hard vertical border. */
+  --chat-attachment-fade-in:
+    transparent 4px, rgb(0 0 0 / 12%) 12px, rgb(0 0 0 / 50%) 24px, rgb(0 0 0 / 88%) 36px, black 48px;
+  --chat-attachment-fade-out:
+    black calc(100% - 48px), rgb(0 0 0 / 88%) calc(100% - 36px), rgb(0 0 0 / 50%) calc(100% - 24px),
+    rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
+
   display: flex;
   gap: calc(var(--chat-composer-editor-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
-  /* Extend only the scrollport's transparent bounds for the original remove
-     target and focus ring. The extra padding cancels the overlap, so the chips
-     keep the editor's visible inset without clipping the controls. */
-  width: calc(100% + var(--chat-attachment-hit-slop));
-  max-width: calc(100% + var(--chat-attachment-hit-slop));
+  /* Keep horizontal clipping inside the composer. Reserve remove-target and
+     focus-ring clearance in padding, not in a wider scrollport. */
+  width: 100%;
+  max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  margin-inline-end: calc(-1 * var(--chat-attachment-hit-slop));
   padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
     var(--chat-composer-editor-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)
@@ -1446,31 +1471,19 @@
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
-  mask-image: linear-gradient(
-    to right,
-    black 0,
-    black calc(100% - var(--chat-composer-editor-inset-inline)),
-    transparent 100%
-  );
+  mask-image: linear-gradient(to right, var(--chat-attachment-fade-out));
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
   mask-image: linear-gradient(
     to right,
-    transparent 0,
-    black var(--chat-composer-editor-inset-inline),
-    black calc(100% - var(--chat-composer-editor-inset-inline)),
-    transparent 100%
+    var(--chat-attachment-fade-in),
+    var(--chat-attachment-fade-out)
   );
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black var(--chat-composer-editor-inset-inline),
-    black 100%
-  );
+  mask-image: linear-gradient(to right, var(--chat-attachment-fade-in));
 }
 
 .chat-attachment-thumb {
@@ -1826,6 +1839,17 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
+.chat-attachment-file__open {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.15;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
 .chat-attachment-text-action {
   display: inline-flex;
   width: fit-content;
@@ -1852,16 +1876,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--text);
 }
 
-.chat-attachment-text-action svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .agent-chat__file-input,
 .agent-chat__photo-input,
 .agent-chat__camera-input {
@@ -1885,16 +1899,22 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: 2px;
 }
 
-/* Model text gives up width before the independent effort and action targets. */
+.chat-controls__inline-select {
+  min-width: 0;
+}
+
+/* Model text can shrink, but its flex item must still reserve the hit target. */
 .chat-controls__model-picker {
   flex: 0 1 auto;
+  min-width: 44px;
 }
 
 .chat-controls__effort-picker {
   flex: 0 0 auto;
 }
 
-.chat-controls__model-settings .chat-controls__inline-select-trigger {
+/* The model trigger fills its shrinkable wrapper; effort keeps its content width. */
+.chat-controls__model-settings .chat-controls__effort-trigger {
   width: auto;
 }
 
@@ -1908,10 +1928,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
   .chat-controls__effort-picker--reserved {
   display: none;
-}
-
-.chat-controls__inline-select {
-  min-width: 0;
 }
 
 .chat-controls__inline-select summary {
@@ -2091,7 +2107,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 9px;
+  padding: 0 0 9px;
 }
 
 .chat-controls__permission-learn-more {
@@ -2218,6 +2234,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1.25;
 }
 
+.chat-controls__permission-option--selected .chat-controls__permission-option-description {
+  color: var(--text);
+}
+
 .chat-controls__model-search-wrap {
   display: flex;
   align-items: center;
@@ -2234,6 +2254,25 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 14px;
   color: var(--muted);
   flex: 0 0 auto;
+}
+
+.chat-controls__model-refresh {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-controls__model-refresh-details {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
 }
 
 .chat-controls__model-search {
@@ -2302,6 +2341,41 @@ html[dir="rtl"] .chat-attachment-loading > span {
   font-weight: 700;
 }
 
+.chat-controls__provider-heading[data-chat-model-provider] {
+  padding-block: 0;
+}
+
+.chat-controls__provider-toggle {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+  min-height: 32px;
+  /* Long account metadata shrinks before the provider toggle's contents. */
+  flex: 1 0 auto;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.chat-controls__provider-toggle:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-controls__provider-toggle .chat-controls__inline-select-chevron {
+  transform: rotate(0deg);
+}
+
+.chat-controls__provider-toggle[aria-expanded="true"] .chat-controls__inline-select-chevron {
+  transform: rotate(180deg);
+}
+
 .chat-controls__auth-meta {
   display: inline-flex;
   align-items: center;
@@ -2332,6 +2406,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option-copy > .chat-controls__auth-meta {
   margin-inline-start: 6px;
+}
+
+[data-chat-account-option] .chat-controls__model-option-copy {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+[data-chat-account-option] .chat-controls__auth-meta {
+  max-width: 100%;
+  margin-inline-start: 0;
 }
 
 .chat-controls__provider-settings {
@@ -2785,11 +2869,70 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   margin: 0;
   padding: 0;
+  border-radius: var(--radius-full);
   background: transparent;
+}
+
+.chat-controls__reasoning-slider:has([data-effort-boost="max"], [data-effort-boost="ultra"]) {
+  --reasoning-track-background: transparent;
+  --reasoning-boost-highlight: color-mix(in srgb, var(--accent) 60%, white);
+  border-radius: var(--radius-full);
+  background-image: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--accent) 70%, var(--card)) 0%,
+    var(--accent) 25%,
+    var(--reasoning-boost-highlight) 50%,
+    var(--accent) 75%,
+    color-mix(in srgb, var(--accent) 70%, var(--card)) 100%
+  );
+  background-position: 50% 50%;
+  background-size: 220% 100%;
+}
+
+.chat-controls__reasoning-range[data-effort-boost="max"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.chat-controls__reasoning-slider:has([data-effort-boost="ultra"]) {
+  --reasoning-boost-highlight: color-mix(in srgb, var(--accent-2) 70%, white);
+}
+
+.chat-controls__reasoning-range[data-effort-boost="ultra"] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 75%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 48%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+@keyframes chat-effort-flow {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__reasoning-slider:has(
+    [data-effort-boost="max"]:not(:disabled),
+    [data-effort-boost="ultra"]:not(:disabled)
+  ) {
+    animation: chat-effort-flow 6s ease-in-out infinite alternate;
+  }
+
+  .chat-controls__reasoning-slider:has([data-effort-boost="ultra"]:not(:disabled)) {
+    animation-duration: 4s;
+  }
 }
 
 .chat-controls__reasoning-range:disabled {
   cursor: not-allowed;
+}
+
+.chat-controls__reasoning-slider:has(.chat-controls__reasoning-range:disabled) {
   opacity: 0.5;
 }
 
@@ -2801,10 +2944,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
-    color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
+  background: var(
+    --reasoning-track-background,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
+      color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
+    )
   );
 }
 
@@ -2835,13 +2981,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 7%, transparent));
 }
 
 .chat-controls__reasoning-range::-moz-range-progress {
   height: 24px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 18%, transparent));
 }
 
 .chat-controls__reasoning-range::-moz-range-thumb {
@@ -3093,7 +3239,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
     display: none;
   }
 }
-@media (max-width: 560px) {
+@container chat-composer (max-width: 560px) {
   .agent-chat__input--mobile-toolbar .chat-controls__inline-select-chevron,
   .agent-chat__input--mobile-toolbar .chat-controls__inline-select-chevron svg {
     width: var(--chat-mobile-row-chevron-size);
@@ -3259,6 +3405,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 @media (max-width: 640px) {
+  .chat-controls__provider-toggle {
+    min-height: 44px;
+  }
+
   .agent-chat__composer-meta .chat-controls__permission-trigger {
     width: 44px;
     justify-content: center;

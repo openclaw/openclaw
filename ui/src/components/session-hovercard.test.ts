@@ -62,6 +62,91 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each([undefined, "Validation worker"])(
+    "shows the full failure above the notepad (child: %s)",
+    (childLabel) => {
+      const container = document.createElement("div");
+      const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
+      const failed = row({ attention: { kind: "error", reason, childLabel } });
+      render(renderSessionHovercard({ row: failed, progressCard: progressCard() }), container);
+      const error = container.querySelector(".session-hovercard__error");
+      expect(error?.textContent).toContain(reason);
+      expect(error?.textContent).toContain(
+        childLabel ? "Child session Validation worker failed:" : "Run failed:",
+      );
+      expect(error?.querySelector("worker")).toBeNull();
+      expect(error?.querySelector("svg")).not.toBeNull();
+      expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(
+        true,
+      );
+
+      render(renderSessionHovercard({ row: failed }), container);
+      expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
+      expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
+      render(renderSessionHovercard({ row: row({ attention: { kind: "none" } }) }), container);
+      expect(container.querySelector(".session-hovercard__error")).toBeNull();
+    },
+  );
+
+  it("puts channel identity before the title and keeps session contributors separate", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({
+          label: "Weekend plans",
+          workContext: undefined,
+          channelPresentation: {
+            channel: "whatsapp",
+            channelLabel: "WhatsApp",
+            kind: "group",
+            conversation: "Weekend plans",
+            account: "personal",
+          },
+          createdActor: { type: "human", id: "cli", label: "CLI" },
+          participants: [{ identity: { type: "profile", id: "alice" }, label: "Alice" }],
+          participantCount: 1,
+        }),
+      }),
+      container,
+    );
+    const header = container.querySelector(".session-hovercard__header");
+    expect(header?.textContent).toContain("Linked to WhatsApp");
+    expect(header?.textContent).toContain("Group chat");
+    expect(header?.textContent).toContain("Via personal");
+    expect(header?.textContent?.match(/Weekend plans/g)).toHaveLength(1);
+    expect(header?.textContent).not.toContain("CLI");
+    const contributors = container.querySelector('[aria-label="In this session"]');
+    expect(contributors?.textContent).toContain("CLI");
+    expect(contributors?.textContent).toContain("1 other");
+    expect(container.textContent).not.toContain("members");
+  });
+
+  it("shows a direct contact address as text and omits an empty contributor footer", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({
+          label: "Alex",
+          workContext: undefined,
+          createdActor: undefined,
+          channelPresentation: {
+            channel: "imessage",
+            channelLabel: "iMessage",
+            kind: "direct",
+            address: "alex@example.com",
+          },
+        }),
+      }),
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__conversation")?.textContent).toContain(
+      "alex@example.com",
+    );
+    expect(container.querySelector(".session-hovercard__conversation a")).toBeNull();
+    expect(container.querySelector('[aria-label="In this session"]')).toBeNull();
+    expect(container.textContent).not.toContain("Via");
+  });
+
   it.each([
     [
       { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
@@ -177,7 +262,6 @@ describe("renderSessionHovercard", () => {
       facts: { boardFace: "dashboard", hasAutomation: true },
       labels: ["Opens as dashboard", "Automation attached"],
     },
-    { name: "absent", facts: {}, labels: [] },
     { name: "disabled", facts: { hasAutomation: false }, labels: [] },
   ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
     "renders $name session facts without other metadata",
@@ -350,6 +434,45 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__more")?.textContent).toBe("+2 more");
     expect(container.querySelector(".session-hovercard__section--header")).toBeNull();
   });
+
+  it.each(["rate-limited", "unavailable"] as const)(
+    "explains %s GitHub lookups with or without retained work and clears the warning after recovery",
+    (status) => {
+      const container = document.createElement("div");
+      const branch = { owner: "openclaw", repo: "openclaw", branch: "feature" };
+      const pullRequest = {
+        ...branch,
+        number: 101,
+        title: "Retained pull request",
+        url: "https://github.com/openclaw/openclaw/pull/101",
+        state: "open" as const,
+      };
+      for (const work of [{}, { branch }, { pullRequests: [pullRequest] }]) {
+        render(
+          renderSessionHovercard({
+            pullRequests: snapshot({ ...work, status, rateLimited: status === "rate-limited" }),
+          }),
+          container,
+        );
+        const notice = container.querySelector('[role="status"]');
+        expect(notice?.textContent).toContain(
+          status === "rate-limited" ? "GitHub API rate limit reached" : "could not be refreshed",
+        );
+        if (status === "unavailable") {
+          expect(notice?.textContent).not.toContain("rate limit");
+        }
+      }
+      expect(container.querySelector<HTMLAnchorElement>(".session-hovercard__pr-row")?.href).toBe(
+        pullRequest.url,
+      );
+      render(
+        renderSessionHovercard({ pullRequests: snapshot({ pullRequests: [pullRequest] }) }),
+        container,
+      );
+      expect(container.querySelector('[role="status"]')).toBeNull();
+      expect(container.textContent).toContain(pullRequest.title);
+    },
+  );
 
   it("does not invent a directory for a repository-only context", () => {
     const container = document.createElement("div");
@@ -638,22 +761,19 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
   });
 
-  it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides plan work updated during the run after the session is %s",
-    (status) => {
-      const container = document.createElement("div");
-      render(
-        renderSessionHovercard({
-          row: row({ status }),
-          progressCard: progressCard(),
-        }),
-        container,
-      );
+  it("hides plan work updated during a completed run", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({ status: "done" }),
+        progressCard: progressCard(),
+      }),
+      container,
+    );
 
-      expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
-      expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
-    },
-  );
+    expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
+    expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
+  });
 
   it("deduplicates creator and self from the compact attribution", () => {
     const container = document.createElement("div");

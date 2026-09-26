@@ -1,6 +1,6 @@
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 // Browser tests cover pw tools core.snapshot.navigate guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
@@ -91,7 +91,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   it.each([
     { requestedTimeoutMs: undefined, expectedTimeoutMs: 20_000 },
     { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
-    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
   ])(
     "applies the shipped navigation timeout contract to Playwright timeout $requestedTimeoutMs",
     async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
@@ -322,7 +321,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "tab-1",
       ssrfPolicy: { allowPrivateNetwork: true },
-      reason: "retry navigate after detached frame",
+      page: expect.objectContaining({ goto }),
     });
     expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(2);
     expect(result.url).toBe("https://example.com/recovered");

@@ -19,7 +19,11 @@ import {
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
+import {
+  createBrowserTestClient,
+  getBrowserTestFetch,
+  type BrowserTestFetch,
+} from "./test-support/fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
@@ -688,21 +692,6 @@ describe("browser control server", () => {
     expect(requirePwMock("traceStopViaPlaywright")).not.toHaveBeenCalled();
   });
 
-  it("trace stop accepts in-root relative output path", async () => {
-    const base = await startServerAndBase();
-    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
-      path: "safe-trace.zip",
-    });
-    expect(res.ok).toBe(true);
-    expect(res.path).toContain("safe-trace.zip");
-    const traceCall = requireMockArg(requirePwMock("traceStopViaPlaywright"));
-    expect(typeof traceCall.cdpUrl).toBe("string");
-    expectRecordFields(traceCall, "trace stop call", {
-      targetId: "abcd1234",
-    });
-    expect(String(traceCall.path)).toContain("safe-trace.zip");
-  });
-
   it("trace stop returns the path committed by the Playwright trace owner", async () => {
     const committedPath = path.join(DEFAULT_TRACE_DIR, "committed-trace.zip");
     requirePwMock("traceStopViaPlaywright").mockResolvedValueOnce(committedPath);
@@ -889,35 +878,44 @@ describe("browser control server", () => {
   ] as const)(
     "cancels $route when its HTTP caller disconnects",
     async ({ route, mockName, body }) => {
-      const base = await startServerAndBase();
-      let operationSignal: AbortSignal | undefined;
-      requirePwMock(mockName).mockImplementationOnce(async (value) => {
-        const options = value as { signal?: AbortSignal };
-        operationSignal = options.signal;
-        await new Promise<void>((_resolve, reject) => {
-          options.signal?.addEventListener(
-            "abort",
-            () => {
-              const reason = options.signal?.reason;
-              reject(reason instanceof Error ? reason : new Error("request aborted"));
-            },
-            { once: true },
-          );
-        });
-        throw new Error("unreachable");
-      });
+      const client = createBrowserTestClient();
       const controller = new AbortController();
-      const response = realFetch(`${base}${route}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let response: ReturnType<typeof client.fetch> | undefined;
+      try {
+        const base = await startServerAndBase(client.fetch);
+        let operationSignal: AbortSignal | undefined;
+        requirePwMock(mockName).mockImplementationOnce(async (value) => {
+          const options = value as { signal?: AbortSignal };
+          operationSignal = options.signal;
+          await new Promise<void>((_resolve, reject) => {
+            options.signal?.addEventListener(
+              "abort",
+              () => {
+                const reason = options.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("request aborted"));
+              },
+              { once: true },
+            );
+          });
+          throw new Error("unreachable");
+        });
+        response = client.fetch(`${base}${route}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
-      await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
-      controller.abort(new Error("caller disconnected"));
-      await expect(response).rejects.toThrow();
-      await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+        await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
+        controller.abort(new Error("caller disconnected"));
+        await expect(response).rejects.toThrow();
+        await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+      } finally {
+        controller.abort();
+        await response?.catch(() => {});
+        // Aborting a request can leave an unused replacement connection in the pool.
+        await client.close();
+      }
     },
   );
 

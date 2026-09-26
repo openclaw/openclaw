@@ -3,23 +3,21 @@ import {
   type GoogleMeetCliCommandContext,
 } from "./cli-command-context.js";
 import {
-  buildGoogleMeetExportManifest,
-  googleMeetExportFileNames,
+  exportGoogleMeetBundle,
   renderArtifactsMarkdown,
   renderArtifactsSummary,
   renderAttendanceCsv,
   renderAttendanceMarkdown,
   renderAttendanceSummary,
-  writeMeetExportBundle,
 } from "./cli-export.js";
 import {
-  type GoogleMeetExportRequest,
   type MeetArtifactOptions,
   writeCliOutput,
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
 import {
+  buildGoogleMeetExportRequest,
   fetchResolvedGoogleMeetArtifacts,
   fetchResolvedGoogleMeetAttendance,
   resolveArtifactQueryFromParams,
@@ -133,68 +131,26 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
       const resolved = await resolveCliArtifactQuery(params, options);
       const artifacts = await fetchResolvedGoogleMeetArtifacts(resolved);
       const attendance = await fetchResolvedGoogleMeetAttendance(resolved);
-      const request: GoogleMeetExportRequest = {
-        ...(resolved.meeting ? { meeting: resolved.meeting } : {}),
-        ...(resolved.conferenceRecord ? { conferenceRecord: resolved.conferenceRecord } : {}),
-        ...(resolved.calendarEvent?.event.id
-          ? { calendarEventId: resolved.calendarEvent.event.id }
-          : {}),
-        ...(resolved.calendarEvent?.event.summary
-          ? { calendarEventSummary: resolved.calendarEvent.event.summary }
-          : {}),
-        ...(options.calendar ? { calendarId: options.calendar } : {}),
-        ...(resolved.pageSize !== undefined ? { pageSize: resolved.pageSize } : {}),
-        includeTranscriptEntries: resolved.includeTranscriptEntries,
-        includeDocumentBodies: resolved.includeDocumentBodies,
-        allConferenceRecords: resolved.allConferenceRecords,
-        mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
-        ...(resolved.lateAfterMinutes !== undefined
-          ? { lateAfterMinutes: resolved.lateAfterMinutes }
-          : {}),
-        ...(resolved.earlyBeforeMinutes !== undefined
-          ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
-          : {}),
-      };
-      if (options.dryRun) {
-        writeStdoutJson({
-          dryRun: true,
-          manifest: buildGoogleMeetExportManifest({
-            artifacts,
-            attendance,
-            files: googleMeetExportFileNames(),
-            request,
-            tokenSource: resolveTokenSource(resolved.token.refreshed),
-            ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-          }),
-          ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-          tokenSource: resolveTokenSource(resolved.token.refreshed),
-        });
-        return;
-      }
-      const bundle = await writeMeetExportBundle({
+      const payload = await exportGoogleMeetBundle({
         outputDir: options.output,
         artifacts,
         attendance,
         zip: Boolean(options.zip),
-        request,
+        dryRun: options.dryRun,
+        request: buildGoogleMeetExportRequest(resolved, options.calendar),
         tokenSource: resolveTokenSource(resolved.token.refreshed),
-        ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+        calendarEvent: resolved.calendarEvent,
       });
-      const payload = {
-        ...bundle,
-        ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-        tokenSource: resolveTokenSource(resolved.token.refreshed),
-      };
-      if (options.json) {
+      if (options.json || "dryRun" in payload) {
         writeStdoutJson(payload);
         return;
       }
-      writeStdoutLine("export: %s", bundle.outputDir);
-      for (const file of bundle.files) {
+      writeStdoutLine("export: %s", payload.outputDir);
+      for (const file of payload.files) {
         writeStdoutLine("- %s", file);
       }
-      if (bundle.zipFile) {
-        writeStdoutLine("zip: %s", bundle.zipFile);
+      if (payload.zipFile) {
+        writeStdoutLine("zip: %s", payload.zipFile);
       }
     });
 }

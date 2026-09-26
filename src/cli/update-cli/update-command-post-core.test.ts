@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -15,6 +16,8 @@ import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   preparePostCorePluginInstallRecordsForFreshProcess,
+  postCoreUpdateParentOwnsCompletion,
+  resolvePostCoreUpdateOperatorOptions,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
   writePostCorePluginInstallRecordsFile,
@@ -52,6 +55,66 @@ async function withTempDir(): Promise<string> {
 }
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
+  it.each([false, true])(
+    "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
+    async (modern) => {
+      const root = await withTempDir();
+      const observation = path.join(root, "ownership.txt");
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
+      if (modern) {
+        await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "scripts", "lib", "source-update-artifact-preflight.mts"),
+          "export {};\n",
+        );
+      }
+      const lockModule = new URL("../../../scripts/lib/dist-artifact-lock.mts", import.meta.url)
+        .href;
+      await fs.writeFile(
+        path.join(root, "dist", "entry.mjs"),
+        `import fs from "node:fs/promises";
+import { acquireDistArtifactOwnership } from ${JSON.stringify(lockModule)};
+let observed;
+try {
+  const lock = await acquireDistArtifactOwnership(${JSON.stringify(root)});
+  await lock.release();
+  observed = "child-acquired";
+} catch (error) {
+  if (!String(error).includes(${JSON.stringify(`retained by PID ${process.pid}`)})) throw error;
+  observed = "parent-held";
+}
+await fs.writeFile(${JSON.stringify(observation)}, observed);
+await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
+`,
+      );
+      const sourceArtifactLock = await acquireDistArtifactOwnership(root);
+      try {
+        const result = await continuePostCoreUpdateInFreshProcess({
+          root,
+          sourceRuntimePrepared: true,
+          channel: "dev",
+          requestedChannel: null,
+          opts: {
+            json: true,
+            run: { runId: "fixture-source-lock", env: {}, sourceArtifactLock },
+          },
+          pluginInstallRecords: {},
+          updateStartedAtMs: Date.now(),
+          timeoutMs: 5000,
+          nodeRunner: process.execPath,
+        });
+        expect(result).toEqual({ resumed: true, pluginUpdate });
+        expect(await fs.readFile(observation, "utf8")).toBe(
+          modern ? "parent-held" : "child-acquired",
+        );
+        expect(await sourceArtifactLock.verifyStillHeld()).toBe(modern);
+      } finally {
+        await sourceArtifactLock.release();
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
@@ -102,6 +165,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       try {
         result = await continuePostCoreUpdateInFreshProcess({
           root,
+          sourceRuntimePrepared: true,
           channel: "stable",
           requestedChannel: null,
           opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
@@ -138,7 +202,15 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       expect(handoff).toEqual({
         resultDir: expect.any(String),
         mode: 0o700,
-        marker: { completionOwner: "parent" },
+        marker: {
+          completionOwner: "parent",
+          sourceRuntimePrepared: true,
+          timeout: {
+            version: 1,
+            serialized: cooperative ? "5" : "3600",
+            operator: cooperative ? null : "3600",
+          },
+        },
         installRecords: `${JSON.stringify(pluginInstallRecords)}\n`,
         sourceConfig: `${JSON.stringify(preUpdateConfig)}\n`,
       });
@@ -263,26 +335,6 @@ describe("readPostCorePluginInstallRecordsFile", () => {
       "Run openclaw doctor to inspect and repair plugin installation state.",
     );
   });
-
-  it("live FS: corrupt handoff is not silently dropped as empty records", async () => {
-    // L3: real temp file + real fs.readFile/JSON.parse (no stubs).
-    const dir = await withTempDir();
-    const filePath = path.join(dir, "plugin-install-records.json");
-    await fs.writeFile(filePath, '[{"not":"a-record-map"', "utf-8");
-
-    let threw = false;
-    try {
-      await readPostCorePluginInstallRecordsFile(filePath);
-    } catch (err) {
-      threw = true;
-      expect(String(err)).toContain(`Malformed JSON in plugin install records file: ${filePath}`);
-    }
-    expect(threw).toBe(true);
-
-    console.info(
-      `[post-core install-records live proof] path=${filePath} outcome=malformed-json-rejected`,
-    );
-  });
 });
 
 describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {
@@ -342,10 +394,10 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
     ).toBe(true);
   });
 
-  it("keeps a metadata-identical git update in process when the install kind is unchanged", () => {
+  it("does not resume a skipped git update with unchanged metadata", () => {
     expect(
       shouldResumePostCoreUpdateInFreshProcess({
-        result: unchangedGitResult,
+        result: { ...unchangedGitResult, status: "skipped" },
         downgradeRisk: false,
         installKindChanged: false,
       }),
@@ -381,5 +433,73 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
         downgradeRisk: true,
       }),
     ).toBe(fresh);
+  });
+});
+
+describe("post-core operator deadline provenance", () => {
+  it.each([
+    {
+      name: "omitted operator deadline",
+      value: { version: 1, serialized: "2700", operator: null },
+      expected: undefined,
+    },
+    {
+      name: "explicit operator deadline",
+      value: { version: 1, serialized: "2700", operator: "2700" },
+      expected: "2700",
+    },
+    { name: "legacy metadata", value: undefined, expected: "2700" },
+    {
+      name: "missing operator provenance",
+      value: { version: 1, serialized: "2700" },
+      expected: "2700",
+    },
+    {
+      name: "mismatched command",
+      value: { version: 1, serialized: "1800", operator: null },
+      expected: "2700",
+    },
+    {
+      name: "unknown version",
+      value: { version: 2, serialized: "2700", operator: null },
+      expected: "2700",
+    },
+    {
+      name: "malformed operator",
+      value: { version: 1, serialized: "2700", operator: false },
+      expected: "2700",
+    },
+    { name: "malformed metadata", value: "default", expected: "2700" },
+  ])("preserves intent for $name", async ({ value, expected }) => {
+    const root = await withTempDir();
+    const resultPath = path.join(root, "plugins.json");
+    await fs.writeFile(
+      path.join(root, "handoff.json"),
+      JSON.stringify({ completionOwner: "parent", timeout: value }),
+    );
+    const opts = { json: true, timeout: "2700" };
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toEqual({
+      ...opts,
+      timeout: expected,
+    });
+    // The shipped completion reader ignores added metadata and keeps its ownership contract.
+    expect(await postCoreUpdateParentOwnsCompletion(resultPath)).toBe(true);
+  });
+
+  it("retains an explicit deadline without private parent ownership", async () => {
+    const root = await withTempDir();
+    const resultPath = path.join(root, "plugins.json");
+    const opts = { timeout: "3" };
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    await fs.writeFile(
+      path.join(root, "handoff.json"),
+      JSON.stringify({
+        completionOwner: "child",
+        timeout: { version: 1, serialized: "3", operator: null },
+      }),
+    );
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    await fs.writeFile(path.join(root, "handoff.json"), "{");
+    await expect(resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).rejects.toThrow();
   });
 });

@@ -23,6 +23,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import {
   loadAuthProfileStoreForRuntime,
   markAuthProfileFailure,
@@ -83,6 +84,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { resolveReplyExpectation } from "./reply-completion.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 const cliRunnerDeps = cliRunSettlementDeps;
@@ -162,7 +164,10 @@ async function runCliAgentInternal(
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
-  params.onExecutionStarted?.();
+  await params.onExecutionStarted?.();
+  assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
   const hookStartedAt = Date.now();
   // Prompt-only inference cannot enter agent hooks: they may replace the turn
   // or add side effects before the exact zero-tool process even starts.
@@ -217,7 +222,7 @@ async function runCliAgentInternal(
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {
           sessionId: "",
-          provider: params.provider,
+          provider: params.modelProvider ?? params.provider,
           model: params.model ?? "",
           ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },
@@ -226,20 +231,47 @@ async function runCliAgentInternal(
       },
     };
   }
-  const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
-  let context: PreparedCliRunContext;
+  const modelExecution = bindOperatorModelExecution(
+    readRunOperatorAuthority(params),
+    params.requesterModel,
+    params.mapOperatorAuthorizationError,
+  );
+  const assertCallerCurrent = params.assertCurrent;
   try {
-    context = await prepareCliRunContext(params);
-  } catch (error) {
-    params.assertCurrent?.();
-    await settleCliPreparationError(error, params);
-    throw error;
+    const runParams = modelExecution
+      ? {
+          ...params,
+          abortSignal: params.abortSignal
+            ? AbortSignal.any([params.abortSignal, modelExecution.signal])
+            : modelExecution.signal,
+          assertCurrent: () => {
+            assertCallerCurrent?.();
+            modelExecution.assertCurrent();
+          },
+        }
+      : params;
+    const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
+    let context: PreparedCliRunContext;
+    try {
+      context = await prepareCliRunContext(runParams);
+    } catch (error) {
+      runParams.assertCurrent?.();
+      await settleCliPreparationError(error, runParams);
+      throw error;
+    }
+    // Preparation resolves the execution owner and effective capture config;
+    // publish both before commentary can arrive from the prepared run.
+    diagnosticLifecycle?.setExecutionContext(context.params);
+    const result = await settlePreparedCliRun({
+      context,
+      diagnosticLifecycle,
+      run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),
+    });
+    modelExecution?.assertCurrent();
+    return result;
+  } finally {
+    modelExecution?.release();
   }
-  return await settlePreparedCliRun({
-    context,
-    diagnosticLifecycle,
-    run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),
-  });
 }
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
@@ -398,6 +430,7 @@ async function runPreparedCliAgentOwned(
       cliSessionIdToUse,
       diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
     );
+    params.assertCurrent?.();
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
     const sourceReplyMirror = resolveCliSourceReplyMirror({
@@ -411,7 +444,7 @@ async function runPreparedCliAgentOwned(
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true &&
+      resolveReplyExpectation(params) === "required" &&
       // Strict isolated completion owns valid-empty output after reasoning is removed.
       !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
     ) {

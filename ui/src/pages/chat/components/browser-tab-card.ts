@@ -2,7 +2,6 @@ import { consume } from "@lit/context";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
-import type { RouteId } from "../../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
@@ -11,13 +10,11 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { t } from "../../../i18n/index.ts";
-import {
-  loadBrowserPagePreview,
-  loadBrowserTabThumbnail,
-} from "../../../lib/chat/browser-tab-preview.ts";
+import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
+import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
@@ -26,7 +23,7 @@ import sessionMenuStyles from "../../../styles/session-menu.css?inline";
 class OpenClawBrowserTabCard extends OpenClawLitElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
-  context?: ApplicationContext<RouteId>;
+  context?: ApplicationContext;
   @property({ attribute: false }) preview?: Extract<ToolPreview, { kind: "browser-tab" }>;
   @property({ attribute: false }) revision?: string;
   @property({ type: Boolean }) latest = false;
@@ -34,7 +31,12 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   @state() private thumbnailSrc?: string;
   @state() private pagePreview?: ControlUiLinkPreview;
   private requestIdentity?: { client: unknown; key: string };
-  private pageIdentity?: { client: unknown; url: string };
+  private pageIdentity?: {
+    client: unknown;
+    url: string;
+    generation: number;
+    recoveryScope: string;
+  };
   private readonly failedImages = new Set<string>();
 
   private readonly subscriptions = new SubscriptionsController(this);
@@ -199,26 +201,39 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.pagePreview = undefined;
       return;
     }
-    if (this.pageIdentity?.client === client && this.pageIdentity.url === url) {
+    if (this.pagePreviewCurrent) {
       return;
     }
-    const identity = { client, url };
+    const identity = {
+      client,
+      url,
+      generation: client.connectionGeneration,
+      recoveryScope: client.recoveryScope,
+    };
     this.pageIdentity = identity;
     this.pagePreview = undefined;
     this.failedImages.clear();
-    void loadBrowserPagePreview(client, url).then((preview) => {
+    void loadLinkPreview(client, url).then((preview) => {
       // Recycled transcript cards and connection/config changes retire the old
       // request; its result must never become another page's preview.
-      if (
-        this.isConnected &&
-        this.pageIdentity === identity &&
-        this.canLoadPagePreview &&
-        this.preview?.url === url &&
-        this.context?.gateway.snapshot.client === client
-      ) {
+      if (this.isConnected && this.pageIdentity === identity && this.pagePreviewCurrent) {
         this.pagePreview = preview;
       }
     });
+  }
+
+  private get pagePreviewCurrent(): boolean {
+    const identity = this.pageIdentity;
+    const client = this.context?.gateway.snapshot.client;
+    return Boolean(
+      identity &&
+      client &&
+      this.canLoadPagePreview &&
+      identity.client === client &&
+      identity.url === this.preview?.url &&
+      identity.generation === client.connectionGeneration &&
+      identity.recoveryScope === client.recoveryScope,
+    );
   }
 
   override disconnectedCallback() {
@@ -311,12 +326,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.requestIdentity?.key === JSON.stringify([browserTabKey(preview), this.revision])
         ? this.thumbnailSrc
         : undefined;
-    const page =
-      this.canLoadPagePreview &&
-      this.pageIdentity?.client === this.context?.gateway.snapshot.client &&
-      this.pageIdentity?.url === preview.url
-        ? this.pagePreview
-        : undefined;
+    const page = this.pagePreviewCurrent ? this.pagePreview : undefined;
     const favicon = page?.faviconDataUrl;
     const image =
       currentImage && !this.failedImages.has(currentImage) ? currentImage : page?.imageDataUrl;

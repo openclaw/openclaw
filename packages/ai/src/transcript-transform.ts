@@ -1,5 +1,5 @@
+import { isImageWithMediaPayload } from "./media-payload.js";
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
-import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
 import {
   FAILED_ASSISTANT_REPLAY_TEXT,
   resolveFailedAssistantReplay,

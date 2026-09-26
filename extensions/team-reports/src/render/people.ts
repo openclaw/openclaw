@@ -1,8 +1,11 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DAY_MS } from "../periods.js";
 import type { PersonDay } from "../store.js";
 import type { Person } from "../types.js";
+import type { PersonWorkSessions } from "../work-sessions.js";
 import { affiliation, href, type PageContext, sectionHeading, shell } from "./page.js";
-import { escapeHtml, renderAvatar } from "./shared.js";
+import { renderAvatar } from "./shared.js";
+import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activityLevel(count: number): number {
   if (count <= 0) {
@@ -256,7 +259,12 @@ function archiveTimeline(ctx: PageContext, login: string, days: PersonDay[]): st
     .join("");
 }
 
-export function renderPersonPage(ctx: PageContext, person: Person, days: PersonDay[]): string {
+export function renderPersonPage(
+  ctx: PageContext,
+  person: Person,
+  days: PersonDay[],
+  workSessions?: PersonWorkSessions,
+): string {
   const login = person.github[0] ?? "";
   const display = person.display ?? login;
   const ordered = days.toSorted((a, b) => a.dayKey.localeCompare(b.dayKey));
@@ -311,7 +319,7 @@ export function renderPersonPage(ctx: PageContext, person: Person, days: PersonD
             .map((alias) => `@${escapeHtml(alias)}`)
             .join(" · ")}</p>`
         : ""
-    }</div></div><div class="oc-card oc-summary-metric"><span class="oc-summary-metric-copy"><small>Active Days</small><strong>${active.length}/${days.length}</strong><small>${latest ? `Latest activity ${escapeHtml(dayTitle(latest.dayKey))}` : "No active days"}</small></span></div></header><section class="oc-summary-strip" aria-label="Member totals over retained days">${totals}</section>${personActivityChart(login, ordered)}<section class="archive-panel oc-section">${sectionHeading("Daily Archive", "timeline")}<div class="legend" aria-label="Activity intensity, low to high"><span class="level-0"></span><span class="level-1"></span><span class="level-2"></span><span class="level-3"></span><span class="level-4"></span></div>${archiveTimeline(ctx, login, ordered) || '<div class="oc-empty"><p class="oc-empty-description">No stored daily reports for this person yet.</p></div>'}</section><section class="archive-panel oc-section">${sectionHeading("Active Days", "history")}<div class="activity-list">${rows || '<p class="muted">No active days recorded.</p>'}</div></section>`,
+    }</div></div><div class="oc-card oc-summary-metric"><span class="oc-summary-metric-copy"><small>Active Days</small><strong>${active.length}/${days.length}</strong><small>${latest ? `Latest activity ${escapeHtml(dayTitle(latest.dayKey))}` : "No active days"}</small></span></div></header><section class="oc-summary-strip" aria-label="Member totals over retained days">${totals}</section>${workSessions ? renderPersonWorkSessions(ctx, login, workSessions) : ""}${personActivityChart(login, ordered)}<section class="archive-panel oc-section">${sectionHeading("Daily Archive", "timeline")}<div class="legend" aria-label="Activity intensity, low to high"><span class="level-0"></span><span class="level-1"></span><span class="level-2"></span><span class="level-3"></span><span class="level-4"></span></div>${archiveTimeline(ctx, login, ordered) || '<div class="oc-empty"><p class="oc-empty-description">No stored daily reports for this person yet.</p></div>'}</section><section class="archive-panel oc-section">${sectionHeading("Active Days", "history")}<div class="activity-list">${rows || '<p class="muted">No active days recorded.</p>'}</div></section>`,
     "person",
   );
 }

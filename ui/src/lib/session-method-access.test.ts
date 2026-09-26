@@ -39,6 +39,26 @@ describe("readSessionMethodAccess", () => {
     ).toEqual({ allowed: true, requiredScope: "operator.write" });
   });
 
+  it("admits ordinary scoped creation before an owned row exists", () => {
+    const scoped = snapshot({ scopes: ["operator.sessions.write"] });
+    const request = { method: "sessions.create", params: { agentId: "main", message: "Hello" } };
+    expect(readSessionMethodAccess(scoped, request)).toMatchObject({ allowed: false });
+    expect(readSessionMethodAccess(scoped, { ...request, sessionScope: true })).toEqual({
+      allowed: true,
+      requiredScope: "operator.sessions.write",
+    });
+    for (const params of [
+      { incognito: true },
+      { permissionMode: "full" },
+      { execNode: "worker" },
+      { toolOverrides: {} },
+    ]) {
+      expect(
+        readSessionMethodAccess(scoped, { ...request, params, sessionScope: true }),
+      ).toMatchObject({ allowed: false, requiredScope: "operator.admin" });
+    }
+  });
+
   it("requires admin for privileged create params", () => {
     const access = readSessionMethodAccess(snapshot({ scopes: ["operator.write"] }), {
       method: "sessions.create",
@@ -88,16 +108,60 @@ describe("readSessionMethodAccess", () => {
   it.each(["model", "thinkingLevel", "fastMode"])(
     "allows write-scoped %s changes while keeping read-only clients read-only",
     (field) => {
-      for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
+      for (const scope of [
+        "operator.read",
+        "operator.sessions.read",
+        "operator.sessions.write",
+        "operator.write",
+        "operator.admin",
+      ]) {
         expect(
           readSessionMethodAccess(snapshot({ methods: ["sessions.patch"], scopes: [scope] }), {
             method: "sessions.patch",
             params: { key: "agent:main:main", [field]: null },
           }),
-        ).toMatchObject({ allowed: scope !== "operator.read", requiredScope: "operator.write" });
+        ).toMatchObject({
+          allowed: scope === "operator.write" || scope === "operator.admin",
+          requiredScope: "operator.write",
+        });
       }
     },
   );
+
+  it("requires explicit opt-in and ownership for narrow session actions", () => {
+    const request = { method: "sessions.patch", params: { key: "agent:main:notes", label: null } };
+    const scoped = snapshot({ methods: [request.method], scopes: ["operator.sessions.write"] });
+    expect(
+      readSessionMethodAccess(scoped, { ...request, session: { sharingRole: "owner" } }),
+    ).toMatchObject({ allowed: false, requiredScope: "operator.write", cause: "missing-scope" });
+    expect(
+      readSessionMethodAccess(scoped, {
+        ...request,
+        sessionScope: true,
+        session: { sharingRole: "owner" },
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
+    for (const session of [
+      { sharingRole: "member" },
+      { sharingRole: "viewer" },
+      undefined,
+    ] as const) {
+      expect(
+        readSessionMethodAccess(scoped, { ...request, sessionScope: true, session }),
+      ).toMatchObject({
+        allowed: false,
+        requiredScope: "operator.sessions.write",
+        cause: "session-not-owned",
+      });
+    }
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [request.method], scopes: ["operator.write"] }), {
+        ...request,
+        sessionScope: true,
+        session: { sharingRole: "viewer" },
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
+  });
 
   it("keeps context-window changes separate from write-scoped effort access", () => {
     expect(

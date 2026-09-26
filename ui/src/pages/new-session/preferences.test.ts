@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   decodeIdentityPreferences,
+  decodePalettePreference,
   encodeIdentityPreferences,
   loadBrowserPreferences,
   loadNewSessionPreference,
@@ -74,6 +75,30 @@ describe("new-session browser preferences", () => {
         .freshWorkspace,
     ).toBe(true);
   });
+
+  it.each([true, false, "auto"] as const)(
+    "round-trips a standalone Fast Mode choice %s",
+    (fastMode) => {
+      replaceBrowserPreference("ws://one.example", "main", { fastMode });
+      expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({ fastMode });
+      expect(
+        decodeIdentityPreferences(
+          encodeIdentityPreferences(loadBrowserPreferences("ws://one.example")),
+        ),
+      ).toEqual({ main: { fastMode } });
+      expect(loadNewSessionPreference("ws://one.example", "other")).toBeNull();
+      expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
+      replaceBrowserPreference("ws://one.example", "main", { fastMode: undefined });
+      expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
+    },
+  );
+
+  it.each(["on", "off", "false", 0, 1, null, {}, []])(
+    "drops malformed stored Fast Mode %j",
+    (fastMode) => {
+      expect(decodeIdentityPreferences({ "new-session.v1:main": { fastMode } })).toEqual({});
+    },
+  );
 
   it("preserves boolean choices and drops malformed persisted fields", () => {
     replaceBrowserPreference("ws://one.example", "main", {
@@ -153,5 +178,42 @@ describe("new-session browser preferences", () => {
     replaceBrowserPreference(gateway, "main", {});
     expect(loadNewSessionPreference(gateway, "main")).toBeNull();
     expect(loadBrowserPreferences(gateway)).toEqual({ research: { folder: "/research" } });
+  });
+});
+
+describe("palette placement overrides", () => {
+  it("preserves cleared placement fields without taking over model defaults or one-use names", () => {
+    expect(
+      decodePalettePreference({
+        agentId: "Main",
+        selection: {
+          workspace: "/workspace",
+          folder: "/workspace",
+          projectId: "",
+          baseRef: "",
+          worktreeName: "foreground-task",
+          where: { kind: "local" },
+          worktree: false,
+          freshWorkspace: false,
+          model: "do-not-restore",
+          thinkingLevel: "high",
+          fastMode: true,
+        },
+      }),
+    ).toEqual({
+      agentId: "main",
+      selection: {
+        workspace: "/workspace",
+        folder: "/workspace",
+        projectId: "",
+        baseRef: "",
+        where: { kind: "local" },
+        worktree: false,
+        freshWorkspace: false,
+      },
+    });
+    expect(decodePalettePreference(null)).toBeNull();
+    expect(decodePalettePreference({ agentId: "", selection: { worktree: true } })).toBeNull();
+    expect(decodePalettePreference({ agentId: "main", selection: "invalid" })).toBeNull();
   });
 });

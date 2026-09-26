@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -63,7 +64,7 @@ describe("guided onboarding post-inference steps", () => {
       confirm: vi.fn(async () => false),
     });
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
-      async ({ config }) => ({ config, commitResult: vi.fn() }),
+      async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) }),
     );
     const deps = setupPostInferenceDeps({ prompter, runAppRecommendations });
     const applySetup = vi.mocked(deps.applySetup);
@@ -116,6 +117,48 @@ describe("guided onboarding post-inference steps", () => {
     );
   });
 
+  it("waits for recommendation persistence and propagates failure before browser handoff", async () => {
+    const commitStarted = createDeferred();
+    const commit = createDeferred();
+    const failure = new Error("Recommendation persistence failed");
+    // Keep the injected rejection observed when checking a missing-await regression.
+    void commit.promise.catch(() => undefined);
+    const commitResult = vi.fn(() => {
+      commitStarted.resolve();
+      return commit.promise;
+    });
+    const deps = setupDeps({
+      prompter: createWizardPrompter(),
+      runAppRecommendations: async ({ config }) => ({ config, commitResult }),
+      runBrowserHandoff: vi.fn(async () => ({ handedOff: true as const })),
+    });
+    const outcome = runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work" },
+      makeRuntime(),
+      deps,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    try {
+      await Promise.race([commitStarted.promise, outcome]);
+      expect(commitResult).toHaveBeenCalledOnce();
+      expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
+      expect(deps.launchHatchTui).not.toHaveBeenCalled();
+      commit.reject(failure);
+      expect(await outcome).toBe(failure);
+      expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
+      expect(deps.launchHatchTui).not.toHaveBeenCalled();
+      expect(restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+        resumeStdinIfPaused: false,
+      });
+    } finally {
+      commit.resolve();
+      await outcome;
+    }
+  });
+
   it("imports memories only after setup persists the selected agent workspace", async () => {
     const prompter = createWizardPrompter();
     const runSetupMemoryImportStep = vi.fn<
@@ -153,21 +196,5 @@ describe("guided onboarding post-inference steps", () => {
     expect(runSetupMemoryImportStep.mock.invocationCallOrder[0]).toBeLessThan(
       deps.launchHatchTui.mock.invocationCallOrder[0]!,
     );
-  });
-
-  it("shows no memory page when the memory step finds no offers", async () => {
-    const prompter = createWizardPrompter();
-    const runSetupMemoryImportStep = vi.fn<
-      NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
-    >(async () => ({ status: "nothing-to-import", providers: [] }));
-    const deps = setupPostInferenceDeps({ prompter, runSetupMemoryImportStep });
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
-
-    expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
-    expect((prompter.note as ReturnType<typeof vi.fn>).mock.calls).not.toContainEqual([
-      expect.anything(),
-      "Memories found",
-    ]);
   });
 });

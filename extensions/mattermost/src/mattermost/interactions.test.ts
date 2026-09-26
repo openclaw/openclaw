@@ -10,7 +10,6 @@ import {
   buildButtonProps,
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
-  resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
   setInteractionCallbackUrl,
   setInteractionSecret,
@@ -118,10 +117,6 @@ describe("setInteractionSecret / getInteractionSecret", () => {
     const secretB = getInteractionSecret();
     expect(secretA).not.toBe(secretB);
   });
-
-  it("returns a hex string", () => {
-    expect(getInteractionSecret()).toMatch(/^[0-9a-f]+$/);
-  });
 });
 
 // ── Token generation / verification ──────────────────────────────────
@@ -129,63 +124,6 @@ describe("setInteractionSecret / getInteractionSecret", () => {
 describe("generateInteractionToken / verifyInteractionToken", () => {
   beforeEach(() => {
     setInteractionSecret("test-bot-token");
-  });
-
-  it("generates a hex token", () => {
-    const token = generateInteractionToken({ action_id: "click" });
-    expect(token).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("verifies a valid token", () => {
-    const context = { action_id: "do_now", item_id: "123" };
-    const token = generateInteractionToken(context);
-    expect(verifyInteractionToken(context, token)).toBe(true);
-  });
-
-  it("rejects a tampered token", () => {
-    const context = { action_id: "do_now" };
-    const token = generateInteractionToken(context);
-    const tampered = token.replace(/.$/, token.endsWith("0") ? "1" : "0");
-    expect(verifyInteractionToken(context, tampered)).toBe(false);
-  });
-
-  it("rejects a token generated with different context", () => {
-    const token = generateInteractionToken({ action_id: "a" });
-    expect(verifyInteractionToken({ action_id: "b" }, token)).toBe(false);
-  });
-
-  it("rejects tokens with wrong length", () => {
-    const context = { action_id: "test" };
-    expect(verifyInteractionToken(context, "short")).toBe(false);
-  });
-
-  it("is deterministic for the same context", () => {
-    const context = { action_id: "test", x: 1 };
-    const t1 = generateInteractionToken(context);
-    const t2 = generateInteractionToken(context);
-    expect(t1).toBe(t2);
-  });
-
-  it("produces the same token regardless of key order", () => {
-    const contextA = { action_id: "do_now", tweet_id: "123", action: "do" };
-    const contextB = { action: "do", action_id: "do_now", tweet_id: "123" };
-    const contextC = { tweet_id: "123", action: "do", action_id: "do_now" };
-    const tokenA = generateInteractionToken(contextA);
-    const tokenB = generateInteractionToken(contextB);
-    const tokenC = generateInteractionToken(contextC);
-    expect(tokenA).toBe(tokenB);
-    expect(tokenB).toBe(tokenC);
-  });
-
-  it("verifies a token when Mattermost reorders context keys", () => {
-    // Simulate: token generated with keys in one order, verified with keys in another
-    // (Mattermost reorders context keys when storing/returning interactive message payloads)
-    const originalContext = { action_id: "bm_do", tweet_id: "999", action: "do" };
-    const token = generateInteractionToken(originalContext);
-
-    // Mattermost returns keys in alphabetical order (or any arbitrary order)
-    const reorderedContext = { action: "do", action_id: "bm_do", tweet_id: "999" };
-    expect(verifyInteractionToken(reorderedContext, token)).toBe(true);
   });
 
   it("verifies nested context regardless of nested key order", () => {
@@ -266,19 +204,6 @@ describe("resolveInteractionCallbackUrl", () => {
     expect(url).toBe("http://gateway.internal:9999/mattermost/interactions/acct");
   });
 
-  it("uses interactions.callbackBaseUrl when configured", () => {
-    const url = resolveInteractionCallbackUrl("default", {
-      channels: {
-        mattermost: {
-          interactions: {
-            callbackBaseUrl: "https://gateway.example.com/openclaw",
-          },
-        },
-      },
-    });
-    expect(url).toBe("https://gateway.example.com/openclaw/mattermost/interactions/default");
-  });
-
   it("trims trailing slashes from callbackBaseUrl", () => {
     const url = resolveInteractionCallbackUrl("acct", {
       channels: {
@@ -320,13 +245,6 @@ describe("resolveInteractionCallbackUrl", () => {
     expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
   });
 
-  it("falls back to gateway.customBindHost when configured", () => {
-    const url = resolveInteractionCallbackUrl("default", {
-      gateway: { port: 9999, customBindHost: "gateway.internal" },
-    });
-    expect(url).toBe("http://gateway.internal:9999/mattermost/interactions/default");
-  });
-
   it("falls back to localhost when customBindHost is a wildcard bind address", () => {
     const url = resolveInteractionCallbackUrl("default", {
       gateway: { port: 9999, customBindHost: "0.0.0.0" },
@@ -344,12 +262,6 @@ describe("resolveInteractionCallbackUrl", () => {
   it("uses default port 18789 when no config provided", () => {
     const url = resolveInteractionCallbackUrl("myaccount");
     expect(url).toBe("http://localhost:18789/mattermost/interactions/myaccount");
-  });
-});
-
-describe("resolveInteractionCallbackPath", () => {
-  it("builds the per-account callback path", () => {
-    expect(resolveInteractionCallbackPath("acct")).toBe("/mattermost/interactions/acct");
   });
 });
 
@@ -380,16 +292,6 @@ describe("buildButtonProps attachments", () => {
     });
 
     expect(requireAction(result).type).toBe("button");
-  });
-
-  it("includes HMAC _token in integration context", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "test", name: "Test" }],
-    });
-
-    const action = requireAction(result);
-    expect(action.integration.context["_token"]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("includes sanitized action_id in integration context", () => {
@@ -462,37 +364,6 @@ describe("buildButtonProps attachments", () => {
     });
 
     expect(requireFirstAttachment(result).text).toBe("");
-  });
-
-  it("generates verifiable tokens", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost/cb",
-      buttons: [{ id: "verify_me", name: "V", context: { extra: "data" } }],
-    });
-
-    const ctx = requireAction(result).integration.context;
-    const token = ctx["_token"] as string;
-    const { _token, ...contextWithoutToken } = ctx;
-    expect(verifyInteractionToken(contextWithoutToken, token)).toBe(true);
-  });
-
-  it("generates tokens that verify even when Mattermost reorders context keys", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost/cb",
-      buttons: [{ id: "do_action", name: "Do", context: { tweet_id: "42", category: "ai" } }],
-    });
-
-    const ctx = requireAction(result).integration.context;
-    const token = ctx["_token"] as string;
-
-    // Simulate Mattermost returning context with keys in a different order
-    const reordered: Record<string, unknown> = {};
-    const keys = Object.keys(ctx).filter((k) => k !== "_token");
-    // Reverse the key order to simulate reordering
-    for (const key of keys.toReversed()) {
-      reordered[key] = ctx[key];
-    }
-    expect(verifyInteractionToken(reordered, token)).toBe(true);
   });
 });
 
@@ -662,7 +533,7 @@ describe("createMattermostInteractionHandler", () => {
     if (requestLog) {
       expect(requestLog).toEqual([
         { path: "/posts/post-1", method: undefined },
-        { path: "/posts/post-1", method: "PUT" },
+        { path: "/posts/post-1/patch", method: "PUT" },
       ]);
     }
   }

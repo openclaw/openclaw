@@ -12,14 +12,14 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
-import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
-import { getExistingOpenClawStateSchemaPath } from "../state/openclaw-state-db-schema-policy.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
@@ -41,9 +41,10 @@ import {
   isNodeHostLauncherChild,
   notifyNodeHostLauncherReady,
   setNodeHostLauncherRestartArguments,
+  watchNodeHostParentStdin,
 } from "./launcher-client.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
-import { runStartupMigrations } from "./startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -65,6 +66,9 @@ type NodeHostRunOptions = {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  desktopSharingEnabled?: boolean;
+  gatewayAuthFromEnv?: boolean;
+  parentStdin?: boolean;
   commands?: string[];
   allCommands?: boolean;
 };
@@ -83,47 +87,21 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
-type NodeHostReconnectPausedDeps = {
-  writeLine?: (message: string) => void;
-  exit?: (code: number) => void;
-};
-
-function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
-  return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
-}
-
-function formatNodeHostReconnectPausedMessage(
-  info: GatewayReconnectPausedInfo,
-  params?: { exiting?: boolean },
-): string {
-  const detail = info.detailCode ? ` detail=${info.detailCode}` : "";
-  const reason = info.reason.trim() || "no close reason";
-  const action = params?.exiting ? "exiting for supervisor restart" : "waiting for operator action";
-  return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
-}
-
-function handleNodeHostReconnectPaused(
-  info: GatewayReconnectPausedInfo,
-  deps: NodeHostReconnectPausedDeps = {},
-): void {
-  const shouldExit = shouldExitNodeHostOnReconnectPaused(info.detailCode);
-  const writeLine = deps.writeLine ?? writeStderrLine;
-  writeLine(formatNodeHostReconnectPausedMessage(info, { exiting: shouldExit }));
-  if (!shouldExit) {
-    return;
-  }
-  const exit = deps.exit ?? ((code: number): never => process.exit(code));
-  exit(1);
-}
-
 async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   savedGateway?: NodeHostGatewayConfig;
   gatewayCandidates: readonly NodeHostGatewayConfig[];
   deviceId: string;
   env?: NodeJS.ProcessEnv;
+  envOnly?: boolean;
 }): Promise<{ token?: string; password?: string }> {
   const env = params.env ?? process.env;
+  if (params.envOnly) {
+    return resolveExplicitGatewayAuth({
+      token: env.OPENCLAW_GATEWAY_TOKEN,
+      password: env.OPENCLAW_GATEWAY_PASSWORD,
+    });
+  }
   const savedGatewayScope = params.savedGateway
     ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
     : undefined;
@@ -172,11 +150,7 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  // Operator-approved startup is a second authorized entry point for Doctor-owned
-  // state migrators. Runtime invokes those owners here and never migrates inline.
-  if (!getExistingOpenClawStateSchemaPath()) {
-    await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
-  }
+  ensureNodeHostStateReady();
   const cfg = getRuntimeConfig();
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
@@ -240,6 +214,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     forceWorkerRuns: opts.forceWorkerRuns,
     ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
+    desktopSharingEnabled: opts.desktopSharingEnabled,
     commands: config.commands,
   });
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
@@ -248,6 +223,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     ? {}
     : await resolveNodeHostGatewayCredentials({
         config: cfg,
+        envOnly: opts.gatewayAuthFromEnv,
         savedGateway: savedConfig?.gateway,
         gatewayCandidates,
         deviceId: deviceIdentity.deviceId,
@@ -373,13 +349,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       void finish(1);
     },
     onReconnectPaused: (info) => {
-      handleNodeHostReconnectPaused(info, {
-        exit: (code) => {
-          // Terminal auth/version pauses restart under a supervisor; close MCP
-          // subprocesses first so restart loops cannot orphan server processes.
-          void finish(code).finally(() => requestExitAfterOneShotOutput(undefined, code));
-        },
-      });
+      const shouldExit =
+        info.detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(info.detailCode);
+      const detail = info.detailCode ? ` detail=${info.detailCode}` : "";
+      const reason = info.reason.trim() || "no close reason";
+      const action = shouldExit ? "exiting for supervisor restart" : "waiting for operator action";
+      writeStderrLine(
+        `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`,
+      );
+      if (shouldExit) {
+        // Terminal auth/version pauses restart under a supervisor; close MCP
+        // subprocesses first so restart loops cannot orphan server processes.
+        void finish(1).finally(() => requestExitAfterOneShotOutput(undefined, 1));
+      }
     },
     onClose: (code, reason) => {
       activeRuntime.disconnect();
@@ -425,6 +407,15 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     if (opts.forceWorkerRuns) {
       args.push("--session-host");
     }
+    if (opts.desktopSharingEnabled !== undefined) {
+      args.push(opts.desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing");
+    }
+    if (opts.gatewayAuthFromEnv) {
+      args.push("--auth-from-env");
+    }
+    if (opts.parentStdin) {
+      args.push("--parent-stdin");
+    }
     // One-use pairing credentials are replaced by the authenticated device state.
     await setNodeHostLauncherRestartArguments(args);
     if (autoUpdateAbort.signal.aborted) {
@@ -454,19 +445,37 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // A pending Promise alone does not keep Node alive. Pairing pauses can close
   // the last socket, so retain a handle until a signal finishes the foreground host.
   const lifetimeInterval = setInterval(() => {}, 1_000_000);
+  let stopWatchingParent = () => {};
   const removeSignalHandlers = () => {
+    stopWatchingParent();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
   };
   const stopClientAndMcp = async () => {
+    stopping = true;
     try {
       autoUpdateAbort.abort();
       // A failed lazy import was already reported by the hello handler; shutdown
       // still owns client and runtime cleanup.
       await autoUpdateStart?.catch(() => undefined);
       await autoUpdater?.stop();
-      client.stop();
-      await activeRuntime.close();
+      const failures: unknown[] = [];
+      try {
+        await client.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await activeRuntime.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "node host shutdown cleanup failed");
+      }
     } finally {
       clearInterval(lifetimeInterval);
     }
@@ -481,7 +490,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       await stopClientAndMcp();
     } catch (error) {
       finalExitCode = 1;
-      writeStderrLine(`node host shutdown failed: ${String(error)}`);
+      writeStderrLine(`node host shutdown failed: ${formatErrorMessage(error)}`);
     } finally {
       removeSignalHandlers();
       process.exitCode = finalExitCode;
@@ -492,6 +501,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const onSigterm = AsyncLocalStorage.bind(() => void finish(143));
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  if (opts.parentStdin && !isNodeHostLauncherChild()) {
+    stopWatchingParent = watchNodeHostParentStdin(onSigterm);
+  }
 
   const readinessPromise = startGatewayClientWhenEventLoopReady(client);
   let readiness;

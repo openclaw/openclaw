@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -45,7 +46,9 @@ function dateSegment(value: string | undefined): string {
   return isoDate ?? new Date().toISOString().slice(0, 10);
 }
 
-export function transcriptSessionSelector(session: TranscriptSessionDescriptor): string {
+export function transcriptSessionSelector(
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string {
   return `${dateSegment(session.startedAt)}/${safeTranscriptPathSegment(session.sessionId)}`;
 }
 
@@ -70,7 +73,9 @@ export function legacyTranscriptSessionSelector(
   return `${date}/${segment}`;
 }
 
-export function transcriptSessionExportKey(session: TranscriptSessionDescriptor): string {
+export function transcriptSessionExportKey(
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string {
   return transcriptSessionSelector(session).toLowerCase();
 }
 
@@ -106,7 +111,7 @@ export async function isCaseSensitiveDirectory(directory: string): Promise<boole
       await fs.access(alternatePath);
       return false;
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      if (hasErrnoCode(error, "ENOENT")) {
         return true;
       }
       throw error;

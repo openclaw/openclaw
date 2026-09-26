@@ -1,13 +1,12 @@
-// Single-message lookup applies the same visibility and display projection as chat.history.
 import {
   ErrorCodes,
   errorShape,
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
@@ -15,6 +14,7 @@ import {
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -26,7 +26,6 @@ import {
 } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -87,41 +86,40 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 }
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context, client }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
     const { sessionKey, messageId, maxChars } = params;
     const agentIdOverride = normalizeOptionalText(params.agentId);
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      sessionKey,
-      agentIdOverride,
-    );
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const session = loadGatewaySessionEntryReadOnly(sessionKey, {
-      agentId: requestedAgentId,
-    });
-    const { cfg, storePath, entry, canonicalKey } = session;
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: sessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
+    const session = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: requestedAgentId }, cfg);
+    const { agentId: sessionAgentId, storePath, entry, canonicalKey } = session;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
-    const canReadSession = (current: typeof session): boolean => {
+    const canReadSession = (
+      current: typeof session = loadGatewaySessionEntryReadOnly(sessionKey, {
+        agentId: requestedAgentId,
+        clone: false,
+        projection: "list",
+      }),
+    ): boolean => {
+      sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
         current.agentId !== session.agentId ||
@@ -141,7 +139,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         );
         return false;
       }
-      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg: context.getCommittedRuntimeConfig?.() ?? current.cfg,
+      });
       if (entryFilter?.(current.canonicalKey, current.entry) === false) {
         respond(false, undefined, hiddenSessionNotFound(canonicalKey));
         return false;
@@ -152,13 +153,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
-    const effectiveMaxChars =
-      typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
+    const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
       // Pending IDs have their own owner. A transcript miss must never widen
       // into pending custody or an archived physical session.
@@ -175,7 +170,19 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         respond(true, { ok: false, unavailableReason: "not_found" });
         return;
       }
-      const message = projectPendingInputMessage(pending, effectiveMaxChars);
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        [pending.message],
+        context.cronStorePath,
+      );
+      if (!canReadSession()) {
+        return;
+      }
+      const message = projectPendingInputMessage(
+        pending,
+        effectiveMaxChars,
+        undefined,
+        resolveCronJobName,
+      );
       if (!message) {
         respond(true, { ok: false, unavailableReason: "not_visible" });
         return;
@@ -214,16 +221,8 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         allowResetArchiveFallback: true,
       }));
     // Async transcript/archive reads cannot publish under a stale sharing or
-    // physical-session snapshot. Pending input reads above are synchronous.
-    if (
-      !canReadSession(
-        loadGatewaySessionEntryReadOnly(sessionKey, {
-          agentId: requestedAgentId,
-          clone: false,
-          projection: "list",
-        }),
-      )
-    ) {
+    // physical-session snapshot.
+    if (!canReadSession()) {
       return;
     }
     if (!visible) {
@@ -249,9 +248,16 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    respond(true, {
-      ok: true,
-      message: projected,
-    });
+    // maxChars bounds individual text fields, not the serialized message: many
+    // blocks or structured output must not bypass the WebSocket payload limit.
+    respond(
+      true,
+      jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
+        ? { ok: false, unavailableReason: "oversized" }
+        : projectOperatorModelRead(
+            { context, client, agentId: sessionAgentId },
+            { ok: true, message: projected },
+          ),
+    );
   },
 };

@@ -39,6 +39,9 @@ function createImageParser(): MarkdownItParser {
 
 /** Finds inline image destinations without treating code or escaped syntax as media. */
 export function findMarkdownImageSpans(markdown: string): MarkdownImageSpan[] {
+  if (!markdown.includes("![")) {
+    return [];
+  }
   const md = (imageParser ??= createImageParser());
   const images: MarkdownImageSpan[] = [];
   let source = "";

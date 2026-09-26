@@ -18,7 +18,6 @@ import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
   hasCommittedOutboundDeliveryEvidence,
-  hasExplicitlyVisibleAgentPayload,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleAgentPayload,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -82,26 +81,18 @@ export function constrainRestartRecoveryDeliveryPayloads(
     if (!suppressText && typeof payload.text === "string") {
       constrainedPayload.text = payload.text;
     }
-    if (payload.isError === true) {
-      constrainedPayload.isError = true;
-    }
-    if (payload.isReasoning === true) {
-      constrainedPayload.isReasoning = true;
-    }
-    if (payload.isCommentary === true) {
-      constrainedPayload.isCommentary = true;
-    }
-    if (payload.isReasoningSnapshot === true) {
-      constrainedPayload.isReasoningSnapshot = true;
-    }
-    if (payload.isCompactionNotice === true) {
-      constrainedPayload.isCompactionNotice = true;
-    }
-    if (payload.isFallbackNotice === true) {
-      constrainedPayload.isFallbackNotice = true;
-    }
-    if (payload.isStatusNotice === true) {
-      constrainedPayload.isStatusNotice = true;
+    for (const flag of [
+      "isError",
+      "isReasoning",
+      "isCommentary",
+      "isReasoningSnapshot",
+      "isCompactionNotice",
+      "isFallbackNotice",
+      "isStatusNotice",
+    ] as const) {
+      if (payload[flag] === true) {
+        constrainedPayload[flag] = true;
+      }
     }
     if (Object.keys(constrainedPayload).length > 0) {
       constrained.push(constrainedPayload);
@@ -155,19 +146,25 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   result: AgentDeliveryEvidence,
 ): RestartRecoveryTerminalDeliveryEvidenceResult {
   const rawPayloads = Array.isArray(result.payloads) ? result.payloads : undefined;
-  const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = Array.isArray(
-    rawPayloads,
-  )
-    ? rawPayloads.slice(0, 64).map((payload) => {
-        const mediaUrls = collectDeliveredMediaUrls({ payloads: [payload] });
-        const visible = hasExplicitlyVisibleAgentPayload(payload);
-        const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
-        if (mediaUrls.length > 0) {
-          evidence.mediaUrls = mediaUrls;
-        }
-        return evidence;
-      })
-    : undefined;
+  const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
+    ?.slice(0, 64)
+    .map((payload) => {
+      const mediaUrls = collectDeliveredMediaUrls({ payloads: [payload] });
+      const visible = hasVisibleAgentPayload(
+        { payloads: [payload] },
+        {
+          requireTerminalContent: true,
+          includeErrorPayloads: false,
+          includeReasoningPayloads: false,
+          includeSilentReplyPayloads: false,
+        },
+      );
+      const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
+      if (mediaUrls.length > 0) {
+        evidence.mediaUrls = mediaUrls;
+      }
+      return evidence;
+    });
   const payloadsTruncated = rawPayloads && rawPayloads.length > 64 ? (true as const) : undefined;
   const rawDeliveryStatus = result.deliveryStatus;
   const status =
@@ -239,19 +236,13 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
           const evidence: NonNullable<
             RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"]
           >[number] = { visible };
-          const provider = normalizeOptionalString(record.provider);
-          const accountId = normalizeOptionalString(record.accountId);
-          const to = normalizeOptionalString(record.to);
+          for (const key of ["provider", "accountId", "to"] as const) {
+            const value = normalizeOptionalString(record[key]);
+            if (value) {
+              evidence[key] = value;
+            }
+          }
           const threadId = normalizeOptionalThreadId(record.threadId);
-          if (provider) {
-            evidence.provider = provider;
-          }
-          if (accountId) {
-            evidence.accountId = accountId;
-          }
-          if (to) {
-            evidence.to = to;
-          }
           if (threadId) {
             evidence.threadId = threadId;
           }
@@ -499,11 +490,14 @@ export function bindCommandHarnessCompletionAssertion(params: {
   }
   const guarded = {
     ...opts,
-    assertSourceCurrent: createHarnessCompletionSourceAssertion({
-      claim,
-      storePath,
-      priorAssertion: opts.assertSourceCurrent,
-    }),
+    assertSourceCurrent: Object.assign(
+      createHarnessCompletionSourceAssertion({
+        claim,
+        storePath,
+        priorAssertion: opts.assertSourceCurrent,
+      }),
+      { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
+    ),
   };
   guarded.assertSourceCurrent();
   return guarded;

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -45,31 +46,7 @@ export type CodexNodeHistory = {
 
 export type CodexSessionDisposition = "existing" | "forked";
 
-export const continueOperations = new Map<
-  string,
-  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
->();
-const sessionActionTails = new Map<string, Promise<void>>();
-
-export async function runSessionActionExclusive<T>(
-  threadId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previous = sessionActionTails.get(threadId) ?? Promise.resolve();
-  const operation = previous.then(run);
-  const tail = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  sessionActionTails.set(threadId, tail);
-  try {
-    return await operation;
-  } finally {
-    if (sessionActionTails.get(threadId) === tail) {
-      sessionActionTails.delete(threadId);
-    }
-  }
-}
+export const catalogSessionActions = new KeyedAsyncQueue();
 
 // Session creation persists this plugin-owned suffix under an agent-qualified key.
 // Restart discovery must compare the parsed suffix, not the returned canonical key.
@@ -276,7 +253,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
   record: CodexSessionCatalogSession;
   history: CodexNodeHistory;
 }): Promise<AdoptedSessionEntry> {
-  const existing = findNodeAdoptedSessionEntry({
+  const lookup = {
     agentId: params.agentId,
     config: params.config,
     runtime: params.api.runtime,
@@ -284,7 +261,8 @@ export async function createOrReuseNodeAdoptedSession(params: {
     threadId: params.record.threadId,
     sourceHomeId: params.sourceHomeId,
     includeInitializing: true,
-  });
+  };
+  const existing = findNodeAdoptedSessionEntry(lookup);
   if (existing) {
     return existing;
   }
@@ -339,15 +317,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
       initializing: true,
     };
   } catch (error) {
-    const raced = findNodeAdoptedSessionEntry({
-      agentId: params.agentId,
-      config: params.config,
-      runtime: params.api.runtime,
-      hostId: params.hostId,
-      threadId: params.record.threadId,
-      sourceHomeId: params.sourceHomeId,
-      includeInitializing: true,
-    });
+    const raced = findNodeAdoptedSessionEntry(lookup);
     if (raced) {
       return raced;
     }

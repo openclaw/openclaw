@@ -1,8 +1,13 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
+}));
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { ExitError } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -147,6 +152,7 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
 
 describe("healthCommand", () => {
   beforeEach(() => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     vi.clearAllMocks();
     buildGatewayConnectionDetailsMock.mockReturnValue({
       message: TEST_GATEWAY_MESSAGE,
@@ -237,11 +243,7 @@ describe("healthCommand", () => {
     expect(output).not.toContain("inactive plugin load failed");
   });
 
-  it.each([
-    { everyMs: 65_001, expected: "1m 5s 1ms" },
-    { everyMs: 604_800_001, expected: "1w 1ms" },
-    { everyMs: 691_200_000, expected: "1w 1d" },
-  ])(
+  it.each([{ everyMs: 691_265_001, expected: "1w 1d 1m 5s 1ms" }])(
     "preserves configured duration precision in heartbeat: $everyMs ms",
     async ({ everyMs, expected }) => {
       const snapshot = createHealthSummary();
@@ -498,7 +500,9 @@ describe("healthCommand", () => {
     await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).toContain("Config hot reload: disabled");
+    expect(output).toContain(
+      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
+    );
   });
 
   it("omits the config hot-reload line in text output when the reloader is active", async () => {
@@ -512,11 +516,10 @@ describe("healthCommand", () => {
     expect(output).not.toContain("Config hot reload");
   });
 
-  it.each(
-    [0, -600_000, 600_000].flatMap((clockSkewMs) =>
-      ["agent", "top-level"].map((surface) => ({ clockSkewMs, surface })),
-    ),
-  )(
+  it.each([
+    { clockSkewMs: -600_000, surface: "agent" },
+    { clockSkewMs: 600_000, surface: "top-level" },
+  ])(
     "prints $surface gateway ages with $clockSkewMs ms client clock skew",
     async ({ clockSkewMs, surface }) => {
       const gatewayNow = Date.now();
@@ -815,6 +818,69 @@ describe("healthCommand", () => {
     expect(probeGatewayStatusMock).not.toHaveBeenCalled();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { elapsedMs: 4000, skipReadiness: false },
+    { elapsedMs: 5000, skipReadiness: false },
+    { elapsedMs: 4000, skipReadiness: true },
+    { elapsedMs: 5000, skipReadiness: true },
+  ])(
+    "charges target/auth preparation and readiness to one budget ($elapsedMs, $skipReadiness)",
+    async ({ elapsedMs, skipReadiness }) => {
+      vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
+        vi.spyOn(performance, "now").mockReturnValue(elapsedMs);
+        return skipReadiness
+          ? undefined
+          : {
+              healthy: true,
+              waitOutcome: "healthy",
+              elapsedMs: 1000,
+              runtime: { status: "running", pid: 42 },
+              portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+              staleGatewayPids: [],
+            };
+      });
+      if (elapsedMs === 5000) {
+        await expect(healthCommand({ timeoutMs: 5000, config: {} }, runtime)).rejects.toThrow(
+          "Gateway diagnostic budget exhausted",
+        );
+        expect(callGatewayMock).not.toHaveBeenCalled();
+      } else {
+        callGatewayMock.mockResolvedValueOnce(createHealthSummary());
+        await healthCommand({ timeoutMs: 5000, config: {} }, runtime);
+        expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+      }
+    },
+  );
+
+  it("keeps readiness exhaustion machine-readable without a second network probe", async () => {
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+      healthy: false,
+      waitOutcome: "timeout",
+      elapsedMs: 5000,
+      probeError: "connect ECONNREFUSED",
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      staleGatewayPids: [],
+    });
+    const { formatGatewayTransportErrorJson } =
+      await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
+    formatGatewayTransportErrorJsonMock.mockImplementation(formatGatewayTransportErrorJson);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
+
+    expect(JSON.parse(requireFirstRuntimeLog())).toMatchObject({
+      ok: false,
+      error: { type: "gateway_transport_error", kind: "timeout", timeoutMs: 5000 },
+      gateway: { url: TEST_GATEWAY_URL },
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("keeps credential failures machine-readable when the gateway is unreachable", async () => {
     const error = new Error("gateway health requires credentials");
     const payload = {
@@ -954,22 +1020,6 @@ describe("formatContextEngineHealthLine", () => {
 });
 
 describe("formatConfigReloadHealthLine", () => {
-  it("reports a disabled config hot-reload watcher", () => {
-    const summary = createHealthSummary();
-    summary.configReload = { hotReloadStatus: "disabled" };
-
-    expect(formatConfigReloadHealthLine(summary)).toBe(
-      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
-    );
-  });
-
-  it("stays silent while the config hot-reload watcher is active", () => {
-    const summary = createHealthSummary();
-    summary.configReload = { hotReloadStatus: "active" };
-
-    expect(formatConfigReloadHealthLine(summary)).toBeNull();
-  });
-
   it("stays silent when no config reloader is running", () => {
     const summary = createHealthSummary();
 

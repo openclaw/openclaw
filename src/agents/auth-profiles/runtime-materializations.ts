@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveSharedAuthStorePath } from "./path-resolve.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveRuntimeStoreKey } from "./mutation-lineage.js";
 
 /** Secret-free proof that one exact provider/model transport completed with usable auth. */
 export type RuntimeAuthMaterialization = Readonly<{
@@ -24,10 +23,6 @@ const MAX_RUNTIME_AUTH_MATERIALIZATIONS_PER_OWNER = 64;
 const materializations = new Map<string, RuntimeAuthMaterialization[]>();
 const listeners = new Set<RuntimeAuthMaterializationMutationListener>();
 
-function ownerKey(agentDir?: string): string {
-  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath();
-}
-
 function notify(agentDir?: string): void {
   const event = {
     ...(agentDir ? { agentDir } : {}),
@@ -46,17 +41,9 @@ export function registerRuntimeAuthMaterializationMutationListener(
 }
 
 /** Records successful auth at the boundary that proved one exact runtime route. */
-export function recordRuntimeAuthMaterialization(params: {
-  agentDir?: string;
-  provider: string;
-  modelId: string;
-  modelApi: string;
-  modelBaseUrl: string;
-  requestTransportOverrides: "none" | "present";
-  authMode: string;
-  runtimeOwnerId: string;
-  authProfileId?: string;
-}): boolean {
+export function recordRuntimeAuthMaterialization(
+  params: RuntimeAuthMaterialization & { agentDir?: string },
+): boolean {
   const provider = normalizeProviderId(params.provider);
   const fact: RuntimeAuthMaterialization = {
     provider,
@@ -71,7 +58,7 @@ export function recordRuntimeAuthMaterialization(params: {
   if (Object.values(fact).some((value) => !value)) {
     return false;
   }
-  const key = ownerKey(params.agentDir);
+  const key = resolveRuntimeStoreKey(params.agentDir);
   const existing = materializations.get(key) ?? [];
   if (existing.some((candidate) => isDeepStrictEqual(candidate, fact))) {
     return false;
@@ -90,7 +77,7 @@ export function revokeRuntimeAuthMaterializations(params: {
   provider: string;
   runtimeOwnerId: string;
 }): boolean {
-  const key = ownerKey(params.agentDir);
+  const key = resolveRuntimeStoreKey(params.agentDir);
   const provider = normalizeProviderId(params.provider);
   const runtimeOwnerId = params.runtimeOwnerId.trim().toLowerCase();
   const existing = materializations.get(key);
@@ -115,7 +102,7 @@ export function revokeRuntimeAuthMaterializations(params: {
 export function getPreparedRuntimeAuthMaterializations(
   agentDir?: string,
 ): readonly RuntimeAuthMaterialization[] {
-  return materializations.get(ownerKey(agentDir)) ?? [];
+  return materializations.get(resolveRuntimeStoreKey(agentDir)) ?? [];
 }
 
 /** Clears materializations for an already resolved canonical auth database owner. */

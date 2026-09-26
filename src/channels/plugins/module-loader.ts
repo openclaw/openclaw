@@ -6,12 +6,13 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { describeRootFileOpenFailure, openRootFileSync } from "../../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure } from "../../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   isJavaScriptModulePath,
   PLUGIN_SOURCE_MODULE_EXTENSIONS,
 } from "../../plugins/native-module-require.js";
+import { openPluginRootFileSync } from "../../plugins/path-safety.js";
 import { getPluginCacheRoot, getPluginCacheSource } from "../../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 
@@ -87,12 +88,10 @@ export function loadChannelPluginModule(params: { modulePath: string; rootDir: s
     return cached.value;
   }
   const boundaryLabel = "plugin root";
-  const opened = openRootFileSync({
-    absolutePath: params.modulePath,
+  const opened = openPluginRootFileSync({
+    filePath: params.modulePath,
     rootPath: params.rootDir,
-    boundaryLabel,
     rejectHardlinks: false,
-    skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
     throw new Error(

@@ -74,10 +74,15 @@ vi.mock("../../logging/subsystem.js", async () => {
   };
 });
 
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
+import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
+import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
 const defaultAgents: AgentConfig[] = [
   { id: "main", default: true },
@@ -104,15 +109,6 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "openai", id: "gpt-5.6-sol", name: "GPT" },
 ];
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
-type TestContext = Pick<
-  GatewayRequestContext,
-  | "getRuntimeConfig"
-  | "loadGatewayModelCatalogSnapshot"
-  | "broadcastToConnIds"
-  | "getSessionEventSubscriberConnIds"
-  | "chatAbortControllers"
-  | "getClientConnIds"
->;
 
 function catalogSnapshot(entries = modelCatalog) {
   return {
@@ -128,20 +124,18 @@ function catalogSnapshot(entries = modelCatalog) {
 
 function context(clients = new Set<TestClient>()) {
   return {
-    getRuntimeConfig: () => cfg,
+    ...createDirectChatContext({ getRuntimeConfig: () => cfg }),
     loadGatewayModelCatalogSnapshot: vi.fn<
       GatewayRequestContext["loadGatewayModelCatalogSnapshot"]
     >(async () => catalogSnapshot()),
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set<string>(),
-    chatAbortControllers: new Map(),
+    broadcastToConnIds: vi.fn<GatewayRequestContext["broadcastToConnIds"]>(),
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
       new Set(
         [...clients]
           .filter((candidate) => !candidate.invalidated && (!filter || filter(candidate)))
           .map((candidate) => candidate.connId),
       ),
-  } satisfies TestContext;
+  } satisfies GatewayRequestContext;
 }
 
 function client(scopes: string[]): TestClient {
@@ -173,7 +167,7 @@ function personClient(profileId: string, scopes = ["operator.write"]): TestClien
 async function patchSession(
   params: Record<string, unknown>,
   scopes = ["operator.admin"],
-  requestContext: TestContext = context(),
+  requestContext: GatewayRequestContext = context(),
   requestClient: GatewayClient = client(scopes),
 ) {
   const responses: Parameters<RespondFn>[] = [];
@@ -181,7 +175,7 @@ async function patchSession(
     req: { type: "req", id: "sticky-model-patch", method: "sessions.patch", params },
     params,
     client: requestClient,
-    context: requestContext as GatewayRequestContext,
+    context: requestContext,
     isWebchatConnect: () => true,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   });
@@ -223,10 +217,12 @@ beforeAll(async () => {
     },
     assertCurrent: () => {},
   }).authProfileId;
-  // Sticky selections still pass real harness admission; this fixture supplies
-  // the installed owner required by its OpenAI route without loading runtime code.
+  // Persisted runtime pins need installed owners even when a patch changes only permissions.
   pluginMetadata.snapshot = createPluginMetadataSnapshotFixture({
-    plugins: [{ id: "codex", activation: { onAgentHarnesses: ["codex"] } }],
+    plugins: [
+      { id: "codex", activation: { onAgentHarnesses: ["codex"] } },
+      { id: "native-fixture", activation: { onAgentHarnesses: ["claude-cli"] } },
+    ],
   });
 });
 
@@ -236,7 +232,11 @@ afterEach(() => {
 
 beforeEach(() => {
   cfg = structuredClone(defaultConfig);
-  runtimeChoice.prepare.mockReset().mockResolvedValue({ kind: "ready", validate: () => undefined });
+  runtimeChoice.prepare.mockReset().mockImplementation(async (input) => ({
+    kind: "ready",
+    runtimeId: input.runtimeId ?? "openclaw",
+    validate: () => undefined,
+  }));
   persistedConfig = undefined;
   effects.info.mockReset();
   effects.warn.mockReset();
@@ -257,7 +257,26 @@ afterAll(async () => {
   await openClawTestState.cleanup();
 });
 
+registerSessionNativeRuntimeConsentTests({
+  getConfig: () => cfg,
+  catalogSnapshot,
+  client,
+  context,
+  patchSession,
+  prepareRuntime: runtimeChoice.prepare,
+  configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
+  queueRuntimeSelection,
+});
+
+registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
+
 describe("sessions.patch sticky model persistence", () => {
+  registerSessionSandboxStickyModelTests({
+    getConfig: () => cfg,
+    patchSession,
+    configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
+    getPersistedConfig: () => persistedConfig,
+  });
   it.each([
     { scope: undefined, agentId: "main", target: undefined },
     { scope: undefined, agentId: "work", target: undefined },
@@ -605,15 +624,11 @@ describe("sessions.patch personal model-account ownership", () => {
     const caller = personClient(accountOwnerId);
     const connections = new Set([caller]);
     const release = vi.fn();
-    const terminalSessions: Pick<
-      NonNullable<GatewayRequestContext["terminalSessions"]>,
-      "beginAgentSessionDrain"
-    > = {
-      beginAgentSessionDrain: () => {
-        connections.delete(caller);
-        return { drained: Promise.resolve(), hasWork: () => false, release };
-      },
-    };
+    const terminalSessions = new TerminalSessionManager({ emit: vi.fn() });
+    vi.spyOn(terminalSessions, "beginAgentSessionDrain").mockImplementation(() => {
+      connections.delete(caller);
+      return { drained: Promise.resolve(), hasWork: () => false, release };
+    });
     const requestContext = {
       ...context(connections),
       terminalSessions,
@@ -769,15 +784,12 @@ describe("explicit session model runtimes", () => {
       ...context(),
       getSessionEventSubscriberConnIds: () => new Set(["reader"]),
     };
-    expect(
-      (
-        await patchSession(
-          { key: sessionKey, agentRuntime: null },
-          ["operator.admin"],
-          requestContext,
-        )
-      )[0],
-    ).toBe(true);
+    const response = await patchSession(
+      { key: sessionKey, agentRuntime: null },
+      ["operator.admin"],
+      requestContext,
+    );
+    expect(response[0]).toBe(true);
     await flushPendingSessionsChangedEvents(requestContext);
     expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       sessionKey,
@@ -816,6 +828,7 @@ describe("explicit session model runtimes", () => {
     );
     runtimeChoice.prepare.mockResolvedValue({
       kind: "ready",
+      runtimeId: "codex",
       validate: vi
         .fn<() => string | undefined>()
         .mockReturnValueOnce(undefined)
@@ -845,7 +858,7 @@ describe("explicit session model runtimes", () => {
     runtimeChoice.prepare.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
-      return { kind: "ready", validate: () => undefined };
+      return { kind: "ready", runtimeId: "codex", validate: () => undefined };
     });
     const pending = patchSession({
       key: sessionKey,

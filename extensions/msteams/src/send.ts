@@ -5,7 +5,6 @@ import {
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
-  type MessageReceiptPart,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
@@ -26,7 +25,10 @@ import {
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
-import { buildMSTeamsMessageActivity } from "./message-activity.js";
+import {
+  buildMSTeamsAdaptiveCardActivity,
+  buildMSTeamsMessageActivity,
+} from "./message-activity.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
 import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
@@ -126,30 +128,12 @@ function createMSTeamsSendReceipt(params: {
       conversationId: params.conversationId,
     })),
   });
-  if (!params.kinds) {
-    return receipt;
+  if (params.kinds) {
+    for (const [index, part] of receipt.parts.entries()) {
+      part.kind = params.kinds[index] ?? params.kind;
+    }
   }
-  const kinds = params.kinds;
-  return {
-    ...receipt,
-    parts: receipt.parts.map((part, index) => {
-      const nextPart: MessageReceiptPart = {
-        platformMessageId: part.platformMessageId,
-        kind: kinds[index] ?? params.kind,
-        index: part.index,
-      };
-      if (part.threadId) {
-        nextPart.threadId = part.threadId;
-      }
-      if (part.replyToId) {
-        nextPart.replyToId = part.replyToId;
-      }
-      if (part.raw) {
-        nextPart.raw = part.raw;
-      }
-      return nextPart;
-    }),
-  };
+  return receipt;
 }
 
 function createMSTeamsSendResult(params: {
@@ -310,16 +294,8 @@ export async function sendMessageMSTeams(
       });
     }
 
-    // Personal chat with small image: use base64 (only works for images)
-    if (conversationType === "personal") {
-      // Small image in personal chat: use base64 (only works for images)
-      const base64 = media.buffer.toString("base64");
-      const finalMediaUrl = `data:${media.contentType};base64,${base64}`;
-
-      return sendTextWithMedia(ctx, messageText, finalMediaUrl, params);
-    }
-
-    if (isImage && !sharePointSiteId) {
+    if (conversationType === "personal" || (isImage && !sharePointSiteId)) {
+      // Personal-chat files needing consent were handled above.
       // Group chat/channel images can be sent inline without SharePoint storage.
       const base64 = media.buffer.toString("base64");
       const finalMediaUrl = `data:${media.contentType};base64,${base64}`;
@@ -539,15 +515,7 @@ export async function sendPollMSTeams(
     optionCount: pollCard.options.length,
   });
 
-  const activity = {
-    type: "message",
-    attachments: [
-      {
-        contentType: "application/vnd.microsoft.card.adaptive",
-        content: pollCard.card,
-      },
-    ],
-  };
+  const activity = buildMSTeamsAdaptiveCardActivity(pollCard.card);
 
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
   const messageId = await sendProactiveActivity({
@@ -587,15 +555,7 @@ export async function sendAdaptiveCardMSTeams(
     cardVersion: card.version,
   });
 
-  const activity = {
-    type: "message",
-    attachments: [
-      {
-        contentType: "application/vnd.microsoft.card.adaptive",
-        content: card,
-      },
-    ],
-  };
+  const activity = buildMSTeamsAdaptiveCardActivity(card);
 
   // Send card via proactive conversation
   const messageId = await sendProactiveActivity({
@@ -660,14 +620,8 @@ export async function editAdaptiveCardMSTeams(
   return updateMSTeamsMessageActivity({
     ...params,
     activity: {
-      type: "message",
+      ...buildMSTeamsAdaptiveCardActivity(params.card),
       id: params.activityId,
-      attachments: [
-        {
-          contentType: "application/vnd.microsoft.card.adaptive",
-          content: params.card,
-        },
-      ],
     },
   });
 }

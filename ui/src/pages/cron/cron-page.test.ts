@@ -20,6 +20,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function scheduledJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return createCronViewJob(id, {
+    name: "Nightly digest",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "digest" },
+    state: {},
+    ...overrides,
+  });
+}
+
 describe("CronPage header", () => {
   it("uses the shared settings header with concise context and scope actions", async () => {
     const gateway = createGateway(
@@ -179,19 +191,10 @@ describe("CronPage editor state sync", () => {
   it.each(["visible", "later page", "another agent"])(
     "opens a linked job's history when the job is on %s",
     async (placement) => {
-      const job: CronJob = {
-        id: "linked-job",
+      const job = scheduledJob("linked-job", {
         agentId: placement === "another agent" ? "writer" : "main",
         name: "Linked automation",
-        enabled: true,
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "digest" },
-        state: {},
-      };
+      });
       const jobs = createDeferred<CronJobsListResult>();
       const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "cron.list") {
@@ -553,19 +556,10 @@ describe("CronPage editor state sync", () => {
     { scenario: "write-only authentication", scopes: ["operator.write"], canManage: false },
     { scenario: "administrator authentication", scopes: ["operator.admin"], canManage: true },
   ])("gates scheduler mutations for $scenario", async ({ scopes, canManage }) => {
-    const job: CronJob = {
-      id: "access-job",
+    const job = scheduledJob("access-job", {
       name: "Readably scheduled task",
       description: "Inspect this task without changing its permissions",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
+    });
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
         return cronListResponse([job]);
@@ -891,18 +885,7 @@ describe("CronPage editor state sync", () => {
   });
 
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
-    const job: CronJob = {
-      id: "job-1",
-      name: "Nightly digest",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
+    const job = scheduledJob("job-1");
     let serverEnabled = true;
     let removed = false;
     const removeRequested = createDeferred();
@@ -979,18 +962,7 @@ describe("CronPage editor state sync", () => {
   });
 
   it("renders read-only controls and rejects a stale admin action after a scope downgrade", async () => {
-    const job: CronJob = {
-      id: "job-1",
-      name: "Nightly digest",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
+    const job = scheduledJob("job-1");
     const request = vi.fn(async (method: string) => {
       if (method === "cron.list") {
         return cronListResponse([job]);

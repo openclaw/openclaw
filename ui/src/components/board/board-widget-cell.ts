@@ -34,7 +34,10 @@ import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { renderLazyViewError } from "../lazy-view-error.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
-import { renderBoardGrantedCapabilities } from "./board-widget-capabilities.ts";
+import {
+  renderBoardGrantedCapabilities,
+  renderBoardPendingCapabilities,
+} from "./board-widget-capabilities.ts";
 import {
   BOARD_SIZE_PRESETS,
   closeBoardWidgetMenu,
@@ -42,7 +45,6 @@ import {
   renderBoardWidgetActionError,
   renderBoardWidgetError,
   renderBoardWidgetMenu,
-  renderBoardWidgetPending,
   renderBoardWidgetRejected,
 } from "./board-widget-cell-render.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
@@ -234,11 +236,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
   }
 
-  private renderMcpApp(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
-    void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
+    if (widget.contentKind === "mcp-app") {
+      void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
+    }
     const accessNotice =
       widget.grantState === "pending"
-        ? renderBoardWidgetPending({
+        ? renderBoardPendingCapabilities({
             widget,
             disabled: this.busy || this.actionPending || !this.canGrant,
             onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
@@ -253,42 +257,23 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               onRemove: () => void this.runAction(() => callbacks.remove(widget)),
             })
           : nothing;
-    return renderBoardMcpAppContent({
-      accessNotice,
-      appView: this.appView.state,
-      busy: this.busy || this.actionPending || !this.canMutate,
-      active: this.active,
-      loading: this.appView.loading,
-      nearVisible: this.appView.nearVisible,
-      rectHeight: this.rect?.h ?? 4,
-      sessionKey: this.sessionKey,
-      widget,
-      expired: () => this.appView.expire(),
-      remove: () => void this.runAction(() => callbacks.remove(widget)),
-      retry: () => this.appView.retry(),
-    });
-  }
-
-  private renderBody(widget: BoardWidget, callbacks: BoardWidgetCellCallbacks): TemplateResult {
     if (widget.contentKind === "mcp-app") {
-      return this.renderMcpApp(widget, callbacks);
-    }
-    if (widget.grantState === "pending") {
-      return renderBoardWidgetPending({
+      return renderBoardMcpAppContent({
+        accessNotice,
+        appView: this.appView.state,
+        busy: this.busy || this.actionPending || !this.canMutate,
+        active: this.active,
+        loading: this.appView.loading,
+        nearVisible: this.appView.nearVisible,
+        sessionKey: this.sessionKey,
         widget,
-        disabled: this.busy || this.actionPending || !this.canGrant,
-        onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
-        ...(this.actionError
-          ? { error: renderBoardWidgetActionError(this.actionError, true) }
-          : {}),
+        expired: () => this.appView.expire(),
+        remove: () => void this.runAction(() => callbacks.remove(widget)),
+        retry: () => this.appView.retry(),
       });
     }
-    if (widget.grantState === "rejected") {
-      return renderBoardWidgetRejected({
-        widget,
-        disabled: this.busy || this.actionPending || !this.canMutate,
-        onRemove: () => void this.runAction(() => callbacks.remove(widget)),
-      });
+    if (accessNotice !== nothing) {
+      return accessNotice;
     }
     if (widget.contentKind === "plugin" && widget.frameUrl) {
       return this.frame.render(widget);
@@ -443,14 +428,15 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         : undefined;
     // While a move/resize gesture runs, the card fills its (preview) cell so
     // the user manipulates the quantized rect they will actually commit.
-    const exactHeightPx = this.dragging
-      ? undefined
-      : exactBoardWidgetHeightPx(
-          widget,
-          this.contentHeightPx,
-          this.pageChrome ? 0 : boardChromeRowPx(),
-          this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
-        );
+    const exactHeightPx =
+      this.dragging || this.pageChrome
+        ? undefined
+        : exactBoardWidgetHeightPx(
+            widget,
+            this.contentHeightPx,
+            boardChromeRowPx(),
+            this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+          );
     const exactHeightStyle =
       exactHeightPx === undefined
         ? ""
@@ -463,7 +449,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}
         aria-setsize=${this.setSize}
-        aria-label=${readOnly || this.pageChrome ? label : t("board.widget.cellLabel", { title: label })}
+        aria-label=${
+          readOnly || this.pageChrome ? label : t("board.widget.cellLabel", { title: label })
+        }
         data-widget-name=${widget.name}
         data-test-id="board-widget"
         @focus=${() => callbacks.focusChanged(widget.name)}
@@ -480,7 +468,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
                         class="board-widget__drag-handle"
                         aria-hidden="true"
                         title=${t("board.widget.moveHandle", { title: label })}
-                        @pointerdown=${(event: PointerEvent) => callbacks.movePointerDown(widget, event)}
+                        @pointerdown=${(event: PointerEvent) =>
+                          callbacks.movePointerDown(widget, event)}
                       >
                         <span aria-hidden="true">⠿</span>
                       </span>`

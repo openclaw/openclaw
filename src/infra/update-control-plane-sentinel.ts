@@ -1,5 +1,5 @@
-// Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -13,13 +13,12 @@ import {
 } from "./update-restart-notice.js";
 import {
   buildUpdateRestartSentinelPayload,
+  type ForegroundUpdateOrigin,
   type UpdateRestartSentinelMeta,
 } from "./update-restart-sentinel-payload.js";
 import { getUpdateRun } from "./update-run-ledger.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
-// Control-plane update sentinel helpers preserve update metadata while a
-// managed service handoff waits for restart health to complete.
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
 // Internal helper/orchestrator correlation; never persisted as an operator setting.
 export const UPDATE_RUN_ID_ENV = "OPENCLAW_UPDATE_RUN_ID";
@@ -47,7 +46,6 @@ export type ControlPlaneUpdateSentinelMetaFile = {
   meta: UpdateRestartSentinelMeta & { triageContextPath?: string };
 };
 
-/** Convert an update result into the restart-health-pending sentinel result. */
 export function buildControlPlaneUpdateRestartHealthPendingResult(
   result: UpdateRunResult,
 ): UpdateRunResult {
@@ -64,7 +62,6 @@ export function buildControlPlaneUpdateRestartHealthPendingResult(
   };
 }
 
-/** Return true when an update sentinel represents an in-progress control-plane restart. */
 export function isPendingControlPlaneUpdateRestartSentinel(
   payload: RestartSentinelPayload,
 ): boolean {
@@ -88,15 +85,46 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
   const root = readNonBlankString(value.root);
   const target = readNonBlankString(value.target);
   const triageContextPath = readNonBlankString(value.triageContextPath);
-  const channel = isRecord(value.deliveryContext)
-    ? readNonBlankString(value.deliveryContext.channel)
-    : undefined;
-  const to = isRecord(value.deliveryContext)
-    ? readNonBlankString(value.deliveryContext.to)
-    : undefined;
-  const accountId = isRecord(value.deliveryContext)
-    ? readNonBlankString(value.deliveryContext.accountId)
-    : undefined;
+  let foregroundOrigin: ForegroundUpdateOrigin | undefined;
+  if (value.foregroundOrigin !== undefined) {
+    const origin = value.foregroundOrigin;
+    if (!isRecord(origin)) {
+      return null;
+    }
+    const owner = readNonBlankString(origin.owner);
+    const pid = asPositiveSafeInteger(origin.pid);
+    const host = readNonBlankString(origin.host);
+    const port = asPositiveSafeInteger(origin.port);
+    const stateDatabasePath = readNonBlankString(origin.stateDatabasePath);
+    const configPath = readNonBlankString(origin.configPath);
+    if (
+      !owner ||
+      !pid ||
+      !host ||
+      !port ||
+      port > 65535 ||
+      typeof origin.startedAt !== "number" ||
+      !Number.isSafeInteger(origin.startedAt) ||
+      origin.startedAt < 0 ||
+      !stateDatabasePath ||
+      !configPath
+    ) {
+      return null;
+    }
+    foregroundOrigin = {
+      owner,
+      pid,
+      host,
+      startedAt: origin.startedAt,
+      port,
+      stateDatabasePath,
+      configPath,
+    };
+  }
+  const delivery = isRecord(value.deliveryContext) ? value.deliveryContext : undefined;
+  const channel = readNonBlankString(delivery?.channel);
+  const to = readNonBlankString(delivery?.to);
+  const accountId = readNonBlankString(delivery?.accountId);
   const deliveryContext =
     channel || to || accountId
       ? {
@@ -107,6 +135,10 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
       : undefined;
   return {
     ...(runId ? { runId } : {}),
+    ...(foregroundOrigin ? { foregroundOrigin } : {}),
+    ...(value.completionOwner === "gateway-restart"
+      ? { completionOwner: "gateway-restart" as const }
+      : {}),
     ...(typeof value.serviceStoppedAtMs === "number" &&
     Number.isSafeInteger(value.serviceStoppedAtMs) &&
     value.serviceStoppedAtMs >= 0
@@ -125,7 +157,6 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
   };
 }
 
-/** Read update sentinel routing metadata from the configured handoff file. */
 export async function readControlPlaneUpdateSentinelMeta(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ControlPlaneUpdateSentinelMetaFile["meta"] | null> {
@@ -145,7 +176,6 @@ export async function readControlPlaneUpdateSentinelMeta(
   }
 }
 
-/** Write an update restart sentinel with control-plane routing metadata. */
 export async function writeControlPlaneUpdateRestartSentinel(
   params: { result: UpdateRunResult; meta: UpdateRestartSentinelMeta },
   env: NodeJS.ProcessEnv = process.env,
@@ -156,16 +186,17 @@ export async function writeControlPlaneUpdateRestartSentinel(
   if (!shouldPublishUpdateRestartNotice(run, meta)) {
     return;
   }
-  await writeRestartSentinel(
-    buildUpdateRestartSentinelPayload({
-      result: params.result,
-      meta,
-    }),
-    env,
-  );
+  const payload = buildUpdateRestartSentinelPayload({ result: params.result, meta });
+  if (
+    meta.completionOwner === "gateway-restart" &&
+    !isPendingControlPlaneUpdateRestartSentinel(payload) &&
+    payload.stats
+  ) {
+    delete payload.stats.handoffId;
+  }
+  await writeRestartSentinel(payload, env);
 }
 
-/** Mark the pending update restart sentinel as failed. */
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
   meta?: UpdateRestartSentinelMeta,

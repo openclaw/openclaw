@@ -85,7 +85,11 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
   },
 }));
 vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: ({ path }: { path: string }): OpenClawStateWorkerContext => ({
+  captureOpenClawStateReadWorkerContext: ({
+    path,
+  }: {
+    path: string;
+  }): OpenClawStateWorkerContext => ({
     admission: {
       databasePath: path,
       identity: { key: path, canonicalPath: path },
@@ -96,7 +100,6 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
   }),
 }));
 vi.mock("../infra/state-database-coordinator.js", () => ({
-  prepareStateDatabaseCanonicalMutation: () => undefined,
   hasStateDatabaseSourceExclusion: () => false,
   acquireStateDatabaseHandleLease: mocks.forbidden,
 }));
@@ -124,7 +127,6 @@ vi.mock("./openclaw-state-read-worker.js", () => ({
     validateFresh: async () => {},
     read: mocks.read,
     close: mocks.close,
-    readFailure: async () => undefined,
   }),
 }));
 

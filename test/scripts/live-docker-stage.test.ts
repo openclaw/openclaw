@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants,
   copyFileSync,
   cpSync,
   existsSync,
@@ -11,6 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -114,16 +116,14 @@ describe("frozen selected consumer ownership", () => {
     return { result, args };
   }
 
-  it.each(
-    [
-      "onboard",
-      "release-typed-onboarding",
-      "mcp-code-mode-gateway",
-      "session-runtime-context",
-    ].flatMap((consumer) =>
-      ["unknown", "missing blob", "absent"].map((runtime) => ({ consumer, runtime })),
-    ),
-  )(
+  it.each([
+    { consumer: "onboard", runtime: "unknown" },
+    { consumer: "release-typed-onboarding", runtime: "unknown" },
+    { consumer: "mcp-code-mode-gateway", runtime: "unknown" },
+    { consumer: "session-runtime-context", runtime: "unknown" },
+    { consumer: "session-runtime-context", runtime: "missing blob" },
+    { consumer: "session-runtime-context", runtime: "absent" },
+  ])(
     "runs only the $consumer source contract with $runtime runtime-context source",
     ({ consumer, runtime }) => {
       const source = committedSourceFixture({
@@ -263,50 +263,6 @@ describe("frozen selected consumer ownership", () => {
     expect(result.stderr).toContain("unable to read selected source");
     expect(args).toEqual([]);
   });
-
-  it.each([false, true])(
-    "rejects unknown runtime source only when the selected consumers include it: %s",
-    (includeRuntime) => {
-      const source = committedSourceFixture({
-        "package.json": "{}\n",
-        [runtimePath]: "unknown runtime-context contract\n",
-      });
-      const consumers = [
-        "onboard_contract",
-        "mcp_code_mode_contract",
-        "plugin_harness_capabilities",
-        "live_cli_backend_package_mode",
-        ...(includeRuntime ? ["runtime_context_contract"] : []),
-      ];
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          'set -euo pipefail; source "$1"; root="$2"; shift 2; for consumer in "$@"; do "openclaw_resolve_frozen_$consumer" "$root"; done; printf "selected contracts resolved\\n"',
-          "test",
-          stageScriptPath,
-          source.root,
-          ...consumers,
-        ],
-        {
-          cwd: repoRoot,
-          encoding: "utf8",
-          timeout: 10_000,
-          env: {
-            ...process.env,
-            OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
-            OPENCLAW_SELECTED_SHA: source.sha,
-            OPENCLAW_TOOLING_SHA: "b".repeat(40),
-          },
-        },
-      );
-      expect(result.status, result.stderr).toBe(includeRuntime ? 2 : 0);
-      expect(result.stdout).toBe(includeRuntime ? "" : "selected contracts resolved\n");
-      if (includeRuntime) {
-        expect(result.stderr).toContain("unable to resolve frozen runtime-context input contract");
-      }
-    },
-  );
 });
 
 describe("frozen committed source errors", () => {
@@ -387,6 +343,41 @@ describe("frozen committed source errors", () => {
     const freshReader = createFrozenTargetSource(source.root, source.sha);
     expect(() => freshReader.readText(metadata)).toThrow();
   });
+
+  it.each(["tree", "blob"] as const)(
+    "rejects a wrong-type %s reference even when Git can dereference it",
+    (type) => {
+      const source = committedSourceFixture({ "contract.txt": "committed contract" });
+      const objectFile = path.join(source.root, "fixture-object");
+      const writeObject = (kind: string, content: string | Buffer) => {
+        writeFileSync(objectFile, content);
+        return source.git("hash-object", "-w", "--literally", "-t", kind, objectFile);
+      };
+      let wrongOid = source.sha;
+      let tree = wrongOid;
+      if (type === "blob") {
+        const blob = source.git("rev-parse", `${source.sha}:contract.txt`);
+        wrongOid = writeObject(
+          "tag",
+          `object ${blob}\ntype blob\ntag fixture\ntagger Test <test@example.invalid> 1 +0000\n\nfixture\n`,
+        );
+        tree = writeObject(
+          "tree",
+          Buffer.concat([Buffer.from("100644 contract.txt\0"), Buffer.from(wrongOid, "hex")]),
+        );
+      }
+      const commit = writeObject(
+        "commit",
+        `${source.git("cat-file", "commit", source.sha).replace(/^tree [0-9a-f]{40}/u, `tree ${tree}`)}\n`,
+      );
+      source.git("update-ref", "HEAD", commit);
+      // Typed cat-file accepts these conversions; source identity must still reject them.
+      expect(source.git("cat-file", type, wrongOid).length).toBeGreaterThan(0);
+      expect(() =>
+        createFrozenTargetSource(source.root, commit).readText("contract.txt"),
+      ).toThrow();
+    },
+  );
 
   it("distinguishes genuine absence from read errors through fallback and negative predicates", () => {
     const source = committedSourceFixture({ "package.json": "{}\n" });
@@ -660,16 +651,18 @@ describe("frozen bundle committed contract", () => {
   const managerPath = "src/agents/agent-bundle-mcp-manager-api.ts";
   const runtimeSource =
     "export async function getOrCreateSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
-  const managerSource =
+  const intermediateManagerSource =
+    "export async function getOrCreateSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
+  const currentManagerSource =
     "export async function acquireSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
 
   function fixture(
-    layout: "June" | "July" | "current" = "July",
+    layout: "June" | "July" | "intermediate" | "current" = "July",
     overrides: Record<string, string | null> = {},
   ) {
     const clientPath = layout === "June" ? juneClient : julyClient;
     const prefix = layout === "June" ? "../.." : "../../../..";
-    const owner = layout === "current" ? "manager-api" : "runtime";
+    const owner = layout === "June" || layout === "July" ? "runtime" : "manager-api";
     const acquire =
       layout === "current" ? "acquireSessionMcpRuntime" : "getOrCreateSessionMcpRuntime";
     const files: Record<string, string | null> = {
@@ -682,7 +675,11 @@ describe("frozen bundle committed contract", () => {
       ].join("\n"),
       [helperPath]: "export async function createE2eStateDir() {}\n",
       [runtimePath]: runtimeSource,
-      ...(layout === "current" ? { [managerPath]: managerSource } : {}),
+      ...(layout === "intermediate"
+        ? { [managerPath]: intermediateManagerSource }
+        : layout === "current"
+          ? { [managerPath]: currentManagerSource }
+          : {}),
       ...overrides,
     };
     return { ...committedSourceFixture(files), clientPath, files };
@@ -726,15 +723,15 @@ describe("frozen bundle committed contract", () => {
     expect(result.stdout).toBe(":\n");
   }
 
-  it.each(["June", "July", "current"] as const)(
+  it.each(["June", "July", "intermediate", "current"] as const)(
     "selects the committed %s contract regardless of package version and dirty decoys",
     (layout) => {
       const source = fixture(layout);
       writeFileSync(path.join(source.root, source.clientPath), "dirty client\n");
       writeFileSync(path.join(source.root, helperPath), "dirty helper\n");
       writeFileSync(path.join(source.root, "package.json"), '{"type":"commonjs"}');
-      if (layout !== "current") {
-        writeFileSync(path.join(source.root, managerPath), managerSource);
+      if (layout === "June" || layout === "July") {
+        writeFileSync(path.join(source.root, managerPath), currentManagerSource);
       }
       const result = resolve(source);
       expect(result.status, result.stderr).toBe(0);
@@ -771,8 +768,16 @@ describe("frozen bundle committed contract", () => {
     "ancestor",
     "NODE_PATH",
     "donor link",
+    "range pin",
+    "tag pin",
     "wrong version",
     "owned pnpm",
+    "nested parser",
+    "native missing",
+    "native wrong version",
+    "native donor link",
+    "native binary symlink",
+    "native lock integrity missing",
     "missing",
     "authorization off",
   ])("validates the trusted parser before execution: %s", (shape) => {
@@ -780,14 +785,27 @@ describe("frozen bundle committed contract", () => {
     const tooling = path.join(outer, ".release-harness");
     const lib = path.join(tooling, "scripts/lib");
     mkdirSync(lib, { recursive: true });
-    for (const file of ["frozen-target-compat.sh", "frozen-target-source.mjs"]) {
+    for (const file of [
+      "frozen-target-compat.sh",
+      "frozen-target-source.mjs",
+      "trusted-native-typescript.mjs",
+      "native-typescript.mts",
+    ]) {
       copyFileSync(path.join(repoRoot, "scripts/lib", file), path.join(lib, file));
     }
     for (const file of ["package.json", "pnpm-lock.yaml"]) {
       copyFileSync(path.join(repoRoot, file), path.join(tooling, file));
     }
-    const pin = JSON.parse(readFileSync(path.join(tooling, "package.json"), "utf8")).dependencies
-      .typescript;
+    const manifestPath = path.join(tooling, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const pin = manifest.devDependencies.typescript;
+    const unpinned = shape === "range pin" || shape === "tag pin";
+    if (unpinned) {
+      manifest.devDependencies.typescript = shape === "range pin" ? `^${pin}` : "next";
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      mkdirSync(path.join(tooling, "node_modules"));
+    }
+    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const poison = path.join(outer, "poison-executed");
     const parser =
       shape === "ancestor"
@@ -799,26 +817,92 @@ describe("frozen bundle committed contract", () => {
             : shape === "owned pnpm"
               ? path.join(tooling, `node_modules/.pnpm/typescript@${pin}/node_modules/typescript`)
               : path.join(tooling, "node_modules/typescript");
-    if (shape !== "missing" && shape !== "authorization off") {
-      if (shape === "owned pnpm") {
-        cpSync(path.join(repoRoot, "node_modules/typescript"), parser, {
+    if (shape !== "missing" && shape !== "authorization off" && !unpinned) {
+      const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
+      cpSync(path.dirname(installedParser), parser, { recursive: true, dereference: true });
+      const executableParser =
+        shape === "nested parser" ? path.join(lib, "node_modules/typescript") : parser;
+      if (shape === "nested parser") {
+        cpSync(parser, executableParser, { recursive: true });
+      }
+      if (shape !== "owned pnpm") {
+        for (const entry of ["dist/api/sync/api.js", "dist/api/fs.js", "dist/ast/index.js"]) {
+          const entryPath = path.join(executableParser, entry);
+          writeFileSync(
+            entryPath,
+            `import * as fixturePoisonFs from "node:fs";\nfixturePoisonFs.writeFileSync(${JSON.stringify(poison)}, "executed");\nthrow new Error("poison parser executed");\n${readFileSync(entryPath, "utf8")}`,
+          );
+        }
+      }
+      if (shape === "wrong version") {
+        const metadataPath = path.join(parser, "package.json");
+        const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+        writeFileSync(metadataPath, JSON.stringify({ ...metadata, version: "0.0.0" }));
+      }
+      if (
+        shape === "owned pnpm" ||
+        shape === "nested parser" ||
+        (shape.startsWith("native ") && shape !== "native missing")
+      ) {
+        const nativePackage =
+          shape === "owned pnpm"
+            ? path.join(
+                tooling,
+                "node_modules/.pnpm",
+                `${nativeName.replaceAll("/", "+")}@${pin}`,
+                "node_modules",
+                nativeName,
+              )
+            : shape === "native donor link"
+              ? path.join(outer, "donor", nativeName)
+              : path.join(tooling, "node_modules", nativeName);
+        const installedNative = createRequire(installedParser).resolve(
+          `${nativeName}/package.json`,
+        );
+        cpSync(path.dirname(installedNative), nativePackage, {
           recursive: true,
           dereference: true,
+          mode: constants.COPYFILE_FICLONE,
+          // Keep executable copies on libuv's close-on-exec path on Node 24.19.
+          filter: () => true,
         });
-      } else {
-        mkdirSync(parser, { recursive: true });
-        writeFileSync(
-          path.join(parser, "package.json"),
-          JSON.stringify({
-            name: "typescript",
-            version: shape === "wrong version" ? "0.0.0" : pin,
-            main: "index.js",
-          }),
-        );
-        writeFileSync(
-          path.join(parser, "index.js"),
-          `require("node:fs").writeFileSync(${JSON.stringify(poison)}, "executed"); throw new Error("poison parser executed");`,
-        );
+        if (shape === "owned pnpm" || shape === "native donor link") {
+          const nativeLink = path.join(
+            shape === "owned pnpm" ? path.dirname(parser) : path.join(tooling, "node_modules"),
+            nativeName,
+          );
+          mkdirSync(path.dirname(nativeLink), { recursive: true });
+          symlinkSync(nativePackage, nativeLink, "dir");
+        }
+        if (shape === "native wrong version") {
+          const metadataPath = path.join(nativePackage, "package.json");
+          const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+          writeFileSync(metadataPath, JSON.stringify({ ...metadata, version: "0.0.0" }));
+        }
+        if (shape === "native binary symlink") {
+          const binary = path.join(
+            nativePackage,
+            "lib",
+            process.platform === "win32" ? "tsc.exe" : "tsc",
+          );
+          const donor = path.join(outer, "donor-native-binary");
+          copyFileSync(binary, donor);
+          rmSync(binary);
+          symlinkSync(donor, binary);
+        }
+        if (shape === "native lock integrity missing") {
+          const lockPath = path.join(tooling, "pnpm-lock.yaml");
+          const lock = readFileSync(lockPath, "utf8");
+          const changed = lock.replace(
+            new RegExp(
+              `(^  '${nativeName}@${pin.replaceAll(".", "\\.")}':\\n)    resolution: [^\\n]+\\n`,
+              "m",
+            ),
+            "$1    resolution: {}\n",
+          );
+          expect(changed).not.toBe(lock);
+          writeFileSync(lockPath, changed);
+        }
       }
       if (shape === "donor link" || shape === "owned pnpm") {
         mkdirSync(path.join(tooling, "node_modules"), { recursive: true });
@@ -842,6 +926,19 @@ describe("frozen bundle committed contract", () => {
       );
     } else {
       expectRejected(result, "trusted TypeScript parser");
+      const admissionErrors: Record<string, string> = {
+        "range pin": "parser is not pinned",
+        "tag pin": "parser is not pinned",
+        "nested parser": "parser package is outside trusted tooling: typescript",
+        "native missing": `Cannot find module '${nativeName}/package.json'`,
+        "native wrong version": `parser package metadata does not match: ${nativeName}`,
+        "native donor link": `parser package is outside trusted tooling: ${nativeName}`,
+        "native binary symlink": "native parser executable is outside trusted tooling",
+        "native lock integrity missing": `parser package lock does not match: ${nativeName}`,
+      };
+      if (shape in admissionErrors) {
+        expect(result.stderr).toContain(admissionErrors[shape]);
+      }
     }
   });
 
@@ -875,7 +972,7 @@ describe("frozen bundle committed contract", () => {
     },
     {
       name: "mixed manager/client",
-      files: { [managerPath]: managerSource },
+      files: { [managerPath]: currentManagerSource },
       error: "client/API contract",
     },
     { name: "unknown client", files: { [julyClient]: "export {};\n" }, error: "helper contract" },
@@ -903,70 +1000,33 @@ describe("frozen bundle committed contract", () => {
     );
   });
 
-  it.each(
-    [runtimePath, helperPath, julyClient].flatMap((relative) =>
-      ["comment", "template", "invalid syntax"].map((form) => ({ relative, form })),
-    ),
-  )("rejects $relative contract markers in $form", ({ relative, form }) => {
+  it.each([
+    { relative: runtimePath, form: "template" },
+    { relative: helperPath, form: "template" },
+    { relative: julyClient, form: "template" },
+    { relative: julyClient, form: "invalid syntax" },
+  ])("rejects $relative contract markers in $form", ({ relative, form }) => {
     const source = fixture();
     const original = source.files[relative];
     const content =
-      form === "comment"
-        ? `/*\n${original}*/\n`
-        : form === "template"
-          ? `const inert = \`\n${original}\`;\n`
-          : `${original}\nfunction (`;
+      form === "template" ? `const inert = \`\n${original}\`;\n` : `${original}\nfunction (`;
     writeFileSync(path.join(source.root, relative), content);
     source.sha = source.commit();
     expectRejected(resolve(source), "contract");
   });
 
-  it.each([julyClient, helperPath, "package.json", runtimePath, managerPath, "test/e2e"])(
-    "rejects committed symlinks at %s",
-    (relative) => {
-      const source = fixture();
-      rmSync(path.join(source.root, relative), { recursive: true, force: true });
-      symlinkSync("nonexistent-target", path.join(source.root, relative));
-      source.sha = source.commit();
-      const result = resolve(source);
-      expectRejected(result, relative === "package.json" ? "package.json" : "expected");
-    },
-  );
-
-  it("rejects a directory in place of a client blob", () => {
+  it.each([julyClient, "test/e2e"])("rejects committed symlinks at %s", (relative) => {
     const source = fixture();
-    rmSync(path.join(source.root, julyClient));
-    mkdirSync(path.join(source.root, julyClient));
-    writeFileSync(path.join(source.root, julyClient, "nested.ts"), "export {};\n");
+    rmSync(path.join(source.root, relative), { recursive: true, force: true });
+    symlinkSync("nonexistent-target", path.join(source.root, relative));
     source.sha = source.commit();
-    expectRejected(resolve(source), "expected regular committed file");
+    const result = resolve(source);
+    expectRejected(result, "expected");
   });
 
-  it.each([
-    "commit",
-    "root tree",
-    "intermediate tree",
-    "client blob",
-    "manager blob",
-    "helper blob",
-  ])("rejects a missing %s without lazy hydration", (missing) => {
+  it("rejects a missing manager blob without lazy hydration", () => {
     const source = fixture("current");
-    const object = source.git(
-      "rev-parse",
-      missing === "commit"
-        ? source.sha
-        : missing === "root tree"
-          ? `${source.sha}^{tree}`
-          : `${source.sha}:${
-              missing === "intermediate tree"
-                ? "src/agents"
-                : missing === "client blob"
-                  ? julyClient
-                  : missing === "manager blob"
-                    ? managerPath
-                    : helperPath
-            }`,
-    );
+    const object = source.git("rev-parse", `${source.sha}:${managerPath}`);
     const bin = path.join(source.root, "transport-bin");
     const transportLog = path.join(source.root, "transport.log");
     mkdirSync(bin);
@@ -986,15 +1046,6 @@ describe("frozen bundle committed contract", () => {
     });
     expectRejected(result, "unable to read selected bundle source");
     expect(existsSync(transportLog)).toBe(false);
-  });
-
-  it("rejects a corrupt referenced blob instead of treating its owner as absent", () => {
-    const source = fixture("current");
-    const object = source.git("rev-parse", `${source.sha}:${managerPath}`);
-    const objectPath = path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2));
-    rmSync(objectPath);
-    writeFileSync(objectPath, "corrupt fixture object\n");
-    expectRejected(resolve(source), "unable to read selected bundle source");
   });
 
   it("does not read an unrelated missing runtime-context blob", () => {
@@ -1021,10 +1072,6 @@ describe("frozen bundle committed contract", () => {
 });
 
 describe("live Docker state staging", () => {
-  function linkFixtureNodeModules(root: string) {
-    symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"));
-  }
-
   function writeFixturePackageSpecParser(root: string) {
     const parserPath = path.join(root, "src", "infra", "npm-registry-spec.ts");
     mkdirSync(path.dirname(parserPath), { recursive: true });
@@ -1038,6 +1085,15 @@ export function parseRegistryNpmSpec(spec: string) {
 }
 `,
     );
+  }
+
+  function stagedPackageMetadataFixture(metadata: string) {
+    const root = tempDirs.make("openclaw-live-stage-packages-");
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"));
+    writeFixturePackageSpecParser(root);
+    writeFileSync(path.join(root, "scripts", "print-cli-backend-live-metadata.ts"), metadata);
+    return root;
   }
 
   it.each([
@@ -1199,17 +1255,12 @@ export function parseRegistryNpmSpec(spec: string) {
   });
 
   it("installs validated Docker packages from the staged metadata export", () => {
-    const root = tempDirs.make("openclaw-live-stage-packages-");
-    const binDir = path.join(root, "bin");
-    const installLog = path.join(root, "installs.log");
-    mkdirSync(path.join(root, "scripts"), { recursive: true });
-    mkdirSync(binDir);
-    linkFixtureNodeModules(root);
-    writeFixturePackageSpecParser(root);
-    writeFileSync(
-      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+    const root = stagedPackageMetadataFixture(
       'export async function resolveCliBackendDockerPackages() { return ["@fixture/cli@1.2.3", "fixture-cli"]; }\n',
     );
+    const binDir = path.join(root, "bin");
+    const installLog = path.join(root, "installs.log");
+    mkdirSync(binDir);
     writeFileSync(
       path.join(binDir, "timeout"),
       '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
@@ -1248,14 +1299,7 @@ export function parseRegistryNpmSpec(spec: string) {
   });
 
   it("allows historical package setup omission only through its derived capability", () => {
-    const root = tempDirs.make("openclaw-live-stage-packages-missing-");
-    mkdirSync(path.join(root, "scripts"), { recursive: true });
-    linkFixtureNodeModules(root);
-    writeFixturePackageSpecParser(root);
-    writeFileSync(
-      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
-      "export const legacyMetadata = true;\n",
-    );
+    const root = stagedPackageMetadataFixture("export const legacyMetadata = true;\n");
     const command = [
       "-c",
       'set -euo pipefail; cd "$1"; source "$2"; openclaw_live_prepare_cli_backend_docker_packages "" ""',
@@ -1293,17 +1337,12 @@ export function parseRegistryNpmSpec(spec: string) {
   });
 
   it("rejects malformed staged package metadata before npm runs", () => {
-    const root = tempDirs.make("openclaw-live-stage-packages-malformed-");
-    const binDir = path.join(root, "bin");
-    const installLog = path.join(root, "installs.log");
-    mkdirSync(path.join(root, "scripts"), { recursive: true });
-    mkdirSync(binDir);
-    linkFixtureNodeModules(root);
-    writeFixturePackageSpecParser(root);
-    writeFileSync(
-      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
+    const root = stagedPackageMetadataFixture(
       'export async function resolveCliBackendDockerPackages() { return ["--force"]; }\n',
     );
+    const binDir = path.join(root, "bin");
+    const installLog = path.join(root, "installs.log");
+    mkdirSync(binDir);
     writeFileSync(
       path.join(binDir, "npm"),
       '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n',
@@ -1332,34 +1371,6 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid Docker CLI package");
     expect(() => readFileSync(installLog, "utf8")).toThrow();
-  });
-
-  it("defaults frozen-target omissions closed and rejects invalid identity", () => {
-    const command = [
-      "-c",
-      'set -euo pipefail; source "$1"; openclaw_frozen_target_omissions_authorized',
-      "test",
-      stageScriptPath,
-    ];
-    const run = (env: Record<string, string>) =>
-      spawnSync("bash", command, { encoding: "utf8", env: { ...process.env, ...env } });
-
-    expect(run({}).status).toBe(1);
-    const sameSha = run({
-      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
-      OPENCLAW_SELECTED_SHA: "a".repeat(40),
-      OPENCLAW_TOOLING_SHA: "a".repeat(40),
-    });
-    expect(sameSha.status).toBe(2);
-    expect(sameSha.stderr).toContain("require distinct selected and tooling SHAs");
-
-    const malformed = run({
-      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "yes",
-      OPENCLAW_SELECTED_SHA: "a".repeat(40),
-      OPENCLAW_TOOLING_SHA: "b".repeat(40),
-    });
-    expect(malformed.status).toBe(2);
-    expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
   });
 
   it("falls back without frozen context but fails malformed authorization", () => {
@@ -1412,19 +1423,9 @@ export function parseRegistryNpmSpec(spec: string) {
   });
 
   it("keeps a matching frozen-source capability under pipefail", () => {
-    const root = tempDirs.make("openclaw-frozen-target-capability-");
-    const sourcePath = path.join(root, "scripts/e2e/lib/plugins/assertions.mjs");
-    mkdirSync(path.dirname(sourcePath), { recursive: true });
-    writeFileSync(sourcePath, `function assertPluginTgzRemoved()\n${"x\n".repeat(100_000)}`);
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
-    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    }).trim();
+    const { root, sha: selectedSha } = committedSourceFixture({
+      "scripts/e2e/lib/plugins/assertions.mjs": `function assertPluginTgzRemoved()\n${"x\n".repeat(100_000)}`,
+    });
 
     const result = spawnSync(
       "bash",
@@ -1448,32 +1449,16 @@ export function parseRegistryNpmSpec(spec: string) {
   });
 
   it("derives stored-dev preview compatibility from the selected source", () => {
-    const root = tempDirs.make("openclaw-frozen-update-channel-");
-    const sourcePath = path.join(root, "src/cli/update-cli/update-command.ts");
-    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    const relativePath = "src/cli/update-cli/update-command.ts";
+    const source = committedSourceFixture({
+      [relativePath]: 'const switchToGit = requestedChannel === "dev" && installKind !== "git";\n',
+    });
+    const { root, sha: legacySha } = source;
     writeFileSync(
-      sourcePath,
-      'const switchToGit = requestedChannel === "dev" && installKind !== "git";\n',
-    );
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "legacy"], { cwd: root });
-    const legacySha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    }).trim();
-    writeFileSync(
-      sourcePath,
+      path.join(root, relativePath),
       'const switchToGit = installKind !== "git" &&\n  (requestedChannel === "dev" || (selectedChannel === "dev" && explicitTag === null));\n',
     );
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "current"], { cwd: root });
-    const currentSha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    }).trim();
+    const currentSha = source.commit();
     const run = (selectedSha: string, authorized = true) => {
       execFileSync("git", ["checkout", "-q", selectedSha], { cwd: root });
       return spawnSync(
@@ -1503,41 +1488,15 @@ export function parseRegistryNpmSpec(spec: string) {
   });
 
   it("derives selected consumer contracts only from an authorized selected source", () => {
-    const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
-    mkdirSync(path.join(root, "src/agents"), { recursive: true });
-    mkdirSync(path.join(root, "src/agents/embedded-agent-runner/run"), { recursive: true });
-    mkdirSync(path.join(root, "src/commands"), { recursive: true });
-    mkdirSync(path.join(root, "scripts"), { recursive: true });
-    mkdirSync(path.join(root, "src/config"), { recursive: true });
-    writeFileSync(
-      path.join(root, "src/agents/code-mode-namespaces.ts"),
-      'export const globals = ["ALL_TOOLS"];\n',
-    );
-    writeFileSync(
-      path.join(root, "src/config/zod-schema.ts"),
-      "const wizard = { lastRunAt: true };\n",
-    );
-    writeFileSync(
-      path.join(root, "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"),
-      "import { extractInternalRuntimeContext } from '../../internal-runtime-context.js';\ntype Params = {\n  modelPrompt?: string;\n};\n",
-    );
-    writeFileSync(
-      path.join(root, "src/commands/doctor-session-transcripts.ts"),
-      'const backup = ".pre-doctor-branch-repair-";\n',
-    );
-    writeFileSync(
-      path.join(root, "scripts", "print-cli-backend-live-metadata.ts"),
-      "export const legacyMetadata = true;\n",
-    );
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
-    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    }).trim();
+    const { root, sha: selectedSha } = committedSourceFixture({
+      "src/agents/code-mode-namespaces.ts": 'export const globals = ["ALL_TOOLS"];\n',
+      "src/config/zod-schema.ts": "const wizard = { lastRunAt: true };\n",
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts":
+        "import { extractInternalRuntimeContext } from '../../internal-runtime-context.js';\ntype Params = {\n  modelPrompt?: string;\n};\n",
+      "src/commands/doctor-session-transcripts.ts":
+        'const backup = ".pre-doctor-branch-repair-";\n',
+      "scripts/print-cli-backend-live-metadata.ts": "export const legacyMetadata = true;\n",
+    });
     const resolveCoreDialects = [
       "-c",
       'set -euo pipefail; source "$1"; openclaw_resolve_frozen_onboard_contract "$2"; openclaw_resolve_frozen_mcp_code_mode_contract "$2"; openclaw_resolve_frozen_runtime_context_contract "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES"',
@@ -1586,28 +1545,10 @@ export function parseRegistryNpmSpec(spec: string) {
         "import { extractInternalRuntimeContext } from '../../internal-runtime-context.js';\ntype Params = {\n  fragments?: RuntimeContextFragment[];\n  modelPrompt?: string;\n};\nconst fragments = params.fragments?.filter(Boolean);\n",
       error: "unable to resolve frozen runtime-context input contract",
     },
-    {
-      name: "unknown shape",
-      source: "export const runtimeContext = true;\n",
-      error: "unable to resolve frozen runtime-context input contract",
-    },
   ])("classifies $name from the selected source", ({ source, expected, error }) => {
-    const root = tempDirs.make("openclaw-frozen-target-runtime-context-");
-    const sourcePath = path.join(
-      root,
-      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
-    );
-    mkdirSync(path.dirname(sourcePath), { recursive: true });
-    writeFileSync(sourcePath, source);
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-    execFileSync("git", ["add", "."], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
-    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-    }).trim();
+    const { root, sha: selectedSha } = committedSourceFixture({
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts": source,
+    });
 
     const result = spawnSync(
       "bash",

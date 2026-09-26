@@ -222,7 +222,7 @@ describe("config view", () => {
     });
     const inheritedInput =
       inherited.container.querySelector<HTMLInputElement>("[data-accent-custom]");
-    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).toContain(
+    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).not.toContain(
       "Using inherited accent",
     );
     expect(inheritedInput?.getAttribute("aria-describedby")).toBe("settings-accent-status");
@@ -1826,7 +1826,7 @@ describe("config view", () => {
     expect(findButtonByText(customContainer, "Claw").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("shows Appearance default descriptions", () => {
+  it("keeps Appearance defaults quiet while retaining the controls", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
@@ -1839,18 +1839,8 @@ describe("config view", () => {
     });
     const text = normalizedText(container);
 
-    for (const expected of [
-      "Using default: System",
-      "Using default: Claw",
-      "Using default: 100%",
-      "Using default: Enabled",
-      "Using default: 48rem",
-      "Using default: Enter",
-      "Using default: OpenClaw viewer",
-      "Using default: Disabled",
-    ]) {
-      expect(text).toContain(expected);
-    }
+    expect(text).not.toContain("Using default:");
+    expect(text).toContain("Stored in this browser only");
     const lobsterPreviews = container.querySelectorAll(".lobsterdex__mini");
     expect(lobsterPreviews).toHaveLength(42);
     expect([...lobsterPreviews].every((preview) => preview.getAttribute("role") === "img")).toBe(
@@ -2039,7 +2029,8 @@ describe("config view", () => {
     );
     for (const title of [
       "Message width",
-      "Collapse task progress by default",
+      "Show task progress cards",
+      "Collapse task progress by default on desktop",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
@@ -2059,14 +2050,14 @@ describe("config view", () => {
     const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
         candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "Collapse task progress by default",
+        "Collapse task progress by default on desktop",
     );
     const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
 
     expect(toggle?.checked).toBe(false);
     row?.click();
     expect(setChatCollapseTaskProgress).toHaveBeenCalledWith(true);
-    expect(row?.textContent).toContain("Using default: Disabled");
+    expect(row?.textContent).not.toContain("Using default:");
     expect(row?.textContent).toContain("Stored in this browser only");
   });
 
@@ -2185,7 +2176,8 @@ describe("config view", () => {
       "steer",
       "queue",
     ]);
-    expect(container.textContent).toContain("Using server default (steer)");
+    expect(container.textContent).not.toContain("Using server default");
+    expect(followUpSelect.selectedOptions[0]?.textContent?.trim()).toBe("Server default (steer)");
     const microphoneSelect = queryRequired(
       container,
       "[data-settings-microphone]",

@@ -7,7 +7,6 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
 import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import {
@@ -22,6 +21,7 @@ import {
 } from "./configured-model.ts";
 import { renderModelSetupLoading } from "./loading-view.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.ts";
+import type { NativeModelSetup } from "./native-model-setup.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, renderManualProviderPicker } from "./provider-picker.ts";
 import type {
@@ -72,6 +72,7 @@ type ModelSetupViewProps = {
   firstRun: boolean;
   nativeSessionCatalogsEnabled?: boolean;
   onNativeSessionCatalogsChange?: (enabled: boolean) => void;
+  nativeModels?: NativeModelSetup;
   iconUrls: Readonly<Record<string, string>>;
   onDetect: () => void;
   onVerify: () => void;
@@ -79,7 +80,6 @@ type ModelSetupViewProps = {
   onStartAuth: (option: AuthOption) => void;
   onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
-  onUseManualProvider: (providerId: string) => void;
   onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
   onMoreSignInToggle: (open: boolean) => void;
@@ -96,6 +96,7 @@ type ModelSetupViewProps = {
 function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const installs = result.recommendedInstalls ?? [];
   if (
+    props.nativeModels?.count ||
     result.candidates.length > 0 ||
     (result.authOptions?.length ?? 0) > 0 ||
     installs.length === 0
@@ -123,94 +124,6 @@ function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDe
         )}
       </div>
     </section>
-  `;
-}
-
-function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
-  const candidates = (result.unavailableCandidates ?? []).map((candidate) => {
-    const auth = (result.authOptions ?? []).find((option) => option.id === candidate.authOptionId);
-    const manual = result.manualProviders.find(
-      (provider) => provider.id === candidate.manualProviderId,
-    );
-    return {
-      candidate,
-      auth,
-      manual,
-      credentialAuth: Boolean(props.embedded && auth && props.credentialChoices?.includes(auth.id)),
-      credentialKey: Boolean(manual && isManualConnectionChoice(props, manual)),
-    };
-  });
-  const recoverable = candidates.filter(({ auth, manual }) => auth || manual);
-  const other = candidates.filter(({ auth, manual }) => !auth && !manual);
-  const rows = (entries: typeof candidates) => html`<div class="model-setup__rows">
-    ${entries.map(
-      ({ candidate, auth, manual, credentialAuth, credentialKey }) => html`
-        <div
-          class="model-setup__row model-setup__row--info"
-          data-unavailable-candidate=${candidate.id}
-        >
-          <div class="model-setup__provider-copy">
-            ${renderProviderIcon(props, candidate)}
-            <div>
-              <div>
-                <strong>${candidate.label}</strong> — ${formatUiExternalText(candidate.detail)}
-              </div>
-              <div class="muted">${formatUiExternalText(candidate.reason)}</div>
-            </div>
-          </div>
-          ${
-            auth || manual
-              ? html`<div class="model-setup__row-actions">
-                  ${
-                    auth
-                      ? html`<button
-                          type="button"
-                          class="btn primary"
-                          ?disabled=${props.actionsDisabled || props.detecting}
-                          @click=${() => (credentialAuth ? props.onConnectChoice?.(auth.id) : props.onStartAuth(auth))}
-                        >
-                          ${credentialAuth ? t("modelSetup.discovery.connectProvider") : t("modelSetup.unavailable.signIn", { provider: auth.groupLabel ?? auth.label })}
-                        </button>`
-                      : nothing
-                  }
-                  ${
-                    manual && !(credentialAuth && credentialKey)
-                      ? html`<button
-                          type="button"
-                          class="btn"
-                          ?disabled=${props.actionsDisabled || props.detecting}
-                          @click=${() => (credentialKey ? props.onConnectChoice?.(manual.id) : props.onUseManualProvider(manual.id))}
-                        >
-                          ${credentialKey ? t("modelSetup.discovery.connectProvider") : t("modelSetup.unavailable.useApiKey")}
-                        </button>`
-                      : nothing
-                  }
-                </div>`
-              : nothing
-          }
-        </div>
-      `,
-    )}
-  </div>`;
-  return html`
-    ${
-      recoverable.length
-        ? html`<section class="settings-section">
-            <div class="settings-section__header">
-              <h2>${t("modelSetup.unavailable.title")}</h2>
-            </div>
-            ${rows(recoverable)}
-          </section>`
-        : nothing
-    }
-    ${
-      other.length
-        ? html`<details class="model-setup__more">
-            <summary>${t("modelSetup.discovery.otherSoftware")}</summary>
-            ${rows(other)}
-          </details>`
-        : nothing
-    }
   `;
 }
 
@@ -342,6 +255,7 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
   }
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
+  const manualId = props.embedded ? "model-discovery-manual" : "model-setup-manual";
   const testing = props.activation.phase === "testing" && props.activation.targetId === targetId;
   return html`
     <section class="settings-section">
@@ -365,6 +279,9 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
             class="input"
             type="password"
             autocomplete="off"
+            required
+            aria-invalid=${props.manualError ? "true" : nothing}
+            aria-describedby=${`${manualId}-help${props.manualError ? ` ${manualId}-error` : ""}`}
             .value=${props.manualApiKey}
             ?disabled=${props.actionsDisabled}
             placeholder=${t("modelSetup.manual.accessValuePlaceholder")}
@@ -372,13 +289,15 @@ function renderManual(props: ModelSetupViewProps, detected: SystemAgentSetupDete
               props.onManualApiKeyChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <div class="model-setup__manual-help">
+        <div id=${`${manualId}-help`} class="model-setup__manual-help">
           ${icons.shieldCheck}
           <span>${t("modelSetup.manual.verifyHint")}</span>
         </div>
         ${
           props.manualError
-            ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
+            ? html`<div id=${`${manualId}-error`} class="callout danger" role="alert">
+                ${props.manualError}
+              </div>`
             : nothing
         }
         <button
@@ -480,7 +399,7 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   }
   return html`
     ${current} ${renderNativeSessionDiscovery(props, result)} ${renderEmptyState(props, result)}
-    ${renderCandidateRows(props, result)} ${renderUnavailable(props, result)}
+    ${props.nativeModels?.render()} ${renderCandidateRows(props, result)}
     ${renderPrepare(props, result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }

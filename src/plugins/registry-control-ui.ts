@@ -52,11 +52,14 @@ function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadat
   const methodPattern = /^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$/u;
   const detailMethod = value.detailMethod;
   const previewMethod = value.previewMethod;
+  const imageMethod = value.imageMethod;
   if (
     typeof detailMethod !== "string" ||
     !methodPattern.test(detailMethod) ||
     (previewMethod !== undefined &&
-      (typeof previewMethod !== "string" || !methodPattern.test(previewMethod)))
+      (typeof previewMethod !== "string" || !methodPattern.test(previewMethod))) ||
+    (imageMethod !== undefined &&
+      (typeof imageMethod !== "string" || !methodPattern.test(imageMethod)))
   ) {
     return undefined;
   }
@@ -65,6 +68,7 @@ function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadat
     pathPattern,
     detailMethod,
     ...(previewMethod !== undefined ? { previewMethod } : {}),
+    ...(imageMethod !== undefined ? { imageMethod } : {}),
   };
 }
 
@@ -190,6 +194,21 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
         ? descriptor.order
         : undefined;
+    const capability =
+      surface === "tab"
+        ? "page"
+        : surface === "widget"
+          ? "widget"
+          : surface === "link-reader"
+            ? "link-reader"
+            : undefined;
+    // Missing declarations are advisory: metadata never grants or denies a UI registration.
+    if (capability && record.uiCapabilities && !record.uiCapabilities.includes(capability)) {
+      state.reportRegistrationWarning(
+        record,
+        `Registered UI capability "${capability}" is missing from uiCapabilities in openclaw.plugin.json.`,
+      );
+    }
     registry.controlUiDescriptors.push(
       createRegistration(record, {
         descriptor: {

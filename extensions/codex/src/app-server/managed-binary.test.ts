@@ -53,6 +53,8 @@ async function writePackageLauncher(owner: string): Promise<string> {
 const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
 const MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND =
   "/Applications/ChatGPT.app/Contents/Resources/codex";
+const MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND =
+  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
 describe("managed Codex app-server binary", () => {
   let root: string;
@@ -64,25 +66,29 @@ describe("managed Codex app-server binary", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("resolves the platform-native artifact behind the managed npm launcher", () => {
-    const packageJsonPath =
-      "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/package.json";
-    const expected =
-      "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex";
+  it.each([
+    { arch: "x64", triple: "x86_64-apple-darwin" },
+    { arch: "arm64", triple: "aarch64-apple-darwin" },
+  ] as const)(
+    "resolves the $arch native artifact behind the managed npm launcher",
+    ({ arch, triple }) => {
+      const packageJsonPath = `/repo/extensions/codex/node_modules/@openai/codex-darwin-${arch}/package.json`;
+      const expected = `/repo/extensions/codex/node_modules/@openai/codex-darwin-${arch}/vendor/${triple}/bin/codex`;
 
-    expect(
-      resolveManagedCodexNativeCommand("/repo/extensions/codex/node_modules/.bin/codex", {
-        platform: "darwin",
-        arch: "arm64",
-        resolvePackageJson: (packageName, packageRoot) =>
-          packageName === "@openai/codex-darwin-arm64" &&
-          packageRoot === "/repo/extensions/codex/node_modules/@openai/codex"
-            ? packageJsonPath
-            : undefined,
-        pathExists: (candidate) => candidate === expected,
-      }),
-    ).toBe(expected);
-  });
+      expect(
+        resolveManagedCodexNativeCommand("/repo/extensions/codex/node_modules/.bin/codex", {
+          platform: "darwin",
+          arch,
+          resolvePackageJson: (packageName, packageRoot) =>
+            packageName === `@openai/codex-darwin-${arch}` &&
+            packageRoot === "/repo/extensions/codex/node_modules/@openai/codex"
+              ? packageJsonPath
+              : undefined,
+          pathExists: (candidate) => candidate === expected,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("resolves native dependencies from the real package behind an isolated install shim", async () => {
     const installRoot = await realpath(
@@ -129,13 +135,16 @@ describe("managed Codex app-server binary", () => {
     }
   });
 
-  it("reports the desktop bundle binary as its native artifact", () => {
+  it.each([
+    MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+    MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND,
+  ])("reports the desktop bundle binary %s as its native artifact", (command) => {
     expect(
-      resolveManagedCodexNativeCommand(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, {
+      resolveManagedCodexNativeCommand(command, {
         platform: "darwin",
         arch: "arm64",
       }),
-    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
+    ).toBe(command);
   });
 
   it.each([true, false])(
@@ -285,8 +294,10 @@ describe("managed Codex app-server binary", () => {
   );
 
   it.each([
+    { order: "package-only", desktop: "both" },
     { order: "package-first", desktop: "both" },
     { order: "desktop-first", desktop: "both" },
+    { order: "desktop-first", desktop: "signed" },
     { order: "desktop-first", desktop: "legacy" },
     { order: "desktop-first", desktop: "none" },
   ] as const)(
@@ -296,11 +307,17 @@ describe("managed Codex app-server binary", () => {
       const desktopCommands =
         desktop === "both"
           ? [MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
-          : desktop === "legacy"
-            ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
-            : [];
+          : desktop === "signed"
+            ? [MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND]
+            : desktop === "legacy"
+              ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
+              : [];
       const commands =
-        order === "package-first" ? [launcher, ...desktopCommands] : [...desktopCommands, launcher];
+        order === "package-only"
+          ? [launcher]
+          : order === "package-first"
+            ? [launcher, ...desktopCommands]
+            : [...desktopCommands, launcher];
       await expect(
         resolveManagedCodexAppServerStartOptions(startOptions("managed", order), {
           platform: "darwin",

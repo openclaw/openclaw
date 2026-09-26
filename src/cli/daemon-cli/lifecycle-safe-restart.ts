@@ -4,6 +4,7 @@ import { refreshLegacySystemdServiceMetadata } from "../../daemon/systemd.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
@@ -13,10 +14,6 @@ import type { DaemonLifecycleOptions } from "./types.js";
 
 const SAFE_RESTART_METADATA_REFRESH_TIMEOUT_MS = 5_000;
 
-function formatSafeRestartWarnings(result: SafeGatewayRestartRequestResult): string[] | undefined {
-  return result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary];
-}
-
 export function resolveGatewayRestartIntentOptions(
   opts: DaemonLifecycleOptions,
 ): GatewayRestartIntent | undefined {
@@ -24,7 +21,7 @@ export function resolveGatewayRestartIntentOptions(
     throw new Error("--force cannot be combined with --wait");
   }
   if (opts.force) {
-    return { force: true };
+    return { force: true, waitMs: resolveGatewayRestartDeferralTimeoutMs() };
   }
   return opts.wait === undefined ? undefined : { waitMs: parseDurationMs(opts.wait) };
 }
@@ -37,7 +34,9 @@ export async function runSafeGatewayRestart(
   target?: SafeRestartTarget,
 ): Promise<boolean> {
   if (opts.force) {
-    throw new Error("--safe cannot be combined with --force; omit --safe to force restart now");
+    throw new Error(
+      "--safe cannot be combined with --force; omit --safe to begin a forced restart",
+    );
   }
   if (opts.wait !== undefined) {
     throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
@@ -120,7 +119,7 @@ export async function runSafeGatewayRestart(
     message,
     preflight: result.preflight,
     restart: result.restart,
-    warnings: formatSafeRestartWarnings(result),
+    warnings: result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary],
   };
   if (opts.json) {
     writeRuntimeJson(defaultRuntime, payload);

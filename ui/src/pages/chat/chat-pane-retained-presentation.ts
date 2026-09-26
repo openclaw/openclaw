@@ -1,7 +1,8 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import "../../components/modal-dialog.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import "../../components/modal-dialog.ts";
+import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -20,6 +21,7 @@ import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
   isInitialChatHistoryUnavailable,
+  setChatError,
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
@@ -28,12 +30,11 @@ import { consumePaneSessionHandoff, type PaneSessionHandoff } from "./chat-pane-
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
@@ -50,6 +51,32 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
+    const state = this.state;
+    const scope = this.captureConnectionScope();
+    if (!state || !scope) {
+      return undefined;
+    }
+    const sessionKey = state.sessionKey;
+    const sessionId = state.currentSessionId;
+    const agentId = resolveChatAgentId(state);
+    return {
+      state: this.progressCard.refreshState,
+      onRefresh: (card) => {
+        const current = this.state;
+        if (
+          current &&
+          this.isConnectionScopeCurrent(scope) &&
+          current.sessionKey === sessionKey &&
+          current.currentSessionId === sessionId &&
+          resolveChatAgentId(current) === agentId
+        ) {
+          this.progressCard.refresh(card);
+        }
+      },
+    };
+  }
+
   private currentSessionArchived: boolean | undefined;
   private archiveFocusOwned = false;
 
@@ -104,6 +131,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       exactKey: true,
     });
     runSessionNavigationIntent(this, {
+      agentId: edit.agentId,
       face: "chat",
       sessionKey: edit.sessionKey,
       commit: () => {
@@ -132,14 +160,20 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: ChatPageHost["currentSessionId"];
         agentId: string | undefined;
         card: ProgressCard;
+        lifetime: object | undefined;
         identity: string;
       }
     | undefined;
 
-  protected get progressCardPresentation(): { card: ProgressCard; identity: string } | null {
+  protected get progressCardPresentation(): {
+    card: ProgressCard;
+    lifetime: object | undefined;
+    identity: string;
+  } | null {
     const state = this.state;
     if (
       !state ||
+      state.settings.chatShowTaskProgress === false ||
       !this.presented ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey)
@@ -171,6 +205,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: state.currentSessionId,
         agentId,
         card,
+        lifetime: this.progressCard.lifetime,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
       };
@@ -194,12 +229,13 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return undefined;
     }
     // Unlike secondary metadata, the progress card determines transcript geometry.
-    return this.resolveChatReadTarget();
+    // Consult preferences only after the pane and its history owner are ready.
+    return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
   }
 
   protected get progressCardInitialLoading(): boolean {
     const state = this.state;
-    if (!state) {
+    if (!state || state.settings.chatShowTaskProgress === false) {
       return false;
     }
     if (this.progressPresentationSessionKey !== state.sessionKey) {
@@ -421,8 +457,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (state) {
       stopChatRealtimeTalk(state);
       invalidateImageLightbox(state);
-      // The detail slot's render guard cannot run once the content is wiped,
-      // so the transcript loader's timer/fetch loop must be stopped here.
       resetTaskDetail(state);
       state.sidebarContent = null;
       clearSessionWorkspacePreviews(state);
@@ -436,14 +470,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!state?.sessionKey) {
       return;
     }
-    const persistResult = this.chatState.persistComposerForEviction();
+    const persistResult = this.chatState.composerPersistence.persistForRouteSwitchResult();
     if (persistResult.status === "storage-failed") {
-      const scope = this.chatState.composerScopeForEviction();
+      const scope = this.chatState.composerPersistence.scopeForRouteSwitch();
       if (scope) {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
           mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
+          replyTarget: state.chatReplyTarget,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
         });
@@ -477,6 +512,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatAttachments = [...handoff.attachments];
     state.chatGoalDraftMode = handoff.goalMode ?? null;
+    state.chatReplyTarget = handoff.replyTarget ?? null;
     state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     state.requestUpdate?.();
     if (handoff.send) {
@@ -493,6 +529,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
         const goalMode = state.chatGoalDraftMode;
+        const replyTarget = state.chatReplyTarget;
         const presentationOwner = this.headerOutcomeOwner;
         const isCurrent = () =>
           this.state === state &&
@@ -509,7 +546,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           state.chatMessage === handoff.draft &&
           state.chatAttachments === attachments &&
           state.chatMentions === mentions &&
-          state.chatGoalDraftMode === goalMode;
+          state.chatGoalDraftMode === goalMode &&
+          state.chatReplyTarget === replyTarget;
         if (!isCurrent()) {
           return;
         }
@@ -531,8 +569,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           })
           .catch((error: unknown) => {
             if (isCurrent()) {
-              setChatError(state, formatUiError(error));
-              state.requestUpdate?.();
+              setChatError(state, formatUiError(error), true);
             }
           });
       });

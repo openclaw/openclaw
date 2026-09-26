@@ -10,22 +10,27 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import * as pendingToolTaskDrain from "./pending-tool-task-drain.js";
 
 type WaitingStatusFixture = {
-  createMinimalRun: (params?: { opts?: InternalGetReplyOptions }) => {
+  createMinimalRun: (params?: {
+    opts?: InternalGetReplyOptions;
+    currentInboundEventKind?: "room_event";
+  }) => {
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
   };
-  runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce" | "mockResolvedValueOnce">;
+  runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce">;
 };
 
 export async function mockAcceptedWaitingStatusRun(
   runner: WaitingStatusFixture["runEmbeddedAgentMock"],
-  result: EmbeddedAgentRunResult,
+  result:
+    | EmbeddedAgentRunResult
+    | ((params: RunEmbeddedAgentInternalParams) => Promise<EmbeddedAgentRunResult>),
 ): Promise<void> {
   const testState = await createOpenClawTestState({ label: "reply-waiting-child" });
   resetSubagentRegistryForTests({ persist: false });
@@ -47,11 +52,12 @@ export async function mockAcceptedWaitingStatusRun(
       requesterAgentId: params.agentId,
       requesterTurnRunId: params.runId,
     };
-    registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
-    if (result.meta.yielded) {
+    await registerSubagentRun(createSubagentRunParams({ ...spawn, ...requester, queued: true }));
+    const runResult = typeof result === "function" ? await result(params) : result;
+    if (runResult.meta.yielded) {
       expect(markRequesterTurnYielded(requester)).toBe(1);
     }
-    return { ...result, acceptedSessionSpawns: [spawn] };
+    return { ...runResult, acceptedSessionSpawns: [spawn] };
   });
 }
 
@@ -63,15 +69,13 @@ export function registerWaitingStatusCases({
     {
       label: "implicit continuation",
       meta: { continuationPending: true as const },
-      implicit: true,
     },
-    { label: "yield without acknowledgment", meta: { yielded: true }, implicit: false },
+    { label: "yield without acknowledgment", meta: { yielded: true } },
     {
       label: "explicit acknowledgment",
       meta: { yielded: true, yieldAcknowledgment: "Research started; results will follow." },
-      implicit: false,
     },
-  ])("delivers one waiting status for $label", async ({ meta, implicit }) => {
+  ])("delivers one waiting status for $label", async ({ meta }) => {
     await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
       payloads: [],
       meta: { durationMs: 0, ...meta },
@@ -89,10 +93,10 @@ export function registerWaitingStatusCases({
     expect(onPendingContinuation).toHaveBeenCalledOnce();
     assert(result && !Array.isArray(result));
     const metadata = getReplyPayloadMetadata(result);
-    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(onPendingContinuation.mock.calls[0]).toEqual(
-      implicit ? [{ settle: expect.any(Function) }] : [],
-    );
+    expect(metadata).toMatchObject({
+      continuationStatus: true,
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it.each([false, true])(
@@ -105,22 +109,22 @@ export function registerWaitingStatusCases({
           setBlockReplyDelivery(Promise.resolve({ outcome: "delivered" }), payload);
         });
       });
-      runEmbeddedAgentMock.mockImplementationOnce(
-        async (params: RunEmbeddedAgentInternalParams) => {
-          await params.onBlockReply?.({
-            text: "Delivered caption",
-            mediaUrls: ["https://example.com/direct.png"],
-          });
-          source.setComplete(!completeAtSettlement);
-          return { payloads: [], meta: { yielded: true, yieldAcknowledgment: "Waiting sentinel" } };
-        },
-      );
+      await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, async (params) => {
+        await params.onBlockReply?.({
+          text: "Delivered caption",
+          mediaUrls: ["https://example.com/direct.png"],
+        });
+        source.setComplete(!completeAtSettlement);
+        return {
+          payloads: [],
+          meta: { durationMs: 0, yielded: true, yieldAcknowledgment: "Waiting sentinel" },
+        };
+      });
       const { run } = createMinimalRun({ opts: { onBlockReply } });
 
       const result = await run();
 
       expect(onBlockReply).toHaveBeenCalledOnce();
-      expect(source.complete).toBe(!completeAtSettlement);
       if (completeAtSettlement) {
         expect(result).toBeUndefined();
       } else {
@@ -130,28 +134,31 @@ export function registerWaitingStatusCases({
   );
 
   it.each([
-    { phase: "deferred cleanup", earlierSuccess: false },
-    { phase: "deferred cleanup", earlierSuccess: true },
-    { phase: "task drain", earlierSuccess: false },
-    { phase: "task drain", earlierSuccess: true },
+    { phase: "deferred cleanup", late: "final", earlierSuccess: false },
+    { phase: "deferred cleanup", late: "progress", earlierSuccess: false },
+    { phase: "deferred cleanup", late: "progress", earlierSuccess: true },
+    { phase: "task drain", late: "final", earlierSuccess: false },
+    { phase: "task drain", late: "progress", earlierSuccess: false },
+    { phase: "task drain", late: "progress", earlierSuccess: true },
   ])(
-    "preserves waiting status when direct delivery settles during $phase (earlier success=$earlierSuccess)",
-    async ({ phase, earlierSuccess }) => {
+    "settles $late delivery during $phase without redundant replies (earlier success=$earlierSuccess)",
+    async ({ phase, late, earlierSuccess }) => {
       const transportStarted = createDeferred();
       const releaseTransport = createDeferred();
       const delivered: string[] = [];
       let lateDelivery: Promise<void> | undefined;
-      let cleanupCompleted = false;
-      let drainSnapshot: { cleanupCompleted: boolean; delivered: string[] } | undefined;
+      const events: string[] = [];
       const onBlockReply = vi.fn(async (payload: ReplyPayload) => {
         if (payload.text === "Late caption") {
           transportStarted.resolve();
           await releaseTransport.promise;
+          events.push("delivered");
         }
         delivered.push(payload.text ?? "");
       });
       const onToolResult = vi.fn(async () => {
         await lateDelivery;
+        events.push("tool completed");
       });
       const originalDrain = pendingToolTaskDrain.drainPendingToolTasks;
       const drainSpy =
@@ -159,64 +166,67 @@ export function registerWaitingStatusCases({
           ? vi
               .spyOn(pendingToolTaskDrain, "drainPendingToolTasks")
               .mockImplementation((options) => {
-                drainSnapshot = { cleanupCompleted, delivered: [...delivered] };
+                events.push("drain started");
                 const draining = originalDrain(options);
                 releaseTransport.resolve();
                 return draining;
               })
           : undefined;
-      runEmbeddedAgentMock.mockImplementationOnce(
-        async (params: RunEmbeddedAgentInternalParams) => {
-          if (earlierSuccess) {
-            await params.onBlockReply?.({
-              text: "Earlier caption",
-              mediaUrls: ["https://example.com/earlier.png"],
-            });
-          }
-          lateDelivery = Promise.resolve(
-            params.onBlockReply?.({
-              text: "Late caption",
-              mediaUrls: ["https://example.com/late.png"],
-            }),
-          );
-          await transportStarted.promise;
-          if (phase === "task drain") {
-            void params.onToolResult?.({ text: "Pending tool delivery" });
-          }
-          params.onDeferredLifecycleOwner?.({
-            beginRetryWait: () => undefined,
-            discard: () => undefined,
-            complete: async () => {
-              if (phase === "deferred cleanup") {
-                releaseTransport.resolve();
-                await lateDelivery;
-              }
-              cleanupCompleted = true;
-            },
+      await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, async (params) => {
+        if (earlierSuccess) {
+          await params.onBlockReply?.({
+            text: "Earlier caption",
+            mediaUrls: ["https://example.com/earlier.png"],
           });
-          return { payloads: [], meta: { yielded: true, yieldAcknowledgment: "Waiting sentinel" } };
-        },
-      );
+        }
+        lateDelivery = Promise.resolve(
+          params.onBlockReply?.({
+            text: "Late caption",
+            mediaUrls: ["https://example.com/late.png"],
+            isCommentary: late === "progress",
+          }),
+        );
+        await transportStarted.promise;
+        if (phase === "task drain") {
+          void params.onToolResult?.({ text: "Pending tool delivery" });
+        }
+        params.onDeferredLifecycleOwner?.({
+          beginRetryWait: () => undefined,
+          discard: () => undefined,
+          complete: async () => {
+            if (phase === "deferred cleanup") {
+              releaseTransport.resolve();
+              await lateDelivery;
+            }
+            events.push("cleanup completed");
+          },
+        });
+        return {
+          payloads: [],
+          meta: { durationMs: 0, yielded: true, yieldAcknowledgment: "Waiting sentinel" },
+        };
+      });
       const { run } = createMinimalRun({
-        opts: { onBlockReply, onToolResult, forceToolResultProgress: true },
+        opts: {
+          onBlockReply,
+          onToolResult,
+          forceToolResultProgress: true,
+          commentaryPayloadsEnabled: true,
+        },
       });
 
       try {
         const result = await run();
 
-        expect(cleanupCompleted).toBe(true);
         expect(delivered).toEqual(
           earlierSuccess ? ["Earlier caption", "Late caption"] : ["Late caption"],
         );
-        if (drainSpy) {
-          expect(drainSpy).toHaveBeenCalledOnce();
-          expect(onToolResult).toHaveBeenCalledOnce();
-          expect(drainSnapshot).toEqual({
-            cleanupCompleted: true,
-            delivered: earlierSuccess ? ["Earlier caption"] : [],
-          });
-        }
-        if (earlierSuccess) {
+        expect(events).toEqual(
+          phase === "task drain"
+            ? ["cleanup completed", "drain started", "delivered", "tool completed"]
+            : ["delivered", "cleanup completed"],
+        );
+        if (earlierSuccess || late === "final") {
           expect(result).toBeUndefined();
         } else {
           expect(result).toMatchObject({ text: "Waiting sentinel", replyToId: "msg" });
@@ -228,4 +238,37 @@ export function registerWaitingStatusCases({
       }
     },
   );
+
+  it.each([
+    { label: "default status" },
+    { label: "explicit status", acknowledgment: "Research started; results will follow." },
+    {
+      label: "room event",
+      acknowledgment: "Research started; results will follow.",
+      roomEvent: true,
+      warning: true,
+    },
+    { label: "empty acknowledgment", acknowledgment: "[[reply_to_current]]", warning: true },
+  ])("resolves an earlier tool warning with $label", async (testCase) => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    await mockAcceptedWaitingStatusRun(runEmbeddedAgentMock, {
+      payloads: [toolWarning],
+      meta: { durationMs: 0, yielded: true, yieldAcknowledgment: testCase.acknowledgment },
+    });
+    const { run } = createMinimalRun({
+      currentInboundEventKind: testCase.roomEvent ? "room_event" : undefined,
+    });
+
+    await expect(run()).resolves.toMatchObject({
+      text: testCase.warning
+        ? "⚠️ Bash failed"
+        : (testCase.acknowledgment ??
+          "I’m continuing this work and will send the result when it is ready."),
+      ...(testCase.warning ? { isError: true } : {}),
+      replyToId: "msg",
+    });
+  });
 }

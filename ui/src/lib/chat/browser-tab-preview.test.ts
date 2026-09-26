@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  latestBrowserTabCards,
-  loadBrowserPagePreview,
-  loadBrowserTabThumbnail,
-} from "./browser-tab-preview.ts";
+import { latestBrowserTabCards, loadBrowserTabThumbnail } from "./browser-tab-preview.ts";
 import { extractToolCardsCached } from "./tool-cards.ts";
 
 afterEach(() => {
@@ -49,20 +45,6 @@ function screenshotClient() {
 }
 
 describe("browser tab previews", () => {
-  it("expires unavailable metadata so a remounted card can recover", async () => {
-    vi.useFakeTimers();
-    const { client, request } = screenshotClient();
-    request.mockResolvedValueOnce({}).mockResolvedValue({ title: "Recovered" });
-    expect(await loadBrowserPagePreview(client, "https://example.com")).toEqual({});
-    expect(await loadBrowserPagePreview(client, "https://example.com")).toEqual({});
-    expect(request).toHaveBeenCalledOnce();
-    vi.advanceTimersByTime(5 * 60_000 + 1);
-    expect(await loadBrowserPagePreview(client, "https://example.com")).toEqual({
-      title: "Recovered",
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps anonymous result revisions stable across reads but distinct across results", () => {
     const message = {
       role: "toolResult",

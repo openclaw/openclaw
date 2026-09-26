@@ -62,7 +62,15 @@ export async function proveHotReloadTerminalDeferredRestart({
       const body = Buffer.concat(chunks);
       const upstream = await fetch(`${mock.baseUrl}${req.url}`, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(typeof req.headers.session_id === "string"
+            ? { session_id: req.headers.session_id }
+            : {}),
+          ...(typeof req.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": req.headers["x-session-affinity"] }
+            : {}),
+        },
         ...(body.length ? { body } : {}),
       });
       const response = Buffer.from(await upstream.arrayBuffer());
@@ -107,6 +115,7 @@ export async function proveHotReloadTerminalDeferredRestart({
           providerMode: "mock-openai",
           forcedRuntime: "openclaw",
           providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+          mockSessionObserverUrl: mock.sessionObserverUrl,
           primaryModel: MODEL,
           transportBaseUrl: "http://127.0.0.1:1",
           controlUiEnabled: true,

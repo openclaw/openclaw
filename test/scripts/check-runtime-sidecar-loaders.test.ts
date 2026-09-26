@@ -1,21 +1,25 @@
 // Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,
   findRuntimeSidecarLoaderViolations,
 } from "../../scripts/check-runtime-sidecar-loaders.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function listRuntimeStaticSpecifiers(sourcePath: string): string[] {
   const source = readFileSync(sourcePath, "utf8");
-  const sourceFile = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(sourcePath, source);
   return sourceFile.statements.flatMap((statement) => {
     if (
       ts.isImportDeclaration(statement) &&
       ts.isStringLiteral(statement.moduleSpecifier) &&
-      !statement.importClause?.isTypeOnly
+      statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword
     ) {
       return [statement.moduleSpecifier.text];
     }
@@ -83,7 +87,12 @@ describe("check-runtime-sidecar-loaders", () => {
     `;
 
     expect(
-      findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
+      findRuntimeSidecarLoaderViolations(
+        source,
+        "src/tasks/task-registry.ts",
+        new Set(),
+        parser.parseSourceFile("src/tasks/task-registry.ts", source),
+      ),
     ).toEqual([
       {
         line: 5,
@@ -109,6 +118,7 @@ describe("check-runtime-sidecar-loaders", () => {
         source,
         "src/tasks/task-registry.ts",
         new Set(["src/tasks/task-registry-control.runtime.ts"]),
+        parser.parseSourceFile("src/tasks/task-registry.ts", source),
       ),
     ).toStrictEqual([]);
   });
@@ -126,7 +136,12 @@ describe("check-runtime-sidecar-loaders", () => {
     `;
 
     expect(
-      findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
+      findRuntimeSidecarLoaderViolations(
+        source,
+        "src/tasks/task-registry.ts",
+        new Set(),
+        parser.parseSourceFile("src/tasks/task-registry.ts", source),
+      ),
     ).toEqual([
       {
         line: 7,
@@ -148,7 +163,12 @@ describe("check-runtime-sidecar-loaders", () => {
     `;
 
     expect(
-      findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
+      findRuntimeSidecarLoaderViolations(
+        source,
+        "src/tasks/task-registry.ts",
+        new Set(),
+        parser.parseSourceFile("src/tasks/task-registry.ts", source),
+      ),
     ).toStrictEqual([]);
   });
 

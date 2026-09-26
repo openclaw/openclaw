@@ -1,3 +1,4 @@
+import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
@@ -11,7 +12,6 @@ import {
 } from "../graph-thread.js";
 import type { extractMSTeamsQuoteInfo } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { resolveMSTeamsAllowlistMatch } from "../policy.js";
 import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -180,7 +180,7 @@ export async function resolveMSTeamsThreadContext(params: {
           groupPolicy: params.groupPolicy,
           allowFrom: params.effectiveGroupAllowFrom,
           isSenderAllowed: (allowFrom) =>
-            resolveMSTeamsAllowlistMatch({
+            resolveAllowlistMatchSimple({
               allowFrom,
               senderId: message.from?.user?.id ?? "",
               senderName: message.from?.user?.displayName,

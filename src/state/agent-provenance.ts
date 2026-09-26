@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
+import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentProvenanceInDatabase } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -60,9 +61,21 @@ export function readAgentProvenance(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): AgentProvenance | undefined {
-  ensureAgentProvenanceSchema(options);
-  const database = openOpenClawStateDatabase(options);
-  return readAgentProvenanceInDatabase(database.db, agentId);
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(({ db }) => {
+    try {
+      return readAgentProvenanceInDatabase(db, agentId);
+    } catch (error) {
+      // Legacy state may omit this lazy additive table; only its writer installs it.
+      if (
+        error instanceof Error &&
+        hasErrnoCode(error, "ERR_SQLITE_ERROR") &&
+        error.message === "no such table: agent_provenance"
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+  }, options);
 }
 
 type AgentProvenanceReadOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path">;

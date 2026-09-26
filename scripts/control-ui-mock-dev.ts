@@ -21,7 +21,7 @@ import {
   controlUiPluginAssetRoot,
 } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
-import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
 import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
@@ -3250,6 +3250,8 @@ async function createChatPickerScenario(
             queuedCount: 5,
             activeCount: 8,
             maxConcurrent: 8,
+            concurrencyScope: "session",
+            saturatedLaneCount: 1,
             draining: false,
             generation: 4,
             blockedBy: "lane",

@@ -12,11 +12,15 @@ import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-servic
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { beginAgentDeletionJournal, removeAgentDeletionJournal } from "./agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -24,6 +28,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const roots: string[] = [];
@@ -65,11 +70,124 @@ function fixture() {
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it.each([false, true])(
+    "joins resources admitted by purge publication before reporting completion (close fails: %s)",
+    async (failClose) => {
+      const f = fixture();
+      const cfg = { agents: { entries: { worker: {}, kept: {} } } };
+      await f.withDeletion(async (deletion) => {
+        await prepareAgentDeleteDatabases(cfg, "worker", f.entry.agentDir, { env: f.options.env });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const closeEntered = createDeferred();
+        const inspectLateWrite = createDeferred();
+        const releaseClose = createDeferred();
+        const closeError = new Error("purge reader close failed");
+        let failNextClose = failClose;
+        let closeCalls = 0;
+        let lateWrite: Promise<void> | undefined;
+        let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+        const stop = onSessionIdentityMutation((mutation) => {
+          if (mutation.agentId !== "worker" || mutation.kind !== "delete") {
+            return;
+          }
+          database = getOpenClawAgentDatabaseIfOpen(f.options);
+          const unregister = registerOpenClawAgentDatabaseAsyncResource({
+            ...f.target,
+            revoke: () => {},
+            close: async () => {
+              closeCalls++;
+              closeEntered.resolve();
+              await releaseClose.promise;
+              unregister();
+              if (failNextClose) {
+                failNextClose = false;
+                throw closeError;
+              }
+            },
+          });
+          lateWrite = (async () => {
+            await inspectLateWrite.promise;
+            expect(() => f.write("late")).toThrow("no longer active");
+          })();
+        });
+        let settled = false;
+        const running = purgeAgentSessionStoreEntries(cfg, "worker", {
+          env: f.options.env,
+          runDatabaseCleanup: deletion.runDatabaseCleanup,
+        }).then((failed) => {
+          settled = true;
+          return failed;
+        });
+        try {
+          await Promise.race([
+            closeEntered.promise,
+            running.then(() => {
+              throw new Error("Purge settled before its resource close was entered");
+            }),
+          ]);
+          inspectLateWrite.resolve();
+          await lateWrite;
+          // Cross one event-loop turn so every completion continuation can run.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(settled).toBe(false);
+          if (!failClose) {
+            vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+          }
+          expect(database?.db.isOpen).toBe(true);
+          releaseClose.resolve();
+          expect(await running).toBe(failClose);
+          expect(closeCalls).toBe(1);
+          if (failClose) {
+            vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+            expect(database?.db.isOpen).toBe(true);
+            expect(() =>
+              registerOpenClawAgentDatabaseAsyncResource({
+                ...f.target,
+                revoke: () => {},
+                close: async () => {},
+              }),
+            ).toThrow("Agent database resources are closing");
+            await deletion.runDatabaseCleanup(f.target, async () => {});
+            expect(closeCalls).toBe(2);
+          }
+          expect(database?.db.isOpen).toBe(false);
+          expect(f.read()).toBeUndefined();
+          expect(() =>
+            assertNoOpenClawAgentDatabaseLeases("worker", { env: f.options.env }),
+          ).not.toThrow();
+          const unregister = registerOpenClawAgentDatabaseAsyncResource({
+            ...f.target,
+            revoke: () => {},
+            close: async () => {},
+          });
+          unregister();
+        } finally {
+          stop();
+          inspectLateWrite.resolve();
+          failNextClose = false;
+          releaseClose.resolve();
+          try {
+            await Promise.all([running, lateWrite]);
+          } finally {
+            try {
+              await closeOpenClawAgentDatabaseByPathAsync(f.target.path, f.target.agentId);
+            } finally {
+              vi.useRealTimers();
+            }
+          }
+        }
+      });
+    },
+  );
+
   it.each(["settle", "replace", "rollback", "finish"] as const)(
     "rejects admission before index repair after its cleanup owner is retired by %s",
     async (retire) => {
       const f = fixture();
       closeOpenClawAgentDatabasesForTest(f.root);
+      clearOpenClawAgentIntegrityVerification(f.target.path, f.options.env);
       const writer = openNodeSqliteDatabase(f.target.path);
       try {
         writer.exec("DROP INDEX idx_agent_cache_expiry");
@@ -140,6 +258,7 @@ describe("agent deletion database cleanup authority", () => {
   it("does not expose cleanup admission to a coalesced operation outside its scope", async () => {
     const f = fixture();
     closeOpenClawAgentDatabasesForTest(f.root);
+    clearOpenClawAgentIntegrityVerification(f.target.path, f.options.env);
     await f.withDeletion(async (deletion) => {
       const checked = createDeferred();
       const resume = createDeferred();

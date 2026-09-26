@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
@@ -73,10 +74,12 @@ export const ChatPendingInputsPageSchema = closedObject({
       message: Type.Unknown(),
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+      queued: Type.Optional(Type.Literal(true)),
     }),
     { maxItems: 20 },
   ),
   total: Type.Integer({ minimum: 0 }),
+  queuedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
@@ -87,6 +90,7 @@ export const ChatInputReceiptsSchema = Type.Array(
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
       state: Type.Literal("pending"),
+      queued: Type.Optional(Type.Literal(true)),
     }),
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
@@ -277,6 +281,17 @@ export const ChatSendIntentSchema = closedObject({
 });
 export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;
 
+const ChatWorkContextSchema = closedObject({
+  page: Type.String({ minLength: 1, maxLength: CHAT_WORK_CONTEXT_LIMITS.page }),
+  title: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.title })),
+  sessionKey: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionKey })),
+  sessionId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.sessionId })),
+  agentId: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.agentId })),
+  workspace: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.workspace })),
+  file: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.file })),
+  selection: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.selection })),
+});
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -284,6 +299,7 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
@@ -346,11 +362,13 @@ const ChatEventErrorKindSchema = Type.Union([
   Type.Literal("timeout"),
   Type.Literal("rate_limit"),
   Type.Literal("context_length"),
+  Type.Literal("state_contention"),
   Type.Literal("unknown"),
 ]);
 
 /** Coarse startup stages shown while a run has not produced visible activity yet. */
 export const ChatRunStartupPhaseSchema = Type.Union([
+  Type.Literal("waiting_for_state"),
   Type.Literal("preparing_workspace"),
   Type.Literal("naming_worktree"),
   Type.Literal("creating_worktree"),

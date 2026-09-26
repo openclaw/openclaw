@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -568,7 +571,7 @@ describe("retained npm package integrity", () => {
           });
         }
         expect(await transaction.complete({ activationVerified: true }, () => {})).toMatchObject({
-          name: "global install backup retention",
+          name: "package-backup-retention",
           exitCode: 1,
         });
         expect(replaced).toBe(true);
@@ -922,13 +925,17 @@ describe("retained npm package integrity", () => {
   });
 
   it.each([
-    "external link",
-    "sibling dependency link",
-    "oversized file",
-    "unavailable inode",
+    { shape: "external link", cause: "Package rollback symlink leaves the retained tree" },
+    {
+      shape: "sibling dependency link",
+      cause: "Package rollback symlink leaves the retained tree",
+    },
+    { shape: "oversized file", cause: "Package rollback verification byte limit exceeded" },
+    { shape: "unavailable inode", cause: "Package rollback filesystem identity is unavailable" },
+    { shape: "timed-out scan", cause: "Package rollback verification timed out" },
   ] as const)(
-    "refuses an unverifiable %s before service preparation or live mutation",
-    async (shape) => {
+    "records the baseline scan failure for $shape before service preparation or live mutation",
+    async ({ shape, cause }) => {
       await withTestDir({ prefix: "openclaw-rollback-admission-" }, async (base) => {
         const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
         if (shape === "external link") {
@@ -958,6 +965,20 @@ describe("retained npm package integrity", () => {
             return stat;
           });
         }
+        if (shape === "timed-out scan") {
+          let timedOut = false;
+          const lstat = fs.lstat.bind(fs);
+          vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+            if (timedOut && String(args[0]) === packageRoot) {
+              throw new Error("identity fallback unavailable");
+            }
+            return lstat(...args);
+          });
+          vi.spyOn(fs, "open").mockImplementation(async () => {
+            timedOut = true;
+            throw new PackageIntegrityTimeoutError(40);
+          });
+        }
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const result = await swapStagedPackageInstall({
@@ -968,6 +989,29 @@ describe("retained npm package integrity", () => {
         expect(result.status).toBe("failed");
         expect(result.step.stderrTail).not.toContain("package tree changed");
         expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");
+        const steps = updateRunStepsFromResultStep(result.step);
+        expect(steps[0]).toMatchObject({
+          detail: expect.stringContaining("Baseline package scan failed"),
+          failureFacts: [
+            {
+              check: "package-swap",
+              code: "baseline-scan-failed",
+              message: expect.stringContaining(cause),
+            },
+          ],
+        });
+        const report = await prepareUpdateFailureReport(
+          {
+            attemptId: "baseline-failure",
+            result: { mode: "npm", status: "error", steps: [], durationMs: 0 },
+            recordedRun: { runId: "baseline-failure", steps },
+          },
+          { env: {}, stateDir: base },
+        );
+        expect(report.body).toContain("baseline-scan-failed");
+        expect(report.body).toContain(cause);
+        expect(report.body).not.toContain("identity fallback unavailable");
+        expect(report.body).not.toContain(base);
         expect(result).toMatchObject({ packageRollbackVerified: false });
         expect(beforeActivate).not.toHaveBeenCalled();
         expect(onLiveMutation).not.toHaveBeenCalled();

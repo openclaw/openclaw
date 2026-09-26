@@ -9,7 +9,6 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
-  sameWorkerBuild,
   sameWorkerProtocolFeatures,
   type ExpectedWorkerBuild,
 } from "../../worker/worker-build-identity.js";
@@ -45,14 +44,6 @@ export function supportsCurrentWorkerLaunch(
 type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
-
-/** Admits only the exact build selected for this worker environment. */
-export function verifyWorkerAdmissionHandshake(
-  handshake: WorkerAdmissionHandshake,
-  expected: ExpectedWorkerBuild,
-): boolean {
-  return sameWorkerBuild(handshake, expected);
-}
 
 /** Validate an opaque credential and every server-owned worker admission binding. */
 export function admitWorkerConnection(params: {

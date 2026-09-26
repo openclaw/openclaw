@@ -67,7 +67,9 @@ describe("gateway chat metadata runtime", () => {
   test("notifies once per settlement, including same-epoch recovery, without an unavailable-read loop", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
-    const owner = harness.getPreparedOwner();
+    await harness.runtime.refresh();
+    expect(onChanged).toHaveBeenCalledOnce();
+    onChanged.mockClear();
     harness.getPreparedOwner.mockReturnValue(undefined);
     await expect(harness.runtime.refresh()).rejects.toThrow("owner is unavailable");
     for (let read = 0; read < 3; read += 1) {
@@ -76,14 +78,42 @@ describe("gateway chat metadata runtime", () => {
       );
     }
     expect(onChanged).toHaveBeenCalledTimes(1);
-    harness.getPreparedOwner.mockReturnValue(owner);
-    await harness.runtime.read({ agentId: "main" });
+    const recovered = createChatMetadataOwner(
+      { agents: { list: [{ id: "main", default: true }] } },
+      "recovered",
+    );
+    harness.setOwner(recovered);
+    harness.getPreparedOwner.mockReturnValue(recovered);
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "recovered" })],
+    });
     await harness.runtime.refresh();
     expect(onChanged).toHaveBeenCalledTimes(2);
     harness.runtime.invalidate();
     harness.runtime.fail(new Error("replacement failed"));
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("replacement failed");
     expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(onChanged.mock.calls).toEqual(
+      Array.from({ length: 3 }, () => [{ modelCatalogChanged: true, authChanged: true }]),
+    );
+  });
+
+  test("invalidates models after same-snapshot owner replacement", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    try {
+      await harness.runtime.refresh();
+      onChanged.mockClear();
+      // Materialization publications can retain both the runtime and catalog objects.
+      harness.runtime.invalidate();
+      await harness.runtime.refresh();
+      expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+        modelCatalogChanged: true,
+        authChanged: true,
+      });
+    } finally {
+      await harness.runtime.stop();
+    }
   });
 
   test.each(["resolve", "reject"] as const)(
@@ -890,30 +920,6 @@ describe("gateway chat metadata runtime", () => {
 
     await expect(waitingRead).resolves.toMatchObject({
       models: [expect.objectContaining({ id: "first" })],
-    });
-  });
-
-  test("retries an unavailable owner on the next read once it is published again", async () => {
-    const harness = createChatMetadataHarness();
-    await harness.runtime.refresh();
-
-    harness.getPreparedOwner.mockReturnValue(undefined);
-    await expect(harness.runtime.refresh()).rejects.toThrow(
-      'prepared chat metadata owner is unavailable for agent "main"',
-    );
-    await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
-      'prepared chat metadata owner is unavailable for agent "main"',
-    );
-
-    const recovered = createChatMetadataOwner(
-      { agents: { list: [{ id: "main", default: true }] } },
-      "recovered",
-    );
-    harness.setOwner(recovered);
-    harness.getPreparedOwner.mockReturnValue(recovered);
-
-    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "recovered" })],
     });
   });
 

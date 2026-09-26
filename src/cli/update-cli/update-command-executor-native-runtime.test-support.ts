@@ -2,15 +2,25 @@
 const currentModuleUrl = import.meta.url;
 
 export const updateExecutorNativeEntrypoints = {
+  coordinator: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/state-database-coordinator",
+    distWorkerPath: "infra/state-database-coordinator.js",
+  },
   signalExitBarrier: {
     currentModuleUrl,
     sourceWorkerName: "../signal-exit-barrier",
     distWorkerPath: "cli/signal-exit-barrier.js",
   },
-  commandRepair: {
+  retainedService: {
     currentModuleUrl,
-    sourceWorkerName: "update-command-repair",
-    distWorkerPath: "cli/update-cli/update-command-repair.js",
+    sourceWorkerName: "update-command-retained-service",
+    distWorkerPath: "cli/update-cli/update-command-retained-service.js",
+  },
+  sealedRuntime: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/sealed-runtime-registry",
+    distWorkerPath: "infra/sealed-runtime-registry.js",
   },
   commandRun: {
     currentModuleUrl,
@@ -71,6 +81,11 @@ export const updateExecutorNativeEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../../daemon/service-update-authority",
     distWorkerPath: "daemon/service-update-authority.js",
+  },
+  includeDelegated: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-include-delegated.test-support",
+    distWorkerPath: "test-support/update-include-delegated.js",
   },
   configIO: {
     currentModuleUrl,

@@ -18,10 +18,8 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -34,15 +32,16 @@ import {
 } from "../../infra/agent-run-registry.js";
 import {
   emitTrustedDiagnosticEvent,
+  onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
-import { diagnosticLogger, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import { startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
@@ -118,29 +117,37 @@ beforeEach(async () => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
+  manager.close();
+  await manager.drain();
   resetDiagnosticStateForTest();
   admission.close();
   releaseAgentRunDelegatedAuthority(authority);
   unregister();
   clearAgentRunContext(ref.runId);
-  manager.close();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
 });
 
-async function call(method: string, params: Record<string, unknown>, trusted = true) {
+async function call(
+  method: string,
+  params: Record<string, unknown>,
+  trusted = true,
+  requestAuthority: Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority"> = {},
+) {
   const responses: Parameters<RespondFn>[] = [];
+  const cfg = {};
   await handlers[method]!({
     req: { type: "req", id: "request", method, params },
     params,
     client: trusted ? client : ({ connect: { scopes: ["operator.admin"] } } as GatewayClient),
     respond: (...args) => responses.push(args),
     isWebchatConnect: () => false,
+    ...requestAuthority,
     context: {
       broadcast: (event: string) => onBroadcast(event),
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => cfg,
       validateAgentRuntimeApprovalAuthority: validateAuthority,
     } as unknown as GatewayRequestHandlerOptions["context"],
   });
@@ -300,32 +307,44 @@ it.each(["resumed", "replacement"] as const)(
   },
 );
 
-it("keeps resumed question work alive when attention logging settles the question", async () => {
+it("keeps resumed question work alive when attention reporting settles the question", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const recoveryAtMs = Date.now() + 900_000;
     const recovery = vi.fn(recoverStuckDiagnosticSession);
     startDiagnosticHeartbeat({}, { recoverStuckSession: recovery, sampleLiveness: () => null });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...ref,
       toolName: "ask_user",
-      toolCallId: "logging-settlement-call",
+      toolCallId: "reporting-settlement-call",
     });
     const id = await request("ask_user");
     const answer = manager.waitAnswer(id);
-    const warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
-      if (message.startsWith("stalled session:") && Date.now() === recoveryAtMs) {
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (
+        event.type === "session.stalled" &&
+        event.sessionId === ref.sessionId &&
+        event.sessionKey === ref.sessionKey &&
+        event.ageMs === 900_000
+      ) {
+        // Attention events can settle a question after the heartbeat captured its generation.
         manager.cancel(id);
       }
     });
     try {
       await vi.advanceTimersByTimeAsync(900_000);
-      await Promise.all(recovery.mock.results.map((result) => result.value));
+      expect(manager.observe(id)?.record.status).toBe("cancelled");
+      const outcomes = await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
+      expect(recovery).toHaveBeenCalledWith(
+        expect.objectContaining({ allowActiveAbort: true, ageMs: 900_000 }),
+      );
+      expect(outcomes).toContainEqual(
+        expect.objectContaining({ status: "skipped", reason: "stale_session_state" }),
+      );
       expect(abort).not.toHaveBeenCalled();
     } finally {
-      warning.mockRestore();
+      unsubscribe();
     }
   });
 });
@@ -369,6 +388,53 @@ it("does not expire a stopped RPC observer's question before its expiry callback
     await observer.drain();
   }
 });
+
+it.each(["signal", "current client"] as const)(
+  "denies a stopped observer's local response when its %s authority closes",
+  async (source) => {
+    const id = await request("ask_user", false, 100);
+    const events: string[] = [];
+    onBroadcast = (event) => events.push(event);
+    const observer = new AsyncWorkScope();
+    const controller = new AbortController();
+    let current = true;
+    const registered = vi.spyOn(manager, "waitAnswer");
+    const waiting = observer.track(() =>
+      call("question.waitAnswer", { id }, false, {
+        signal: controller.signal,
+        hasCurrentClientAuthority: () => current,
+      }),
+    );
+    const result = Promise.allSettled([waiting]);
+    try {
+      expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined);
+      observer.beginClose();
+      if (source === "signal") {
+        controller.abort(new Error("Question request source closed"));
+      } else {
+        current = false;
+      }
+      vi.setSystemTime(Date.now() + 101);
+      expect((await result)[0]).toMatchObject({
+        status: "rejected",
+        reason: {
+          message:
+            source === "signal"
+              ? "Question request source closed"
+              : "Gateway requester authority changed",
+        },
+      });
+      await observer.drain();
+      expect(manager.observe(id)?.record.status).toBe("pending");
+      expect(events).toEqual([]);
+    } finally {
+      observer.beginClose();
+      await result;
+      await observer.drain();
+      registered.mockRestore();
+    }
+  },
+);
 
 it.each(["cancel", "reset", "close", "authority", "generation"] as const)(
   "releases protection after %s closes the question",

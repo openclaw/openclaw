@@ -1,4 +1,3 @@
-// File Transfer plugin module implements file write behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +16,15 @@ import {
   type FileIdentity,
   type PathBinding,
 } from "../shared/path-binding.js";
+import {
+  canonicalTargetForSymlinkError,
+  captureWriteBinding,
+  fileWriteError as err,
+  openBoundWriteRoot,
+  symlinkRedirectError,
+  writeFsSafeError,
+  type FileWriteError,
+} from "./file-write-path.js";
 import { rejectCanonicalPathChange } from "./path-errors.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
@@ -44,104 +52,10 @@ type FileWriteSuccess = {
   rejectHardlinks?: true;
 };
 
-type FileWriteError = {
-  ok: false;
-  code: string;
-  message: string;
-  canonicalPath?: string;
-};
-
 type FileWriteResult = FileWriteSuccess | FileWriteError;
 
 function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
-}
-
-function err(code: string, message: string, canonicalPath?: string): FileWriteError {
-  return { ok: false, code, message, ...(canonicalPath ? { canonicalPath } : {}) };
-}
-
-async function canonicalTargetForSymlinkError(
-  error: FsSafeError,
-  targetPath: string,
-): Promise<string | undefined> {
-  // fs-safe may attach the canonical target to the error cause; when it does
-  // not, resolve it here: realpath covers a final-component symlink, and the
-  // existing-ancestor walk covers a symlinked parent of a missing leaf.
-  const causeCanonical =
-    error.cause &&
-    typeof error.cause === "object" &&
-    "canonicalPath" in error.cause &&
-    typeof error.cause.canonicalPath === "string"
-      ? error.cause.canonicalPath
-      : undefined;
-  if (causeCanonical) {
-    return causeCanonical;
-  }
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return await canonicalPathFromExistingAncestor(targetPath).catch(() => undefined);
-  }
-}
-
-function symlinkRedirectError(code: string, canonicalPath?: string): FileWriteError {
-  return err(
-    code,
-    "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)",
-    canonicalPath,
-  );
-}
-
-function writeFsSafeError(error: FsSafeError, targetPath: string): FileWriteError {
-  if (error.code === "symlink") {
-    return err(
-      "SYMLINK_TARGET_DENIED",
-      `path is a symlink; refusing to write through it: ${targetPath}`,
-    );
-  }
-  if (error.code === "not-file") {
-    return err("IS_DIRECTORY", `path resolves to a directory: ${targetPath}`);
-  }
-  if (error.code === "already-exists") {
-    return err("EXISTS_NO_OVERWRITE", `file already exists and overwrite is false: ${targetPath}`);
-  }
-  return err("WRITE_ERROR", error.message, targetPath);
-}
-
-async function captureWriteBinding(
-  canonicalTargetPath: string,
-  targetIdentity?: FileIdentity,
-): Promise<Extract<PathBinding, { kind: "write" }>> {
-  let anchorPath = path.dirname(canonicalTargetPath);
-  for (;;) {
-    try {
-      const stats = await fs.stat(anchorPath, { bigint: true });
-      if (!stats.isDirectory()) {
-        throw new Error(`write anchor is not a directory: ${anchorPath}`);
-      }
-      const anchor = fileIdentity(stats);
-      return {
-        kind: "write",
-        anchorPath,
-        anchorDevice: anchor.device,
-        anchorInode: anchor.inode,
-        ...(targetIdentity
-          ? { targetDevice: targetIdentity.device, targetInode: targetIdentity.inode }
-          : {}),
-      };
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-      const parent = path.dirname(anchorPath);
-      if (parent === anchorPath) {
-        throw error;
-      }
-      anchorPath = parent;
-    }
-  }
 }
 
 async function writeBoundTarget(input: {
@@ -195,48 +109,21 @@ async function writeBoundTarget(input: {
     }
   }
 
-  let anchorRoot: Awaited<ReturnType<typeof root>>;
-  try {
-    anchorRoot = await root(input.binding.anchorPath);
-    const anchorStats = await fs.stat(anchorRoot.rootReal, { bigint: true });
-    if (
-      !matchesFileIdentity(anchorStats, {
-        device: input.binding.anchorDevice,
-        inode: input.binding.anchorInode,
-      })
-    ) {
-      throw new Error("write anchor changed");
-    }
-  } catch {
-    return err(
-      "CANONICAL_PATH_CHANGED",
-      "filesystem identity differs from the authorized target",
-      input.canonicalTargetPath,
-    );
+  const anchor = await openBoundWriteRoot(input);
+  if (!anchor.ok) {
+    return anchor;
   }
-  const relativeTarget = path.relative(anchorRoot.rootReal, input.canonicalTargetPath);
-  if (
-    !relativeTarget ||
-    path.isAbsolute(relativeTarget) ||
-    relativeTarget === ".." ||
-    relativeTarget.startsWith(`..${path.sep}`)
-  ) {
-    return err("WRITE_ERROR", "write target is outside the authorized anchor");
-  }
+  const { anchorRoot, relativeTarget } = anchor;
   try {
     await anchorRoot.create(relativeTarget, input.buffer, { mkdir: true });
-    const opened = await anchorRoot.open(relativeTarget);
-    try {
-      const stats = await opened.handle.stat({ bigint: true });
-      return {
-        ok: true,
-        path: opened.realPath,
-        overwritten: false,
-        identity: fileIdentity(stats),
-      };
-    } finally {
-      await opened.handle.close().catch(() => undefined);
-    }
+    await using opened = await anchorRoot.open(relativeTarget);
+    const stats = await opened.handle.stat({ bigint: true });
+    return {
+      ok: true,
+      path: opened.realPath,
+      overwritten: false,
+      identity: fileIdentity(stats),
+    };
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "already-exists") {
       return err(
@@ -266,7 +153,6 @@ export async function handleFileWrite(
   const preflightOnly = params?.preflightOnly === true;
   const rejectHardlinks = params?.rejectHardlinks === true;
 
-  // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
     return err("INVALID_PATH", "path is required");
   }
@@ -280,7 +166,7 @@ export async function handleFileWrite(
     return err("INVALID_BASE64", "contentBase64 is required");
   }
 
-  // 2. Validate the payload and cap its decoded size before allocating a Buffer.
+  // Cap the decoded size before allocating a Buffer.
   const decodedBytes = inspectStrictBase64(contentBase64);
   if (decodedBytes === undefined) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
@@ -292,17 +178,9 @@ export async function handleFileWrite(
     );
   }
 
-  // Decode base64 → Buffer.
-  //    Buffer.from(s, "base64") in Node never throws — it silently drops
-  //    non-base64 characters and returns whatever it could decode. That
-  //    means a typo or truncated input would land garbage on disk if we
-  //    accepted whatever decoded. Defense: round-trip the decoded buffer
-  //    back to base64 and compare against the input modulo padding/url
-  //    variants. A mismatch means characters were silently dropped.
+  // Buffer decoding is permissive; verify the round trip, including padding bits.
   const buf = Buffer.from(contentBase64, "base64");
   const reEncoded = buf.toString("base64");
-  // Normalize: drop padding and convert base64url chars to standard so the
-  // comparison tolerates both "=" / no-"=" inputs and "-_" base64url.
   const normalize = (s: string): string =>
     s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
   if (normalize(reEncoded) !== normalize(contentBase64)) {
@@ -430,11 +308,7 @@ export async function handleFileWrite(
     }
   }
 
-  // 5. Hash the decoded buffer BEFORE touching disk. If the caller
-  //    supplied expectedSha256 and it doesn't match, refuse outright so
-  //    a bad caller hash with overwrite=true can't replace + delete the
-  //    original. Computing from the buffer (not a re-read) is the right
-  //    source of truth — the caller asked us to write THESE bytes.
+  // Reject an incorrect caller hash before overwriting the original bytes.
   const computedSha256 = sha256Hex(buf);
   if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
     return err(
@@ -498,10 +372,9 @@ export async function handleFileWrite(
   let canonicalPath = targetPath;
   let finalIdentity: FileIdentity | undefined;
   try {
-    const opened = await parentRoot.open(targetFileName);
+    await using opened = await parentRoot.open(targetFileName);
     canonicalPath = opened.realPath;
     finalIdentity = fileIdentity(await opened.handle.stat({ bigint: true }));
-    await opened.handle.close().catch(() => undefined);
   } catch (openErr) {
     if (openErr instanceof FsSafeError) {
       return writeFsSafeError(openErr, targetPath);

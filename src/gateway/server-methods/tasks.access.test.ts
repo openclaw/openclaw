@@ -6,6 +6,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { setCanonicalSqliteSessionMainKey } from "../../config/sessions/session-canonical-key.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -14,6 +15,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as taskRuntime from "../../tasks/runtime-internal.js";
 import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
@@ -52,6 +54,41 @@ function simulateExpensiveAccessSlices() {
 }
 
 describe("task page access snapshots", () => {
+  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
+    const storePath = state.statePath("fixed-store.sqlite");
+    await upsertSessionEntryCore(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      { sessionId: "session-global", updatedAt: 1 },
+    );
+    const task = createSnapshotTask({
+      taskId: "fixed-store-task",
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      scopeKind: "session",
+      runId: "run-global",
+      task: "Owned task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    seedTaskRegistryRowsForTests([task]);
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+    const { calls, payload } = await runTaskHandler(
+      "tasks.list",
+      { sessionKey: "global" },
+      {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      },
+    );
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
+  });
+
   it.each(["canonical", "main alias", "distinct requesters", "warm"] as const)(
     "bounds session lookup work across a yielded task page using %s keys",
     async (mode) => {
@@ -96,6 +133,7 @@ describe("task page access snapshots", () => {
       seedTaskRegistryRowsForTests(tasks);
       await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       if (!warm) {
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
       }
       const expectedHandles = listOpenClawAgentDatabasesForTest().length;
@@ -242,7 +280,13 @@ describe("task page access snapshots", () => {
             );
             expect(readGatewayAccessRevision()).toBe(accessRevision);
             if (registryRestart) {
-              expect(taskRuntime.deleteTaskRecordById("access-task-63")).toBe(true);
+              const current = expectDefined(
+                taskRuntime.getTaskById("access-task-63"),
+                "registry-restart task",
+              );
+              const changed = { ...current, task: "Registry changed during access selection" };
+              getTaskRegistryStore().upsertTaskWithDeliveryState({ task: changed });
+              taskRuntime.publishTaskRecordAfterAtomicStore(changed);
             }
             resolve();
           } catch (error) {
@@ -267,6 +311,34 @@ describe("task page access snapshots", () => {
     ]);
     if (published) {
       expect(pageSelections).toHaveBeenCalledTimes(2);
+      const sharing = captureRespond();
+      await expectDefined(
+        sessionSharingHandlers["session.visibility.set"],
+        "session.visibility.set handler",
+      )({
+        params: { sessionKey: changingKey, agentId: "main", visibility: "draft" },
+        client: identifiedClient(["operator.admin"], profileId),
+        context,
+        respond: sharing.respond,
+      } as never);
+      expect(sharing.calls[0]?.[0]).toBe(true);
+      expect(payload?.nextCursor).toEqual(expect.any(String));
+      const continuation = await runTaskHandler(
+        "tasks.list",
+        { limit: 1, cursor: payload?.nextCursor },
+        config,
+        identifiedClient(["operator.read"], profileId),
+        context as never,
+      );
+      expect(continuation.calls[0]).toMatchObject([
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "tasks.list cursor access changed; restart pagination without a cursor",
+          details: { reason: "access-changed" },
+        },
+      ]);
     }
   });
 });

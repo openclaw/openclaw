@@ -13,10 +13,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionRunStatus } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
+import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionChannelPresentation } from "../lib/session-channel.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
   normalizeCatalogProjectGrouping,
@@ -45,12 +45,6 @@ export type SidebarSessionAttention =
   | { kind: "approval"; requests: readonly SidebarAttentionRequest[] }
   | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
   | { kind: "error"; reason: string; childLabel?: string };
-
-/** Client-owned attention that can name a session before its row is loaded. */
-export type SidebarKnownSessionAttention = {
-  sessionKey: string;
-  attention: Extract<SidebarSessionAttention, { kind: "question" } | { kind: "approval" }>;
-};
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
@@ -130,6 +124,7 @@ export type SidebarRecentSession = {
   pinnable: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
+  sharingRole?: GatewaySessionRow["sharingRole"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
@@ -138,6 +133,7 @@ export type SidebarRecentSession = {
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
+  channelPresentation?: SessionChannelPresentation;
   workSession?: boolean;
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
@@ -163,13 +159,12 @@ export type SidebarRecentSession = {
   /** Own state remains distinct from the collapsed-tree projection. */
   ownAttention?: SidebarSessionAttention;
   ownWorkspaceConflictCount?: number;
-  childAttention?: readonly SidebarSessionAttention[];
   unreadChildCount?: number;
   queuedChildCount?: number;
   /** Hidden run state remains visible when persistent children are expanded. */
   subagentSummary?: Pick<
     SidebarRecentSession,
-    | "childAttention"
+    | "attention"
     | "unreadChildCount"
     | "queuedChildCount"
     | "runningChildCount"
@@ -207,6 +202,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
+  | "channelPresentation"
   | "color"
   | "endedAt"
   | "hasAutomation"
@@ -223,7 +219,8 @@ export type SidebarSessionHovercardRow = Pick<
   | "startedAt"
   | "updatedAt"
   | "workContext"
->;
+> &
+  Partial<Pick<SidebarRecentSession, "attention">>;
 
 export const enum RowVisibilityReason {
   Any = 0,
@@ -293,8 +290,8 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
-  context: ApplicationContext<RouteId>;
-  gateway: ApplicationContext<RouteId>["gateway"];
+  context: ApplicationContext;
+  gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;
@@ -440,8 +437,16 @@ export function loadStoredHiddenSessionCatalogIds(): ReadonlySet<string> {
   }
 }
 
+function storeSidebarSessionPreference(key: string, value: string): void {
+  try {
+    getSafeLocalStorage()?.setItem(key, value);
+  } catch {
+    // Keep the in-memory preference when storage is unavailable.
+  }
+}
+
 export function storeSidebarSessionsGrouping(grouping: SidebarSessionsGrouping) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
+  storeSidebarSessionPreference(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
 }
 
 export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
@@ -449,19 +454,19 @@ export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
 }
 
 export function storeSidebarSessionsShowCron(show: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionsShowPreview(show: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY, String(show));
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionsShowSystem(show: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+  storeSidebarSessionPreference(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
 }
 
 export function storeSidebarSessionOwnerFilter(
@@ -503,16 +508,12 @@ export function storeSidebarSessionSortMode(
   peopleCapability: boolean | undefined,
 ): SidebarSessionSortMode {
   const resolved = resolveSidebarSessionSortMode(mode, peopleCapability !== false);
-  try {
-    getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY, resolved);
-  } catch {
-    // Keep the in-memory preference when storage is unavailable.
-  }
+  storeSidebarSessionPreference(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY, resolved);
   return resolved;
 }
 
 export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
-  getSafeLocalStorage()?.setItem(
+  storeSidebarSessionPreference(
     SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
     JSON.stringify([...sections]),
   );

@@ -1,28 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getSessionRepositoryWorkspaceStore,
-  type SessionRepositoryWorkspaceRecord,
   type SessionRepositoryWorkspaceStore,
 } from "../../state/session-repository-workspaces.js";
-import {
-  readGitHubRepositoryPublicationBlob,
-  readGitHubRepositoryPublicationMetadata,
-} from "../github-repository-publication-snapshot.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { readGitHubRepositoryPublicationMetadata } from "../github-repository-publication-snapshot.js";
 import { boundedWorkerError } from "./worker-error.js";
-import {
-  captureWorkspaceSnapshot,
-  parseWorkspaceManifestPair,
-} from "./workspace-manifest-worker.js";
-import {
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  serializeWorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+import { parseWorkspaceManifestPair } from "./workspace-manifest-worker.js";
 import {
   requireWorkspaceResultGit,
   updateWorkspaceResultRefs,
@@ -46,7 +35,6 @@ export type SessionRepositoryCheckpointPayload = CheckpointSnapshot & {
   publicationStagingRoot?: string;
   publicationDigest?: string;
 };
-const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
 const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
@@ -192,12 +180,14 @@ export async function withSessionRepositoryCheckpoint<T>(
 
 async function stagePublication(params: {
   root: string;
+  assertCurrent: () => void;
   candidateRef: string;
   publicationStagingRoot: string;
   publicationDigest: string;
   currentManifestRef: string;
   baseCommit: string;
 }) {
+  params.assertCurrent();
   const { raw: metadata, snapshot } = await readGitHubRepositoryPublicationMetadata(
     params.publicationStagingRoot,
     params.publicationDigest,
@@ -205,51 +195,19 @@ async function stagePublication(params: {
   if (snapshot.baseCommit !== params.baseCommit) {
     throw new Error("Repository publication checkpoint base changed");
   }
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-publication-payload-"));
-  try {
-    await fs.mkdir(path.join(stagingRoot, "blobs"), { mode: 0o700 });
-    await fs.writeFile(path.join(stagingRoot, "snapshot.json"), metadata, { mode: 0o600 });
-    await fs.writeFile(
-      path.join(stagingRoot, "binding.json"),
-      JSON.stringify({
-        currentManifestRef: params.currentManifestRef,
-        publicationDigest: params.publicationDigest,
-      }),
-      { mode: 0o600 },
-    );
-    let bytes = Buffer.byteLength(metadata);
-    const blobs = new Set(
-      snapshot.entries
-        .filter((entry) => entry.sha && entry.mode !== "160000")
-        .map((entry) => entry.sha!),
-    );
-    for (const sha of blobs) {
-      const content = await readGitHubRepositoryPublicationBlob(params.publicationStagingRoot, sha);
-      bytes += content.byteLength;
-      if (bytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-        throw new Error("Repository publication checkpoint exceeds its byte budget");
-      }
-      await fs.writeFile(path.join(stagingRoot, "blobs", sha), content, { mode: 0o600 });
-    }
-    const baseManifestRaw = serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit: null,
-      entries: [],
-    });
-    const current = await captureWorkspaceSnapshot({ root: stagingRoot, baseCommit: null });
-    const currentManifestRaw = current.rawManifest;
-    return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-      root: params.root,
-      stagingRoot,
-      stagedResultRef: params.candidateRef,
-      baseManifestRaw,
-      baseManifestRef: digest(baseManifestRaw),
-      currentManifestRaw,
-      currentManifestRef: current.manifestRef,
-    });
-  } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
-  }
+  params.assertCurrent();
+  return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+    assertCurrent: params.assertCurrent,
+    root: params.root,
+    stagingRoot: params.publicationStagingRoot,
+    stagedResultRef: params.candidateRef,
+    publication: {
+      metadata,
+      publicationDigest: params.publicationDigest,
+      currentManifestRef: params.currentManifestRef,
+      baseCommit: params.baseCommit,
+    },
+  });
 }
 
 export async function recoverSessionRepositoryCheckpoint(
@@ -326,7 +284,9 @@ export async function stageSessionRepositoryCheckpoint(
   };
   assertRevision();
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  assertRevision();
   await requireWorkspaceResultGit(root, ["init", "--quiet", "--bare", "--object-format=sha1"]);
+  assertRevision();
   let discardPromise: Promise<void> | undefined;
   const discard = () => {
     // These candidates are never recreated after preparation. Share completed
@@ -345,7 +305,9 @@ export async function stageSessionRepositoryCheckpoint(
       ...params,
       root,
       stagedResultRef: candidateRef,
+      assertCurrent: assertRevision,
     });
+    assertRevision();
     let companionId: string | undefined;
     if (params.publicationStagingRoot || params.publicationDigest) {
       try {
@@ -354,6 +316,7 @@ export async function stageSessionRepositoryCheckpoint(
         }
         companionId = await stagePublication({
           root,
+          assertCurrent: assertRevision,
           candidateRef: companionCandidate,
           publicationStagingRoot: params.publicationStagingRoot,
           publicationDigest: params.publicationDigest,
@@ -417,6 +380,7 @@ export async function stageSessionRepositoryCheckpoint(
             await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
               input: Buffer.from(updates.join("")),
               baseEnv,
+              beforeInput: assertRevision,
             });
           }
         });

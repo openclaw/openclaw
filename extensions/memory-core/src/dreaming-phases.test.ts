@@ -15,6 +15,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
   filterRecallEntriesWithinLookback,
   previewRemDreaming,
@@ -29,7 +30,7 @@ import {
 } from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
-import { appendSessionCorpusLines, writeSessionIngestionState } from "./session-ingestion.js";
+import { appendSessionCorpusLines } from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -252,28 +253,17 @@ function createHarness(
     error: vi.fn(),
   };
 
-  const resolvedConfig = workspaceDir
-    ? {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            workspace: workspaceDir,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      }
-    : {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      };
+  const resolvedConfig = {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        ...(workspaceDir ? { workspace: workspaceDir } : {}),
+        userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+      },
+    },
+  };
   const pluginConfig = resolveMemoryDreamingPluginConfig(resolvedConfig) ?? {};
   const beforeAgentReply = async (
     event: { cleanedBody: string },
@@ -471,6 +461,43 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
   return candidates.map((candidate) => candidate.snippet);
 }
 
+async function seedRemRecallSources(
+  workspaceDir: string,
+  noteDay: string,
+  nowMs: number,
+  staleSnippet = "Documented Ollama provider setup.",
+): Promise<void> {
+  const livePath = `memory/${noteDay}.md`;
+  const liveSnippet = "Move backups to S3 Glacier.";
+  await fs.writeFile(path.join(workspaceDir, livePath), `${liveSnippet}\n`, "utf-8");
+  for (const source of [
+    { query: "live backup", path: livePath, line: 1, score: 0.91, snippet: liveSnippet },
+    {
+      query: "stale provider setup",
+      path: "memory/.dreams/session-corpus/2026-04-16.txt",
+      line: 2,
+      score: 0.88,
+      snippet: staleSnippet,
+    },
+  ]) {
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: source.query,
+      nowMs,
+      results: [
+        {
+          path: source.path,
+          startLine: source.line,
+          endLine: source.line,
+          score: source.score,
+          snippet: source.snippet,
+          source: "memory",
+        },
+      ],
+    });
+  }
+}
+
 describe("memory-core dreaming phases", () => {
   it("ranks a valid duplicate ahead of an invalid dreaming timestamp", async () => {
     const workspaceDir = await createDreamingWorkspace();
@@ -624,6 +651,46 @@ describe("memory-core dreaming phases", () => {
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
     });
   });
+
+  it.each(["<!-- openclaw:dreaming:rem:end -->", "## Ops", "# Ops"])(
+    "does not ingest nested REM output before boundary %s",
+    async (boundary) => {
+      const workspaceDir = await createDreamingWorkspace();
+      await withDreamingTestClock(async () => {
+        await writeDailyNote(workspaceDir, [
+          `# ${DREAMING_TEST_DAY}`,
+          "- Move backups to S3 Glacier.",
+          "",
+          "## REM Sleep",
+          "<!-- openclaw:dreaming:rem:start -->",
+          "### Reflections",
+          "- Theme: `across` kept surfacing across 26 memories.",
+          "#### Unexpected nested heading",
+          "- Old generated dream text must not become a daily memory.",
+          "### Possible Lasting Truths",
+          "- Old generated lasting truth must not become a daily memory.",
+          boundary,
+          "### User follow-up",
+          "- Rotate access keys.",
+        ]);
+        const subagent = createMockNarrativeSubagent();
+        const { beforeAgentReply } = createHarness(
+          LIGHT_DREAMING_TEST_CONFIG,
+          workspaceDir,
+          subagent,
+        );
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+        const store = await shortTermTesting.readRecallStore(
+          workspaceDir,
+          "2026-04-05T10:01:00.000Z",
+        );
+        expect(Object.values(store.entries).map((entry) => entry.snippet)).toEqual([
+          "Move backups to S3 Glacier.",
+          "User follow-up: Rotate access keys.",
+        ]);
+      });
+    },
+  );
 
   it("does not restage unchanged light candidates in later cycles", async () => {
     const workspaceDir = await createDreamingWorkspace();
@@ -2300,57 +2367,6 @@ describe("memory-core dreaming phases", () => {
     }
   });
 
-  it("ingests appended SQLite session transcript rows after prior checkpoint", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-main",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: "Move backups to S3 Glacier." }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-
-      await seedDreamingSessionTranscript({
-        sessionId: "dreaming-main",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-06T01:02:00.000Z",
-            content: [{ type: "text", text: "Retention policy stays at 365 days." }],
-          },
-        ],
-      });
-
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 910);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
-      name.endsWith(".txt"),
-    );
-    let combinedCorpus = "";
-    for (const fileName of corpusFiles) {
-      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
-    }
-    expect(combinedCorpus).toContain("Move backups to S3 Glacier.");
-    expect(combinedCorpus).toContain("Retention policy stays at 365 days.");
-  });
-
   it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
     const workspaceDir = await createDreamingWorkspace();
     setDreamingTestEnv(path.join(workspaceDir, ".state"));
@@ -2866,42 +2882,8 @@ describe("memory-core dreaming phases", () => {
 
   it("skips REM short-term candidates whose source file disappeared", async () => {
     const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-03.md"),
-      "Move backups to S3 Glacier.\n",
-      "utf-8",
-    );
     const nowMs = DREAMING_TEST_BASE_TIME.getTime();
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "live backup",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.91,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ],
-    });
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "stale provider setup",
-      nowMs,
-      results: [
-        {
-          path: "memory/.dreams/session-corpus/2026-04-16.txt",
-          startLine: 2,
-          endLine: 2,
-          score: 0.88,
-          snippet: "Documented Ollama provider setup.",
-          source: "memory",
-        },
-      ],
-    });
+    await seedRemRecallSources(workspaceDir, "2026-04-03", nowMs);
     const baseline = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
@@ -3373,41 +3355,12 @@ describe("previewRemHarness", () => {
   it("skips REM short-term candidates whose source file disappeared", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const nowMs = new Date("2026-04-15T12:00:00.000Z").getTime();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-14.md"),
-      "Move backups to S3 Glacier.\n",
-      "utf-8",
+    await seedRemRecallSources(
+      workspaceDir,
+      "2026-04-14",
+      nowMs,
+      "Assistant: Documented Ollama provider setup.",
     );
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "live backup",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-14.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.91,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ],
-    });
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "stale provider setup",
-      nowMs,
-      results: [
-        {
-          path: "memory/.dreams/session-corpus/2026-04-16.txt",
-          startLine: 2,
-          endLine: 2,
-          score: 0.88,
-          snippet: "Assistant: Documented Ollama provider setup.",
-          source: "memory",
-        },
-      ],
-    });
 
     const preview = await previewRemHarness({
       workspaceDir,

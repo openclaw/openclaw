@@ -1,5 +1,7 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -71,7 +73,19 @@ suite.define(() => {
           },
           "tasks.get": { task },
           "tasks.history": {
-            messages: [{ role: "assistant", content: "Exact retained old output" }],
+            messages: [
+              {
+                role: "assistant",
+                senderLabel: "Forwarded from Daily report — café 雪 🦞",
+                senderSession: {
+                  sessionKey: entry.sessionKey,
+                  agentId: "main",
+                  label: "Daily report — café 雪 🦞",
+                },
+                content: "Check the queue and report the result.",
+              },
+              { role: "assistant", content: "Exact retained old output" },
+            ],
           },
         },
       });
@@ -83,6 +97,16 @@ suite.define(() => {
         .click();
       const region = page.getByRole("region", { name: "Task transcript", exact: true });
       await region.getByText("Exact retained old output", { exact: true }).waitFor();
+      const proof = createControlUiE2eArtifactDir("automation-attribution");
+      try {
+        const attribution = region.locator(".chat-reply-attribution--forwarded");
+        expect(await attribution.count()).toBe(1);
+        expect(await attribution.textContent()).toContain("Daily report — café 雪 🦞");
+        expect(await attribution.locator("a, [role=link], [tabindex]").count()).toBe(0);
+        expect(await region.locator(".sr-only").allTextContents()).toEqual(["Assistant: "]);
+      } finally {
+        await page.screenshot({ path: path.join(proof, "automation-attribution.png") });
+      }
       expect(new URL(page.url()).pathname).toBe("/cron");
       expect(await gateway.getRequests("tasks.history")).toMatchObject([
         { params: { taskId: task.id } },

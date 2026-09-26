@@ -3,39 +3,60 @@
 import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
 
 export type AgentEventDeliveryStartOrder = {
-  schedule: (deliver: () => Promise<unknown>) => Promise<void>;
+  preserveCallbackStartOrder?: boolean;
+  schedule: (
+    deliver: () => Promise<unknown>,
+    options?: { waitForEarlierDeliveries?: boolean },
+  ) => Promise<void>;
 };
 
-export function createAgentEventDeliveryStartOrder(): AgentEventDeliveryStartOrder {
+export function createAgentEventDeliveryStartOrder(options?: {
+  preserveCallbackStartOrder?: boolean;
+}): AgentEventDeliveryStartOrder {
   let startTail = Promise.resolve();
+  let settledTail = Promise.resolve();
   return {
-    schedule: async (deliver) => {
-      // Reserve at raw event receipt, then release at callback invocation. CLI streams drain
-      // independently, so waiting for callback completion here would reorder later streams.
+    preserveCallbackStartOrder: options?.preserveCallbackStartOrder ?? true,
+    schedule: (deliver, deliveryOptions) => {
       const previousStart = startTail;
+      const previousSettlement = settledTail;
       let releaseStart: (() => void) | undefined;
       startTail = new Promise<void>((resolve) => {
         releaseStart = resolve;
       });
-      await previousStart;
-      let delivery: Promise<unknown>;
-      try {
-        delivery = deliver();
-      } finally {
-        releaseStart?.();
-      }
-      await delivery;
+      const scheduled = (async () => {
+        await previousStart;
+        // Completed answers must follow earlier presentation, not merely callback invocation.
+        // Ordinary progress retains callback-start ordering across independent streams.
+        if (deliveryOptions?.waitForEarlierDeliveries) {
+          await previousSettlement;
+        }
+        let delivery: Promise<unknown>;
+        try {
+          delivery = deliver();
+        } finally {
+          releaseStart?.();
+        }
+        await delivery;
+      })();
+      settledTail = Promise.all([previousSettlement, scheduled.catch(() => undefined)]).then(
+        () => undefined,
+      );
+      return scheduled;
     },
   };
 }
 
-export function createAgentEventBridge<T>(params: {
+export type AgentEventBridgeParams<T> = {
   runId: string;
   suppressed?: boolean;
   read: (evt: AgentEventPayload) => T | undefined;
   deliver?: (payload: T) => Promise<unknown>;
   startOrder?: AgentEventDeliveryStartOrder;
-}) {
+  waitForEarlierDeliveries?: (payload: T) => boolean;
+};
+
+export function createAgentEventBridge<T>(params: AgentEventBridgeParams<T>) {
   const deliver = params.deliver;
   if (!deliver) {
     return {
@@ -60,7 +81,16 @@ export function createAgentEventBridge<T>(params: {
       delivery = delivery.then(() => deliver(payload)).catch(() => undefined);
       return;
     }
-    const scheduled = params.startOrder.schedule(() => deliver(payload)).catch(() => undefined);
+    const previousDelivery = delivery;
+    const scheduled = params.startOrder
+      .schedule(
+        () =>
+          params.startOrder?.preserveCallbackStartOrder === false
+            ? previousDelivery.then(() => deliver(payload))
+            : deliver(payload),
+        { waitForEarlierDeliveries: params.waitForEarlierDeliveries?.(payload) },
+      )
+      .catch(() => undefined);
     // Start ordering stays global; each bridge still owns and drains its callback completion.
     delivery = Promise.all([delivery, scheduled]).then(() => undefined);
   });

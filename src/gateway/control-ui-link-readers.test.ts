@@ -23,6 +23,7 @@ function setup() {
     id: string,
     methodScope: "operator.read" | "operator.write" = "operator.read",
     claimedMethod = id + ".read",
+    imageMethod?: string,
   ) => {
     registerVirtualTestPlugin({
       registry,
@@ -39,6 +40,7 @@ function setup() {
             hosts: [id + ".example"],
             pathPattern: "^/items/[0-9]+$",
             detailMethod: claimedMethod,
+            ...(imageMethod ? { imageMethod } : {}),
           },
         });
         api.registerGatewayMethod(
@@ -46,6 +48,9 @@ function setup() {
           ({ respond }) => respond(true, { title: id }, undefined),
           { scope: methodScope },
         );
+        api.registerGatewayMethod(id + ".image", ({ respond }) => respond(true, {}, undefined), {
+          scope: "operator.read",
+        });
       },
     });
   };
@@ -64,8 +69,9 @@ describe("plugin link-reader discovery", () => {
   it("projects registered third-party readers without service-specific core dispatch", () => {
     const { register, readers, methods } = setup();
     register("notes");
-    register("forge");
+    register("forge", "operator.read", "forge.read", "forge.image");
     expect(readers(["operator.read"]).map((reader) => reader.pluginId)).toEqual(["forge", "notes"]);
+    expect(readers(["operator.read"])[0]?.linkReader.imageMethod).toBe("forge.image");
     expect(readers([])).toEqual([]);
     expect(readers(["operator.admin"])).toHaveLength(2);
     expect(
@@ -102,6 +108,31 @@ describe("plugin link-reader discovery", () => {
     setActivePluginRegistry(replacement.registry.registry);
     expect(readers(["operator.read"])).toEqual([]);
   });
+  it.each(["missing", "other-owner", "write", "hidden", "control-plane-write"])(
+    "does not advertise a reader with a %s image method",
+    (kind) => {
+      const { registry, register, readers } = setup();
+      register("notes", "operator.read", "notes.read", "notes.image");
+      const method = registry.registry.gatewayMethodDescriptors.find(
+        (entry) => entry.name === "notes.image",
+      )!;
+      if (kind === "missing") {
+        registry.registry.gatewayMethodDescriptors.splice(
+          registry.registry.gatewayMethodDescriptors.indexOf(method),
+          1,
+        );
+      } else if (kind === "other-owner") {
+        method.owner = { kind: "plugin", pluginId: "other" };
+      } else if (kind === "write") {
+        method.scope = "operator.write";
+      } else if (kind === "hidden") {
+        method.advertise = false;
+      } else {
+        method.controlPlaneWrite = true;
+      }
+      expect(readers(["operator.admin"])).toEqual([]);
+    },
+  );
   it("copies valid declaration data and rejects malformed or misplaced routing metadata", () => {
     const { config, registry } = createPluginRegistryFixture();
     const metadata = {
@@ -116,6 +147,8 @@ describe("plugin link-reader discovery", () => {
       { linkReader: { ...metadata, pathPattern: "^[$" } },
       { surface: "tab", linkReader: metadata },
       { linkReader: { ...metadata, detailMethod: "" } },
+      { linkReader: { ...metadata, imageMethod: "" } },
+      { linkReader: { ...metadata, imageMethod: "notes image" } },
     ];
     registerVirtualTestPlugin({
       registry,

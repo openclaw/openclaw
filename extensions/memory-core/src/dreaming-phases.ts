@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -21,7 +19,14 @@ import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
-  normalizeDailyIngestionState,
+  readSessionIngestionState,
+  writeSessionIngestionState,
+  type SessionIngestionState,
+  readDailyIngestionState,
+  writeDailyIngestionState,
+  DAILY_MEMORY_FILENAME_RE,
+  compareDailyMemoryFilesByNewestDay,
+  parseDailyMemoryFileName,
   normalizeMemoryDay,
   type DailyIngestionFileState,
   type DailyIngestionState,
@@ -34,19 +39,18 @@ import {
   runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
-import {
-  DREAMING_DAILY_INGESTION_NAMESPACE,
-  normalizeMemoryCoreWorkspaceKey,
-  readMemoryCoreWorkspaceEntries,
-  writeMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
+import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import {
+  inspectWorkspaceFile,
+  listWorkspaceDirectory,
+  readWorkspaceText,
+} from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
-  readSessionIngestionState,
   resolveAdmissionPolicy,
   scanSessionIngestionSource,
   sessionExclusionReason,
@@ -56,14 +60,12 @@ import {
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
   SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   trimTrackedSessionScopes,
-  writeSessionIngestionState,
   type SessionAdmissionPolicy,
   type SessionEntryOrigin,
   type SessionIngestionMessage,
   type SessionIngestionSource,
-  type SessionIngestionState,
 } from "./session-ingestion.js";
-import { compareStoreTimestampDesc } from "./short-term-promotion-utils.js";
+import { compareStoreTimestampDesc, isGenericDailyHeading } from "./short-term-promotion-utils.js";
 import {
   filterLiveShortTermRecallEntries,
   filterFreshLightDreamingEntries,
@@ -76,23 +78,8 @@ import {
 } from "./short-term-promotion.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-type DreamingPhaseStorageConfig = {
-  timezone?: string;
-  storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-  execution?: { model?: string };
-};
-type LightDreamingConfig = DreamingPhaseStorageConfig & {
-  enabled: boolean;
-  lookbackDays: number;
-  limit: number;
-  dedupeSimilarity: number;
-};
-type RemDreamingConfig = DreamingPhaseStorageConfig & {
-  enabled: boolean;
-  lookbackDays: number;
-  limit: number;
-  minPatternStrength: number;
-};
+type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
+type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> = {
   agentId?: string;
   workspaceDir: string;
@@ -105,7 +92,6 @@ type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingCon
   nowMs?: number;
   admissionPolicy?: SessionAdmissionPolicy;
 };
-const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
@@ -113,8 +99,6 @@ const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const LIGHT_DIARY_HISTORY_LIMIT = 4;
 const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
-const GENERIC_DAY_HEADING_RE =
-  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
   {
     heading: "## Light Sleep",
@@ -155,21 +139,6 @@ function normalizeDailyHeading(line: string): string | null {
     return null;
   }
   return truncateUtf16Safe(heading, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
-}
-
-function isGenericDailyHeading(heading: string): boolean {
-  const normalized = heading.trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return true;
-  }
-  const lower = normalized.toLowerCase();
-  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
-    return true;
-  }
-  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
-    return true;
-  }
-  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 function normalizeDailySnippet(line: string): string | null {
@@ -399,10 +368,12 @@ function findManagedDailyDreamingHeadingIndex(
 
 function isManagedDailyDreamingBoundary(
   line: string,
+  headingLevel: number,
   blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
 ): boolean {
   const trimmed = line.trim();
-  return /^#{1,6}\s+/.test(trimmed) || blockByStartMarker.has(trimmed);
+  const heading = /^#{1,6}(?=\s)/.exec(trimmed);
+  return (heading !== null && heading[0].length <= headingLevel) || blockByStartMarker.has(trimmed);
 }
 
 function stripManagedDailyDreamingLines(lines: string[]): string[] {
@@ -423,7 +394,10 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
         stripUntilIndex = cursor;
         break;
       }
-      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker)) {
+      if (
+        line &&
+        isManagedDailyDreamingBoundary(line, block.heading.indexOf(" "), blockByStartMarker)
+      ) {
         stripUntilIndex = cursor - 1;
         break;
       }
@@ -513,63 +487,12 @@ type DailyIngestionBatch = {
   >;
 };
 
-type DailyMemoryFile = {
-  fileName: string;
-  day: string;
-  canonical: boolean;
-};
-
-function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
-  const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
-  const day = match?.[1];
-  return day
-    ? {
-        fileName,
-        day,
-        canonical: fileName.toLowerCase() === `${day}.md`,
-      }
-    : null;
-}
-
-function compareDailyMemoryFilesByNewestDay(left: DailyMemoryFile, right: DailyMemoryFile): number {
-  const dayOrder = right.day.localeCompare(left.day);
-  if (dayOrder !== 0) {
-    return dayOrder;
-  }
-  if (left.canonical !== right.canonical) {
-    return left.canonical ? -1 : 1;
-  }
-  return left.fileName.localeCompare(right.fileName);
-}
-
 function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: string): string {
   const relativePath = path.relative(workspaceDir, filePath).replace(/\\/g, "/");
   if (relativePath && relativePath !== ".." && !relativePath.startsWith("../")) {
     return relativePath;
   }
   return `memory/${path.basename(filePath)}`;
-}
-
-async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  const entries = await readMemoryCoreWorkspaceEntries<DailyIngestionFileState>({
-    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-    workspaceDir,
-  });
-  return normalizeDailyIngestionState({
-    version: 1,
-    files: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
-  });
-}
-
-async function writeDailyIngestionState(
-  workspaceDir: string,
-  state: DailyIngestionState,
-): Promise<void> {
-  await writeMemoryCoreWorkspaceEntries({
-    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-    workspaceDir,
-    entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
-  });
 }
 
 function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
@@ -823,25 +746,19 @@ async function collectDailyIngestionBatches(params: {
   );
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
-  const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((err: unknown) => {
-    if (extractErrorCode(err) === "ENOENT") {
-      return [] as Dirent[];
-    }
-    throw err;
-  });
+  const entries = await listWorkspaceDirectory(params.workspaceDir, memoryDir).catch(
+    (err: unknown) => {
+      if (extractErrorCode(err) === "ENOENT") {
+        return [];
+      }
+      throw err;
+    },
+  );
   const files = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const file = parseDailyMemoryFileName(entry.name);
-      if (!file) {
-        return null;
-      }
-      if (!isDayWithinLookback(file.day, cutoffMs)) {
-        return null;
-      }
-      return file;
+    .flatMap((entry) => {
+      const file = entry.isFile() ? parseDailyMemoryFileName(entry.name) : null;
+      return file && isDayWithinLookback(file.day, cutoffMs) ? [file] : [];
     })
-    .filter((entry): entry is DailyMemoryFile => entry !== null)
     .toSorted(compareDailyMemoryFilesByNewestDay);
 
   const batches: DailyIngestionBatch[] = [];
@@ -853,12 +770,12 @@ async function collectDailyIngestionBatches(params: {
   );
   let changed = false;
   const totalCap = Math.max(20, params.limit * 4);
-  const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, Math.max(files.length, 1))));
+  const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, files.length)));
   let total = 0;
   for (const file of files) {
     const relativePath = `memory/${file.fileName}`;
     const filePath = path.join(memoryDir, file.fileName);
-    const stat = await fs.stat(filePath).catch((err: unknown) => {
+    const stat = await inspectWorkspaceFile(params.workspaceDir, filePath).catch((err: unknown) => {
       if (extractErrorCode(err) === "ENOENT") {
         return null;
       }
@@ -888,7 +805,7 @@ async function collectDailyIngestionBatches(params: {
     }
     changed = true;
 
-    const raw = await fs.readFile(filePath, "utf-8").catch((err: unknown) => {
+    const raw = await readWorkspaceText(params.workspaceDir, filePath).catch((err: unknown) => {
       if (extractErrorCode(err) === "ENOENT") {
         return "";
       }
@@ -1010,19 +927,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
     );
 
     const resolved = normalizedPaths
-      .map((filePath) => {
-        const fileName = path.basename(filePath);
-        const file = parseDailyMemoryFileName(fileName);
-        if (!file) {
-          return { filePath, fileName, relativePath: "", file: null as DailyMemoryFile | null };
-        }
-        return {
-          filePath,
-          fileName,
-          relativePath: resolveWorkspaceMemoryRelativePath(params.workspaceDir, filePath),
-          file,
-        };
-      })
+      .map((filePath) => ({ filePath, file: parseDailyMemoryFileName(path.basename(filePath)) }))
       .toSorted((a, b) => {
         if (a.file && b.file) {
           return compareDailyMemoryFilesByNewestDay(a.file, b.file);
@@ -1036,15 +941,8 @@ export async function seedHistoricalDailyMemorySignals(params: {
         return a.filePath.localeCompare(b.filePath);
       });
 
-    const valid = resolved.filter(
-      (
-        entry,
-      ): entry is {
-        filePath: string;
-        fileName: string;
-        relativePath: string;
-        file: DailyMemoryFile;
-      } => Boolean(entry.file),
+    const valid = resolved.flatMap((entry) =>
+      entry.file ? [{ filePath: entry.filePath, file: entry.file }] : [],
     );
     const skippedPaths = resolved.filter((entry) => !entry.file).map((entry) => entry.filePath);
     const totalCap = Math.max(20, params.limit * 4);
@@ -1056,22 +954,25 @@ export async function seedHistoricalDailyMemorySignals(params: {
       if (importedSignalCount >= totalCap) {
         break;
       }
-      const raw = await fs.readFile(entry.filePath, "utf-8").catch((err: unknown) => {
-        if (extractErrorCode(err) === "ENOENT") {
-          skippedPaths.push(entry.filePath);
-          return "";
-        }
-        throw err;
-      });
+      const raw = await readWorkspaceText(params.workspaceDir, entry.filePath).catch(
+        (err: unknown) => {
+          if (extractErrorCode(err) === "ENOENT") {
+            skippedPaths.push(entry.filePath);
+            return "";
+          }
+          throw err;
+        },
+      );
       if (!raw) {
         continue;
       }
-      const recordedProvenance = provenanceByPath.get(entry.relativePath);
+      const relativePath = resolveWorkspaceMemoryRelativePath(params.workspaceDir, entry.filePath);
+      const recordedProvenance = provenanceByPath.get(relativePath);
       // Same owner-controlled default as live daily ingestion above: workspace
       // notes are 'agent' unless the flush explicitly recorded a downgrade.
       const results = buildDailyIngestionResults({
         raw,
-        path: entry.relativePath,
+        path: relativePath,
         limit: Math.min(perFileCap, totalCap - importedSignalCount),
         defaultObservedAt: params.nowMs,
         ...(recordedProvenance ? { recorded: recordedProvenance } : {}),

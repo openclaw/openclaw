@@ -72,7 +72,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     vi.unstubAllEnvs();
   });
 
-  it("does not start a worker when startup cleanup has nothing to reclaim", async () => {
+  it("uses one worker for empty startup archive planning without changing the session", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:current";
     const entry = { sessionId: "current-session", updatedAt: now };
@@ -99,7 +99,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     } finally {
       workerChannel.unsubscribe(onWorker);
     }
-    expect(workersStarted).toBe(0);
+    expect(workersStarted).toBe(1);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(entry);
   });
 
@@ -157,7 +157,10 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         // Replacement may schedule maintenance; the stale deletion must not reach reclamation.
         const deletionPlans = reclaim.mock.calls
           .map(([{ plan }]) => plan)
-          .filter((plan) => !plan.kind.startsWith("maintenance-"));
+          .filter(
+            (plan) =>
+              !plan.kind.startsWith("maintenance-") && !plan.kind.startsWith("archive-publish-"),
+          );
         expect(deletionPlans).toMatchObject(
           mutation === "delete"
             ? [
@@ -234,7 +237,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   });
 
   it.each([false, true])(
-    "reports warm marker phases without changing native failure=%s",
+    "reuses the warm archive reader while preserving marker phases and native failure=%s",
     async (fail) => {
       const sessionKey = "agent:main:marker-scan-history";
       const sessionId = "marker-scan-history";
@@ -275,6 +278,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       // Native age and payload reads advance the clock, not the number of timer calls.
       database.db.exec(`CREATE TEMP VIEW transcript_events AS
         SELECT session_id, seq, cleanup_marker_event(event_json) AS event_json,
+          event_zstd, event_utf8_bytes, navigation_json,
           cleanup_event_age(created_at) AS created_at
         FROM main.transcript_events`);
       const logPath = path.join(tempDirs.make("cleanup-diagnostics-log-"), "writer.log");
@@ -303,6 +307,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
             archivedTranscriptArtifacts: 0,
           });
         }
+        expect(workersStarted).toBe(fail ? 0 : 1);
         const records = await readArtifactPreparationLogs(logPath);
         expect(records).toHaveLength(1);
         expect(records[0]?.message).toBe(
@@ -337,7 +342,8 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         channel("worker_threads").unsubscribe(onWorker);
         database.db.exec("DROP VIEW temp.transcript_events");
       }
-      expect(workersStarted).toBe(0);
+      // Empty archive probes reuse the history reader across warm cleanup passes.
+      expect(workersStarted).toBe(fail ? 0 : 1);
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before);
       await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(
         events,

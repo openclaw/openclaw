@@ -5,6 +5,7 @@
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
+  type ExecApprovalDecision,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
@@ -22,6 +23,11 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import {
+  commandApprovalAllowedDecisions,
+  commandApprovalCapabilities,
+  resolveCommandApproval,
+} from "./native-command-approval.js";
+import {
   approvalRequestExplicitlyUnavailable,
   codexApprovalTimeoutText,
   mapExecDecisionToOutcome,
@@ -31,7 +37,6 @@ import {
   truncateCodexApprovalDisplayText as truncate,
   type AppServerApprovalOutcome,
   type CodexApprovalKind,
-  type ExecApprovalDecision,
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
@@ -123,6 +128,19 @@ export async function handleCodexAppServerApprovalRequest(params: {
       resolvedOutcome = "approved-once";
       resolvedMessage = "Codex app-server approval granted for this byte-bound command only.";
     }
+    if (params.method === "item/commandExecution/requestApproval" && resolvedOutcome !== "denied") {
+      const resolution = resolveCommandApproval(context.requestParams, resolvedOutcome);
+      if (resolution.scope === "denied") {
+        resolvedOutcome = "denied";
+        resolvedMessage = "Codex app-server request does not offer the approved scope.";
+      } else if (resolvedOutcome === "approved-session" && resolution.scope === "once") {
+        resolvedOutcome = "approved-once";
+        resolvedMessage = approvalResolutionMessage(resolvedOutcome);
+      } else if (resolution.scope === "persistent") {
+        resolvedMessage =
+          "Codex app-server approval granted; persistent policy amendment requested for future sessions.";
+      }
+    }
     // Permission changes close this native turn while its outer run stays live.
     // Recheck after byte revalidation before releasing a grant to Codex.
     params.signal?.throwIfAborted();
@@ -195,25 +213,34 @@ export async function handleCodexAppServerApprovalRequest(params: {
       !readNetworkApprovalContext(requestParams);
     if (canAutoApproveConcreteToolCall && params.autoApprove === true) {
       return await resolvePolicyApproval(
-        "approved-session",
+        "approved-once",
         "Codex app-server approval auto-approved by runtime policy.",
       );
     }
     // Codex app-server approval requests do not expose an enforceable resolved
     // executable, so unresolved requests must stay on the human approval route.
+    const allowedDecisions = nativeApprovalAllowedDecisions({
+      method: params.method,
+      requestParams,
+      requiresOneShot: mutableFileApprovalRequiresOneShot,
+    });
+    const repeatedApproval =
+      params.method === "item/commandExecution/requestApproval" &&
+      allowedDecisions?.includes("allow-always")
+        ? commandApprovalCapabilities(requestParams).repeated
+        : undefined;
     const requestResult = await requestPluginApproval({
       hostCapabilities: params.paramsForRun.hostCapabilities,
       signal: params.signal,
       title: context.title,
-      description: context.description,
+      description:
+        repeatedApproval?.scope === "persistent"
+          ? `${repeatedApproval.description}\n${context.description}`
+          : context.description,
       severity: context.severity,
       toolName: context.toolName,
       toolCallId: context.approvalId,
-      allowedDecisions: nativeApprovalAllowedDecisions({
-        method: params.method,
-        requestParams,
-        requiresOneShot: mutableFileApprovalRequiresOneShot,
-      }),
+      allowedDecisions,
     });
     approvalId = requestResult?.id;
     params.signal?.throwIfAborted();
@@ -342,7 +369,7 @@ function buildApprovalResponse(
   outcome: AppServerApprovalOutcome,
 ): JsonValue {
   if (method === "item/commandExecution/requestApproval") {
-    return { decision: commandApprovalDecision(requestParams, outcome) };
+    return { decision: resolveCommandApproval(requestParams, outcome).decision };
   }
   if (method === "item/fileChange/requestApproval") {
     return { decision: fileChangeApprovalDecision(outcome) };
@@ -429,7 +456,7 @@ function buildApprovalContext(params: {
           : "Codex app-server approval";
   const subject =
     (networkApproval
-      ? `Network: ${sanitizePermissionScalar(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
+      ? `Network: ${sanitizeCodexApprovalVisibleText(networkApproval.protocol)}://${sanitizePermissionHostValue(networkApproval.host)}`
       : undefined) ??
     permissionLines[0] ??
     (command
@@ -829,23 +856,6 @@ function stableJsonText(value: unknown): string | undefined {
   return undefined;
 }
 
-function commandApprovalDecision(
-  requestParams: JsonObject | undefined,
-  outcome: AppServerApprovalOutcome,
-): JsonValue {
-  if (outcome === "cancelled") {
-    return "cancel";
-  }
-  if (outcome === "denied" || outcome === "unavailable") {
-    return "decline";
-  }
-  const capabilities = commandApprovalCapabilities(requestParams);
-  if (outcome === "approved-session" && capabilities.sessionDecision !== undefined) {
-    return capabilities.sessionDecision;
-  }
-  return capabilities.once ? "accept" : "decline";
-}
-
 function nativeApprovalAllowedDecisions(params: {
   method: string;
   requestParams: JsonObject | undefined;
@@ -854,23 +864,9 @@ function nativeApprovalAllowedDecisions(params: {
   if (params.method === "item/fileChange/requestApproval") {
     return ["allow-once", "allow-always", "deny"];
   }
-  if (params.method !== "item/commandExecution/requestApproval") {
-    return undefined;
-  }
-  const available = params.requestParams?.availableDecisions;
-  if (!Array.isArray(available)) {
-    return undefined;
-  }
-  const capabilities = commandApprovalCapabilities(params.requestParams);
-  const decisions: ExecApprovalDecision[] = [];
-  if (capabilities.once) {
-    decisions.push("allow-once");
-  }
-  if (!params.requiresOneShot && capabilities.sessionDecision !== undefined) {
-    decisions.push("allow-always");
-  }
-  decisions.push("deny");
-  return decisions;
+  return params.method === "item/commandExecution/requestApproval"
+    ? commandApprovalAllowedDecisions(params.requestParams, params.requiresOneShot)
+    : undefined;
 }
 
 function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValue {
@@ -911,7 +907,7 @@ function describeCommandApprovalDetails(requestParams: JsonObject | undefined): 
   const execpolicySummary = summarizeStringArray(
     requestParams?.proposedExecpolicyAmendment,
     "Proposed exec policy",
-    sanitizePermissionScalar,
+    sanitizeCodexApprovalVisibleText,
   );
   if (execpolicySummary) {
     lines.push(execpolicySummary);
@@ -942,53 +938,24 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
   if (isJsonObject(permissions.network)) {
     const summaries = [
       summarizeNetworkEnabledPermission(permissions.network, risks),
-      summarizePermissionRecord(permissions.network, risks, [
-        {
-          key: "allowHosts",
-          label: "allowHosts",
-          sanitize: sanitizePermissionHostValue,
-          risksFor: permissionHostRisks,
-        },
-      ]),
+      summarizePermissionArray(permissions.network.allowHosts, "allowHosts", risks, {
+        sanitize: sanitizePermissionHostValue,
+        risksFor: permissionHostRisks,
+      }),
     ].filter((summary): summary is string => Boolean(summary));
     networkSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
   let fileSystemSummary: string | undefined;
-  if (isJsonObject(permissions.fileSystem)) {
+  const fileSystem = permissions.fileSystem;
+  if (isJsonObject(fileSystem)) {
     const summaries = [
-      summarizePermissionRecord(permissions.fileSystem, risks, [
-        {
-          key: "read",
-          label: "read",
+      ...["read", "write", "roots", "readPaths", "writePaths"].map((key) =>
+        summarizePermissionArray(fileSystem[key], key, risks, {
           sanitize: sanitizePermissionPathValue,
           risksFor: permissionPathRisks,
-        },
-        {
-          key: "write",
-          label: "write",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "roots",
-          label: "roots",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "readPaths",
-          label: "readPaths",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-        {
-          key: "writePaths",
-          label: "writePaths",
-          sanitize: sanitizePermissionPathValue,
-          risksFor: permissionPathRisks,
-        },
-      ]),
-      summarizeFileSystemEntries(permissions.fileSystem, risks),
+        }),
+      ),
+      summarizeFileSystemEntries(fileSystem, risks),
     ].filter((summary): summary is string => Boolean(summary));
     fileSystemSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
@@ -1003,13 +970,6 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
   }
   return lines;
 }
-
-type PermissionArrayDescriptor = {
-  key: string;
-  label: string;
-  sanitize: (value: string) => string;
-  risksFor: (value: string) => readonly string[];
-};
 
 function summarizeNetworkEnabledPermission(
   permission: JsonObject,
@@ -1049,54 +1009,37 @@ function summarizeFileSystemEntries(
       }
     }
     if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
+      samples.push(
+        `${sanitizeCodexApprovalVisibleText(access)} ${sanitizePermissionPathValue(path)}`,
+      );
     }
   }
-  if (count === 0) {
-    return undefined;
-  }
-  const remaining = count - samples.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `entries: ${samples.join(", ")}${remainderSuffix}`;
-}
-
-function summarizePermissionRecord(
-  permission: JsonObject,
-  risks: Set<string>,
-  descriptors: readonly PermissionArrayDescriptor[],
-): string | undefined {
-  return (
-    descriptors
-      .map((descriptor) => summarizePermissionArray(permission, descriptor, risks))
-      .filter(Boolean)
-      .join("; ") || undefined
-  );
+  return formatPermissionSamples("entries", samples, count);
 }
 
 function summarizePermissionArray(
-  record: JsonObject,
-  descriptor: PermissionArrayDescriptor,
+  input: JsonValue | undefined,
+  label: string,
   risks: Set<string>,
+  format: {
+    sanitize: (value: string) => string;
+    risksFor: (value: string) => readonly string[];
+  },
 ): string | undefined {
-  const values = normalizeTrimmedStringList(record[descriptor.key]);
+  const values = normalizeTrimmedStringList(input);
   if (values.length === 0) {
     return undefined;
   }
   for (const value of values) {
-    for (const risk of descriptor.risksFor(value)) {
+    for (const risk of format.risksFor(value)) {
       risks.add(risk);
     }
   }
   const sampleValues = values
     .slice(0, PERMISSION_SAMPLE_LIMIT)
-    .map(descriptor.sanitize)
+    .map(format.sanitize)
     .filter(Boolean);
-  if (sampleValues.length === 0) {
-    return `${descriptor.label}: ${values.length}`;
-  }
-  const remaining = values.length - sampleValues.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${descriptor.label}: ${sampleValues.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples(label, sampleValues, values.length);
 }
 
 function summarizeStringArray(
@@ -1111,13 +1054,7 @@ function summarizeStringArray(
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => sanitize(entry))
     .filter(Boolean);
-  if (values.length === 0) {
-    return undefined;
-  }
-  const samples = values.slice(0, PERMISSION_SAMPLE_LIMIT);
-  const remaining = values.length - samples.length;
-  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
+  return formatPermissionSamples(label, values.slice(0, PERMISSION_SAMPLE_LIMIT), values.length);
 }
 
 function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string | undefined {
@@ -1135,19 +1072,32 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
     }
     count += 1;
     if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
+      samples.push(
+        `${sanitizeCodexApprovalVisibleText(action)} ${sanitizePermissionHostValue(host)}`,
+      );
     }
   }
+  return formatPermissionSamples("Proposed network policy", samples, count);
+}
+
+function formatPermissionSamples(
+  label: string,
+  samples: string[],
+  count: number,
+): string | undefined {
   if (count === 0) {
     return undefined;
   }
+  if (samples.length === 0) {
+    return `${label}: ${count}`;
+  }
   const remaining = count - samples.length;
   const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
-  return `Proposed network policy: ${samples.join(", ")}${remainderSuffix}`;
+  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
 }
 
 function sanitizePermissionHostValue(value: string): string {
-  const compact = sanitizePermissionScalar(value).toLowerCase();
+  const compact = sanitizeCodexApprovalVisibleText(value).toLowerCase();
   const withoutScheme = compact.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
   const authority = withoutScheme.split(/[/?#]/, 1)[0] ?? withoutScheme;
   const withoutUserInfo = authority.includes("@")
@@ -1158,13 +1108,9 @@ function sanitizePermissionHostValue(value: string): string {
 
 function sanitizePermissionPathValue(value: string): string {
   return truncate(
-    formatApprovalDisplayPath(sanitizePermissionScalar(value)),
+    formatApprovalDisplayPath(sanitizeCodexApprovalVisibleText(value)),
     PERMISSION_VALUE_MAX_LENGTH,
   );
-}
-
-function sanitizePermissionScalar(value: string): string {
-  return sanitizeCodexApprovalVisibleText(value);
 }
 
 function permissionHostRisks(value: string): string[] {
@@ -1180,7 +1126,7 @@ function permissionHostRisks(value: string): string[] {
 }
 
 function permissionPathRisks(value: string): string[] {
-  const normalized = sanitizePermissionScalar(value);
+  const normalized = sanitizeCodexApprovalVisibleText(value);
   const risks: string[] = [];
   if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
     risks.push("filesystem root");
@@ -1217,37 +1163,6 @@ function isPrivateNetworkHostPattern(value: string): boolean {
     return true;
   }
   return /^172\.(1[6-9]|2\d|3[0-1])\./.test(wildcardStripped);
-}
-
-function commandApprovalCapabilities(requestParams: JsonObject | undefined): {
-  once: boolean;
-  sessionDecision?: JsonValue;
-} {
-  const available = requestParams?.availableDecisions;
-  if (!Array.isArray(available)) {
-    return { once: true, sessionDecision: "acceptForSession" };
-  }
-  return {
-    once: available.includes("accept"),
-    ...(available.includes("acceptForSession")
-      ? { sessionDecision: "acceptForSession" }
-      : { sessionDecision: findAvailableCommandAmendmentDecision(requestParams) }),
-  };
-}
-
-function findAvailableCommandAmendmentDecision(
-  requestParams: JsonObject | undefined,
-): JsonValue | undefined {
-  const available = requestParams?.availableDecisions;
-  if (!Array.isArray(available)) {
-    return undefined;
-  }
-  return available.find(
-    (entry): entry is JsonObject =>
-      isJsonObject(entry) &&
-      (isJsonObject(entry.acceptWithExecpolicyAmendment) ||
-        isJsonObject(entry.applyNetworkPolicyAmendment)),
-  );
 }
 
 function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {

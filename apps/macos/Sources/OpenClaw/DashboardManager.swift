@@ -388,30 +388,12 @@ final class DashboardManager {
         if let previous = self.lastFrontmostWindow?.windowController as? DashboardWindowController,
            previous.isHiddenForExperience { return false }
         guard self.mainTarget == .primary, self.controller?.pendingGatewaySwitch == nil else { return false }
-        let mode = AppStateStore.shared.connectionMode
         // Remote dashboards must resolve the server's sign-in route before any
         // document receives native credentials, including the synchronous fast path.
-        guard mode == .local else { return false }
-        guard let endpoint = Self.immediateDashboardEndpoint(mode: mode),
-              let url = try? GatewayEndpointStore.dashboardURL(
-                  for: endpoint.config,
-                  mode: mode,
-                  authToken: endpoint.config.token)
-        else {
-            return false
-        }
-        let config = endpoint.config
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
-            password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-        guard auth.hasCredential else {
-            return false
-        }
+        guard let (configuration, endpoint) = self.immediateWindowConfiguration() else { return false }
         let previousController = self.controller
         self.presentDashboard(
-            configuration: WindowConfiguration(
-                url: url, auth: auth, tlsParams: endpoint.tls?.params, mode: mode, displayName: "OpenClaw"),
+            configuration: configuration,
             endpoint: endpoint,
             target: .primary,
             source: previousController)
@@ -432,15 +414,15 @@ final class DashboardManager {
     func preloadIfConfigured() {
         guard self.mainTarget == .primary, self.controller == nil,
               AppStateStore.shared.onboardingSeen,
-              let (mode, url, auth, tlsParams) = immediateWindowConfiguration()
+              let (configuration, _) = immediateWindowConfiguration()
         else { return }
-        let controller = makePrimaryController(
-            url: url,
-            auth: auth,
-            mode: mode,
-            tlsParams: tlsParams)
+        let controller = makeController(
+            configuration: configuration,
+            target: .primary,
+            windowAutosaveName: self.mainWindowAutosaveName,
+            auxiliary: false)
         self.installMainController(controller)
-        controller.loadInBackground(url: url, auth: auth)
+        controller.loadInBackground(url: configuration.url, auth: configuration.auth)
     }
 
     private func showResolvedPrimaryDashboard() async throws {
@@ -542,10 +524,16 @@ final class DashboardManager {
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
-        let controller = self.controller ?? makePrimaryController(
-            url: Self.failureURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            mode: .unconfigured)
+        let controller = self.controller ?? makeController(
+            configuration: WindowConfiguration(
+                url: Self.failureURL,
+                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+                tlsParams: nil,
+                mode: .unconfigured,
+                displayName: "OpenClaw"),
+            target: .primary,
+            windowAutosaveName: self.mainWindowAutosaveName,
+            auxiliary: false)
         self.pendingOpenCommands.removeAll()
         self.installMainController(controller)
         // Keep observing while the failure page is up so a recovered tunnel
@@ -836,6 +824,8 @@ extension DashboardManager {
         guard isMainWindow || windowID != nil else { return nil }
         let preserveNavigation = self.target(for: source) == target &&
             Self.notificationRoute(source.currentURL) == Self.notificationRoute(configuration.url)
+        let signInReturnURL = source.browserSignInReturnURL(
+            session: configuration.browserSession, dashboardURL: configuration.url)
         let pendingActions = source.takePendingNativeActions()
         self.displayedPrimaryRoutes[ObjectIdentifier(source)] = nil
         // Background reconciliation must not resurrect a window the user closed;
@@ -858,7 +848,7 @@ extension DashboardManager {
         } else if let windowID {
             self.auxiliaryWindows[windowID] = AuxiliaryWindowInstance(target: target, controller: replacement)
         }
-        self.loadWindow(replacement, configuration: configuration, present: false)
+        self.loadWindow(replacement, configuration: configuration, present: false, restoringRoute: signInReturnURL)
         if shouldPresent, present == true || !replacement.isWindowOpen {
             replacement.show()
         }
@@ -1060,22 +1050,6 @@ extension DashboardManager {
             guard self?.profileObservations[target]?.id == observationID, delivery.isCurrent else { return }
             await self?.refreshGatewaySnapshots()
         }
-    }
-
-    private func makePrimaryController(
-        url: URL,
-        auth: DashboardWindowAuth,
-        mode: AppState.ConnectionMode,
-        tlsParams: GatewayTLSParams? = nil,
-        reusingWindow: NSWindow? = nil) -> DashboardWindowController
-    {
-        self.makeController(
-            configuration: WindowConfiguration(
-                url: url, auth: auth, tlsParams: tlsParams, mode: mode, displayName: "OpenClaw"),
-            target: .primary,
-            windowAutosaveName: self.mainWindowAutosaveName,
-            auxiliary: false,
-            reusingWindow: reusingWindow)
     }
 
     private func makeController(

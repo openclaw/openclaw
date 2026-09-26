@@ -1,14 +1,15 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -30,6 +31,7 @@ import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void> | void) | undefined,
@@ -170,6 +172,71 @@ it.each([false, true])(
     }
   },
 );
+
+it("caps only the oldest eligible activity ties without decoding unrelated payloads", () => {
+  const { database, storePath } = createPlannerStore(0);
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const old = now - 10 * 24 * 60 * 60 * 1_000;
+  const key = (name: string) => `agent:main:bounded-${name}`;
+  const untouchedPayload = "unselected-maintenance-payload".repeat(1_000);
+  const fixtures: Array<[string, Partial<SessionEntry>]> = [
+    ["oldest", { updatedAt: old + 1 }],
+    ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
+    ["tie-\u{10000}", { updatedAt: old + 3, lastActivityAt: old + 10 }],
+    ["started", { sessionStartedAt: now }],
+    ["pinned", { pinnedAt: old }],
+    ["locked", { modelSelectionLocked: true }],
+    ["running", { status: "running" }],
+    ["group", { chatType: "group" }],
+    ["recent", { lastActivityAt: now }],
+    ["live", {}],
+    ["fresh", { updatedAt: now }],
+  ];
+  const victims = ["oldest", "tie-\u{10000}"].map(key);
+  for (const [index, [name, entry]] of fixtures.entries()) {
+    replaceSessionEntrySync(
+      { sessionKey: key(name), storePath },
+      {
+        sessionId: `bounded-${index}`,
+        updatedAt: old,
+        label: victims.includes(key(name)) ? name : untouchedPayload,
+        ...entry,
+      },
+    );
+  }
+  const unregister = registerSessionMaintenancePreserveKeysProvider(() => [key("live")]);
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const plan = runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          archiveDirectory: path.join(path.dirname(database.path), "archives"),
+          maintenanceConfig: {
+            ...resolveMaintenanceConfigFromInput(),
+            archiveDashboardAfterMs: null,
+            preserveRecentMs: 1_000,
+            maxEntries: fixtures.length - victims.length,
+          },
+          storePath,
+        }),
+      { agentId: "main", path: database.path },
+    );
+    expect(plan.archivedSessionKeys.toSorted()).toEqual(victims.toSorted());
+    expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
+    expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
+      false,
+    );
+  } finally {
+    parse.mockRestore();
+    unregister();
+  }
+  for (const [name] of fixtures) {
+    expect(loadSessionEntry({ sessionKey: key(name), storePath })?.archivedAt !== undefined).toBe(
+      victims.includes(key(name)),
+    );
+  }
+});
 
 it.each(["session-key", "session-id"] as const)(
   "preserves aged sessions during a lifecycle mutation and resumes retention afterward (%s)",
@@ -320,26 +387,33 @@ it("releases the store writer before maintenance archive sizing completes", asyn
   expect(writerCompletedBeforeMaterialization).toBe(true);
 });
 
-it("does not hold channel recording behind automatic session maintenance", async () => {
+it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
   const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
-  const finalized = createDeferred();
+  const finalized = createDeferredCore();
+  void finalized.promise.catch(() => {});
   const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
   vi.spyOn(
     maintenance,
     "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
   ).mockImplementation(async (...args) => {
-    const result = await finalize(...args);
-    if (
-      args[1].some((plan) =>
-        plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
-      )
-    ) {
-      finalized.resolve();
+    const includesLaterEntry = args[1].some((plan) =>
+      plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
+    );
+    try {
+      const result = await finalize(...args);
+      if (includesLaterEntry) {
+        finalized.resolve();
+      }
+      return result;
+    } catch (error) {
+      if (includesLaterEntry) {
+        finalized.reject(error);
+      }
+      throw error;
     }
-    return result;
   });
   replaceSessionEntrySync(
     { sessionKey: staleSessionKey, storePath },
@@ -417,7 +491,7 @@ it("does not hold channel recording behind automatic session maintenance", async
 
   expect(firstCompleted).toBe("entry-write");
   // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
-  await finalized.promise;
+  await racePromiseWithAbortSignal(finalized.promise, signal);
   expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
   expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
 });

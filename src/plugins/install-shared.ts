@@ -255,13 +255,10 @@ export function sourceFamilyForInstallPolicySource(
 ): PluginSecuritySourceFamily {
   switch (source?.kind) {
     case "archive":
-      return "archive";
     case "file":
-      return "file";
     case "git":
-      return "git";
     case "npm":
-      return "npm";
+      return source.kind;
     case "bundled":
     case "clawhub":
     case "local-path":
@@ -371,6 +368,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
   copyErrorPrefix: string;
@@ -425,6 +423,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     targetDir,
     mode: params.mode,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,

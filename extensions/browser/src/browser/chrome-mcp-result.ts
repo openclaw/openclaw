@@ -1,12 +1,12 @@
 // Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   asNullableRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_CONNECTION_TOOL_ERROR_RE,
@@ -138,9 +138,30 @@ function extractMessageText(result: ChromeMcpToolResult): string {
   return blocks.find((block) => block.trim()) ?? "";
 }
 
-export function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
+function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
   const message = extractMessageText(result).trim();
   return message || `Chrome MCP tool "${name}" failed.`;
+}
+
+export function extractChromeMcpToolError(
+  result: ChromeMcpToolResult,
+  name: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  if (
+    result.isError ||
+    (name === "close_page" &&
+      extractStructuredPages(result).some((page) => page.id === args.pageId))
+  ) {
+    return extractToolErrorMessage(result, name);
+  }
+  if (name !== "navigate_page") {
+    return undefined;
+  }
+  // Chrome MCP catches page.goto failures without setting isError.
+  return [extractMessageText(result), ...extractTextContent(result)]
+    .flatMap((text) => text.split(/\r?\n/))
+    .find((line) => line.startsWith("Unable to navigate in the selected page:"));
 }
 
 function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
@@ -193,7 +214,8 @@ export function extractJsonMessage(result: ChromeMcpToolResult): unknown {
       const match = candidate.match(
         /^[\t ]*```json[\t ]*\r?\n([\s\S]*?)\r?\n[\t ]*```[\t ]*\r?$/im,
       );
-      return JSON.parse(match?.[1]?.trim() || candidate.trim());
+      const json = match?.[1]?.trim() || candidate.trim();
+      return json === "undefined" ? undefined : JSON.parse(json);
     } catch (err) {
       lastError = err;
     }

@@ -61,7 +61,10 @@ function buildLaunchdRestartScript(
 ): string {
   // The detached shell waits for the caller before touching launchd so the
   // current gateway process can exit cleanly after scheduling the handoff.
-  const waitForCallerPid = `wait_pid="$4"
+  const preamble = `service_target="$1"
+domain="$2"
+plist_path="$3"
+wait_pid="$4"
 ${renderPosixRestartLogSetup(restartLogEnv)}
 printf '[%s] openclaw restart attempt source=handoff mode=${mode} target=%s pid=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$service_target" "$wait_pid" >&2
 if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
@@ -79,10 +82,7 @@ fi
 `;
 
   if (mode === "park") {
-    return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
+    return `${preamble}
 status=0
 if launchctl bootout "$service_target"; then
   status=0
@@ -98,34 +98,13 @@ exit "$status"
 `;
   }
 
-  if (mode === "kickstart") {
-    // Restart is explicit operator intent; undo any previous `launchctl disable`.
-    return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
-${systemOwnershipGuard}
-status=0
-launchctl enable "$service_target"
-if launchctl kickstart -k "$service_target"; then
-  status=0
-else
-  status=$?
-  if launchctl bootstrap "$domain" "$plist_path"; then
-    status=0
-  else
-    launchctl kickstart -k "$service_target"
-    status=$?
-  fi
-fi
-if [ "$status" -eq 0 ]; then
+  const completion = `if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
 else
   printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 exit "$status"
 `;
-  }
 
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
@@ -173,53 +152,36 @@ while :; do
   sleep ${RELOAD_BOOTOUT_WAIT_DELAY_SECONDS}
 done
 `;
-    return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
+    return `${preamble}
 ${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
 ${bootoutWaitLoop}
 ${bootstrapRetryLoop}
-if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
-else
-  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
-fi
-exit "$status"
-`;
+${completion}`;
   }
 
   // Without -k, kickstart starts an inert service but leaves a KeepAlive
   // replacement alone. This actively schedules relaunch without a second
   // interruption when launchd wins the race after the caller exits.
-  return `service_target="$1"
-domain="$2"
-plist_path="$3"
-${waitForCallerPid}
+  const kickstart = mode === "kickstart" ? "kickstart -k" : "kickstart";
+  return `${preamble}
 ${systemOwnershipGuard}
 status=0
 launchctl enable "$service_target"
-if launchctl kickstart "$service_target"; then
+if launchctl ${kickstart} "$service_target"; then
   status=0
 else
   status=$?
   if launchctl bootstrap "$domain" "$plist_path"; then
     status=0
   else
-    launchctl kickstart "$service_target"
+    launchctl ${kickstart} "$service_target"
     status=$?
   fi
 fi
-if [ "$status" -eq 0 ]; then
-  printf '[%s] openclaw restart done source=handoff mode=${mode} interactive=0\\n' "$(date -u +%FT%TZ)" >&2
-else
-  printf '[%s] openclaw restart failed source=handoff mode=${mode} status=%s interactive=0\\n' "$(date -u +%FT%TZ)" "$status" >&2
-fi
-exit "$status"
-`;
+${completion}`;
 }
 
 function scheduleDetachedLaunchdHandoff(params: {

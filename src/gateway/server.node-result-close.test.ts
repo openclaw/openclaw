@@ -52,21 +52,21 @@ const RUNNER_ENVIRONMENT_ID = "environment-runner-socket-close";
 const RUNNER_BUNDLE_HASH = "a".repeat(64);
 
 async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
-  const environments = createWorkerEnvironmentStore();
+  const environments = await createWorkerEnvironmentStore();
   const placements = createWorkerSessionPlacementStore();
-  environments.createIntent({
+  await environments.createIntent({
     environmentId: RUNNER_ENVIRONMENT_ID,
     providerId: DEVICE_WORKER_PROVIDER_ID,
     profileId: `device:${nodeId}`,
     profileSnapshot: { install: "bundle", settings: { device: nodeId } },
     provisionOperationId: `provision:${RUNNER_ENVIRONMENT_ID}`,
   });
-  environments.transition({
+  await environments.transition({
     environmentId: RUNNER_ENVIRONMENT_ID,
     from: "requested",
     to: "provisioning",
   });
-  environments.transition({
+  await environments.transition({
     environmentId: RUNNER_ENVIRONMENT_ID,
     from: "provisioning",
     to: "ready",
@@ -92,7 +92,7 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       },
     },
   });
-  const attached = environments.transition({
+  const attached = await environments.transition({
     environmentId: RUNNER_ENVIRONMENT_ID,
     from: "ready",
     to: "attached",
@@ -107,7 +107,7 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
     },
   });
 
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: RUNNER_SESSION_ID,
     sessionKey: RUNNER_SESSION_KEY,
     agentId: "main",

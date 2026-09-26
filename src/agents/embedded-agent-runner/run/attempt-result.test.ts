@@ -99,6 +99,7 @@ function createResultFixture(params?: {
     getMessagingToolSentTexts: () => [],
     getMessagingToolSourceReplyPayloads: () => [],
     getSourceReplyDelivered: () => undefined,
+    getSourceReplyDeliveryState: () => undefined,
     getPendingToolMediaReply: () => params?.pendingToolMediaReply,
     getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
     getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),

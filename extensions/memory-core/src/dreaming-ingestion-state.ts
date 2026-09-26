@@ -1,8 +1,50 @@
-// Memory Core codecs normalize canonical and legacy dreaming ingestion state.
+// Canonical and legacy ingestion share checkpoint encoding and normalization.
 import {
   asNullableRecord,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DREAMING_DAILY_INGESTION_NAMESPACE,
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+  readMemoryCoreWorkspaceEntries,
+  SESSION_SEEN_HASHES_PER_CHUNK,
+  writeMemoryCoreWorkspaceEntries,
+} from "./dreaming-state.js";
+
+export const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
+
+export type DailyMemoryFile = {
+  fileName: string;
+  day: string;
+  canonical: boolean;
+};
+
+export function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
+  const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
+  const day = match?.[1];
+  return day
+    ? {
+        fileName,
+        day,
+        canonical: fileName.toLowerCase() === `${day}.md`,
+      }
+    : null;
+}
+
+export function compareDailyMemoryFilesByNewestDay(
+  left: DailyMemoryFile,
+  right: DailyMemoryFile,
+): number {
+  const dayOrder = right.day.localeCompare(left.day);
+  if (dayOrder !== 0) {
+    return dayOrder;
+  }
+  if (left.canonical !== right.canonical) {
+    return left.canonical ? -1 : 1;
+  }
+  return left.fileName.localeCompare(right.fileName);
+}
 
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -122,4 +164,87 @@ export function normalizeSessionIngestionState(raw: unknown): SessionIngestionSt
     }
   }
   return { version: 3, files, seenMessages };
+}
+
+export async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
+  const entries = await readMemoryCoreWorkspaceEntries<DailyIngestionFileState>({
+    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+    workspaceDir,
+  });
+  return normalizeDailyIngestionState({
+    version: 1,
+    files: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
+  });
+}
+
+export async function writeDailyIngestionState(
+  workspaceDir: string,
+  state: DailyIngestionState,
+): Promise<void> {
+  await writeMemoryCoreWorkspaceEntries({
+    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+    workspaceDir,
+    entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
+  });
+}
+
+export async function readSessionIngestionState(
+  workspaceDir: string,
+): Promise<SessionIngestionState> {
+  const [files, seenChunks] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<SessionIngestionFileState>({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<{ scope: string; index: number; hashes: string[] }>({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  const seenMessages: Record<string, string[]> = {};
+  for (const { value } of seenChunks.toSorted((a, b) => a.value.index - b.value.index)) {
+    if (!value.scope.trim()) {
+      continue;
+    }
+    seenMessages[value.scope] = [...(seenMessages[value.scope] ?? []), ...value.hashes];
+  }
+  return normalizeSessionIngestionState({
+    version: 3,
+    files: Object.fromEntries(files.map((entry) => [entry.key, entry.value])),
+    seenMessages,
+  });
+}
+
+export async function writeSessionIngestionState(
+  workspaceDir: string,
+  state: SessionIngestionState,
+): Promise<void> {
+  const seenEntries = Object.entries(state.seenMessages).flatMap(([scope, hashes]) =>
+    Array.from(
+      { length: Math.ceil(hashes.length / SESSION_SEEN_HASHES_PER_CHUNK) },
+      (_, index) => ({
+        key: `${scope}:${index}`,
+        value: {
+          scope,
+          index,
+          hashes: hashes.slice(
+            index * SESSION_SEEN_HASHES_PER_CHUNK,
+            (index + 1) * SESSION_SEEN_HASHES_PER_CHUNK,
+          ),
+        },
+      }),
+    ),
+  );
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+      entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+      entries: seenEntries,
+    }),
+  ]);
 }

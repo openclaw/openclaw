@@ -11,6 +11,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -25,6 +26,7 @@ import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 describe("worker node provisioning shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -82,7 +84,7 @@ describe("worker node provisioning shutdown replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const requested = placements.startDispatch(REQUEST);
+    const requested = await placements.startDispatch(REQUEST);
     const intent = deriveEnvironmentIntent(
       `session-dispatch:${REQUEST.sessionId}:${requested.generation}`,
     );
@@ -93,14 +95,14 @@ describe("worker node provisioning shutdown replay", () => {
       expectedGeneration: requested.generation,
       patch: { environmentId: intent.environmentId },
     });
-    const environment = support.testState.store.createIntent({
+    const environment = await support.testState.store.createIntent({
       environmentId: intent.environmentId,
       providerId: provider.id,
       profileId: "development",
       profileSnapshot: { install: "bundle", settings: { region: "test" } },
       provisionOperationId: intent.provisionOperationId,
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: environment.environmentId,
       from: "requested",
       to: "provisioning",
@@ -151,9 +153,9 @@ describe("worker node provisioning shutdown replay", () => {
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+        ...createWorkerWorkspaceRecoveryFixture({
+          resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
+        }),
       });
     const firstDispatch = createDispatch(first);
     const uninstallFirstGuard = first.installReconcileEnvironmentGuard(
@@ -197,11 +199,12 @@ describe("worker node provisioning shutdown replay", () => {
     expect(destroy).not.toHaveBeenCalled();
 
     support.testState.service = undefined;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     support.testState.stateDb = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: support.testState.root },
     });
-    support.testState.store = createWorkerEnvironmentStore({
+    support.testState.store = await createWorkerEnvironmentStore({
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });

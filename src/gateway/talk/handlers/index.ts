@@ -138,10 +138,6 @@ function asStringRecord(value: unknown): Record<string, string> | undefined {
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function normalizeAliasKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
-
 function resolveTalkVoiceId(
   providerConfig: TalkProviderConfig,
   requested: string | undefined,
@@ -153,9 +149,9 @@ function resolveTalkVoiceId(
   if (!aliases) {
     return requested;
   }
-  const normalizedRequested = normalizeAliasKey(requested);
+  const normalizedRequested = normalizeLowercaseStringOrEmpty(requested);
   for (const [alias, voiceId] of Object.entries(aliases)) {
-    if (normalizeAliasKey(alias) === normalizedRequested) {
+    if (normalizeLowercaseStringOrEmpty(alias) === normalizedRequested) {
       return voiceId;
     }
   }
@@ -783,12 +779,6 @@ function projectTalkSourceProviderMapForSecrets(
   );
 }
 
-function projectTalkRealtimeForSecrets(realtime: TalkRealtimeConfig): TalkRealtimeConfig {
-  const projected = redactConfigObject(realtime);
-  const providers = projectTalkSourceProviderMapForSecrets(realtime.providers);
-  return providers ? { ...projected, providers } : projected;
-}
-
 function projectTalkSourcePayloadForSecrets(payload: TalkConfigResponse): TalkConfigResponse {
   const projected = redactConfigObject(payload);
   const providers = projectTalkSourceProviderMapForSecrets(payload.providers);
@@ -796,13 +786,13 @@ function projectTalkSourcePayloadForSecrets(payload: TalkConfigResponse): TalkCo
     projected.providers = providers;
   }
   if (payload.realtime) {
-    projected.realtime = projectTalkRealtimeForSecrets(payload.realtime);
+    const realtime = redactConfigObject(payload.realtime);
+    const realtimeProviders = projectTalkSourceProviderMapForSecrets(payload.realtime.providers);
+    projected.realtime = realtimeProviders
+      ? { ...realtime, providers: realtimeProviders }
+      : realtime;
   }
   return projected;
-}
-
-function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderConfig {
-  return stripUnresolvedSecretApiKeyFromRecord(config) as TalkProviderConfig;
 }
 
 function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
@@ -825,7 +815,7 @@ function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
       cleaned[providerId] = providerConfig;
       continue;
     }
-    const next = stripUnresolvedSecretApiKeyFromRecord(cfg);
+    const next = stripUnresolvedSecretApiKey(cfg);
     if (next !== cfg) {
       mutated = true;
     }
@@ -837,9 +827,7 @@ function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
   return { ...base, providers: cleaned };
 }
 
-function stripUnresolvedSecretApiKeyFromRecord(
-  config: Record<string, unknown>,
-): Record<string, unknown> {
+function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderConfig {
   if (config.apiKey === undefined || typeof config.apiKey === "string") {
     return config;
   }
@@ -878,7 +866,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const includeSecrets = Boolean((params as { includeSecrets?: boolean }).includeSecrets);
+    const includeSecrets = Boolean(params.includeSecrets);
     if (includeSecrets && !canReadTalkSecrets(client)) {
       respond(
         false,
@@ -932,7 +920,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
     const seamColor =
       profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
-    if (typeof seamColor === "string") {
+    if (typeof seamColor === "string" && seamColor !== "theme") {
       configPayload.ui = { seamColor };
     }
 
@@ -943,18 +931,13 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const typedParams = params;
-    const text = normalizeOptionalString(typedParams.text);
+    const text = normalizeOptionalString(params.text);
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"));
       return;
     }
 
-    if (
-      typedParams.speed == null &&
-      typedParams.rateWpm != null &&
-      resolveTalkSpeed(typedParams) == null
-    ) {
+    if (params.speed == null && params.rateWpm != null && resolveTalkSpeed(params) == null) {
       respond(
         false,
         undefined,
@@ -978,7 +961,7 @@ export const talkHandlers: GatewayRequestHandlers = {
         setup.provider,
         setup.providerConfig,
         runtimeConfig,
-        typedParams,
+        params,
       );
       const speechText = isCodeHeavySpeechText(text) ? CODE_HEAVY_SPOKEN_FALLBACK : text;
       const result = await synthesizeTalkSpeech({

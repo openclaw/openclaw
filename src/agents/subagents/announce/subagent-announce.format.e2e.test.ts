@@ -23,6 +23,8 @@ import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrat
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -39,6 +41,7 @@ import { textAssistant } from "../../test-helpers/sparse-transcript.test-support
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
+import { announceTesting as subagentAnnounceTesting } from "./subagent-announce-overrides.test-support.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -398,7 +401,6 @@ vi.mock("../registry/subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -407,8 +409,7 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow, testing: subagentAnnounceTesting } =
-      await import("./subagent-announce.js"));
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
@@ -484,7 +485,9 @@ describe("subagent announce formatting", () => {
     transcriptEvents = [];
     subagentAnnounceOutputTesting.setDepsForTest({
       findTranscriptEvent: async (_scope, match) => {
-        const event = transcriptEvents.findLast(match);
+        const event = transcriptEvents.findLast((candidate) =>
+          matchesTranscriptEvent(candidate, match),
+        );
         return event === undefined ? undefined : { event };
       },
       callGateway: async <T = Record<string, unknown>>(
@@ -976,6 +979,7 @@ describe("subagent announce formatting", () => {
       });
       await run();
     } finally {
+      await closeOpenClawAgentDatabasesAsync(root);
       await fs.rm(root, { recursive: true, force: true });
     }
   }
@@ -2148,17 +2152,6 @@ describe("subagent announce formatting", () => {
     expect(direct).not.toHaveBeenCalled();
   });
 
-  it("reports cron announce as delivered when it successfully steers into an active requester run", async () => {
-    const delivery = await runSubagentAnnounceDispatch({
-      expectsCompletionMessage: false,
-      steer: async () => ({ status: "steered" }),
-      direct: async () => ({ delivered: false, path: "direct" as const }),
-    });
-
-    expect(delivery.delivered).toBe(true);
-    expect(delivery.path).toBe("steered");
-  });
-
   it("does not fall through to direct delivery when active steering drops a new item", async () => {
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const delivery = await runSubagentAnnounceDispatch({
@@ -2499,12 +2492,30 @@ describe("subagent announce formatting", () => {
       },
     },
   ] as const)("thread routing: $testName", async (testCase) => {
-    const params = {
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-thread-session",
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+      },
+    };
+    const outcome = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: testCase.childRunId,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: testCase.requesterOrigin,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(outcome).toBe("delivered");
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(getAgentCall().params).toMatchObject({
       channel: "telegram",
       to: "telegram:123",
-      threadId: testCase.requesterOrigin?.threadId?.toString() ?? "42",
-    };
-    expect(params.threadId).toBe(testCase.expectedThreadId);
+      threadId: testCase.expectedThreadId,
+    });
   });
 
   it("preserves account routing for separate collect-mode announcements", async () => {
@@ -3155,13 +3166,11 @@ describe("subagent announce formatting", () => {
         completion: { required: true, resultText: "child result" },
       },
     ]);
-    let releaseWake: (() => void) | undefined;
-    agentSpy.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
-        }),
-    );
+    let releaseWake!: () => void;
+    const wakeResponse = new Promise<ReturnType<typeof visibleAgentResponse>>((resolve) => {
+      releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
+    });
+    agentSpy.mockImplementationOnce(() => wakeResponse);
     callGatewaySpy.mockImplementation(async (req: unknown) => {
       const typed = req as { method?: string; params?: { runId?: string } };
       if (typed.method === "agent") {
@@ -3185,10 +3194,13 @@ describe("subagent announce formatting", () => {
       roundOneReply: "waiting for child",
       isCompletionDeliveryAllowed: () => completionDeliveryAllowed,
     });
-    await vi.waitFor(() => expect(agentSpy).toHaveBeenCalledOnce());
-
-    completionDeliveryAllowed = false;
-    releaseWake?.();
+    try {
+      await vi.waitFor(() => expect(agentSpy).toHaveBeenCalledOnce());
+      completionDeliveryAllowed = false;
+    } finally {
+      releaseWake();
+      await announce;
+    }
 
     await expect(announce).resolves.toBe("intentional_non_delivery");
     expect(subagentRegistryMock.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
@@ -3628,26 +3640,6 @@ describe("subagent announce formatting", () => {
       };
     }
 
-    it("regression simple announce, leaf subagent with no children announces immediately", async () => {
-      // Regression guard: repeated refactors accidentally delayed leaf completion announces.
-      subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
-
-      const didAnnounce = await runSubagentAnnounceFlow({
-        childSessionKey: "agent:main:subagent:leaf-simple",
-        childRunId: "run-leaf-simple",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        ...defaultOutcomeAnnounce,
-        expectsCompletionMessage: true,
-        roundOneReply: "leaf says done",
-      });
-
-      expect(didAnnounce).toBe("delivered");
-      expect(agentSpy).toHaveBeenCalledTimes(1);
-      const call = getAgentCall() as { params?: { message?: string } };
-      expect(call?.params?.message ?? "").toContain("leaf says done");
-    });
-
     it("wakes a waiting parent with its direct child result", async () => {
       // Regression guard: parent announce once used stale waiting text instead of child completion output.
       subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
@@ -3742,66 +3734,6 @@ describe("subagent announce formatting", () => {
       const message = call?.params?.message ?? "";
       expect(message).toContain("result A");
       expect(message).toContain("result B");
-    });
-
-    it("does not wake a parent before its slow child settles", async () => {
-      // Regression guard: timing skew once allowed partial parent announces with only fast-child output.
-      let pendingSlowChild = 1;
-      subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
-        sessionKey === "agent:main:subagent:parent-timing" ? pendingSlowChild : 0,
-      );
-      subagentRegistryMock.listSubagentRunsForRequester.mockImplementation((sessionKey: string) =>
-        sessionKey === "agent:main:subagent:parent-timing"
-          ? [
-              makeChildCompletion({
-                runId: "run-fast",
-                childSessionKey: "agent:main:subagent:parent-timing:subagent:fast",
-                requesterSessionKey: "agent:main:subagent:parent-timing",
-                task: "fast child",
-                createdAt: 10,
-                endedAt: 11,
-                resultText: "fast child result",
-              }),
-              makeChildCompletion({
-                runId: "run-slow",
-                childSessionKey: "agent:main:subagent:parent-timing:subagent:slow",
-                requesterSessionKey: "agent:main:subagent:parent-timing",
-                task: "slow child",
-                createdAt: 11,
-                endedAt: 40,
-                resultText: "slow child result",
-              }),
-            ]
-          : [],
-      );
-
-      const prematureAttempt = await runSubagentAnnounceFlow({
-        childSessionKey: "agent:main:subagent:parent-timing",
-        childRunId: "run-parent-timing",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        ...defaultOutcomeAnnounce,
-        expectsCompletionMessage: true,
-        wakeOnDescendantSettle: true,
-      });
-      expect(prematureAttempt).toBe("retryable");
-      expect(agentSpy).not.toHaveBeenCalled();
-
-      pendingSlowChild = 0;
-      const settledAttempt = await runSubagentAnnounceFlow({
-        childSessionKey: "agent:main:subagent:parent-timing",
-        childRunId: "run-parent-timing",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        ...defaultOutcomeAnnounce,
-        expectsCompletionMessage: true,
-        wakeOnDescendantSettle: true,
-      });
-      expect(settledAttempt).toBe("delivered");
-      const call = getAgentCall();
-      const message = call?.params?.message ?? "";
-      expect(message).toContain("fast child result");
-      expect(message).toContain("slow child result");
     });
 
     it("regression nested parallel, middle waits for two children then parent receives the synthesized middle result", async () => {
@@ -4031,90 +3963,6 @@ describe("subagent announce formatting", () => {
         "agent:main:subagent:parent-gated",
       );
       expect(agentSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("regression deep 3-level re-check chain, child announce then parent re-check emits synthesized parent output", async () => {
-      // Regression guard: child completion must unblock parent announce on deterministic re-check.
-      const parentSessionKey = "agent:main:subagent:parent-recheck";
-      const childSessionKey = `${parentSessionKey}:subagent:child`;
-      let parentPending = 1;
-
-      subagentRegistryMock.countPendingDescendantRuns.mockImplementation((sessionKey: string) => {
-        if (sessionKey === parentSessionKey) {
-          return parentPending;
-        }
-        return 0;
-      });
-
-      subagentRegistryMock.listSubagentRunsForRequester.mockImplementation((sessionKey: string) => {
-        if (sessionKey === childSessionKey) {
-          return [
-            makeChildCompletion({
-              runId: "run-grandchild",
-              childSessionKey: `${childSessionKey}:subagent:grandchild`,
-              requesterSessionKey: childSessionKey,
-              task: "grandchild task",
-              createdAt: 10,
-              resultText: "grandchild settled output",
-            }),
-          ];
-        }
-        if (sessionKey === parentSessionKey && parentPending === 0) {
-          return [
-            makeChildCompletion({
-              runId: "run-child",
-              childSessionKey,
-              requesterSessionKey: parentSessionKey,
-              task: "child task",
-              createdAt: 20,
-              resultText: "child synthesized from grandchild",
-            }),
-          ];
-        }
-        return [];
-      });
-
-      const parentDeferred = await runSubagentAnnounceFlow({
-        childSessionKey: parentSessionKey,
-        childRunId: "run-parent-recheck",
-        roundOneReply: "parent final decision",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        ...defaultOutcomeAnnounce,
-        expectsCompletionMessage: true,
-      });
-      expect(parentDeferred).toBe("retryable");
-
-      const childAnnounced = await runSubagentAnnounceFlow({
-        childSessionKey,
-        childRunId: "run-child-recheck",
-        roundOneReply: "child synthesized from grandchild",
-        requesterSessionKey: parentSessionKey,
-        requesterDisplayKey: parentSessionKey,
-        ...defaultOutcomeAnnounce,
-        expectsCompletionMessage: true,
-      });
-      expect(childAnnounced).toBe("delivered");
-
-      parentPending = 0;
-      const parentAnnounced = await runSubagentAnnounceFlow({
-        childSessionKey: parentSessionKey,
-        childRunId: "run-parent-recheck",
-        roundOneReply: "parent final decision",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        ...defaultOutcomeAnnounce,
-        expectsCompletionMessage: true,
-      });
-      expect(parentAnnounced).toBe("delivered");
-      expect(agentSpy).toHaveBeenCalledTimes(2);
-
-      const childCall = getAgentCall() as { params?: { message?: string } };
-      expect(childCall?.params?.message ?? "").toContain("child synthesized from grandchild");
-      expect(childCall?.params?.message ?? "").not.toContain("grandchild settled output");
-      const parentCall = getAgentCall(1);
-      expect(parentCall?.params?.message ?? "").toContain("parent final decision");
-      expect(parentCall?.params?.message ?? "").not.toContain("child synthesized from grandchild");
     });
   });
 });

@@ -1,0 +1,15 @@
+.chat-reply-attribution {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-reply-attribution__icon,
+.chat-reply-attribution__icon svg {
+  width: 14px;
+  height: 14px;
+}

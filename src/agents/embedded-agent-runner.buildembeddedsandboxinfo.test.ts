@@ -1,56 +1,51 @@
 // Covers prompt-facing sandbox metadata and full-access availability rules.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as execApprovals from "../infra/exec-approvals.js";
+import * as execApprovals from "../infra/exec-approvals-store.js";
 import {
   buildEmbeddedSandboxInfo,
-  resolveEmbeddedFullAccessState,
   resolveEmbeddedSandboxInfoExecPolicy,
 } from "./embedded-agent-runner/sandbox-info.js";
 import type { SandboxContext } from "./sandbox.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
-  // Mirrors the sandbox runtime shape enough for prompt-info tests without
-  // starting Docker or browser sidecars.
-  const base = {
-    enabled: true,
-    backendId: "docker",
-    sessionKey: "session:test",
-    workspaceDir: "/tmp/openclaw-sandbox",
-    agentWorkspaceDir: "/tmp/openclaw-workspace",
-    workspaceAccess: "none",
-    runtimeId: "openclaw-sbx-test",
-    runtimeLabel: "openclaw-sbx-test",
-    containerName: "openclaw-sbx-test",
-    containerWorkdir: "/workspace",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      workdir: "/workspace",
-      readOnlyRoot: true,
-      tmpfs: ["/tmp"],
-      network: "none",
-      user: "1000:1000",
-      capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
+  return createSandboxTestContext({
+    overrides: {
+      workspaceDir: "/tmp/openclaw-sandbox",
+      agentWorkspaceDir: "/tmp/openclaw-workspace",
+      workspaceAccess: "none",
+      browserAllowHostControl: true,
+      browser: {
+        bridgeUrl: "http://localhost:9222",
+        noVncUrl: "http://localhost:6080",
+        containerName: "openclaw-sbx-browser-test",
+      },
+      ...overrides,
     },
-    tools: {
-      allow: ["exec"],
-      deny: ["browser"],
-    },
-    browserAllowHostControl: true,
-    browser: {
-      bridgeUrl: "http://localhost:9222",
-      noVncUrl: "http://localhost:6080",
-      containerName: "openclaw-sbx-browser-test",
-    },
-  } satisfies SandboxContext;
-  return { ...base, ...overrides };
+  });
 }
+
+const fullElevation = { enabled: true, allowed: true, defaultLevel: "full" } as const;
+const blockedFullAccess = {
+  allowed: true,
+  defaultLevel: "full",
+  fullAccessAvailable: false,
+  fullAccessBlockedReason: "host-policy",
+};
+const promptInfo = {
+  enabled: true,
+  workspaceDir: "/tmp/openclaw-sandbox",
+  containerWorkspaceDir: "/workspace",
+  workspaceAccess: "none",
+  agentWorkspaceMount: undefined,
+  browserBridgeUrl: "http://localhost:9222",
+  hostBrowserAllowed: true,
+};
 
 describe("buildEmbeddedSandboxInfo", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
+    vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
       version: 1,
       agents: {},
     });
@@ -64,13 +59,7 @@ describe("buildEmbeddedSandboxInfo", () => {
     const sandbox = createSandboxContext();
 
     expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
-      enabled: true,
-      workspaceDir: "/tmp/openclaw-sandbox",
-      containerWorkspaceDir: "/workspace",
-      workspaceAccess: "none",
-      agentWorkspaceMount: undefined,
-      browserBridgeUrl: "http://localhost:9222",
-      hostBrowserAllowed: true,
+      ...promptInfo,
     });
   });
 
@@ -87,11 +76,8 @@ describe("buildEmbeddedSandboxInfo", () => {
         defaultLevel: "on",
       }),
     ).toEqual({
-      enabled: true,
-      workspaceDir: "/tmp/openclaw-sandbox",
-      containerWorkspaceDir: "/workspace",
-      workspaceAccess: "none",
-      agentWorkspaceMount: undefined,
+      ...promptInfo,
+      browserBridgeUrl: undefined,
       hostBrowserAllowed: false,
       elevated: {
         allowed: true,
@@ -106,9 +92,7 @@ describe("buildEmbeddedSandboxInfo", () => {
 
     expect(
       buildEmbeddedSandboxInfo(sandbox, {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "full",
+        ...fullElevation,
         fullAccessAvailable: true,
       })?.elevated,
     ).toEqual({
@@ -126,20 +110,12 @@ describe("buildEmbeddedSandboxInfo", () => {
 
     expect(
       buildEmbeddedSandboxInfo(sandbox, {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "full",
+        ...fullElevation,
         fullAccessAvailable: false,
         fullAccessBlockedReason: "runtime",
       }),
     ).toEqual({
-      enabled: true,
-      workspaceDir: "/tmp/openclaw-sandbox",
-      containerWorkspaceDir: "/workspace",
-      workspaceAccess: "none",
-      agentWorkspaceMount: undefined,
-      browserBridgeUrl: "http://localhost:9222",
-      hostBrowserAllowed: true,
+      ...promptInfo,
       elevated: {
         allowed: true,
         defaultLevel: "full",
@@ -152,81 +128,51 @@ describe("buildEmbeddedSandboxInfo", () => {
   it("marks full access unavailable when exec policy denies execution", () => {
     const sandbox = createSandboxContext();
 
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
-        { mode: "deny" },
-      )?.elevated,
-    ).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: false,
-      fullAccessBlockedReason: "host-policy",
-    });
+    expect(buildEmbeddedSandboxInfo(sandbox, fullElevation, { mode: "deny" })?.elevated).toEqual(
+      blockedFullAccess,
+    );
   });
 
-  it("uses config exec mode when building prompt full-access state", () => {
+  it("uses config exec mode when building prompt full-access state", async () => {
     const sandbox = createSandboxContext();
-    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
-      config: {
-        tools: {
-          exec: {
-            mode: "auto",
+    const execPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
+      {
+        config: {
+          tools: {
+            exec: {
+              mode: "auto",
+            },
           },
         },
+        agentId: "main",
+        sandboxAvailable: true,
       },
-      agentId: "main",
-      sandboxAvailable: true,
-    });
+      {},
+    );
 
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
-        execPolicy,
-      )?.elevated,
-    ).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: false,
-      fullAccessBlockedReason: "host-policy",
-    });
+    expect(buildEmbeddedSandboxInfo(sandbox, fullElevation, execPolicy)?.elevated).toEqual(
+      blockedFullAccess,
+    );
   });
 
-  it("uses elevated host policy when sandbox is active and exec policy is unset", () => {
+  it("uses elevated host policy when sandbox is active and exec policy is unset", async () => {
     const sandbox = createSandboxContext();
-    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
-      config: {
-        tools: {
-          exec: {
-            host: "auto",
+    const execPolicy = await resolveEmbeddedSandboxInfoExecPolicy(
+      {
+        config: {
+          tools: {
+            exec: {
+              host: "auto",
+            },
           },
         },
+        agentId: "main",
+        sandboxAvailable: true,
       },
-      agentId: "main",
-      sandboxAvailable: true,
-    });
+      {},
+    );
 
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
-        execPolicy,
-      )?.elevated,
-    ).toEqual({
+    expect(buildEmbeddedSandboxInfo(sandbox, fullElevation, execPolicy)?.elevated).toEqual({
       allowed: true,
       defaultLevel: "full",
       fullAccessAvailable: true,
@@ -239,20 +185,11 @@ describe("buildEmbeddedSandboxInfo", () => {
     expect(
       buildEmbeddedSandboxInfo(
         sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
+        fullElevation,
         { mode: "full", security: "full" },
         { security: "deny" },
       )?.elevated,
-    ).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: false,
-      fullAccessBlockedReason: "host-policy",
-    });
+    ).toEqual(blockedFullAccess);
   });
 
   it("marks full access unavailable when host approval floors still require review", () => {
@@ -263,47 +200,25 @@ describe("buildEmbeddedSandboxInfo", () => {
     expect(
       buildEmbeddedSandboxInfo(
         sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
+        fullElevation,
         { mode: "full", security: "full", ask: "off" },
         { security: "allowlist", ask: "off" },
       )?.elevated,
-    ).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: false,
-      fullAccessBlockedReason: "host-policy",
-    });
+    ).toEqual(blockedFullAccess);
 
     expect(
       buildEmbeddedSandboxInfo(
         sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
+        fullElevation,
         { mode: "full", security: "full", ask: "off" },
         { security: "full", ask: "always" },
       )?.elevated,
-    ).toEqual({
-      allowed: true,
-      defaultLevel: "full",
-      fullAccessAvailable: false,
-      fullAccessBlockedReason: "host-policy",
-    });
+    ).toEqual(blockedFullAccess);
 
     expect(
       buildEmbeddedSandboxInfo(
         sandbox,
-        {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
+        fullElevation,
         { mode: "full", security: "full", ask: "on-miss" },
         { security: "full", ask: "on-miss" },
       )?.elevated,
@@ -311,37 +226,6 @@ describe("buildEmbeddedSandboxInfo", () => {
       allowed: true,
       defaultLevel: "full",
       fullAccessAvailable: true,
-    });
-  });
-});
-
-describe("resolveEmbeddedFullAccessState", () => {
-  it("treats direct host runs with allowed elevation as full-access available", () => {
-    expect(
-      resolveEmbeddedFullAccessState({
-        execElevated: {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-        },
-      }),
-    ).toEqual({ available: true });
-  });
-
-  it("keeps explicit runtime blocks even when host exec is allowed", () => {
-    expect(
-      resolveEmbeddedFullAccessState({
-        execElevated: {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-          fullAccessAvailable: false,
-          fullAccessBlockedReason: "runtime",
-        },
-      }),
-    ).toEqual({
-      available: false,
-      blockedReason: "runtime",
     });
   });
 });

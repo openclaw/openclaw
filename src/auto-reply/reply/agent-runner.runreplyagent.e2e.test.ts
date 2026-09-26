@@ -15,6 +15,11 @@ import {
   type MockInstance,
 } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+  sqliteMethods,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
@@ -37,19 +42,30 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
-import {
-  mockAcceptedWaitingStatusRun,
-  registerWaitingStatusCases,
-} from "./agent-runner.runreplyagent.waiting-status.cases.js";
+import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
+import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
+import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
+import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
+import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
@@ -62,6 +78,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationAgentTurn,
@@ -1966,52 +1983,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 
-  it("runs visible turns with the session id returned by admission", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "pre-compact-session",
-      resetTriggered: false,
-    });
-    active.setPhase("preflight_compacting");
-    const sessionStore = {
-      main: {
-        sessionId: "pre-compact-session",
-        sessionFile: "main",
-        updatedAt: Date.now(),
-      },
-    };
-    const { run } = createMinimalRun({
-      runOverrides: { sessionId: "stale-session" },
-      sessionStore,
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    });
-
-    const pending = run();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    active.updateSessionId("post-compact-session");
-    sessionStore.main = {
-      sessionId: "post-compact-session",
-      sessionFile: "main",
-      updatedAt: Date.now(),
-    };
-    active.complete();
-    await pending;
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("main");
+  registerReplyAdmissionCases({
+    createMinimalRun,
+    makeSessionFixture,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -2101,6 +2076,26 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("releases reply admission and typing when the recovery read fails", async () => {
+    const failure = new Error("synthetic recovery read failure");
+    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
+    const ticket = reserveReplyAdmissionTicket(["main"]);
+    if (!ticket) {
+      throw new Error("expected a reply admission ticket");
+    }
+    const release = vi.spyOn(ticket, "release");
+    const { run, typing } = createMinimalRun({
+      opts: { [REPLY_ADMISSION_TICKET]: ticket },
+      storePath: "/tmp/synthetic-recovery-read.sqlite",
+    });
+
+    await expect(run()).rejects.toBe(failure);
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -2276,44 +2271,16 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 
-  it.each([true, undefined, false])(
-    "reports provider failure after a group partial with visibility %s",
-    async (callbackResult) => {
-      const onPartialReply = vi.fn(async () => callbackResult);
-      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-        await params.onPartialReply?.({ text: "partial answer" });
-        throw new Error("model stream failed");
-      });
-      const { run } = createMinimalRun({
-        blockStreamingEnabled: false,
-        opts: { onPartialReply, preserveProgressCallbackStartOrder: true },
-        sessionCtx: {
-          ChatType: "group",
-          SessionKey: "agent:test:telegram:group:-100123",
-        },
-      });
-
-      const result = await run();
-      const payload = Array.isArray(result) ? result[0] : result;
-
-      expect(payload).toMatchObject({
-        text: callbackResult === false ? "NO_REPLY" : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-        ...(callbackResult === false ? {} : { isError: true }),
-      });
-      expect(onPartialReply).toHaveBeenCalledOnce();
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([
-    ["accepted answer", { text: "answer block" }, true],
-    ["in-flight answer", { text: "answer block" }, true],
-    ["queued answer", { text: "answer block" }, true],
-    ["aborted answer", { text: "answer block" }, false],
-    ["reasoning", { text: "internal reasoning", isReasoning: true }, false],
-    ["commentary", { text: "working on it", isCommentary: true }, false],
-    ["rejected answer", { text: "answer block" }, false],
-  ])("reports provider failure after %s block delivery", async (label, payload, delivered) => {
+    ["accepted answer", { text: "answer block" }],
+    ["in-flight answer", { text: "answer block" }],
+    ["queued answer", { text: "answer block" }],
+    ["aborted answer", { text: "answer block" }],
+    ["reasoning", { text: "internal reasoning", isReasoning: true }],
+    ["commentary", { text: "working on it", isCommentary: true }],
+    ["rejected answer", { text: "answer block" }],
+  ])("settles optional provider failure after %s block delivery", async (label, payload) => {
+    const runState: ReplyOperationRunState = {};
     const replyOperation =
       label === "aborted answer"
         ? createReplyOperation({
@@ -2328,7 +2295,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
       deliveryStarted.resolve();
       if (label === "in-flight answer" || replyOperation) {
         await setImmediate();
-        replyOperation?.abortByUser();
+        if (replyOperation) {
+          expect(replyOperation.abortByUser()).toBe(true);
+        }
       }
       if (label === "rejected answer") {
         throw new Error("transport rejected the block");
@@ -2340,7 +2309,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
       if (label !== "queued answer") {
         await deliveryStarted.promise;
       }
-      if (label !== "in-flight answer" && label !== "queued answer" && !replyOperation) {
+      if (label !== "in-flight answer" && label !== "queued answer") {
         await blockFlush;
       }
       throw new Error("model stream failed after block delivery");
@@ -2348,19 +2317,29 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const { run } = createMinimalRun({
       replyOperation,
       blockStreamingEnabled: true,
-      opts: { onBlockReply, reasoningPayloadsEnabled: true, commentaryPayloadsEnabled: true },
+      opts: {
+        onBlockReply,
+        reasoningPayloadsEnabled: true,
+        commentaryPayloadsEnabled: true,
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
       sessionCtx: { ChatType: "group" },
+      runOverrides: { terminalReplyExpectation: "optional" },
     });
 
     const result = await run();
     await blockFlush;
     const reply = Array.isArray(result) ? result[0] : result;
 
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(reply).toMatchObject({
-      text: delivered ? GENERIC_EXTERNAL_RUN_FAILURE_TEXT : "NO_REPLY",
-      ...(delivered ? { isError: true } : {}),
-    });
+    if (label === "aborted answer" || label === "rejected answer") {
+      expect(reply?.text).toBe("NO_REPLY");
+    } else {
+      expect(reply).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(reply?.text).not.toBe("NO_REPLY");
+    }
+    if (label !== "aborted answer") {
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
+    }
   });
 
   it("rethrows after a delivered partial without visible content", async () => {
@@ -2439,13 +2418,14 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it.each(["reasoning", "commentary"] as const)(
-    "rethrows after %s-only block streaming",
+    "reports failure after visible %s-only block streaming",
     async (lane) => {
       const accounting = await import("./session-usage.js");
       const persistSpy = vi
         .spyOn(accounting, "persistSessionUsageUpdate")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onBlockReply = vi.fn();
+      const runState: ReplyOperationRunState = {};
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         await params.onBlockReply?.({
           text: `internal ${lane}`,
@@ -2462,12 +2442,17 @@ describe("runReplyAgent heartbeat followup guard", () => {
           blockStreamingEnabled: true,
           opts: {
             onBlockReply,
+            [REPLY_OPERATION_RUN_STATE]: runState,
             reasoningPayloadsEnabled: lane === "reasoning",
             commentaryPayloadsEnabled: lane === "commentary",
           },
         });
 
-        await expect(run()).rejects.toThrow("persist exploded");
+        await expect(run()).resolves.toMatchObject({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          isError: true,
+        });
+        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
         expect(onBlockReply).toHaveBeenCalledWith(
           expect.objectContaining({ text: `internal ${lane}` }),
           expect.any(Object),
@@ -3141,7 +3126,29 @@ describe("runReplyAgent pending final delivery capture", () => {
       text: "execute once",
     });
 
-    await expect(duplicate.run()).resolves.toBeUndefined();
+    // Retire the completed turn's automatic maintenance before observing cold redelivery.
+    const database = toDatabaseOptions(resolveSqliteScope({ storePath, sessionKey: "main" }));
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveOpenClawAgentSqlitePath(database),
+      database.agentId,
+    );
+    const observer = observeParentSqlite();
+    try {
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      expect(query.get()).toEqual({ value: 7 });
+      expect(query.all()).toEqual([{ value: 7 }]);
+      expect([...query.iterate()]).toEqual([{ value: 7 }]);
+      calibration.close();
+      sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
+      observer.reset();
+      await expect(duplicate.run()).resolves.toBeUndefined();
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
 
     expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -4172,6 +4179,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const { run, typing } = createMinimalRun({
         opts: { isHeartbeat: false, onPartialReply },
+        runOverrides: { terminalReplyExpectation: "optional" },
         typingMode: "message",
       });
       await run();
@@ -4221,54 +4229,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     ]);
   });
 
-  it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
-    const onPartialReply = vi.fn();
-    const onBlockReply = vi.fn();
-    const onReasoningStream = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      expect(params.silentExpected).toBe(true);
-      await params.onReasoningStream?.({ text: "Reasoning:\nI am trying to send NO_REPLY now." });
-      await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
-      await params.onBlockReply?.({ text: "I am trying to send NO_REPLY now." });
-      return { payloads: [{ text: "I am trying to send NO_REPLY now." }], meta: {} };
-    });
-
-    const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
-      blockStreamingEnabled: true,
-      runOverrides: { silentExpected: true },
-    });
-    const res = await run();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(res).toBeUndefined();
-  });
-
-  it("suppresses bare NO_REPLY silent-turn payloads", async () => {
-    const onPartialReply = vi.fn();
-    const onBlockReply = vi.fn();
-    const onReasoningStream = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      expect(params.silentExpected).toBe(true);
-      await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
-      await params.onPartialReply?.({ text: "NO_REPLY" });
-      await params.onBlockReply?.({ text: "NO_REPLY" });
-      return { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantText: "NO_REPLY" } };
-    });
-
-    const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
-      blockStreamingEnabled: true,
-      runOverrides: { silentExpected: true },
-    });
-    const res = await run();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(res).toBeUndefined();
+  registerRequiredReplyCompletionCases({
+    createMinimalRun,
+    state,
+    requireScheduledFollowupRunner,
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
@@ -4797,45 +4761,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it.each([
-    { label: "empty output", payloads: [] },
-    { label: "reasoning-only output", payloads: [{ text: "internal", isReasoning: true }] },
-    { label: "commentary-only output", payloads: [{ text: "internal", isCommentary: true }] },
-    { label: "directive-only output", payloads: [{ text: "[[reply_to_current]]" }] },
-  ])("surfaces successful $label through normal reply delivery", async ({ payloads }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads, meta: {} });
-    const { run } = createMinimalRun({
-      runOverrides: { config: { channels: { whatsapp: { replyToMode: "first" } } } },
-    });
-
-    const result = await run();
-    const payloadsResult = Array.isArray(result) ? result : [result];
-
-    expect(payloadsResult).toContainEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("did not produce a visible reply"),
-        isError: true,
-        replyToId: "msg",
-      }),
-    );
-  });
-
-  it("surfaces a marked fallback for an empty message-tool-only completion", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const { run } = createMinimalRun({
-      opts: { sourceReplyDeliveryMode: "message_tool_only" },
-    });
-
-    const result = await run();
-    const payload = Array.isArray(result) ? result[0] : result;
-
-    expect(payload).toMatchObject({
-      text: expect.stringContaining("did not produce a visible reply"),
-      isError: true,
-    });
-    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
-
   it("delivers a queued provider error after a private settled-tool completion", async () => {
     const helperStarted = createDeferred();
     const finishHelper = createDeferred();
@@ -4936,138 +4861,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it.each([
-    { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
-    { lane: "commentary", payload: { text: "internal", isCommentary: true } },
-  ])("does not let streamed $lane suppress the empty-reply fallback", async ({ payload }) => {
-    const onBlockReply = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onBlockReply?.(payload);
-      return { payloads: [], meta: {} };
-    });
-    const { run } = createMinimalRun({
-      blockStreamingEnabled: true,
-      opts: {
-        onBlockReply,
-        reasoningPayloadsEnabled: true,
-        commentaryPayloadsEnabled: true,
-      },
-    });
+  registerImmediateFailurePolicyCases({ createMinimalRun, state });
 
-    const result = await run();
-    const payloads = Array.isArray(result) ? result : [result];
-
-    expect(onBlockReply).toHaveBeenCalled();
-    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(expect.objectContaining(payload));
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("did not produce a visible reply"),
-        isError: true,
-      }),
-    );
-  });
-
-  it.each([
-    {
-      label: "NO_REPLY",
-      pendingContinuation: false,
-      result: {
-        payloads: [{ text: "NO_REPLY" }],
-        meta: { finalAssistantVisibleText: "NO_REPLY" },
-      },
-    },
-    {
-      label: "pending tool continuation",
-      pendingContinuation: true,
-      result: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
-    },
-  ])("keeps successful $label completions silent", async ({ result, pendingContinuation }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const onPendingContinuation = vi.fn();
-    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
-
-    await expect(run()).resolves.toBeUndefined();
-    expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
+  registerReasoningFallbackTests({
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    createMinimalRun,
   });
 
   registerWaitingStatusCases({
     createMinimalRun,
     runEmbeddedAgentMock: state.runEmbeddedAgentMock,
-  });
-  it.each([
-    { label: "default status" },
-    { label: "explicit status", acknowledgment: "Research started; results will follow." },
-    {
-      label: "room event",
-      acknowledgment: "Research started; results will follow.",
-      roomEvent: true,
-      warning: true,
-    },
-    { label: "empty acknowledgment", acknowledgment: "[[reply_to_current]]", warning: true },
-  ])("resolves an earlier tool warning with $label", async (testCase) => {
-    const toolWarning = setReplyPayloadMetadata(
-      { text: "⚠️ Bash failed", isError: true },
-      { toolErrorWarning: { toolName: "bash" } },
-    );
-    await mockAcceptedWaitingStatusRun(state.runEmbeddedAgentMock, {
-      payloads: [toolWarning],
-      meta: { durationMs: 0, yielded: true, yieldAcknowledgment: testCase.acknowledgment },
-    });
-    const { run } = createMinimalRun({
-      currentInboundEventKind: testCase.roomEvent ? "room_event" : undefined,
-    });
-
-    await expect(run()).resolves.toMatchObject({
-      text: testCase.warning
-        ? "⚠️ Bash failed"
-        : (testCase.acknowledgment ??
-          "I’m continuing this work and will send the result when it is ready."),
-      ...(testCase.warning ? { isError: true } : {}),
-      replyToId: "msg",
-    });
-  });
-
-  it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: {
-        yielded: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      },
-    });
-    const { run } = createMinimalRun({
-      opts: { sourceReplyDeliveryMode: "message_tool_only" },
-    });
-
-    const result = await run();
-    const payloads = Array.isArray(result) ? result : result ? [result] : [];
-
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Research started; results will follow.",
-    ]);
-    expect(getReplyPayloadMetadata(payloads[0] ?? {})?.deliverDespiteSourceReplySuppression).toBe(
-      true,
-    );
-  });
-
-  it.each([
-    {
-      label: "room event",
-      params: { currentInboundEventKind: "room_event" as const },
-    },
-    {
-      label: "internal handoff",
-      params: {
-        runOverrides: {
-          inputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
-        },
-      },
-    },
-  ])("keeps successful empty $label completions silent", async ({ params }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const { run } = createMinimalRun(params);
-
-    await expect(run()).resolves.toBeUndefined();
   });
 
   it.each([
@@ -5127,12 +4930,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it.each([
-    { label: "message-tool", delivery: { didSendViaMessagingTool: true } },
+    {
+      label: "coarse message-tool evidence",
+      delivery: { didSendViaMessagingTool: true },
+      sent: false,
+    },
     {
       label: "source-reply",
       delivery: { didDeliverSourceReplyViaMessageTool: true },
+      sent: true,
     },
-  ])("does not duplicate an empty terminal failure after $label delivery", async ({ delivery }) => {
+  ])("settles an empty terminal failure using $label", async ({ delivery, sent }) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {
@@ -5147,7 +4955,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const { run } = createMinimalRun();
     const result = await run();
 
-    expect(result).toBeUndefined();
+    if (sent) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({ isError: true });
+    }
   });
 
   it("does not duplicate an empty terminal failure after an accepted answer block", async () => {
@@ -5257,7 +5069,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("surfaces empty internal fallback failures without persisting visible fallback state", async () => {
+  it("keeps successful empty internal fallback silent without changing visible fallback state", async () => {
     const sessionEntry = makeSessionEntry({
       modelProvider: "openai",
       model: "gpt-5.5",
@@ -5307,9 +5119,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const res = await run();
 
-    const payload = Array.isArray(res) ? res[0] : res;
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
+    expect(res).toBeUndefined();
     expect(sessionEntry.modelProvider).toBe("openai");
     expect(sessionEntry.model).toBe("gpt-5.5");
     expect(sessionEntry.providerOverride).toBeUndefined();
@@ -5622,35 +5432,29 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not report silent fallback failure after a did-send-only side effect", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      didSendViaMessagingTool: true,
-      meta: {},
-    });
+  it.each([
+    { label: "did-send-only evidence", result: { payloads: [], didSendViaMessagingTool: true } },
+    {
+      label: "target-only evidence",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      },
+    },
+  ])("surfaces a missing required answer after fallback with $label", async ({ result }) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ ...result, meta: {} });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
-      const { run } = createMinimalRun({
-        runOverrides: {
-          provider: "lmstudio",
-          model: "gemma-4-e4b-it",
-        },
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          MessageSid: "1503645939964055592",
-        },
-      });
+      const { run } = createDiscordFallbackRun();
 
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(payload).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(payload?.text).not.toContain("NO_REPLY");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -5684,7 +5488,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
+  it("surfaces a missing required answer after fallback completed only a cron side effect", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
@@ -5700,33 +5504,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
-    } finally {
-      fallbackSpy.mockRestore();
-    }
-  });
-
-  it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "NO_REPLY" }],
-      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(makeCompletedFallbackRunner());
-
-    try {
-      const { run } = createDiscordFallbackRun();
-
-      const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
-
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(payload).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(payload?.text).not.toContain("NO_REPLY");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -5766,7 +5545,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("preserves intentional fallback silence when the turn permits silent replies", async () => {
+  it("preserves fallback silence for an explicitly optional turn", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {},
@@ -5780,7 +5559,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         runOverrides: {
           provider: "lmstudio",
           model: "gemma-4-e4b-it",
-          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
         },
         sessionCtx: {
           Provider: "discord",
@@ -6500,6 +6279,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

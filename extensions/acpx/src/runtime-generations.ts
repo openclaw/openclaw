@@ -9,7 +9,7 @@ export class AcpxGenerationRegistry {
   // The shared runtime can still hold a retired owner. Retain only resource
   // isolation after ordinary close, not a private runtime or full record.
   private readonly isolatedSessionResources = new Set<string>();
-  private readonly resetDelegates = new Set<BaseAcpxRuntime>();
+  private readonly privateDelegates = new Set<BaseAcpxRuntime>();
   private readonly retiringDelegates = new WeakSet<BaseAcpxRuntime>();
   private nextGenerationId = 0;
   private readonly generationOwner = Symbol("acpx-runtime-owner");
@@ -45,23 +45,24 @@ export class AcpxGenerationRegistry {
     }
   }
 
-  resolveDelegate(generation: AcpxGeneration): BaseAcpxRuntime {
+  resolveDelegate(generation: AcpxGeneration, nativeTools: boolean): BaseAcpxRuntime {
     this.assertRunning();
+    if (generation.delegate && generation.nativeTools !== nativeTools) {
+      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP session tool ownership changed.");
+    }
     if (!generation.delegate) {
-      // Upstream fresh preparation waits old work; only reset successors need
-      // independent runtimes. Ordinary pooling remains in the shared runtime.
+      // Reset successors need isolation from the prior runtime's queued work.
       generation.delegate = generation.afterReset ? this.createDelegate() : this.delegate;
+      generation.nativeTools = nativeTools;
       if (generation.delegate !== this.delegate) {
-        this.resetDelegates.add(generation.delegate);
+        this.privateDelegates.add(generation.delegate);
       }
     }
     return generation.delegate;
   }
 
   currentGeneration(resource: string): AcpxGeneration {
-    if (this.stopping) {
-      throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "ACP runtime is shut down.");
-    }
+    this.assertRunning();
     let generation = this.generations.get(resource);
     if (!generation) {
       const fresh = this.sessionStore.isFresh(resource);
@@ -141,7 +142,7 @@ export class AcpxGenerationRegistry {
     // Post-reset runtimes belong to one generation. The normal shared runtime
     // stays service-owned because it may still host unrelated sessions.
     void delegate.shutdown().then(
-      () => this.resetDelegates.delete(delegate),
+      () => this.privateDelegates.delete(delegate),
       () => {
         /* Retain failed cleanup for service shutdown to report. */
       },
@@ -195,7 +196,7 @@ export class AcpxGenerationRegistry {
   async shutdown(): Promise<void> {
     this.stopping = true;
     const results = await Promise.allSettled(
-      [this.delegate, ...this.resetDelegates].map((delegate) => delegate.shutdown()),
+      [this.delegate, ...this.privateDelegates].map((delegate) => delegate.shutdown()),
     );
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
@@ -203,7 +204,7 @@ export class AcpxGenerationRegistry {
     if (errors.length) {
       throw new AggregateError(errors, "ACP runtime shutdown failed.");
     }
-    this.resetDelegates.clear();
+    this.privateDelegates.clear();
     this.generations.clear();
     this.isolatedSessionResources.clear();
   }

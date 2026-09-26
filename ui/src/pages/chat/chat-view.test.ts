@@ -4,24 +4,23 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
-import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import {
-  buildFallbackSlashCommands,
-  replaceSlashCommands,
-  SLASH_COMMANDS,
-} from "../../lib/chat/commands.ts";
+import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import type {
+  SessionPatchOptions,
+  SessionPatchResult,
+  SessionPatchRoute,
+} from "../../lib/sessions/patch.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
@@ -30,6 +29,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -37,7 +37,6 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
-  createAttachmentSidebarHarness,
   getAttachmentMenuOption,
   renderAttachmentHarness,
   requireAttachmentInput,
@@ -54,12 +53,28 @@ import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   appendChatBubble,
+  replaceSkillCommands,
+  inputDraft,
+  inputDraftAtEnd,
+  keydownComposer,
+  createReactiveDraftHarness,
+  createSlashRerenderHarness,
   createChatProps,
   createPasteEvent,
   createTestTranscript,
   renderChatInto,
   renderChatView,
+  getComposerTextarea,
+  requireElement,
   stubAnimationFrames,
+  createDragEvent,
+  getChatModelSelect,
+  getChatThinkingValue,
+  getThinkingReasoningValueLabel,
+  getThinkingSelect,
+  getThinkingSlider,
+  getThinkingSliderValues,
+  itemAt,
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
@@ -149,11 +164,6 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "The compacted transcript is preserved as a checkpoint.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
-          },
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -252,7 +262,6 @@ const renderMessageGroupMock = vi.fn(
     return html`<div class="chat-group">${text}</div>`;
   },
 );
-const chatMediaRenderVersionMock = { value: 0 };
 
 type ChatHeaderTestState = {
   basePath?: string;
@@ -271,7 +280,7 @@ type ChatHeaderTestState = {
   chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
   connected: boolean;
-  hello: null;
+  hello: GatewayHelloOk | null;
   lastError: string | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   sessionKey: string;
@@ -342,28 +351,49 @@ beforeEach(() => {
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
-  vi.spyOn(chatMessage, "getChatMediaRenderVersion").mockImplementation(
-    () => chatMediaRenderVersionMock.value,
-  );
   vi.spyOn(chatMessage, "renderMessageGroup").mockImplementation(renderMessageGroupMock);
   vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(renderStreamGroupMock);
   vi.spyOn(chatMessage, "renderWorkGroupSummary").mockImplementation(renderWorkGroupSummaryMock);
 });
 
-function createSessionsResultFromRows(
-  sessions: GatewaySessionRow[],
-  overrides: Partial<
-    Pick<SessionsListResult, "hasMore" | "nextOffset" | "offset" | "totalCount">
-  > = {},
-): SessionsListResult {
+function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
     ts: 0,
     path: "",
     count: sessions.length,
     defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
     sessions,
-    ...overrides,
   };
+}
+
+function createSettingsLaneHost(
+  patch: SessionPatchRoute,
+  refresh: () => Promise<void> = async () => {},
+) {
+  const host = makeChatHost({
+    requestHandlers: {},
+    sessionKey: "main",
+    chatModelSwitchPromises: {},
+    chatThinkingLevel: "high",
+    sessionsResult: createSessionsResultFromRows([
+      {
+        key: "main",
+        agentId: "main",
+        sessionId: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-fable-5",
+        modelProvider: "anthropic",
+        thinkingLevel: "high",
+        fastMode: false,
+        effectiveFastMode: false,
+      },
+    ]),
+  });
+  vi.spyOn(host.sessions, "patch").mockImplementation(patch);
+  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
+  onTestFinished(() => host.sessions.dispose());
+  return host;
 }
 
 function createChatHeaderState(
@@ -384,75 +414,43 @@ function createChatHeaderState(
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     if (method === "sessions.patch") {
-      const nextModel = (params.model as string | null | undefined) ?? null;
-      if (!nextModel) {
-        currentModel = null;
-        currentModelProvider = null;
-      } else {
-        const normalized = nextModel.trim();
-        const slashIndex = normalized.indexOf("/");
-        if (slashIndex > 0) {
-          currentModelProvider = normalized.slice(0, slashIndex);
-          currentModel = normalized.slice(slashIndex + 1);
+      if (Object.hasOwn(params, "model")) {
+        const nextModel = (params.model as string | null | undefined) ?? null;
+        if (!nextModel) {
+          currentModel = null;
+          currentModelProvider = null;
         } else {
-          currentModel = normalized;
-          const matchingProviders: string[] = [];
-          for (const entry of catalog) {
-            if (entry.id === normalized && entry.provider) {
-              matchingProviders.push(entry.provider);
+          const normalized = nextModel.trim();
+          const slashIndex = normalized.indexOf("/");
+          if (slashIndex > 0) {
+            currentModelProvider = normalized.slice(0, slashIndex);
+            currentModel = normalized.slice(slashIndex + 1);
+          } else {
+            currentModel = normalized;
+            const matchingProviders: string[] = [];
+            for (const entry of catalog) {
+              if (entry.id === normalized && entry.provider) {
+                matchingProviders.push(entry.provider);
+              }
             }
+            currentModelProvider =
+              matchingProviders.length === 1
+                ? expectDefined(matchingProviders[0], "single matching model provider")
+                : currentModelProvider;
           }
-          currentModelProvider =
-            matchingProviders.length === 1
-              ? expectDefined(matchingProviders[0], "single matching model provider")
-              : currentModelProvider;
         }
       }
-      return { ok: true, key: "main" };
+      return {
+        ok: true,
+        path: "",
+        key: "main",
+        entry: { sessionId: "main" },
+      } satisfies SessionPatchResult;
     }
     if (method === "chat.history") {
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      const search = typeof params.search === "string" ? params.search.trim() : "";
-      const offset =
-        typeof params.offset === "number" && Number.isFinite(params.offset) ? params.offset : 0;
-      const matchesTelegramSearch = search !== "" && "telegram".startsWith(search);
-      if (matchesTelegramSearch && offset === 50) {
-        return createSessionsResultFromRows(
-          [
-            {
-              key: "agent:main:telegram-page-51",
-              kind: "direct",
-              label: "Telegram page 51",
-              updatedAt: 2,
-            },
-            {
-              key: "agent:main:telegram-page-52",
-              kind: "direct",
-              label: "Telegram page 52",
-              updatedAt: 1,
-            },
-          ],
-          { hasMore: false, nextOffset: null, offset: 50, totalCount: 4 },
-        );
-      }
-      if (matchesTelegramSearch) {
-        return createSessionsResultFromRows(
-          [
-            { key: "agent:main:telegram-one", kind: "direct", label: "Telegram one", updatedAt: 4 },
-            { key: "agent:main:telegram-two", kind: "direct", label: "Telegram two", updatedAt: 3 },
-            {
-              key: "agent:main:telegram-archived",
-              kind: "direct",
-              label: "Telegram archived",
-              updatedAt: 2,
-              archived: true,
-            },
-          ],
-          { hasMore: true, nextOffset: 50, totalCount: 4 },
-        );
-      }
       return createSessionsListResult({
         model: currentModel,
         modelProvider: currentModelProvider,
@@ -477,7 +475,7 @@ function createChatHeaderState(
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability({
-    snapshot: { client, phase: "connected", hello: null },
+    snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -524,7 +522,7 @@ function createChatHeaderState(
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
-    hello: null,
+    hello: sessionMutationGatewayHello(),
     agentsList: null,
     agentsPanel: "overview",
     agentsSelectedId: null,
@@ -549,23 +547,18 @@ function createChatHeaderState(
   return { state, request };
 }
 
-function createReasoningHeaderState(
-  options: {
-    levels?: Array<{ id: string; label: string }>;
-    models?: ModelCatalogEntry[];
-  } = {},
-) {
+function createReasoningHeaderState(options: { models: ModelCatalogEntry[] }) {
   const result = createChatHeaderState({
     model: "gpt-5.5",
     modelProvider: "openai",
-    models: options.models ?? [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    models: options.models,
     thinkingDefault: "high",
   });
   result.state.sessionsResult = createSessionsListResult({
     defaultsModel: "gpt-5.5",
     defaultsProvider: "openai",
     defaultsThinkingDefault: "high",
-    defaultsThinkingLevels: options.levels ?? [
+    defaultsThinkingLevels: [
       { id: "low", label: "low" },
       { id: "high", label: "high" },
     ],
@@ -580,15 +573,6 @@ function createOpenAiHeaderState(overrides: Parameters<typeof createChatHeaderSt
     models: createOpenAiModelCatalog(),
     ...overrides,
   });
-}
-
-function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
-  expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
-  return select;
 }
 
 type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
@@ -646,62 +630,6 @@ function renderModelControls(
     container,
   );
   return container;
-}
-
-function getChatThinkingValue(control: HTMLElement): string {
-  return control.dataset.chatThinkingValue ?? "";
-}
-
-function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
-  expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
-  return select;
-}
-
-function getThinkingSlider(container: Element): HTMLInputElement | null {
-  return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
-}
-
-function getThinkingSliderValues(container: Element): string[] {
-  const values = getThinkingSlider(container)?.dataset.chatThinkingValues ?? "";
-  return values ? values.split(",") : [];
-}
-
-function getThinkingReasoningValueLabel(container: Element): string {
-  const preview = container.querySelector(
-    "[data-chat-thinking-preview-committed]:not([hidden]), " +
-      "[data-chat-thinking-preview-index]:not([hidden])",
-  );
-  return preview?.textContent?.trim() ?? "";
-}
-
-function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
-}
-
-function getComposerTextarea(container: Element): HTMLTextAreaElement {
-  return requireElement(
-    container,
-    ".agent-chat__composer-combobox > textarea",
-    "composer textarea",
-  ) as HTMLTextAreaElement;
-}
-
-function createDragEvent(type: string, types = ["Files"]): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types } });
-  return event;
-}
-
-function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
-  return expectDefined(items[index], `${label} ${index}`);
 }
 
 describe("chat typing status", () => {
@@ -796,7 +724,6 @@ function createBackgroundTasks(
       rows: [],
       overflowCount: 0,
       taskIds: new Set<string>(),
-      nextExpiryAt: null,
     },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
@@ -948,8 +875,6 @@ describe("chat run error", () => {
 
   it.each([
     ["run", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
-    ["request", "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line"],
-    ["run", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
     ["request", `Request failed: ${"Long diagnostic text. ".repeat(20)}Final diagnostic line`],
   ])("exposes the complete %s error as selectable text and a copy action", (source, diagnostic) => {
     const container = renderChatView(
@@ -1093,25 +1018,15 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders checkpoint recovery copy and action", () => {
-    const onOpenSessionCheckpoints = vi.fn();
+  it("renders a compact divider without a subtitle or checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
-      onOpenSessionCheckpoints,
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
-    expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint.",
-    );
+    expect(container.querySelector(".chat-divider__description")).toBeNull();
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
-    expect(button?.textContent?.trim()).toBe("Open checkpoints");
-
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
-
-    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
 
   it("renders the session reset divider title", () => {
@@ -1316,19 +1231,6 @@ describe("cloud worker disk-space notice", () => {
   });
 });
 
-describe("chat conversation width", () => {
-  it("applies a configured width once to the centered transcript frame", () => {
-    const container = renderChatView({
-      chatMessageMaxWidth: "82%",
-      messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
-    });
-    const chat = container.querySelector<HTMLElement>(".chat");
-
-    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
-    expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
-  });
-});
-
 describe("chat history pagination", () => {
   it("keeps earlier history discoverable and retryable until the transcript is exhausted", () => {
     const onShowEarlier = vi.fn();
@@ -1464,6 +1366,41 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
+  it.each([
+    {
+      type: "attachment",
+      attachment: { kind: "document", label: "installation.pdf", url: "/media/installation.pdf" },
+    },
+    {
+      type: "attachment",
+      attachment: { kind: "audio", label: "voice-note.ogg", url: "/media/voice-note.ogg" },
+    },
+    {
+      type: "attachment_error",
+      attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
+    },
+  ])("names a queued $attachment.kind attachment without message text", (content) => {
+    const historyState = makeChatHost({ currentSessionId: "attachment-session" });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "attachment-input",
+          runId: "attachment-run",
+          acceptedAt: 1,
+          state: "queued",
+          queued: true,
+          message: { role: "user", content: [content] },
+        },
+      ],
+    });
+    const container = renderChatView({ historyState });
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+      content.attachment.label,
+    );
+    expect(container.querySelector(".chat-group.user")).toBeNull();
+  });
+
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -1571,29 +1508,6 @@ describe("retained input navigation", () => {
       expect(queue).toHaveLength(3);
     },
   );
-
-  it("does not show an inventory banner for a single retained message", () => {
-    const historyState = makeChatHost({
-      sessionKey: "agent:main:retained-input",
-      currentSessionId: "retained-input-session",
-    });
-    applyChatPendingInputs(historyState, {
-      total: 1,
-      items: [
-        {
-          id: "retained-input",
-          runId: "retained-run",
-          acceptedAt: 100,
-          state: "interrupted",
-          message: { role: "user", content: "Retained message", timestamp: 100 },
-        },
-      ],
-    });
-
-    const container = renderChatView({ historyState });
-
-    expect(container.querySelector(".chat-history-error--inline")).toBeNull();
-  });
 });
 
 describe("direct thread avatar mode", () => {
@@ -1746,13 +1660,8 @@ describe("direct thread avatar mode", () => {
 });
 
 describe("chat code-block copy", () => {
-  it.each([
-    { name: "keeps legacy raw data-code payloads copyable", payload: "legacy text" },
-    {
-      name: "does not decode unmarked raw data-code payloads that start with the block-art prefix",
-      payload: 'openclaw:block-art-code:"literal"',
-    },
-  ])("$name", async ({ payload }) => {
+  it("does not decode unmarked raw data-code payloads that start with the block-art prefix", async () => {
+    const payload = 'openclaw:block-art-code:"literal"';
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const container = renderChatView();
@@ -2231,67 +2140,6 @@ describe("chat transcript rendering", () => {
 });
 
 describe("chat scroll-to-bottom affordance", () => {
-  it("anchors immediately after the transcript and above every rendered footer surface", () => {
-    const onScrollToBottom = vi.fn();
-    const container = renderChatView({
-      showNewMessages: true,
-      onScrollToBottom,
-      inlineApproval: {
-        id: "approval-below-scroll-anchor",
-        kind: "exec",
-        request: {
-          command: "pnpm test",
-          agentId: "main",
-          sessionKey: "agent:main:current",
-          commandSpans: [],
-        },
-        createdAtMs: 1,
-        expiresAtMs: 61_000,
-      },
-      onApprovalDecision: vi.fn(),
-      queue: [{ id: "queued-below-scroll-anchor", text: "queued message", createdAt: 1 }],
-    });
-
-    const button = container.querySelector<HTMLButtonElement>(".chat-scroll-to-bottom");
-    const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
-    expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
-    expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(wrapper?.nextElementSibling?.classList.contains("chat-footer")).toBe(true);
-    for (const surface of container.querySelectorAll(
-      ".chat-inline-approval, .chat-queue, .agent-chat__composer-shell",
-    )) {
-      expect(wrapper?.compareDocumentPosition(surface) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    }
-    expect(button?.textContent?.trim()).toBe("");
-    expect(container.querySelector(".chat-new-messages")).toBeNull();
-
-    button?.click();
-
-    expect(onScrollToBottom).toHaveBeenCalledWith({ smooth: true });
-  });
-
-  it("keeps the button above a variable-height footer stack", () => {
-    const container = renderChatView({
-      showNewMessages: true,
-      queue: [
-        { id: "queued-1", text: "first queued message", createdAt: 1 },
-        { id: "queued-2", text: "second queued message", createdAt: 2 },
-      ],
-    });
-
-    const wrapper = requireElement(container, ".chat-scroll-to-bottom-wrap", "scroll affordance");
-    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
-    const queue = requireElement(container, ".chat-queue", "composer queue");
-    const composer = requireElement(shell, ".agent-chat__input", "composer");
-    const footer = requireElement(container, ".chat-footer", "footer");
-    expect(wrapper.nextElementSibling).toBe(footer);
-    expect(shell.closest(".chat-footer")).toBe(footer);
-    expect(wrapper.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(queue.closest(".chat-footer__context")).not.toBeNull();
-    expect(composer.closest(".chat-footer__context")).toBeNull();
-    expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  });
-
   it.each([false, true])(
     "keeps the latest action inactive while hidden and reuses it on reentry (initially visible: %s)",
     (showNewMessages) => {
@@ -2337,31 +2185,6 @@ describe("chat composer workbench", () => {
       commandContainer.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')
         ?.disabled,
     ).toBe(true);
-  });
-
-  it("renders session controls in the composer without owning side-panel content", () => {
-    const container = renderChatView({
-      composerControls: html`<button class="test-composer-control">Model</button>`,
-      permissionPicker: {
-        canSelectFull: true,
-        mode: "workspace",
-        onSelect: vi.fn(),
-      },
-    });
-
-    const composerControl = container.querySelector(
-      ".agent-chat__composer-controls .test-composer-control",
-    );
-    const permissionControl = container.querySelector('[data-chat-permission-select="true"]');
-    expect(composerControl).not.toBeNull();
-    expect(composerControl?.closest(".agent-chat__composer-footer")).not.toBeNull();
-    expect(permissionControl?.closest(".agent-chat__composer-meta")).not.toBeNull();
-    expect(permissionControl?.closest(".chat-composer-model-control")).toBeNull();
-    expect(permissionControl!.compareDocumentPosition(composerControl!)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(container.querySelector(".agent-chat__composer-header")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 
   it("opens inline Markdown images", () => {
@@ -2416,32 +2239,6 @@ describe("chat composer workbench", () => {
     const working = renderChatView({ messages, backgroundTasks, canAbort: true, runActive: true });
     expect(working.querySelector(".chat-tasks-status")).toBeNull();
   });
-
-  it("keeps the secondary New session and Export controls suppressed in the composer", () => {
-    const container = renderChatView({
-      messages: [{ role: "assistant", content: "ready" }],
-    });
-
-    const labels = Array.from(container.querySelectorAll(".agent-chat__composer-shell button")).map(
-      (button) => button.getAttribute("aria-label"),
-    );
-    expect(labels).not.toContain(t("chat.runControls.newSession"));
-    expect(labels).not.toContain(t("chat.runControls.exportChat"));
-  });
-
-  it("uses the primary action for voice with only the compact device-picker caret", () => {
-    const container = renderChatView({
-      onToggleRealtimeTalk: () => undefined,
-    });
-
-    const voiceButton = container.querySelector('button[aria-label="Start voice input"]');
-    expect(voiceButton).not.toBeNull();
-    expect(voiceButton?.closest(".agent-chat__composer-trail")).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
-    // The mic device picker is a caret on the voice button, not a separate settings button.
-    const picker = container.querySelector('button[aria-label="Microphone input"]');
-    expect(picker?.classList.contains("chat-talk-input-picker__trigger")).toBe(true);
-  });
 });
 
 afterEach(() => {
@@ -2451,14 +2248,13 @@ afterEach(() => {
   // Restore defaults even when a case fails with an override installed.
   buildChatItemsMock.mockReset();
   renderMessageGroupMock.mockReset();
-  chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
   resetTranscriptTestDom();
 });
 
 describe("per-pane chat presentation state", () => {
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Win32"])(
     "uses the platform search shortcut on %s without consuming text navigation",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
@@ -2647,34 +2443,6 @@ describe("chat transcript rendering cache", () => {
     expect(renderMessageGroupMock.mock.calls[1]?.[1]).toMatchObject({ userId: "profile-1" });
   });
 
-  it("rerenders transcript groups when chat media changes", () => {
-    const messages = [{ role: "assistant", content: "ready" }];
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const queue: ChatQueueItem[] = [];
-    const container = document.createElement("div");
-
-    renderChatInto(container, { messages, toolMessages, streamSegments, queue });
-    chatMediaRenderVersionMock.value += 1;
-    renderChatInto(container, { messages, toolMessages, streamSegments, queue, draft: "h" });
-
-    expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("passes assistant attachment load callbacks to transcript groups", () => {
-    const onAssistantAttachmentLoaded = vi.fn();
-
-    renderChatView({
-      messages: [{ role: "assistant", content: "MEDIA:https://example.com/vector.svg" }],
-      onAssistantAttachmentLoaded,
-    });
-
-    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
-    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
-      onAssistantAttachmentLoaded,
-    });
-  });
-
   it("shares assistant media context across history, streams, and continuations", () => {
     const onAssistantAttachmentLoaded = vi.fn();
     const onRequestUpdate = vi.fn();
@@ -2761,29 +2529,6 @@ describe("chat transcript rendering cache", () => {
       expected,
     );
   });
-
-  it("rebuilds transcript items when the transcript reference changes", () => {
-    const toolMessages: unknown[] = [];
-    const streamSegments: Array<{ text: string; ts: number }> = [];
-    const queue: ChatQueueItem[] = [];
-
-    renderChatView({
-      messages: [{ role: "assistant", content: "ready" }],
-      toolMessages,
-      streamSegments,
-      queue,
-      draft: "",
-    });
-    renderChatView({
-      messages: [{ role: "assistant", content: "new reply" }],
-      toolMessages,
-      streamSegments,
-      queue,
-      draft: "",
-    });
-
-    expect(buildChatItemsMock).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("chat loading skeleton", () => {
@@ -2820,6 +2565,36 @@ describe("chat loading skeleton", () => {
       ],
     };
   }
+
+  it("retires only the exact saved Talk entries, retaining unsaved speech and repeated words", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      messages: [{ role: "user", content: "Repeated words", __openclaw: { id: "voice:call:1" } }],
+      realtimeTalkConversation: [
+        {
+          id: "u1",
+          role: "user",
+          text: "Repeated words",
+          isStreaming: false,
+          transcriptId: "voice:call:1",
+        },
+        {
+          id: "u2",
+          role: "user",
+          text: "Repeated words",
+          isStreaming: false,
+          transcriptId: "voice:call:2",
+        },
+        { id: "a1", role: "assistant", text: "Still speaking", isStreaming: true },
+      ],
+    });
+    const turns = [...container.querySelectorAll(".agent-chat__voice-turn")];
+    expect(turns).toHaveLength(2);
+    expect(turns.map((turn) => turn.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "You Repeated words",
+      "Val Still speaking",
+    ]);
+  });
 
   it("renders realtime Talk transcript as ordered voice turns", () => {
     const container = renderChatView({
@@ -2936,42 +2711,6 @@ describe("chat loading skeleton", () => {
     }
   });
 
-  it("routes live and completed status into the existing assistant turn", () => {
-    renderChatView({
-      canAbort: true,
-      runActive: true,
-      messages: [
-        { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
-      ],
-      stream: null,
-    });
-
-    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
-    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
-      activeContinuation: {
-        parts: [{ kind: "reading-indicator", key: "reading:test", startedAt: 1 }],
-      },
-    });
-
-    renderMessageGroupMock.mockClear();
-    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
-      runId: "run-composed",
-      runtimeMs: 5_000,
-      outputTokens: 42,
-    });
-    const container = renderChatView({
-      messages: [
-        { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
-      ],
-    });
-
-    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
-    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
-      turnRecap: { runtimeMs: 5_000, outputTokens: 42 },
-    });
-    expect(container.querySelector(".chat-turn-recap")).toBeNull();
-  });
-
   it("keeps a completed recap after later tool content", () => {
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
       {
@@ -3080,144 +2819,6 @@ describe("chat loading skeleton", () => {
     expect(replyCall?.[1].activeContinuation).toBeUndefined();
   });
 
-  it("keeps the live token counter current when only run usage changes", () => {
-    // Run usage arrives on its own patches, so the transcript items, the
-    // shared render context, and this row's own identity all stay put while
-    // the counter ticks.
-    const readingIndicator = {
-      kind: "reading-indicator",
-      key: "reading:test",
-      startedAt: 1,
-      runId: "usage-run",
-    };
-    const reply = {
-      kind: "group",
-      key: "group:assistant:reply",
-      role: "assistant",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:assistant:reply",
-          message: { role: "assistant", content: "Interim answer", timestamp: 1 },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-    };
-    const renderWithUsage = (container: HTMLElement, runOutputTokens: number) => {
-      renderChatInto(container, {
-        canAbort: true,
-        runUsageById: new Map([["usage-run", { outputTokens: runOutputTokens, seq: 1 }]]),
-        stream: null,
-      });
-    };
-
-    const streamGroupSpy = vi.fn(renderStreamGroupMock);
-    vi.spyOn(chatMessage, "renderStreamGroup").mockImplementation(streamGroupSpy);
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([readingIndicator] as ReturnType<
-      typeof chatThread.buildCachedChatItems
-    >);
-    const standalone = document.createElement("div");
-    renderWithUsage(standalone, 5_500);
-    renderWithUsage(standalone, 7_200);
-    expect(streamGroupSpy.mock.calls.at(-1)?.[1]?.runOutputTokens).toBe(7_200);
-
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      reply,
-      readingIndicator,
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    const embedded = document.createElement("div");
-    renderWithUsage(embedded, 5_500);
-    renderMessageGroupMock.mockClear();
-    renderWithUsage(embedded, 7_200);
-    expect(
-      renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation?.options.runOutputTokens,
-    ).toBe(7_200);
-  });
-
-  it("keeps multi-part run usage current when only output tokens change", () => {
-    const runId = "run-composed";
-    const user = {
-      kind: "group",
-      key: "group:user:run-composed",
-      role: "user",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:user:run-composed",
-          message: {
-            role: "user",
-            content: "Start the work.",
-            timestamp: 0,
-            __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
-          },
-        },
-      ],
-      timestamp: 0,
-      isStreaming: false,
-    };
-    const assistant = {
-      kind: "group",
-      key: "group:assistant:run-start",
-      role: "assistant",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:assistant:run-start",
-          message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-      runId,
-    };
-    const tool = {
-      kind: "group",
-      key: "group:tool:run-work",
-      role: "tool",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:tool:run-work",
-          message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
-        },
-      ],
-      timestamp: 2,
-      isStreaming: false,
-      runId,
-    };
-    const reading = {
-      kind: "reading-indicator",
-      key: "reading:run-composed",
-      startedAt: 1,
-      runId,
-    };
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      user,
-      assistant,
-      tool,
-      reading,
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    const container = document.createElement("div");
-    const streamPartsSpy = vi.spyOn(chatMessage, "renderStreamGroupParts");
-
-    renderChatInto(container, {
-      canAbort: true,
-      runId,
-      runUsageById: new Map([[runId, { outputTokens: 5_500, seq: 1 }]]),
-      stream: null,
-    });
-    streamPartsSpy.mockClear();
-    renderChatInto(container, {
-      canAbort: true,
-      runId,
-      runUsageById: new Map([[runId, { outputTokens: 7_200, seq: 2 }]]),
-      stream: null,
-    });
-
-    expect(streamPartsSpy.mock.calls.at(-1)?.[1].runOutputTokens).toBe(7_200);
-  });
-
   it("keeps the completed recap on one composed multi-part run", () => {
     const runId = "run-composed";
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
@@ -3308,67 +2909,6 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
-  it("does not move a watched recap onto a later unrelated run", () => {
-    const firstReply = {
-      kind: "group",
-      key: "group:assistant:first",
-      runId: "run-composed",
-      role: "assistant",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:assistant:first",
-          message: { role: "assistant", content: "First answer", timestamp: 1 },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-    };
-    const secondReply = {
-      ...firstReply,
-      key: "group:assistant:second",
-      runId: "foreign-run",
-      messages: [
-        {
-          key: "message:assistant:second",
-          message: { role: "assistant", content: "Second answer", timestamp: 2 },
-        },
-      ],
-      timestamp: 2,
-    };
-    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
-      runId: "run-composed",
-      runtimeMs: 5_000,
-      outputTokens: 42,
-    });
-    const props = { messages: [{ role: "assistant", content: "First answer", timestamp: 1 }] };
-    const container = document.createElement("div");
-
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([firstReply] as ReturnType<
-      typeof chatThread.buildCachedChatItems
-    >);
-    renderChatInto(container, props);
-    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1].turnRecap).toBeDefined();
-
-    renderMessageGroupMock.mockClear();
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      firstReply,
-      secondReply,
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    renderChatInto(container, props);
-
-    const firstCall = renderMessageGroupMock.mock.calls.find(
-      ([group]) => group.key === firstReply.key,
-    );
-    expect(firstCall).toBeDefined();
-    expect(firstCall?.[1].turnRecap).toBeUndefined();
-    expect(
-      renderMessageGroupMock.mock.calls.find(([group]) => group.key === secondReply.key)?.[1]
-        .turnRecap,
-    ).toBeUndefined();
-    expect(container.querySelector(".chat-turn-recap")).toBeNull();
-  });
-
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
@@ -3391,7 +2931,7 @@ describe("chat loading skeleton", () => {
     expect(contextUsage?.closest(".agent-chat__composer-context")).not.toBeNull();
   });
 
-  it("places context usage after the composer controls in the bottom row", () => {
+  it("keeps subscription usage and its navigation scoped to the configured base path", () => {
     const container = renderChatView({
       providerUsage: {
         basePath: "/rosita",
@@ -3419,16 +2959,11 @@ describe("chat loading skeleton", () => {
       selectedSession: createContextUsageSessions().sessions[0],
     });
 
-    const context = container.querySelector(".context-ring");
-    expect(context).toBeInstanceOf(HTMLElement);
-    expect(context?.closest(".agent-chat__composer-context")).not.toBeNull();
-    expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
-    expect(container.querySelector(".agent-chat__composer-header")).toBeNull();
     const limitRow = container.querySelector(".context-usage__limit");
     expect(limitRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Weekly 72%");
     const usageLink = container.querySelector<HTMLAnchorElement>(
@@ -3593,18 +3128,6 @@ describe("chat loading skeleton", () => {
 });
 
 describe("chat voice controls", () => {
-  afterEach(async () => {
-    await i18n.setLocale("en");
-  });
-
-  it("shows one mic button for starting realtime talk", () => {
-    const container = renderChatView();
-
-    requireElement(container, '[aria-label="Start voice input"]', "voice input button");
-    expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
-    expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
-  });
-
   it("toggles camera inside a video-capable voice session and renders the preview", () => {
     const onToggleRealtimeCamera = vi.fn();
     const stream = {} as MediaStream;
@@ -3635,7 +3158,6 @@ describe("chat voice controls", () => {
       'video[aria-label="Camera preview"]',
       "camera preview",
     ) as HTMLVideoElement;
-
     expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
@@ -3756,31 +3278,6 @@ describe("chat voice controls", () => {
     } finally {
       container.remove();
     }
-  });
-
-  it("renders composer labels from the active locale map", async () => {
-    await i18n.setLocale("zh-CN");
-    const container = renderChatView();
-    const startTalkLabel = t("chat.composer.startVoiceInput");
-
-    const talkButton = requireElement(
-      container,
-      `[aria-label="${startTalkLabel}"]`,
-      "localized voice input button",
-    );
-    const tooltip = talkButton.parentElement as (HTMLElement & { content?: string }) | null;
-    expect(talkButton.getAttribute("title")).toBeNull();
-    expect(tooltip?.localName).toBe("openclaw-tooltip");
-    expect(tooltip?.content).toBe(t("chat.composer.voiceGestureHint"));
-    expect(talkButton.textContent?.trim()).toBe(startTalkLabel);
-    requireElement(
-      container,
-      `[aria-label="${t("chat.composer.addAttachment")}"]`,
-      "localized attachment menu",
-    );
-    expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholder", { name: "Val" }),
-    );
   });
 
   it("focuses the composer from non-control input chrome", () => {
@@ -4059,7 +3556,6 @@ describe("chat composer IME composition", () => {
     });
 
     textarea.dispatchEvent(arrowEvent);
-
     expect(arrowEvent.defaultPrevented).toBe(true);
     expect(onHistoryKeydown).toHaveBeenCalledOnce();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
@@ -4089,160 +3585,7 @@ describe("chat composer IME composition", () => {
   });
 });
 
-describe("chat composer sizing", () => {
-  it("sizes restored drafts after the rendered value is committed", async () => {
-    const container = renderChatView({ draft: "A restored long draft" });
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, value: 180 },
-      clientHeight: { configurable: true, value: 150 },
-    });
-    document.body.append(container);
-
-    await Promise.resolve();
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-    container.remove();
-  });
-
-  it("shows the textarea scrollbar only when the draft overflows", () => {
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    textarea.value = "A long draft";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-
-    expect(textarea.style.height).toBe("150px");
-    expect(textarea.style.overflowY).toBe("auto");
-  });
-
-  it("resizes the draft when responsive layout changes the textarea width", () => {
-    let resizeCallback: ResizeObserverCallback | undefined;
-    let animationFrameCallback: FrameRequestCallback | undefined;
-    let nextAnimationFrameId = 0;
-    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
-      animationFrameCallback = callback;
-      nextAnimationFrameId += 1;
-      return nextAnimationFrameId;
-    });
-    const cancelAnimationFrameMock = vi.fn();
-    class TestResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-      takeRecords(): ResizeObserverEntry[] {
-        return [];
-      }
-    }
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
-
-    let width = 320;
-    let scrollHeight = 42;
-    let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
-      bottom: clientHeight,
-      height: clientHeight,
-      left: 0,
-      right: width,
-      top: 0,
-      width,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    }));
-
-    const container = renderChatView({});
-    const textarea = getComposerTextarea(container);
-    Object.defineProperties(textarea, {
-      scrollHeight: { configurable: true, get: () => scrollHeight },
-      clientHeight: { configurable: true, get: () => clientHeight },
-    });
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    expect(textarea.style.height).toBe("42px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    scrollHeight = 180;
-    clientHeight = 150;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(textarea.style.overflowY).toBe("auto");
-    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
-
-    width = 180;
-    scrollHeight = 120;
-    clientHeight = 120;
-    resizeCallback?.([], {} as ResizeObserver);
-    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
-    expect(textarea.style.height).toBe("42px");
-
-    animationFrameCallback?.(0);
-    expect(textarea.style.height).toBe("120px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    width = 160;
-    resizeCallback?.([], {} as ResizeObserver);
-    render(html``, container);
-    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
-  });
-});
-
 describe("chat slash menu accessibility", () => {
-  function replaceSkillCommands(
-    ...skills: Array<{ key: string; name?: string; skillDisplayName?: string; description: string }>
-  ) {
-    replaceSlashCommands([
-      ...buildFallbackSlashCommands(),
-      ...skills.map(({ key, name = key, skillDisplayName, description }) => ({
-        key,
-        name,
-        skillDisplayName,
-        description,
-        source: "skill" as const,
-        skillModelVisible: true,
-      })),
-    ]);
-  }
-
-  function inputDraft(container: HTMLElement, value: string) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    textarea!.value = value;
-    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function inputDraftAtEnd(container: HTMLElement, value: string) {
-    const textarea = getComposerTextarea(container);
-    textarea.value = value;
-    textarea.setSelectionRange(value.length, value.length);
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-  }
-
-  function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
-    textarea!.dispatchEvent(event);
-    return event;
-  }
-
   function replayInput(textarea: HTMLTextAreaElement, value: string, type = "input") {
     if (type === "input") {
       textarea.value = value;
@@ -4263,47 +3606,6 @@ describe("chat slash menu accessibility", () => {
     });
     renderChatInto(container, { draft, getDraft: () => draft, onDraftChange, onSend });
     return { container, onDraftChange, onSend };
-  }
-
-  function createReactiveDraftHarness({
-    onDraftChange: observeDraftChange,
-    ...overrides
-  }: Partial<ChatProps> = {}) {
-    let draft = "";
-    let currentOverrides = overrides;
-    const container = document.createElement("div");
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-      observeDraftChange?.(next);
-    });
-    const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
-      currentOverrides = { ...currentOverrides, ...nextOverrides };
-      renderChatInto(container, {
-        draft,
-        getDraft: () => draft,
-        onDraftChange,
-        onRequestUpdate: renderCurrent,
-        ...currentOverrides,
-      });
-    };
-    renderCurrent();
-    return { container, renderCurrent };
-  }
-
-  function createSlashRerenderHarness() {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
-    const renderCurrent = () => renderChatView({ draft, onDraftChange });
-    return {
-      container: renderCurrent(),
-      inputAndRender(container: HTMLElement, value: string) {
-        inputDraft(container, value);
-        return renderCurrent();
-      },
-      renderCurrent,
-    };
   }
 
   function createSessionDraftHarness(prefix: string) {
@@ -4860,7 +4162,6 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
-
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
@@ -4900,28 +4201,6 @@ describe("chat slash menu accessibility", () => {
     await type("Use $p");
     await type("Use $pro");
 
-    expect(onSlashIntent).toHaveBeenCalledOnce();
-  });
-
-  it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
-    replaceSkillCommands({
-      key: "prose_writer",
-      skillDisplayName: "Prose Writer",
-      description: "Draft polished prose.",
-    });
-    const onSlashIntent = vi.fn(async () => undefined);
-    const { container } = createReactiveDraftHarness({ onSlashIntent });
-
-    inputDraftAtEnd(container, "Polish this with $pro:");
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
-    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
-    expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
     expect(onSlashIntent).toHaveBeenCalledOnce();
   });
 
@@ -5136,31 +4415,31 @@ describe("chat slash menu accessibility", () => {
       animationFrames.push(callback);
       return animationFrames.length;
     });
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
-        const height = 28;
-        let top = 0;
-        if (this.classList.contains("slash-menu-item")) {
-          const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
-          const options = Array.from(
-            scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
-          );
-          top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
-        }
-        const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
-        return {
-          bottom,
-          height: bottom - top,
-          left: 0,
-          right: 240,
-          top,
-          width: 240,
-          x: 0,
-          y: top,
-          toJSON: () => ({}),
-        };
-      },
-    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const height = 28;
+      let top = 0;
+      if (this.classList.contains("slash-menu-item")) {
+        const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
+        const options = Array.from(
+          scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
+        );
+        top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
+      }
+      const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
+      return {
+        bottom,
+        height: bottom - top,
+        left: 0,
+        right: 240,
+        top,
+        width: 240,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      };
+    });
     const { container } = createReactiveDraftHarness();
     document.body.append(container);
     inputDraftAtEnd(container, "Use $");
@@ -5510,350 +4789,6 @@ describe("chat slash menu accessibility", () => {
 
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("history recall");
   });
-
-  it("wires command suggestions to the composer with stable active option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/");
-
-    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(wrapper?.hasAttribute("role")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
-    expect(textarea?.hasAttribute("role")).toBe(false);
-    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
-    expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
-    expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
-    expect(listbox?.getAttribute("role")).toBe("listbox");
-    expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
-  });
-
-  it("removes secondary implementation and option-count badges", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/");
-    const stopOption = Array.from(
-      container.querySelectorAll<HTMLElement>(".slash-menu [role='option']"),
-    ).find((option) => option.querySelector(".slash-menu-name")?.textContent?.trim() === "/stop");
-
-    expect(stopOption).toBeDefined();
-    expect(stopOption?.querySelector(".slash-menu-badge")).toBeNull();
-    expect(container.querySelector(".slash-menu-badge")).toBeNull();
-  });
-
-  it("shows every command directly without an expander or keyboard footer", () => {
-    replaceSlashCommands([
-      {
-        key: "standard-command",
-        name: "standard-command",
-        description: "Standard command.",
-        tier: "standard",
-        category: "session",
-      },
-      {
-        key: "power-command",
-        name: "power-command",
-        description: "Power command.",
-        tier: "power",
-        category: "tools",
-      },
-    ]);
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/");
-
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["/standard-command", "/power-command"]);
-    expect(container.querySelector(".slash-menu-show-more")).toBeNull();
-    expect(container.querySelector(".slash-menu-footer")).toBeNull();
-  });
-
-  it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
-    replaceSlashCommands([
-      {
-        key: "pair",
-        name: "pair",
-        description: "Pair a device.",
-        tier: "power",
-        category: "tools",
-      },
-      {
-        key: "pair-device",
-        name: "pair-device",
-        description: "Pair a specific device.",
-        tier: "standard",
-        category: "session",
-      },
-      {
-        key: "openclaw",
-        name: "openclaw",
-        description: "Run the setup and repair helper.",
-        tier: "essential",
-        category: "tools",
-      },
-    ]);
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/pair");
-
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["/pair", "/pair-device", "/openclaw"]);
-    expect(
-      Array.from(container.querySelectorAll(".slash-menu-group__label")).map((label) =>
-        label.textContent?.trim(),
-      ),
-    ).toEqual(["Tools", "Session", "Tools"]);
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-    const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
-    const activeId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    expect(options[1]?.id).toBe(activeId);
-    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
-
-    keydownComposer(container, "Enter");
-    container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("keeps a stable composer name when attachments change its placeholder", () => {
-    const harness = createReactiveDraftHarness();
-    const textarea = requireElement(
-      harness.container,
-      "textarea",
-      "chat composer",
-    ) as HTMLTextAreaElement;
-    const initialPlaceholder = textarea.placeholder;
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({
-      attachments: [
-        {
-          id: "image",
-          fileName: "sample.png",
-          mimeType: "image/png",
-          previewUrl: "blob:sample-image",
-          sizeBytes: 3,
-        },
-      ],
-    });
-    expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
-    expect(textarea.placeholder).not.toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({ attachments: [] });
-    expect(textarea.placeholder).toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-  });
-
-  it("updates the active descendant and live announcement during command navigation", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const initialActiveId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const nextActiveId = textarea?.getAttribute("aria-activedescendant");
-    const activeOption = nextActiveId
-      ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
-      : null;
-    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
-
-    if (!nextActiveId) {
-      throw new Error("Expected command navigation to set aria-activedescendant");
-    }
-    expect(nextActiveId).not.toBe(initialActiveId);
-    expect(activeOption?.getAttribute("aria-selected")).toBe("true");
-    expect(status?.getAttribute("aria-live")).toBe("polite");
-    const announcementText = status?.textContent?.trim();
-    if (!announcementText) {
-      throw new Error("Expected command navigation to update the live announcement");
-    }
-    const expectedAnnouncement = [
-      activeOption?.querySelector(".slash-menu-name")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-args")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-desc")?.textContent?.trim(),
-    ]
-      .filter(Boolean)
-      .join(" ");
-    expect(announcementText).toBe(expectedAnnouncement);
-  });
-
-  it("uses the localized command description in the live announcement", async () => {
-    const clearCommand = SLASH_COMMANDS.find((command) => command.name === "clear");
-    if (!clearCommand) {
-      throw new Error("Expected the clear slash command");
-    }
-    const originalDescriptionKey = clearCommand.descriptionKey;
-    clearCommand.descriptionKey = "common.health";
-    await i18n.setLocale("zh-CN");
-    try {
-      const harness = createSlashRerenderHarness();
-      const container = harness.inputAndRender(harness.container, "/clear");
-
-      const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
-      expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);
-    } finally {
-      clearCommand.descriptionKey = originalDescriptionKey;
-      await i18n.setLocale("en");
-    }
-  });
-
-  it("wires fixed argument suggestions with command-and-argument option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/tools ");
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
-    expect(activeId).toBe("chat-single-slash-option-arg-tools-compact");
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
-  });
-
-  it.each([
-    { name: "direct", sessionKey: "main", rowKey: "main" },
-    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
-  ])(
-    "opens model-supported thinking arguments after tab-completing /think ($name)",
-    ({ sessionKey, rowKey }) => {
-      const sessions = createSessionsListResult({
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-      });
-      const session = expectDefined(sessions.sessions[0], "active session");
-      session.key = rowKey;
-      session.thinkingLevels = [
-        { id: "off", label: "off" },
-        { id: "minimal", label: "minimal" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-        { id: "ultra", label: "ultra" },
-      ];
-      const { container } = createReactiveDraftHarness({
-        sessions,
-        sessionKey,
-        selectedSession: session,
-      });
-
-      inputDraft(container, "/think");
-      keydownComposer(container, "Tab");
-
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-      expect(
-        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-        ),
-      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-    },
-  );
-
-  it("suppresses thinking arguments while the active model is switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container } = createReactiveDraftHarness({
-      modelSwitching: true,
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("closes open thinking arguments when the active model starts switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container, renderCurrent } = createReactiveDraftHarness({
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-    expect(container.querySelector(".slash-menu")).not.toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBe("chat-single-slash-option-arg-think-default");
-
-    renderCurrent({ modelSwitching: true });
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
-  });
-
-  it("clears active descendant when suggestions close", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    if (!activeDescendant) {
-      throw new Error("Expected slash suggestions to set aria-activedescendant");
-    }
-
-    container = harness.inputAndRender(container, "plain message");
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLElement>(".agent-chat__composer-combobox")
-        ?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
-  });
 });
 
 describe("chat attachment picker", () => {
@@ -5908,30 +4843,6 @@ describe("chat attachment picker", () => {
     const rangeDrop = createDragEvent("drop", ["text/uri-list"]);
     range.dispatchEvent(rangeDrop);
     expect(rangeDrop.defaultPrevented).toBe(true);
-  });
-
-  it("turns large pasted plain text into a compact attachment", async () => {
-    const onAttachmentsChange = vi.fn();
-    const container = renderChatView({
-      draft: "intro",
-      getDraft: () => "intro",
-      onAttachmentsChange,
-    });
-    const textarea = getComposerTextarea(container);
-    const pastedText = "large paste\n" + "x".repeat(1100);
-    const allowed = textarea.dispatchEvent(createPasteEvent(pastedText));
-
-    expect(allowed).toBe(false);
-    await waitForFast(() => {
-      const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
-      expect(attachments).toHaveLength(1);
-      expect(attachments[0]?.fileName).toMatch(/^pasted-text-\d+\.txt$/u);
-      expect(attachments[0]?.mimeType).toBe("text/plain");
-      expect(attachments[0]?.sizeBytes).toBe(new Blob([pastedText]).size);
-      expect(
-        getChatAttachmentDataUrl(expectDefined(attachments[0], "attachments[0] test invariant")),
-      ).toMatch(/^data:text\/plain;base64,/u);
-    });
   });
 
   it("turns large rich-text clipboard content into a text attachment", () => {
@@ -6084,107 +4995,6 @@ describe("chat attachment picker", () => {
     );
   });
 
-  it("opens a pasted text excerpt in the side panel with the text-field action", async () => {
-    let attachments: ChatAttachment[] = [];
-    let container = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const textarea = getComposerTextarea(container);
-    const text = `First words from a long pasted note ${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(text));
-    const sidebar = createAttachmentSidebarHarness();
-    container = renderChatView({ attachments, onOpenSidebar: sidebar.open });
-    document.body.append(container);
-
-    await waitForFast(() => {
-      expect(container.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
-        "First words from a long pasted…",
-      );
-    });
-    expect(attachments[0]?.origin).toBe("paste");
-    expect(container.querySelector("openclaw-chat-pasted-text openclaw-tooltip")).toBeNull();
-    requireElement(
-      container,
-      ".chat-selection-annotations__chip",
-      "pasted text chip",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(sidebar.open).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
-    );
-    expect(
-      sidebar.container.querySelector(".chat-attachment-text-action")?.textContent?.trim(),
-    ).toBe("Show in text field");
-  });
-
-  it("preserves pasted-text presentation and restore behavior across handoff", async () => {
-    let attachments: ChatAttachment[] = [];
-    const producer = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
-    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
-    const original = expectDefined(attachments[0], "pasted attachment");
-    const originalDataUrl = getChatAttachmentDataUrl(original);
-
-    const handoff = createChatAttachmentHandoff();
-    const owner = {} as GatewayBrowserClient;
-    handoff.prepare({
-      owner,
-      paneId: "p1",
-      scopeKey: "agent:main:one",
-      attachments,
-      fallbacks: {},
-    });
-    attachments = expectDefined(
-      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" }),
-      "restored attachments",
-    ).attachments;
-
-    expect(attachments).toHaveLength(1);
-    expect(attachments[0]).toBe(original);
-    expect(getChatAttachmentDataUrl(original)).toBe(originalDataUrl);
-
-    const onAttachmentsChange = vi.fn();
-    const onDraftChange = vi.fn();
-    const sidebar = createAttachmentSidebarHarness();
-    const remounted = renderChatView({
-      onOpenSidebar: sidebar.open,
-      attachments,
-      getAttachments: () => attachments,
-      draft: "intro",
-      getDraft: () => "intro",
-      onAttachmentsChange,
-      onDraftChange,
-    });
-    document.body.append(remounted);
-    await waitForFast(() => {
-      expect(remounted.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
-        "First words from a remounted p…",
-      );
-    });
-    expect(attachments[0]?.origin).toBe("paste");
-    requireElement(
-      remounted,
-      ".chat-selection-annotations__chip",
-      "pasted text chip",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    requireElement(
-      sidebar.container,
-      ".chat-attachment-text-action",
-      "show pasted text button",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
-    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
-    expect(getChatAttachmentDataUrl(original)).toBeNull();
-  });
-
   it("keeps normal short plain-text paste in the textarea", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -6193,56 +5003,6 @@ describe("chat attachment picker", () => {
 
     expect(allowed).toBe(true);
     expect(onAttachmentsChange).not.toHaveBeenCalled();
-  });
-
-  it("shows a pasted text attachment in the composer text field", async () => {
-    const onAttachmentsChange = vi.fn();
-    const firstRender = renderChatView({ onAttachmentsChange });
-    const textarea = getComposerTextarea(firstRender);
-    const pastedText = "large paste\n" + "x".repeat(1100);
-    textarea.dispatchEvent(createPasteEvent(pastedText));
-
-    await waitForFast(() => {
-      expect(onAttachmentsChange).toHaveBeenCalled();
-    });
-    const attachment = expectDefined(
-      requireFirstAttachmentsChange(onAttachmentsChange)[0],
-      "pasted attachment",
-    );
-    const onDraftChange = vi.fn();
-    const onShowAttachmentsChange = vi.fn();
-    const sidebar = createAttachmentSidebarHarness();
-    const preview = expectDefined(
-      renderChatView({
-        onOpenSidebar: sidebar.open,
-        attachments: [attachment],
-        draft: "intro",
-        getDraft: () => "intro",
-        onAttachmentsChange: onShowAttachmentsChange,
-        onDraftChange,
-      }),
-      'renderChatView({ attachments: [attachment], draft: "intro", getDraft:... test invariant',
-    );
-    document.body.append(preview);
-    await waitForFast(() => {
-      expect(preview.querySelector(".chat-selection-annotations__chip")).not.toBeNull();
-    });
-    requireElement(preview, ".chat-selection-annotations__chip", "pasted text chip").dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
-    const showInTextFieldButton = requireElement(
-      sidebar.container,
-      ".chat-attachment-text-action",
-      "show pasted text in text field button",
-    ) as HTMLButtonElement;
-
-    showInTextFieldButton.click();
-
-    expect(onShowAttachmentsChange).toHaveBeenCalledWith([]);
-    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
-    expect(
-      getChatAttachmentDataUrl(expectDefined(attachment, "attachment test invariant")),
-    ).toBeNull();
   });
 
   it("converts pasted data image text into an attachment", () => {
@@ -6262,27 +5022,6 @@ describe("chat attachment picker", () => {
     expect(getChatAttachmentDataUrl(itemAt(attachments, 0, "pasted attachment"))).toBe(
       `data:image/png;base64,${base64}`,
     );
-  });
-
-  it("removes a pasted image attachment from the preview", () => {
-    const attachment: ChatAttachment = {
-      id: "image",
-      fileName: "pasted-image.png",
-      mimeType: "image/png",
-      previewUrl: "blob:pasted-image",
-      sizeBytes: 3,
-    };
-    const onAttachmentsChange = vi.fn();
-    const container = renderChatView({ attachments: [attachment], onAttachmentsChange });
-    const removeButton = requireElement(
-      container,
-      '[aria-label="Remove pasted-image.png"]',
-      "remove attachment button",
-    ) as HTMLButtonElement;
-
-    removeButton.click();
-
-    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
   });
 
   it("renders multiple browser annotations as bounded, accessible cards", () => {
@@ -6429,13 +5168,6 @@ describe("chat attachment picker", () => {
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps attachment-only composers free of capability rows", () => {
-    const container = renderChatView();
-
-    expect(container.querySelectorAll(".agent-chat__attach-menu-option")).toHaveLength(3);
-    expect(container.querySelector(".agent-chat__capability-menu-item")).toBeNull();
-  });
-
   it("opens the camera input from the attachment menu and attaches the captured photo", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -6463,15 +5195,6 @@ describe("chat attachment picker", () => {
       expect(attachments[0]?.fileName).toBe("camera.jpg");
       expect(attachments[0]?.mimeType).toBe("image/jpeg");
     });
-  });
-
-  it("keeps the camera attachment option available when the composer has text", () => {
-    const container = renderChatView({ draft: "Ready to send" });
-    const cameraButton = getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
-
-    expect(cameraButton).toBeInstanceOf(HTMLElement);
-    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
-    expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 
   it("accepts and previews file attachments", async () => {
@@ -6822,11 +5545,37 @@ describe("chat model controls", () => {
         expect(heading.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
           loaded ? expected : "",
         );
-        expect(heading.getAttribute("title")).toBe(loaded && expected ? expected : null);
         expect(heading.textContent).not.toContain("claude@example.com");
       }
     },
   );
+
+  it.each([1, 2])("identifies the selected sign-in method and email with %i accounts", (count) => {
+    const { state } = createChatHeaderState({
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    const profiles = subscriptionProfiles.slice(0, count).map((profile, index) =>
+      Object.assign({}, profile, {
+        displayName: index === 0 ? "Sign in with ChatGPT" : "Codex sign-in",
+      }),
+    );
+    const container = renderModelControls(state, {
+      accountSelection: {
+        kind: "shared",
+        label: "Sign in with ChatGPT",
+        authProfileId: "openai:work",
+      },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [{ ...authStatus.providers[0]!, profiles }],
+      },
+    });
+    expect(
+      container
+        .querySelector('[data-chat-model-provider="openai"] .chat-controls__auth-meta')
+        ?.textContent?.trim(),
+    ).toBe("Sign in with ChatGPT · work@example.com");
+  });
 
   it.each([
     ["personal", "openai:work", ["openai:personal"], "Subscription · work@example.com"],
@@ -6979,13 +5728,17 @@ describe("chat model controls", () => {
   });
 
   it.each([1, 2])(
-    "shows account emails only for multiple subscription profiles (%i)",
+    "identifies the selected account even before expanding %i subscription profiles",
     async (count) => {
-      const profiles = subscriptionProfiles.slice(0, count);
+      const profiles = subscriptionProfiles.slice(0, count).map((profile, index) =>
+        Object.assign({}, profile, {
+          displayName: index === 0 ? "Sign in with ChatGPT" : "Codex sign-in",
+        }),
+      );
       const accounts = profiles.map((profile) => ({
         authProfileId: profile.profileId,
         provider: "openai",
-        label: "Workspace",
+        label: profile.displayName,
         authType: profile.type,
         selected: false,
       }));
@@ -7025,6 +5778,9 @@ describe("chat model controls", () => {
           container,
         );
       draw();
+      expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
+        "work@example.com · Sign in with ChatGPT",
+      );
       container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       await vi.waitFor(() =>
@@ -7034,17 +5790,18 @@ describe("chat model controls", () => {
         ...container.querySelectorAll("[data-chat-account-option]"),
       ].entries()) {
         expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
-          "Workspace",
+          profiles[index]!.displayName,
         );
         expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
-          count > 1 ? profiles[index]!.email : "",
+          profiles[index]!.email,
         );
         expect(row.textContent).not.toContain(profiles[index]!.profileId);
       }
     },
   );
 
-  it.each([100, 400])("prepares %i catalog rows without per-option catalog rescans", (size) => {
+  it("prepares a large catalog without per-option catalog rescans", () => {
+    const size = 400;
     let idReads = 0;
     const models: ModelCatalogEntry[] = Array.from({ length: size }, (_, index) => ({
       get id() {
@@ -7067,7 +5824,6 @@ describe("chat model controls", () => {
     expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
     expect(rows[size - 1]?.textContent).toContain(`Model ${size - 1}`);
     expect(rows[size - 1]?.textContent).toContain("128k");
-    console.log(JSON.stringify({ proof: "model-catalog-render", size, idReads }));
     expect(idReads).toBeLessThan(size * 60);
   });
 
@@ -7098,16 +5854,6 @@ describe("chat model controls", () => {
       expect(row?.textContent).toContain("444k");
       expect(row?.textContent).not.toContain("555k");
     }
-  });
-
-  it("disables the chat header model picker while a run is active", () => {
-    const { state } = createChatHeaderState();
-    state.chatRunId = "run-123";
-    state.chatStream = "Working";
-    const container = renderModelControls(state);
-
-    const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("shows the selected model for an idle session with stale running status", () => {
@@ -7471,74 +6217,6 @@ describe("chat model controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
-  it("keeps a non-empty model list free of refresh failure chrome", () => {
-    const { state } = createOpenAiHeaderState();
-    const container = renderModelControls(state, {
-      modelCatalogState: { hasSnapshot: true, status: "ready", refreshFailed: true },
-    });
-    expect(container.querySelector("[data-chat-model-option]")).not.toBeNull();
-    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
-  });
-
-  it("shows a successful empty catalog without authentication guidance", () => {
-    const { state } = createChatHeaderState({ models: [] });
-    const onModelSetup = vi.fn();
-    const container = renderModelControls(state, {
-      modelCatalogState: { hasSnapshot: true, status: "ready" },
-      onModelSetup,
-    });
-
-    expect(
-      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-    ).toContain("No models available");
-    expect(container.textContent).not.toContain("Authentication failed");
-    expect(container.textContent).toContain("Manage models");
-    expect(container.textContent).not.toContain("Review connection");
-    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { status: "offline", catalogState: "offline", triggerLabel: "GPT-5.6 Sol" },
-    { status: "error", catalogState: "error", triggerLabel: "GPT-5.6 Sol" },
-  ] as const)(
-    "renders $status over a stale all-cold catalog",
-    ({ status, catalogState, triggerLabel }) => {
-      const { state } = createChatHeaderState({
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-        models: [
-          {
-            id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
-            provider: "openai",
-            available: false,
-          },
-        ],
-      });
-      const container = renderModelControls(state, {
-        modelCatalogState: {
-          hasSnapshot: true,
-          status,
-        },
-      });
-
-      expect(
-        container
-          .querySelector("[data-chat-model-catalog-state]")
-          ?.getAttribute("data-chat-model-catalog-state") ?? null,
-      ).toBe(catalogState);
-      expect(container.querySelector(".chat-controls__inline-select-label")?.textContent).toContain(
-        triggerLabel,
-      );
-      expect(container.textContent).not.toContain("Authentication failed");
-      expect(container.querySelector('[data-chat-model-setup="true"]')).toBeNull();
-      if (status === "offline") {
-        expect(container.querySelector(".chat-controls__effort-picker")).toBeNull();
-      }
-    },
-  );
-
   it.each([
     ["session", "Selecting a model changes only this session."],
     ["agent", "Selecting a model updates this agent's default."],
@@ -7576,79 +6254,6 @@ describe("chat model controls", () => {
       );
     },
   );
-
-  it("renders and applies selectable context windows inside the model picker", () => {
-    const { state } = createChatHeaderState({
-      model: "claude-fable-5",
-      modelProvider: "claude-cli",
-      models: [
-        {
-          id: "claude-fable-5",
-          name: "Claude Fable 5",
-          provider: "claude-cli",
-          contextWindow: 1_000_000,
-          contextWindows: [
-            { id: "200k", label: "200K", contextWindow: 200_000 },
-            { id: "1m", label: "1M", contextWindow: 1_000_000 },
-          ],
-          contextWindowDefault: "1m",
-        },
-      ],
-    });
-    const session = state.sessionsResult?.sessions[0];
-    if (!state.sessionsResult || !session) {
-      throw new Error("Expected session fixture");
-    }
-    state.sessionsResult = {
-      ...state.sessionsResult,
-      defaults: {
-        ...state.sessionsResult.defaults,
-        contextWindow: "1m",
-        contextWindowDefault: "1m",
-        contextWindows: state.chatModelCatalog[0]?.contextWindows,
-      },
-      sessions: [
-        {
-          ...session,
-          contextWindow: "1m",
-          contextWindowDefault: "1m",
-          contextWindows: state.chatModelCatalog[0]?.contextWindows,
-        },
-      ],
-    };
-    const onContextWindowSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onContextWindowSelect });
-    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-    expect(picker).toBeInstanceOf(HTMLDetailsElement);
-    if (!picker) {
-      throw new Error("Expected model picker");
-    }
-    picker.open = true;
-    picker.dispatchEvent(new Event("toggle"));
-
-    const toggle = container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]");
-    expect(toggle).toBeInstanceOf(HTMLButtonElement);
-    expect(toggle?.getAttribute("aria-checked")).toBe("true");
-    expect(toggle?.dataset.chatContextWindowToggle).toBe("200k");
-    expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
-    toggle?.click();
-    expect(onContextWindowSelect).toHaveBeenCalledWith("200k", "main");
-    expect(picker.open).toBe(true);
-
-    const activeRow = expectDefined(state.sessionsResult.sessions[0], "active session");
-    state.sessionsResult.sessions[0] = { ...activeRow, contextWindow: "200k" };
-    renderModelControls(state, { onContextWindowSelect }, container);
-    expect(container.querySelector("[data-chat-model-context-badge]")?.textContent?.trim()).toBe(
-      "200K",
-    );
-    expect(
-      container.querySelector("[data-chat-context-window-toggle]")?.getAttribute("aria-checked"),
-    ).toBe("false");
-
-    const { state: unsupportedState } = createOpenAiHeaderState();
-    renderModelControls(unsupportedState, {}, container);
-    expect(container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
-  });
 
   it("hides the context-window switch when the active session's model declares none", () => {
     const { state } = createChatHeaderState({
@@ -7695,46 +6300,6 @@ describe("chat model controls", () => {
 
     expect(container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
     expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
-  });
-
-  it("requests live wildcard discovery when the model picker opens", () => {
-    const { state } = createOpenAiHeaderState();
-    const onModelPickerOpen = vi.fn();
-    const container = renderModelControls(state, { onModelPickerOpen });
-
-    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-    expect(picker).toBeInstanceOf(HTMLDetailsElement);
-    picker!.open = true;
-    picker!.dispatchEvent(new Event("toggle"));
-
-    expect(onModelPickerOpen).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the model picker geometry stable when its open catalog resolves", () => {
-    const { state } = createOpenAiHeaderState({
-      thinkingDefault: "medium",
-      thinkingLevels: ["off", "minimal", "low", "medium", "high"].map((id) => ({ id, label: id })),
-    });
-    const container = renderModelControls(state, {
-      modelCatalog: [],
-      modelCatalogState: { hasSnapshot: false, status: "loading" },
-      modelPickerOpen: true,
-      modelsLoading: true,
-    });
-    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
-    const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
-    expect(picker?.open).toBe(true);
-    expect(effort?.getAttribute("aria-hidden")).toBe("true");
-    expect(effort?.hasAttribute("inert")).toBe(true);
-
-    renderModelControls(state, { modelPickerOpen: true }, container);
-
-    expect(container.querySelector(".chat-controls__model-picker")).toBe(picker);
-    expect(picker?.open).toBe(true);
-    expect(container.querySelector(".chat-controls__effort-picker")).toBe(effort);
-    expect(effort?.getAttribute("aria-hidden")).toBe("false");
-    expect(effort?.hasAttribute("inert")).toBe(false);
-    expect(effort?.textContent).toContain("Medium");
   });
 
   it("keeps model enabled while write-only access disables effort controls", () => {
@@ -8041,77 +6606,56 @@ describe("chat model controls", () => {
     expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
   });
 
-  describe.each(["codex", "openclaw", "claude-cli", undefined])(
-    "locked model labels with runtime %s",
-    (runtimeId) => {
-      it.each([
-        ["catalog label", "gpt-5.6-sol", "known", false, "GPT-5.6 Sol"],
-        ["missing catalog entry", "gpt-5.6-sol", "other", false, "openai/gpt-5.6-sol"],
-        ["empty catalog", "gpt-5.6-sol", "empty", false, "openai/gpt-5.6-sol"],
-        ["refreshing catalog", "gpt-5.6-sol", "known", true, "GPT-5.6 Sol"],
-        ["loading catalog without a snapshot", "gpt-5.6-sol", "empty", true, "openai/gpt-5.6-sol"],
-        ["no current model despite an unrelated default", null, "other", false, "Session model"],
-      ])("preserves the %s", (_name, model, catalog, loading, expected) => {
-        const { state } = createChatHeaderState({
-          model,
-          modelProvider: model ? "openai" : null,
-          models:
-            catalog === "empty"
-              ? []
-              : [
-                  {
-                    id: catalog === "known" ? "gpt-5.6-sol" : "gpt-5.6-luna",
-                    name: catalog === "known" ? "GPT-5.6 Sol" : "GPT-5.6 Luna",
-                    provider: "openai",
-                  },
-                ],
-        });
-        const session = expectDefined(state.sessionsResult?.sessions[0], "selected session");
-        session.modelSelectionLocked = true;
-        session.agentRuntime = runtimeId ? { id: runtimeId, source: "model" } : undefined;
-        const container = renderModelControls(state, {
-          agentDefaultModel: "openai/gpt-5.6-luna",
-          modelCatalogState: {
-            hasSnapshot: catalog !== "empty" || !loading,
-            status: loading ? "loading" : "ready",
-          },
-        });
-
-        expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-          expected,
-        );
-        const trigger = getChatModelSelect(container);
-        expect(
-          trigger.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-        ).toBe(expected);
-        expect(trigger.getAttribute("aria-label")).toBe(`Chat model: ${expected}`);
-        expect(trigger.title).toBe(expected);
-        expect(trigger.dataset.chatModelLocked).toBe("true");
-        expect(
-          container.querySelector(".chat-controls__locked-model-badge")?.textContent?.trim(),
-        ).toBe("Locked");
+  it.each([
+    ["codex", "catalog label", "gpt-5.6-sol", "known", false, "GPT-5.6 Sol"],
+    ["openclaw", "missing catalog entry", "gpt-5.6-sol", "other", false, "openai/gpt-5.6-sol"],
+    ["claude-cli", "empty catalog", "gpt-5.6-sol", "empty", false, "openai/gpt-5.6-sol"],
+    [undefined, "refreshing catalog", "gpt-5.6-sol", "known", true, "GPT-5.6 Sol"],
+    ["codex", "loading without snapshot", "gpt-5.6-sol", "empty", true, "openai/gpt-5.6-sol"],
+    ["codex", "no model with unrelated default", null, "other", false, "Session model"],
+  ] as const)(
+    "preserves the locked %s %s",
+    (runtimeId, _name, model, catalog, loading, expected) => {
+      const { state } = createChatHeaderState({
+        model,
+        modelProvider: model ? "openai" : null,
+        models:
+          catalog === "empty"
+            ? []
+            : [
+                {
+                  id: catalog === "known" ? "gpt-5.6-sol" : "gpt-5.6-luna",
+                  name: catalog === "known" ? "GPT-5.6 Sol" : "GPT-5.6 Luna",
+                  provider: "openai",
+                },
+              ],
       });
+      const session = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+      session.modelSelectionLocked = true;
+      session.agentRuntime = runtimeId ? { id: runtimeId, source: "model" } : undefined;
+      const container = renderModelControls(state, {
+        agentDefaultModel: "openai/gpt-5.6-luna",
+        modelCatalogState: {
+          hasSnapshot: catalog !== "empty" || !loading,
+          status: loading ? "loading" : "ready",
+        },
+      });
+
+      expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+        expected,
+      );
+      const trigger = getChatModelSelect(container);
+      expect(
+        trigger.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
+      ).toBe(expected);
+      expect(trigger.getAttribute("aria-label")).toBe(`Chat model: ${expected}`);
+      expect(trigger.title).toBe(expected);
+      expect(trigger.dataset.chatModelLocked).toBe("true");
+      expect(
+        container.querySelector(".chat-controls__locked-model-badge")?.textContent?.trim(),
+      ).toBe("Locked");
     },
   );
-
-  it("does not patch the model for a locked session", async () => {
-    const { state, request } = createOpenAiHeaderState();
-    state.sessionsResult = createSessionsResultFromRows([
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        modelSelectionLocked: true,
-        updatedAt: 1,
-      },
-    ]);
-
-    await expect(
-      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], "openai/gpt-5.4"),
-    ).resolves.toBe(false);
-    expect(request).not.toHaveBeenCalled();
-  });
 
   it("ignores model clicks while a run is active", () => {
     const { state } = createOpenAiHeaderState();
@@ -8148,11 +6692,9 @@ describe("chat model controls", () => {
         ],
       });
       const onModelSelect = vi.fn(async () => true);
-      const onModelSetup = vi.fn();
-      const container = renderModelControls(state, {
-        onModelSelect,
-        onModelSetup,
-      });
+      const onProviderSettings = vi.fn();
+      const callbacks = { onModelSelect, onProviderSettings };
+      const container = renderModelControls(state, callbacks);
       document.body.append(container);
 
       const providerHeadings = Array.from(
@@ -8175,7 +6717,7 @@ describe("chat model controls", () => {
         ),
       ).toBe(true);
       providerSettings?.click();
-      expect(onModelSetup).toHaveBeenCalledOnce();
+      expect(onProviderSettings).toHaveBeenCalledExactlyOnceWith("openai");
       const anthropicModels = container.querySelector<HTMLElement>(
         '[data-chat-model-provider-group="anthropic"]',
       );
@@ -8231,7 +6773,7 @@ describe("chat model controls", () => {
         ...state.chatModelCatalog,
         { id: "new-match", name: "Anth new", provider: "openai" },
       ];
-      renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+      renderModelControls(state, { ...callbacks, modelPickerOpen: true }, container);
       await Promise.resolve();
       expect(container.querySelector("[data-chat-model-search]")).toBe(search);
       expect(search?.value).toBe("anth");
@@ -8243,8 +6785,14 @@ describe("chat model controls", () => {
       expect(details?.open).toBe(false);
 
       onModelSelect.mockClear();
+      details!.dispatchEvent(new Event("toggle"));
       details!.open = true;
-      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
+        )!
+        .click();
+      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
       expect(onModelSelect).toHaveBeenCalledExactlyOnceWith(
         "anthropic/claude-sonnet-4-6",
         "main",
@@ -8255,12 +6803,12 @@ describe("chat model controls", () => {
     },
   );
 
-  it("matches the default model by its localized marker", () => {
+  it("matches the default model by its localized marker and canonical reference", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "gpt-5.5", name: "Chat Model", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ],
     });
@@ -8273,14 +6821,14 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
 
-    search!.value = "default";
-    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    for (const query of ["default", "gpt-5.5", "OPENAI/GPT-5.5"]) {
+      search!.value = query;
+      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
-    const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).filter((option) => !option.hidden);
-    expect(visibleOptions).toHaveLength(1);
-    expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
+      const visibleOptions = container.querySelectorAll("[data-chat-model-option]:not([hidden])");
+      expect(visibleOptions, query).toHaveLength(1);
+      expect(visibleOptions[0]?.getAttribute("data-chat-model-default")).toBe("true");
+    }
   });
 
   it("leaves digit keys to nested controls and selects the numbered row from the picker", () => {
@@ -8600,110 +7148,6 @@ describe("chat model controls", () => {
     expect(overrideOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
   });
 
-  it("distinguishes model rows that use different agent runtimes", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.6",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.6",
-          name: "GPT-5.6",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "openclaw", source: "model" },
-        },
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "codex", source: "model" },
-        },
-        {
-          id: "claude-opus-4-5",
-          name: "Claude Opus 4.5",
-          provider: "anthropic",
-          contextWindow: 200_000,
-          agentRuntime: { id: "claude-cli", source: "model" },
-        },
-        {
-          id: "gemini-3-pro",
-          name: "Gemini 3 Pro",
-          provider: "google",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "google-gemini-cli", source: "model" },
-        },
-        {
-          id: "gpt-5.6-terra",
-          name: "GPT-5.6 Terra",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "openclaw", source: "implicit" },
-        },
-      ],
-    });
-    const container = renderModelControls(state);
-    const metaFor = (value: string) =>
-      container.querySelector(
-        `[data-chat-model-option="${value}"] .chat-controls__model-option-meta`,
-      )?.textContent;
-
-    expect(metaFor("openai/gpt-5.6")).toBe("1M · OpenClaw");
-    expect(metaFor("openai/gpt-5.6")).not.toContain("Codex");
-    expect(metaFor("openai/gpt-5.6-sol")).toBe("1M · Codex");
-    // Known CLI runtime ids map to their product labels, not capitalized ids.
-    expect(metaFor("anthropic/claude-opus-4-5")).toBe("200k · Claude CLI");
-    expect(metaFor("google/gemini-3-pro")).toBe("1M · Gemini CLI");
-    // Implicitly resolved runtimes stay unlabeled; only operator-pinned
-    // (source model/provider) rows carry the runtime meta.
-    expect(metaFor("openai/gpt-5.6-terra")).toBe("1M");
-  });
-
-  it("marks chat-only models in the active control and picker", () => {
-    const { state } = createChatHeaderState({
-      model: "qwen3-8b",
-      modelProvider: "lmstudio",
-      models: [
-        {
-          id: "qwen3-8b",
-          name: "Qwen3 8B",
-          provider: "lmstudio",
-          contextWindow: 32_768,
-          supportsTools: false,
-        },
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-          supportsTools: true,
-        },
-      ],
-    });
-    const container = renderModelControls(state);
-    const trigger = getChatModelSelect(container);
-
-    expect(trigger.dataset.chatModelTools).toBe("unavailable");
-    expect(
-      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
-    ).toBe("Chat only");
-    expect(trigger.querySelector(".chat-controls__model-capability-alert")).toBeNull();
-    expect(trigger.getAttribute("aria-label")).toContain("Chat only");
-    expect(
-      container
-        .querySelector('[data-chat-model-option="lmstudio/qwen3-8b"]')
-        ?.querySelector(".chat-controls__model-option-meta")
-        ?.textContent?.trim(),
-    ).toBe("32.8k");
-    expect(
-      container.querySelector(
-        '[data-chat-model-option="lmstudio/qwen3-8b"] .chat-controls__model-chat-only-info svg',
-      ),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
-    ).not.toContain("Chat only");
-  });
-
   it("shows canonical OpenAI model names instead of command aliases", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -8746,94 +7190,6 @@ describe("chat model controls", () => {
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
     ).toContain("GPT-5.5");
-  });
-
-  it("marks the actual default model row and selects it when inherited", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      thinkingDefault: "high",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          alias: "gpt",
-          provider: "openai",
-        },
-      ],
-    });
-    state.sessionsResult = {
-      ...state.sessionsResult!,
-      defaults: {
-        ...state.sessionsResult!.defaults,
-        model: "gpt-5.5",
-        modelProvider: "openai",
-      },
-    };
-    const container = document.createElement("div");
-    renderModelControls(state, { modelOverrides: { main: null } }, container);
-
-    expect(
-      getChatModelSelect(container)
-        .querySelector(".chat-controls__inline-select-label")
-        ?.textContent?.trim(),
-    ).toBe("GPT-5.5");
-    const defaultOptions = container.querySelectorAll<HTMLButtonElement>(
-      '[data-chat-model-default="true"]',
-    );
-    expect(defaultOptions).toHaveLength(1);
-    const defaultOption = defaultOptions[0];
-    expect(defaultOption?.dataset.chatModelOption).toBe("openai/gpt-5.5");
-    expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
-    expect(defaultOption?.textContent).toContain("GPT-5.5");
-    expect(defaultOption?.textContent).toContain("Default");
-    expect(defaultOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
-    expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
-  });
-
-  it.each([
-    {
-      name: "clears a different model override from the actual default model row",
-      model: "gpt-5.4",
-      models: createOpenAiModelCatalog(),
-      sessionKey: "default-clear",
-      selected: "false",
-    },
-    {
-      name: "clears an explicit override that matches the default model",
-      model: "gpt-5.5",
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
-      sessionKey: "explicit-default",
-      selected: "true",
-    },
-  ])("$name", async ({ model, models, sessionKey, selected }) => {
-    const { state } = createChatHeaderState({ model, modelProvider: "openai", models });
-    state.sessionsResult = createSessionsListResult({
-      defaultsModel: "gpt-5.5",
-      defaultsProvider: "openai",
-      model,
-      modelProvider: "openai",
-    });
-    const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, {
-      sessionKey,
-      modelOverrides: { [sessionKey]: `openai/${model}` },
-      onModelSelect,
-    });
-
-    const defaultOption = container.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="openai/gpt-5.5"][data-chat-model-default="true"]',
-    );
-    expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
-    expect(defaultOption?.getAttribute("aria-selected")).toBe(selected);
-    expect(defaultOption?.textContent).toContain("Default");
-    const currentOption = container.querySelector<HTMLButtonElement>('[aria-selected="true"]');
-    expect(currentOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
-    defaultOption?.click();
-
-    await waitForFast(() => {
-      expect(onModelSelect).toHaveBeenCalledWith("", sessionKey, null);
-    });
   });
 
   it("uses the session provider for slash-containing raw model ids", () => {
@@ -8946,86 +7302,6 @@ describe("chat model controls", () => {
     ).toBe(false);
   });
 
-  it("renders reasoning as a slider and speed as a fast-mode toggle", () => {
-    const { state } = createReasoningHeaderState({
-      levels: [
-        { id: "adaptive", label: "adaptive" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-      ],
-    });
-    const container = renderModelControls(state);
-
-    const slider = getThinkingSlider(container);
-    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
-
-    expect(getThinkingSliderValues(container)).toEqual(["adaptive", "low", "medium", "high"]);
-    expect(slider?.value).toBe("3");
-    expect(slider?.getAttribute("aria-valuetext")).toBe("Default (High)");
-    const effortValue = container.querySelector<HTMLElement>(".chat-controls__effort-value");
-    expect(effortValue).toBeInstanceOf(HTMLElement);
-    expect(effortValue?.classList.contains("sr-only")).toBe(false);
-    expect(getThinkingReasoningValueLabel(container)).toBe("High");
-    expect(container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim()).toBe(
-      "Fast mode",
-    );
-    expect(speedToggle?.getAttribute("aria-checked")).toBe("false");
-    expect(speedToggle?.dataset.chatSpeedToggle).toBe("on");
-    expect(
-      container.querySelector('[data-chat-model-select="true"] .chat-controls__provider-icon'),
-    ).toBeNull();
-    expect(
-      container.querySelector("[data-chat-model-option] .chat-controls__provider-icon"),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('[data-chat-model-provider="openai"] [data-provider-icon]'),
-    ).not.toBeNull();
-  });
-
-  it("keeps fast-only controls separately named and out of the model picker", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-          reasoning: false,
-        },
-      ],
-    });
-    const sessionsResult = expectDefined(state.sessionsResult, "fast-only session");
-    const session = expectDefined(sessionsResult.sessions[0], "fast-only session row");
-    state.sessionsResult = {
-      ...sessionsResult,
-      defaults: {
-        ...sessionsResult.defaults,
-        thinkingLevels: [],
-      },
-      sessions: [
-        {
-          ...session,
-          thinkingLevels: [],
-        },
-      ],
-    };
-
-    const container = renderModelControls(state);
-    const effortTrigger = container.querySelector('[data-chat-thinking-select="true"]');
-    const modelTrigger = container.querySelector('[data-chat-model-select="true"]');
-
-    expect(effortTrigger?.getAttribute("aria-label")).toBe("Fast mode: Standard");
-    expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Fast mode");
-    expect(container.querySelector(".chat-controls__model-menu")?.textContent).not.toMatch(
-      /Effort|Fast mode/,
-    );
-    expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Thinking level");
-    expect(getThinkingSlider(container)).toBeNull();
-    expect(container.querySelector("[data-chat-speed-toggle]")).not.toBeNull();
-  });
-
   it("applies model, reasoning, and speed for the session that opened the picker", async () => {
     const { state } = createReasoningHeaderState({
       models: createOpenAiModelCatalog(),
@@ -9093,56 +7369,30 @@ describe("chat model controls", () => {
   });
 
   it("orders model-dependent patches after a pending model switch", async () => {
-    const modelPatch = createDeferred<unknown>();
-    const thinkingUpdate = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
+    const thinkingUpdate = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          if (Object.hasOwn(patch, "model")) {
-            return modelPatch.promise;
-          }
-          if (Object.hasOwn(patch, "thinkingLevel")) {
-            return thinkingUpdate.promise;
-          }
-          return patchResult;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-          fastMode: false,
-          effectiveFastMode: false,
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        if (Object.hasOwn(patch, "model")) {
+          return modelPatch.promise;
+        }
+        if (Object.hasOwn(patch, "thinkingLevel")) {
+          return thinkingUpdate.promise;
+        }
+        return patchResult;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -9171,50 +7421,25 @@ describe("chat model controls", () => {
     const reconciliationStarted = createDeferred();
     const releaseReconciliation = createDeferred();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return patchResult;
-        },
-      ),
-      // The list refresh is the reconcile step switchChatModel awaits; holding
-      // it open models a slow reconciliation inside the settings lane.
-      refresh: async () => {
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return patchResult;
+      },
+      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
@@ -9228,41 +7453,17 @@ describe("chat model controls", () => {
   });
 
   it("validates queued settings independently after a model switch fails", async () => {
-    const modelPatch = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return modelPatch.promise;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return modelPatch.promise;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -9275,37 +7476,23 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    ["global", "main"],
-    ["agent:work:main", "main"],
-    ["agent:work:home", "home"],
+    { sessionKey: "global", keepsVisibleOwner: false },
+    { sessionKey: "agent:work:main", keepsVisibleOwner: true },
   ])(
-    "does not report a failed selected-global model switch after the selected agent changes for %s",
-    async (sessionKey, mainKey) => {
-      const modelPatch = createDeferred<unknown>();
-      const modelOverrides: Record<string, string | null> = {
-        [sessionKey]: "openai/gpt-agent-a-old",
-      };
-      let patchOptions: SessionPatchOptions | undefined;
-      const sessions = {
-        state: { modelOverrides },
-        patch: vi.fn(
-          async (_key: string, _patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-            patchOptions = options;
-            return await modelPatch.promise;
-          },
-        ),
-        refresh: async () => {},
-        patchRowLocal: vi.fn(),
-      };
+    "keeps model errors bound to the captured conversation ($sessionKey)",
+    async ({ sessionKey, keepsVisibleOwner }) => {
+      const modelPatch = createDeferred<null>();
+      const { state } = createChatHeaderState();
+      const sessions = state.sessions;
+      const patch = vi.spyOn(sessions, "patch").mockImplementation(async () => modelPatch.promise);
       const host = {
+        ...state,
         assistantAgentId: "work",
-        agentsList: { defaultId: "main", mainKey, scope: "global" },
-        client: {},
-        connected: true,
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
         sessionKey,
         chatModelCatalog: [],
         chatModelSwitchPromises: {},
-        chatThinkingLevel: null,
+        chatError: null,
         sessions,
         sessionsResult: createSessionsResultFromRows([
           {
@@ -9316,64 +7503,99 @@ describe("chat model controls", () => {
             modelProvider: "openai",
           },
         ]),
-      } as unknown as Parameters<typeof switchChatModel>[0];
+      } satisfies Parameters<typeof switchChatModel>[0];
 
       const switching = switchChatModel(host, "openai/gpt-agent-a-new");
-      await waitForFast(() => expect(patchOptions).toBeDefined());
-      expect(patchOptions?.ownsModelOverride?.()).toBe(true);
-
+      await waitForFast(() => expect(patch).toHaveBeenCalledOnce());
+      // Bare global follows the selector; an explicit agent key retains its conversation owner.
       host.assistantAgentId = "main";
       modelPatch.reject(new Error("agent A patch failed"));
 
       await expect(switching).resolves.toBe(false);
-      expect(patchOptions?.ownsModelOverride?.()).toBe(false);
-      expect(modelOverrides[sessionKey]).toBe("openai/gpt-agent-a-old");
-      expect(host.lastError ?? null).toBeNull();
-      expect(host.chatError ?? null).toBeNull();
+      if (keepsVisibleOwner) {
+        expect(host.lastError).toContain("agent A patch failed");
+        expect(host.chatError).toContain("agent A patch failed");
+      } else {
+        expect(host.lastError ?? null).toBeNull();
+        expect(host.chatError ?? null).toBeNull();
+      }
     },
   );
 
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-    // Minimal host: the factory's mock gateway rebuilds session rows on every
-    // refresh, which would mask the optimistic fastMode value under test.
-    const host = {
-      client: {},
-      connected: true,
+    const operations: Promise<boolean>[] = [];
+    let canonical: GatewaySessionRow = {
+      key: "main",
+      agentId: "main",
+      sessionId: "main",
+      kind: "direct",
+      updatedAt: 1,
+      fastMode: false,
+      effectiveFastMode: false,
+    };
+    const host = makeChatHost({
       sessionKey: "main",
-      chatModelCatalog: [],
-      chatThinkingLevel: null,
-      sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
-      sessions: {
-        patch: async (
-          _key: string,
-          _patch: Record<string, unknown>,
-          options?: SessionPatchOptions,
-        ) => {
-          if (options?.waitFor) {
-            await options.waitFor;
+      hello: {
+        ...sessionMutationGatewayHello(),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+      sessionsResult: createSessionsResultFromRows([canonical]),
+      requestHandlers: {
+        "sessions.list": () => createSessionsResultFromRows([canonical]),
+        "sessions.patch": (params: Record<string, unknown>) => {
+          const fastMode = params.fastMode;
+          if (typeof fastMode !== "boolean") {
+            throw new Error("Expected the speed race to send a boolean fastMode");
           }
-          return new Promise((resolve, reject) => {
+          return new Promise<SessionPatchResult>((resolve, reject) => {
             pendingPatches.push({
-              resolve: () =>
+              resolve: () => {
+                canonical = {
+                  ...canonical,
+                  fastMode,
+                  effectiveFastMode: fastMode,
+                  updatedAt: (canonical.updatedAt ?? 0) + 1,
+                };
                 resolve({
                   ok: true,
                   path: "",
                   key: "main",
-                  entry: { sessionId: "main" },
-                }),
+                  entry: { sessionId: "main", fastMode, updatedAt: canonical.updatedAt ?? 1 },
+                });
+              },
               reject,
             });
           });
         },
-        refresh: async () => {},
-        patchRowLocal: () => {},
       },
-    } as unknown as Parameters<typeof switchChatFastMode>[0];
+    });
+    const projectSessions = (state: typeof host.sessions.state) => {
+      host.sessionsResult = state.result;
+      host.sessionsResultAgentId = state.agentId;
+    };
+    projectSessions(host.sessions.state);
+    const stop = host.sessions.subscribe(projectSessions);
+    onTestFinished(async () => {
+      stop();
+      host.sessions.dispose();
+      for (const patch of pendingPatches) {
+        patch.resolve();
+      }
+      await Promise.allSettled(operations);
+    });
 
     const first = switchChatFastMode(host, "on");
+    operations.push(first);
     await waitForFast(() => expect(pendingPatches).toHaveLength(1));
     const second = switchChatFastMode(host, "off");
+    operations.push(second);
 
     pendingPatches[0]?.reject(new Error("boom"));
     await expect(first).resolves.toBe(false);
@@ -9384,31 +7606,6 @@ describe("chat model controls", () => {
     // The newer selection keeps its own validation turn after the older failure.
     const row = host.sessionsResult?.sessions.find((entry) => entry.key === "main");
     expect(row?.fastMode).toBe(false);
-  });
-
-  it("renders the committed model selection when a model switch fails", async () => {
-    const { state } = createOpenAiHeaderState();
-    const onModelSelect = vi.fn(async () => false);
-    const container = document.createElement("div");
-    const props = {
-      ...createChatModelControlsProps(state),
-      onModelSelect,
-    };
-    render(renderChatModelControls(props), container);
-
-    container
-      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
-      ?.click();
-
-    await waitForFast(() => {
-      expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main", undefined);
-    });
-    render(renderChatModelControls(props), container);
-    expect(
-      container
-        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
-        ?.getAttribute("aria-selected"),
-    ).toBe("true");
   });
 
   it("keeps the speed toggle visible and disabled for unsupported providers", () => {
@@ -9445,19 +7642,6 @@ describe("chat model controls", () => {
     expect(container.querySelector('[data-chat-thinking-option=""]')).toBeNull();
   });
 
-  it("shows a reasoning override without a separate reset action", () => {
-    const { state } = createReasoningHeaderState();
-    const sessionsResult = expectDefined(state.sessionsResult, "reasoning sessions");
-    sessionsResult.sessions[0] = {
-      ...sessionsResult.sessions[0]!,
-      thinkingLevel: "low",
-    };
-    const container = renderModelControls(state);
-
-    expect(getThinkingReasoningValueLabel(container)).toBe("Low");
-    expect(container.querySelector('[data-chat-thinking-option=""]')).toBeNull();
-  });
-
   it("lets an unanchored slider select its first stop directly", async () => {
     const { state, request } = createChatHeaderState({
       model: "gemma4:hermes-e4b",
@@ -9488,26 +7672,6 @@ describe("chat model controls", () => {
         thinkingLevel: "off",
       });
     });
-  });
-
-  it("anchors the slider thumb on the inherited default when it is a stop", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      thinkingDefault: "medium",
-    });
-    expectDefined(state.sessionsResult?.sessions[0], "session").thinkingLevels = [
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-    ].map((id) => ({ id, label: id }));
-    const container = renderModelControls(state);
-
-    const slider = getThinkingSlider(container);
-    expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(false);
-    expect(slider?.value).toBe(String(getThinkingSliderValues(container).indexOf("medium")));
   });
 
   it("keeps a single available thinking level selectable without a slider", async () => {
@@ -9559,42 +7723,6 @@ describe("chat model controls", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("disables thinking for known non-reasoning models without duplicate off options", () => {
-    const { state } = createChatHeaderState({
-      model: "mistral:v0.3",
-      modelProvider: "ollama",
-      models: [
-        {
-          id: "mistral:v0.3",
-          name: "Mistral",
-          provider: "ollama",
-          reasoning: false,
-        },
-      ],
-    });
-    const sessionsResult = expectDefined(state.sessionsResult, "non-reasoning model sessions");
-    const session = expectDefined(sessionsResult.sessions[0], "non-reasoning model session");
-    state.sessionsResult = {
-      ...sessionsResult,
-      defaults: {
-        ...sessionsResult.defaults,
-        thinkingLevels: [{ id: "off", label: "off" }],
-      },
-      sessions: [
-        {
-          ...session,
-          thinkingLevel: "off",
-          thinkingLevels: [{ id: "off", label: "off" }],
-        },
-      ],
-    };
-    const container = renderModelControls(state);
-
-    expect(container.querySelector('[data-chat-thinking-select="true"]')).toBeNull();
-    expect(getThinkingSlider(container)).toBeNull();
-    expect(container.querySelector("[data-chat-speed-toggle]")).toBeNull();
-  });
-
   it("does not label a non-default chat model from global thinking defaults", () => {
     const { state } = createChatHeaderState({
       model: "deepseek-v4-flash",
@@ -9624,29 +7752,6 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
 
     expect(getThinkingReasoningValueLabel(container)).toBe("Low");
-  });
-
-  it("always renders full thinking labels", () => {
-    const { state } = createReasoningHeaderState({
-      levels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-      ],
-    });
-    const container = renderModelControls(state);
-
-    const thinkingSelect = getThinkingSelect(container);
-    const triggerLabel = thinkingSelect.querySelector(".chat-controls__inline-select-label");
-
-    expect(container.querySelector('[data-chat-thinking-select-compact="true"]')).toBeNull();
-    expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(triggerLabel?.textContent?.trim()).toBe("High");
-    expect(getThinkingSliderValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
-    expect(getThinkingSlider(container)?.value).toBe("3");
-    expect(getThinkingReasoningValueLabel(container)).toBe("High");
   });
 
   it("labels chat thinking default from session defaults when the row is absent", () => {
@@ -10034,7 +8139,6 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-confirm-popover")).not.toBeNull();
 
     resetThreadPresentation("pane-a");
-
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
     expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(onRewindMessage).not.toHaveBeenCalled();

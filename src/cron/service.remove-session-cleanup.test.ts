@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -12,12 +11,13 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { hasPendingCronSessionCleanupForAgent } from "./service/locked.js";
+import * as cronCleanup from "./service/locked.js";
 
 const gatewayTestState = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -92,6 +92,16 @@ afterEach(() => {
 });
 
 describe("CronService.remove session cleanup", () => {
+  let cleanupInFlight: Promise<unknown> | undefined;
+
+  afterEach(async () => {
+    // This nested hook drains writes before the parent closes SQLite and deletes stores.
+    if (cleanupInFlight) {
+      await Promise.allSettled([cleanupInFlight]);
+      cleanupInFlight = undefined;
+    }
+  });
+
   it("does not materialize a session database when the deleted job never ran", async () => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
@@ -293,7 +303,7 @@ describe("CronService.remove session cleanup", () => {
     ).toBe("transport-session");
   });
 
-  it("removes a base session recreated by an already-admitted run", async () => {
+  it("removes a base session recreated by an already-admitted run", async ({ signal }) => {
     const { storePath } = await makeStorePath();
     const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
     const cron = new CronService({
@@ -323,6 +333,10 @@ describe("CronService.remove session cleanup", () => {
       { sessionId: "active-session", updatedAt: Date.now() },
     );
 
+    const cleanupRegistration = vi.spyOn(cronCleanup, "registerPendingCronSessionCleanup");
+    onTestFinished(() => {
+      cleanupRegistration.mockRestore();
+    });
     await expect(cron.remove(job.id)).resolves.toEqual({
       ok: true,
       removed: true,
@@ -335,23 +349,19 @@ describe("CronService.remove session cleanup", () => {
       { agentId: "main", storePath: sessionStorePath, sessionKey },
       { sessionId: "late-session", updatedAt: Date.now() },
     );
-    const cleanup = createDeferred<unknown>();
-    const deleteSession = expectDefined(
-      gatewayTestState.callGateway.getMockImplementation(),
-      "Gateway session deletion handler",
-    );
-    gatewayTestState.callGateway.mockImplementationOnce((...args) => {
-      const pending = deleteSession(...args);
-      cleanup.resolve(pending);
-      return pending;
-    });
+    const cleanupDone = cleanupRegistration.mock.calls.find(
+      ([, registeredJobId]) => registeredJobId === job.id,
+    )?.[2];
+    if (!cleanupDone) {
+      throw new Error("Cron cleanup completion was not registered");
+    }
+    cleanupInFlight = cleanupDone;
     clearCronJobActive(job.id, marker);
 
-    await cleanup.promise;
-    await vi.waitFor(() => {
-      expect(hasPendingCronSessionCleanupForAgent("main")).toBe(false);
-      expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
-    });
+    // The cron owner releases pending cleanup after the real lifecycle mutation settles.
+    await racePromiseWithAbortSignal(cleanupDone, signal);
+    expect(cronCleanup.hasPendingCronSessionCleanupForAgent("main")).toBe(false);
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
   });
 
   it("preserves the session of a replacement job with the same id", async () => {

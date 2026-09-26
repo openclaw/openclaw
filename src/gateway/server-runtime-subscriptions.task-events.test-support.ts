@@ -1,4 +1,7 @@
 import { expect, it, vi } from "vitest";
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -8,12 +11,14 @@ import {
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
+  releaseAgentRunContext,
   retainQueuedAgentRunContext,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getTaskById } from "../tasks/runtime-internal.js";
+import { createSubagentTaskBackingDetail } from "../tasks/task-backing-authority.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import {
   createTaskFixture,
@@ -22,6 +27,7 @@ import {
   recordTaskProgressByRunId,
   reloadTaskRegistryFromStoreAsync,
 } from "../tasks/task-registry.test-support.js";
+import { bindTaskRunOwner } from "../tasks/task-run-owner.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { runTaskHandler } from "./server-methods/tasks.test-helpers.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
@@ -46,6 +52,78 @@ export function registerTaskEventSubscriptionTests(
 ) {
   let unsubs: Subscriptions;
   const waitForFast = (callback: () => unknown) => vi.waitFor(callback, { interval: 1 });
+  it.each([
+    { status: "succeeded", outcomeStatus: "ok", stopReason: "stop", ledgerStatus: "completed" },
+    { status: "failed", outcomeStatus: "error", stopReason: "error", ledgerStatus: "failed" },
+    { status: "cancelled", outcomeStatus: "timeout", stopReason: "rpc", ledgerStatus: "cancelled" },
+    {
+      status: "timed_out",
+      outcomeStatus: "timeout",
+      stopReason: "timeout",
+      ledgerStatus: "timed_out",
+    },
+  ] as const)(
+    "publishes settled execution without unknown before a $status task is finalized",
+    async ({ status, outcomeStatus, stopReason, ledgerStatus }) => {
+      const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+      const closeTaskSessions = vi.fn(() => 0);
+      unsubs = start({ broadcast, terminalSessions: { closeTaskSessions } });
+      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+      const runId = `settled-task-${status}`;
+      const task = createTaskFixture("cli", {
+        ...sessionTaskDefaults,
+        runId,
+        task: "Record the finished result",
+      });
+      const release = bindTaskRunOwner(task, async () => ({
+        ok: false,
+        error: "Cancellation was not requested.",
+      }));
+      const lifecycle = createAgentCommandLifecycle({
+        runId,
+        lifecycleGeneration: getAgentRunLifecycleGeneration,
+        startedAt: Date.now(),
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      try {
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: Date.now() },
+        });
+        broadcast.mockClear();
+        const terminal = {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({ status: outcomeStatus, stopReason }),
+        };
+        if (status === "failed") {
+          lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
+        } else {
+          lifecycle.emitEnd(terminal);
+        }
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+        expect(closeTaskSessions).not.toHaveBeenCalled();
+        finishTaskFixture({ taskId: task.taskId, status, endedAt: Date.now() });
+        expect(
+          readTaskUpserts(broadcast).map(({ task: summary }) => ({
+            status: summary.status,
+            execution: summary.execution?.state,
+          })),
+        ).toEqual([
+          { status: "running", execution: "finished" },
+          { status: ledgerStatus, execution: "finished" },
+        ]);
+        expect(closeTaskSessions).toHaveBeenCalledExactlyOnceWith(task.taskId);
+      } finally {
+        release();
+      }
+    },
+  );
+
   it.each(["visible", "hidden-lifecycle", "hidden-session"] as const)(
     "pushes CLI owner and capacity changes without activity for %s runs",
     async (projection) => {
@@ -107,6 +185,73 @@ export function registerTaskEventSubscriptionTests(
       await unsubs.taskUnsub();
       clearAgentRunContext(runId);
       expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "pushes subagent capacity transitions without activity (collector=%s)",
+    async (collect) => {
+      const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+      const closeTaskSessions = vi.fn(() => 0);
+      unsubs = start({ broadcast, terminalSessions: { closeTaskSessions } });
+      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+      const runId = "run-subagent-capacity-push";
+      const sessionKey = "agent:main:subagent:capacity-push";
+      subagentRuns.set(runId, {
+        runId,
+        childSessionKey: sessionKey,
+        requesterSessionKey: sessionTaskDefaults.requesterSessionKey,
+        requesterDisplayKey: "main",
+        task: "Show capacity changes",
+        cleanup: "keep",
+        collect,
+        createdAt: 1,
+        generation: 1,
+        execution: { status: "running", startedAt: 1 },
+      });
+      const claim = claimAgentRunContext(
+        runId,
+        { sessionKey, agentId: "main" },
+        { trackOwner: true, ownsContext: true },
+      );
+      let releaseCapacity: (() => void) | undefined;
+      try {
+        const task = createTaskFixture("subagent", {
+          ...sessionTaskDefaults,
+          childSessionKey: sessionKey,
+          runId,
+          task: "Show capacity changes",
+          detail: createSubagentTaskBackingDetail(1),
+        });
+        releaseCapacity = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+        releaseCapacity?.();
+        expect(
+          readTaskUpserts(broadcast).map(({ task: summary }) => ({
+            id: summary.id,
+            status: summary.status,
+            execution: summary.execution?.state,
+          })),
+        ).toEqual([
+          { id: task.taskId, status: "running", execution: "running" },
+          { id: task.taskId, status: "running", execution: "queued" },
+          { id: task.taskId, status: "running", execution: "running" },
+        ]);
+        for (const [event, , options] of broadcast.mock.calls) {
+          if (event === "task") {
+            expect(options).toEqual({
+              dropIfSlow: true,
+              sessionKeys: [sessionTaskDefaults.requesterSessionKey],
+              agentId: "main",
+            });
+          }
+        }
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+        expect(closeTaskSessions).not.toHaveBeenCalled();
+      } finally {
+        releaseCapacity?.();
+        releaseAgentRunContext(runId, claim);
+        subagentRuns.delete(runId);
+      }
     },
   );
 

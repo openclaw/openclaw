@@ -1,5 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-utility-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 
 export function escapeTelegramHtml(text: string): string {
   if (!/[&<>]/.test(text)) {
@@ -73,14 +73,10 @@ function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {
 }
 
 function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
-  if (entity.startsWith("#x") || entity.startsWith("#X")) {
-    const codePoint = Number.parseInt(entity.slice(2), 16);
-    return isValidTelegramHtmlEntityCodePoint(codePoint)
-      ? String.fromCodePoint(codePoint)
-      : fallback;
-  }
   if (entity.startsWith("#")) {
-    const codePoint = Number.parseInt(entity.slice(1), 10);
+    const hex = entity[1] === "x" || entity[1] === "X";
+    const radix = hex ? 16 : 10;
+    const codePoint = Number.parseInt(entity.slice(hex ? 2 : 1), radix);
     return isValidTelegramHtmlEntityCodePoint(codePoint)
       ? String.fromCodePoint(codePoint)
       : fallback;

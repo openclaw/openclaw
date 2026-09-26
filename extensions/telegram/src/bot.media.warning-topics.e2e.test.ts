@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  flushChannelPostMediaGroup,
+  holdTelegramMediaTimeouts,
+} from "./bot-media-timers.test-support.js";
 import {
   onSpy,
   readRemoteMediaBufferSpy,
   telegramBotDepsForTest,
   telegramMediaHarnessSendMessageSpy,
 } from "./bot.media.e2e.test-harness.js";
-import { createBotHandlerWithOptions, mockTelegramPngDownload } from "./bot.media.test-utils.js";
+import {
+  TELEGRAM_TEST_TIMINGS,
+  createBotHandlerWithOptions,
+  createTelegramPhotoForTest,
+  mockTelegramPngDownload,
+} from "./bot.media.test-utils.js";
 
 describe("Telegram media failure notices", () => {
   beforeEach(() => {
@@ -78,7 +87,7 @@ describe("Telegram media failure notices", () => {
           is_topic_message: true,
           caption: "Topic attachment",
           date: 1736380800,
-          photo: [{ file_id: "topic-attachment" }],
+          photo: [createTelegramPhotoForTest("topic-attachment")],
         },
         me: { username: "openclaw_bot", has_topics_enabled: true },
         getFile: async () => ({ file_path: "photos/topic-attachment.jpg" }),
@@ -127,7 +136,7 @@ describe("Telegram media failure notices", () => {
           message_id: 902,
           date: 1736380800,
           caption: "Channel attachment",
-          photo: [{ file_id: "channel-attachment" }],
+          photo: [createTelegramPhotoForTest("channel-attachment")],
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "photos/channel-attachment.jpg" }),
@@ -148,39 +157,58 @@ describe("Telegram media failure notices", () => {
 
   it.each([0, 1, 2])("accounts for %s failed attachments in an album", async (failedCount) => {
     const { handler, replySpy } = await createBotHandlerWithOptions({});
-    mockTelegramPngDownload();
-    for (let index = 0; index < failedCount; index++) {
-      readRemoteMediaBufferSpy.mockRejectedValueOnce(
-        new Error("Telegram media exceeds 8 MB limit"),
-      );
-    }
-    for (let index = 0; index < 2; index++) {
-      await handler({
-        message: {
-          chat: { id: 4242, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "Ada" },
-          message_id: 910 + index,
-          date: 1736380800,
-          media_group_id: "failure-notice-album",
-          caption: index === 0 ? "Album attachment" : undefined,
-          photo: [{ file_id: `album-${index}` }],
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: `photos/album-${index}.jpg` }),
+    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+    try {
+      mockTelegramPngDownload();
+      for (let index = 0; index < failedCount; index++) {
+        readRemoteMediaBufferSpy.mockRejectedValueOnce(
+          new Error("Telegram media exceeds 8 MB limit"),
+        );
+      }
+      for (let index = 0; index < 2; index++) {
+        await handler({
+          message: {
+            chat: { id: 4242, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            message_id: 910 + index,
+            date: 1736380800,
+            media_group_id: "failure-notice-album",
+            ...(index === 0 ? { caption: "Album attachment" } : {}),
+            photo: [createTelegramPhotoForTest(`album-${index}`)],
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: `photos/album-${index}.jpg` }),
+        });
+      }
+      await flushChannelPostMediaGroup(setTimeoutSpy, 0, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0];
+      expect(payload).toMatchObject({
+        BodyForAgent: failedCount
+          ? `Album attachment\n\n[media unavailable: ${failedCount} of 2 attachments could not be downloaded]`
+          : "Album attachment",
+        RawBody: "Album attachment",
+        CommandBody: "Album attachment",
       });
+      expect(payload.Body.includes("[media unavailable:")).toBe(failedCount > 0);
+      expect(payload.media.filter((media: { path?: string }) => media.path)).toHaveLength(
+        2 - failedCount,
+      );
+      const warnings = telegramMediaHarnessSendMessageSpy.mock.calls.filter(
+        ([, text]) => typeof text === "string" && text.includes(" of 2 images"),
+      );
+      expect(warnings).toHaveLength(failedCount > 0 ? 1 : 0);
+      if (failedCount > 0) {
+        expect(warnings[0]).toEqual([
+          4242,
+          expect.stringContaining(`${2 - failedCount} of 2 images`),
+          expect.objectContaining({
+            reply_parameters: expect.objectContaining({ message_id: 910 }),
+          }),
+        ]);
+      }
+    } finally {
+      setTimeoutSpy.mockRestore();
     }
-    await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-    const payload = replySpy.mock.calls[0]?.[0];
-    expect(payload).toMatchObject({
-      BodyForAgent: failedCount
-        ? `Album attachment\n\n[media unavailable: ${failedCount} of 2 attachments could not be downloaded]`
-        : "Album attachment",
-      RawBody: "Album attachment",
-      CommandBody: "Album attachment",
-    });
-    expect(payload.Body.includes("[media unavailable:")).toBe(failedCount > 0);
-    expect(payload.media.filter((media: { path?: string }) => media.path)).toHaveLength(
-      2 - failedCount,
-    );
   });
 });

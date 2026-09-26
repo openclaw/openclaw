@@ -3,7 +3,6 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -83,7 +82,9 @@ export function createSessionShareNodeCommands(
         const search = params.searchTerm?.toLowerCase();
         const sessions = [];
         for (const { agentId, sessionKey, storePath, entry } of sharedEntries(api)) {
-          const name = readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry });
+          const name = search
+            ? readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry })
+            : undefined;
           if (
             search &&
             !name?.toLowerCase().includes(search) &&
@@ -92,6 +93,8 @@ export function createSessionShareNodeCommands(
             continue;
           }
           sessions.push({
+            agentId,
+            storePath,
             threadId: sessionKey,
             name,
             entry,
@@ -107,6 +110,16 @@ export function createSessionShareNodeCommands(
             right.recencyAt - left.recencyAt || left.threadId.localeCompare(right.threadId),
         );
         const selected = sessions.slice(offset, offset + params.limit);
+        if (!search) {
+          for (const session of selected) {
+            session.name = readSessionTranscriptCatalogTitle({
+              agentId: session.agentId,
+              sessionKey: session.threadId,
+              storePath: session.storePath,
+              entry: session.entry,
+            });
+          }
+        }
         const projectCreator = createSessionCatalogSourceActorProjector({
           ...source,
           actors: selected.map(({ entry }) => entry.createdActor),
@@ -187,16 +200,6 @@ export function createSessionShareNodeCommands(
         }
         return JSON.stringify({ threadId: session.sessionKey, ...page });
       },
-    },
-  ];
-}
-
-export function createSessionShareNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: SESSION_SHARE_COMMANDS,
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
     },
   ];
 }

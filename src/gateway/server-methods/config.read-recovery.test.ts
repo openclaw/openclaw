@@ -130,3 +130,84 @@ it("config.get keeps recorded publication failure across an older read and recon
   await get(laterInvalid.options);
   expect(laterInvalid.respond).toHaveBeenCalledWith(true, invalid, undefined);
 });
+
+it("reports only the committed config with a projected hash and redacted secrets after failed application", async () => {
+  const committed = createDeferred();
+  const application = createDeferred<"failed">();
+  const queueFollowUp = vi.fn();
+  write.mockImplementationOnce(async () => {
+    committed.resolve();
+    return {
+      path: "/tmp/openclaw.json",
+      config: {
+        hooks: { enabled: true },
+        gateway: { auth: { token: "synthetic-persisted-token" } },
+      },
+      hash: "committed-hash",
+      application: application.promise,
+      queueFollowUp,
+    };
+  });
+  const harness = createConfigHandlerHarness({
+    method: "config.patch",
+    params: { raw: '{"hooks":{"enabled":true}}', baseHash: "public:base-hash" },
+    contextOverrides: {
+      configRevisionProjector: {
+        projectRawHash: (hash) => `public:${hash}`,
+        projectResolvedHash: (hash) => hash,
+      },
+    },
+  });
+  const operation = expectDefined(
+    configHandlers["config.patch"],
+    "registered config.patch",
+  )(harness.options);
+  await committed.promise;
+  expect(harness.respond).not.toHaveBeenCalled();
+  application.resolve("failed");
+  await operation;
+  expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      details: {
+        persistedConfig: {
+          hash: "public:committed-hash",
+          config: {
+            hooks: { enabled: true },
+            gateway: { auth: { token: "__OPENCLAW_REDACTED__" } },
+          },
+        },
+      },
+    }),
+  );
+  expect(queueFollowUp).toHaveBeenCalledOnce();
+});
+
+it.each(["restored", "unknown", "not-restored"] as const)(
+  "does not report a committed receipt when publication rollback is %s",
+  async (rollbackStatus) => {
+    write.mockRejectedValueOnce(
+      new ConfigWritePostCommitError({
+        configPath: "/tmp/openclaw.json",
+        publication: "partial",
+        rollbackStatus,
+        cause: new Error("synthetic publication failure"),
+      }),
+    );
+    const harness = createConfigHandlerHarness({
+      method: "config.patch",
+      params: { raw: '{"hooks":{"enabled":true}}', baseHash: "base-hash" },
+    });
+    await expectDefined(configHandlers["config.patch"], "registered config.patch")(harness.options);
+    expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: expect.not.objectContaining({ persistedConfig: expect.anything() }),
+      }),
+    );
+  },
+);

@@ -11,7 +11,10 @@
     "../../src/agents/model-catalog.planning.test.ts",
     "../../src/agents/prepared-model-runtime*.test.ts",
     "../../src/agents/prepared-model-runtime*.test.tsx",
-    "../../src/agents/workspace-access.test.ts"
+    "../../src/agents/workspace-access.test.ts",
+    "../../src/agents/workspace-bootstrap-policy.test.ts",
+    "../../src/agents/workspace-input-attachments.test.ts",
+    "../../src/agents/workspace-memory-client.test.ts"
   ],
   "exclude": [
     "../../node_modules",

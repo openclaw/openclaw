@@ -8,6 +8,24 @@ import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
+function respondDesktopObserveFailure(respond: RespondFn, error: unknown, fallback: string) {
+  if (isDesktopCredentialsRequiredError(error)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+        details: { code: error.detailCode, auth: error.auth },
+      }),
+    );
+    return;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : fallback),
+  );
+}
+
 export async function respondDesktopObserve(params: {
   request: DesktopObserveParams;
   respond: RespondFn;
@@ -21,7 +39,7 @@ export async function respondDesktopObserve(params: {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true), then restart the gateway",
+          "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
         ),
       );
       return;
@@ -32,7 +50,7 @@ export async function respondDesktopObserve(params: {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "gateway host desktop is not active; desktop.host.enabled changes require a gateway restart",
+          "gateway host desktop is unavailable in this Gateway runtime",
         ),
       );
       return;
@@ -50,28 +68,10 @@ export async function respondDesktopObserve(params: {
         undefined,
       );
     } catch (error) {
-      if (isDesktopCredentialsRequiredError(error)) {
-        params.respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-            details: {
-              code: error.detailCode,
-              auth: error.auth,
-            },
-          }),
-        );
-        return;
-      }
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error
-            ? error.message
-            : "gateway host desktop observe unavailable; verify the VNC server and retry",
-        ),
+      respondDesktopObserveFailure(
+        params.respond,
+        error,
+        "gateway host desktop observe unavailable; verify the VNC server and retry",
       );
     }
     return;
@@ -85,7 +85,7 @@ export async function respondDesktopObserve(params: {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "node desktop is disabled; explicitly allow desktop.stream, then restart the gateway",
+          "node desktop service is unavailable; reconnect to the Gateway and retry",
         ),
       );
       return;
@@ -104,24 +104,7 @@ export async function respondDesktopObserve(params: {
         undefined,
       );
     } catch (error) {
-      if (isDesktopCredentialsRequiredError(error)) {
-        params.respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-            details: { code: error.detailCode, auth: error.auth },
-          }),
-        );
-        return;
-      }
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "node desktop observe unavailable",
-        ),
-      );
+      respondDesktopObserveFailure(params.respond, error, "node desktop observe unavailable");
     }
     return;
   }

@@ -4,6 +4,7 @@ import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { MessageClientSource } from "../chat/message-client-source.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
+import type { AttachedChatWorkContext } from "../chat/work-context.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
@@ -50,6 +51,8 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
   text?: string | null;
+  /** Authored text and its captured reference; model content stays unchanged. */
+  workContext?: AttachedChatWorkContext;
   /** Explicit human selections bound to UTF-16 offsets in text. */
   mentions?: readonly HumanMention[];
   media?: readonly PersistedUserTurnMediaInput[] | null;
@@ -185,6 +188,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
   trackInputCompletion?: boolean;
+  /** Trusted settle replay candidates; storage must match the complete original request hash. */
+  pendingInputReplaySourceSessionKeys?: readonly string[];
   /** Exact admitted source recorders consumed by this collected transcript message. */
   pendingInputSources?: readonly UserTurnTranscriptRecorder[];
   sessionTurnMutation?: SessionTranscriptTurnMutation;
@@ -229,7 +234,10 @@ export type UserTurnTranscriptRecorder = {
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
-  setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
+  /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
+  setAdmissionHandler?: (
+    handler: (admission: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>,
+  ) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (

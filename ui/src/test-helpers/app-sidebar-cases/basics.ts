@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import {
-  SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
-  sessionRefFromPath,
-} from "../../app-session-route-paths.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import {
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -186,7 +183,6 @@ describe("AppSidebar new session navigation", () => {
     await sidebar.updateComplete;
 
     const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-session-catalog-new")!;
-    expect(sidebar.querySelector(".sidebar-session-catalog-new-spacer")).toBeNull();
     expect(link.getAttribute("aria-label")).toBe("New session — Claude Code");
     expect(link.getAttribute("href")).toBe("/new?agent=research&catalog=claude");
     const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -252,9 +248,7 @@ describe("AppSidebar agent chip", () => {
       ?.getAttribute("href");
     const sessionUrl = new URL(href ?? "", window.location.origin);
     expect(sessionUrl.pathname).toBe("/chat/research/telegram/12345");
-    expect(sessionUrl.searchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
-      SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
-    );
+    expect(sessionUrl.search).toBe("");
     expect(sessionRefFromPath(sessionUrl.pathname)).toMatchObject({
       kind: "literal",
       sessionKey: "agent:research:telegram:12345",
@@ -400,14 +394,16 @@ describe("AppSidebar agent chip", () => {
     ).not.toContain("Online");
 
     sidebar.connected = false;
-    sidebar.offline = true;
+    sidebar.connectionStatus = "reconnecting";
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
-    expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");
-    expect(connectionStatus?.textContent).toContain("Offline");
+    const connectionStatus = sidebar.querySelector(".gateway-status");
+    expect(
+      sidebar.querySelector('.sidebar-footer-bar > [role="status"]')?.getAttribute("aria-live"),
+    ).toBe("polite");
+    expect(connectionStatus?.textContent).not.toContain("Offline");
     expect(connectionStatus?.textContent).toContain("Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
 
@@ -418,10 +414,10 @@ describe("AppSidebar agent chip", () => {
     menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: retry }, bubbles: true }));
     expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    sidebar.offline = false;
+    sidebar.connectionStatus = null;
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(sidebar.querySelector(".gateway-status")).toBeNull();
   });
 
   it("shows the Home ring without an agent subtitle during an active run", async () => {

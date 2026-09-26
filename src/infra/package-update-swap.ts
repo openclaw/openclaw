@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import {
   collectPackageDistInventory,
@@ -38,8 +40,7 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
-import { createUpdateFailureFact } from "./update-failure-facts.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   FreeBsdPkgOwnershipError,
@@ -50,18 +51,15 @@ import {
   NativePackageRollbackError,
 } from "./update-native-package-stage.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "./update-npm-prefix.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
 export type {
   PackageUpdateTransaction,
   StagedPackageInstall,
 } from "./package-update-swap-contract.js";
-
-export function isBlockingPackageUpdateStep(step: UpdateStepResult): boolean {
-  return step.exitCode !== 0 && step.advisory === undefined;
-}
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
@@ -86,13 +84,14 @@ export async function swapStagedPackageInstall(
   const targetSwapRoot = native?.liveProjectRoot ?? targetPackageRoot;
   const stagedSwapRoot = native?.projectRoot ?? params.stage.packageRoot;
   const warnings: string[] = [];
+  let baselineError: Error | undefined;
   const step = (
     exitCode: number,
     stdoutTail: string | null,
     stderrTail: string | null,
     code = "swap-failed",
   ): UpdateStepResult => ({
-    name: "global install swap",
+    name: "package-swap",
     command: `swap ${params.stage.packageRoot} -> ${targetPackageRoot ?? "unknown root"}`,
     cwd: targetLayout?.globalRoot ?? params.stage.prefix,
     durationMs: Date.now() - startedAt,
@@ -102,11 +101,13 @@ export async function swapStagedPackageInstall(
     ...(exitCode !== 0
       ? {
           failureFacts: [
-            createUpdateFailureFact({
-              check: "package-swap",
-              code,
-              message: stderrTail ?? undefined,
-            }),
+            baselineError
+              ? { ...createUpdateErrorFact("package-swap", baselineError), code }
+              : createUpdateFailureFact({
+                  check: "package-swap",
+                  code,
+                  message: stderrTail ?? undefined,
+                }),
           ],
         }
       : {}),
@@ -315,6 +316,8 @@ export async function swapStagedPackageInstall(
       try {
         previousRoot = await baseline.rootEntry(targetSwapRoot);
       } catch (error) {
+        // Preserve the scan cause if the identity fallback also fails.
+        baselineError = new Error("Baseline package scan failed", { cause: error });
         if (!(error instanceof PackageIntegrityTimeoutError)) {
           throw error;
         }
@@ -330,6 +333,7 @@ export async function swapStagedPackageInstall(
           `baseline package fingerprint incomplete after ${error.budgetMs / 1000} s; rollback will be verified by the retained package copy`,
         );
       }
+      baselineError = undefined;
       previousVersion =
         previousRoot?.kind === "directory"
           ? previousRoot.tree.version
@@ -413,7 +417,7 @@ export async function swapStagedPackageInstall(
             }
           }
         : rootLink?.verifyRuntime;
-      params.onTransaction({
+      await params.onTransaction({
         backupRoot,
         ...(assertRollbackSafe ? { assertRollbackSafe } : {}),
         rollback: (assertion) => {
@@ -425,7 +429,7 @@ export async function swapStagedPackageInstall(
                 null,
                 "Package transaction retirement has started; automatic rollback is no longer available.",
               ),
-              name: "global install rollback",
+              name: "package-rollback",
               activePackageRoot,
             });
           }
@@ -440,7 +444,7 @@ export async function swapStagedPackageInstall(
               assertCurrent();
               return {
                 ...step(1, null, formatErrorMessage(error)),
-                name: "global install rollback",
+                name: "package-rollback",
                 activePackageRoot,
                 ...(error instanceof NativePackageRollbackError ? { reason: error.reason } : {}),
               };
@@ -454,7 +458,7 @@ export async function swapStagedPackageInstall(
                   : null,
                 messages.join("\n") || null,
               ),
-              name: "global install rollback",
+              name: "package-rollback",
               activePackageRoot,
               command: `restore ${backupRoot} -> ${targetSwapRoot}`,
               durationMs: Date.now() - rollbackStartedAt,
@@ -480,7 +484,7 @@ export async function swapStagedPackageInstall(
                 null,
                 `Installation recovery is unverified; inspect the installation and backups in ${targetLayout.globalRoot} before restarting.`,
               ),
-              name: "global install backup retention",
+              name: "package-backup-retention",
             };
           }
           // Seal automatic rollback once retirement begins, but retain the actual
@@ -505,7 +509,7 @@ export async function swapStagedPackageInstall(
               rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
             assertRetirementCurrent();
             if (linkRetention) {
-              return { ...step(1, null, linkRetention), name: "global install backup retention" };
+              return { ...step(1, null, linkRetention), name: "package-backup-retention" };
             }
             if (hadPackage && previousRoot?.kind !== "link") {
               const message = await discardPackageUpdateBackup(
@@ -532,7 +536,7 @@ export async function swapStagedPackageInstall(
             if (messages.length) {
               return {
                 ...step(1, null, messages.join("\n")),
-                name: "global install backup retention",
+                name: "package-backup-retention",
                 // Only this verified obsolete-resource path qualifies the warning.
                 // Recovery refusal and unclassified link outcomes remain hard.
                 advisory: {
@@ -651,7 +655,7 @@ export async function swapStagedPackageInstall(
     const postVerifyStep = params.postVerifyStep
       ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
       : null;
-    if (postVerifyStep && isBlockingPackageUpdateStep(postVerifyStep) && !retained) {
+    if (postVerifyStep && isFailedUpdateStep(postVerifyStep) && !retained) {
       const rollbackMessages = await restoreSwap();
       return {
         status: "failed",
@@ -697,6 +701,9 @@ export async function swapStagedPackageInstall(
       postVerifyStep,
     };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError
@@ -706,7 +713,7 @@ export async function swapStagedPackageInstall(
         ? error
         : new PackageUpdateActivationError(error);
     }
-    const errors = [formatErrorMessage(error)];
+    const errors = [formatErrorMessage(baselineError ?? error)];
     if (!retained && !liveMutationStarted) {
       // Preparation can fail before a baseline exists. There is nothing to
       // restore; the caller independently verifies the untouched runtime.
@@ -725,11 +732,13 @@ export async function swapStagedPackageInstall(
         1,
         null,
         errors.join("\n"),
-        isErrno(error) && typeof error.code === "string"
-          ? error.code
-          : error instanceof Error
-            ? error.name
-            : "swap-failed",
+        baselineError
+          ? "baseline-scan-failed"
+          : isErrno(error) && typeof error.code === "string"
+            ? error.code
+            : error instanceof Error
+              ? error.name
+              : "swap-failed",
       ),
       postVerifyStep: null,
       packageRollbackVerified: retained ? false : packageRollbackVerified,

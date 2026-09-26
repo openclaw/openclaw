@@ -4,13 +4,15 @@ import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
+import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -18,6 +20,8 @@ import {
 } from "./sqlite-wal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+vi.mock("@openclaw/fs-safe/copy", { spy: true });
 
 function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): DatabaseSync {
   return {
@@ -28,7 +32,9 @@ function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): 
       get: vi.fn(() =>
         sql.includes("wal_checkpoint")
           ? checkpointResult
-          : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
+          : sql === "PRAGMA freelist_count"
+            ? { freelist_count: 1024 }
+            : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
       ),
     })),
   } as unknown as DatabaseSync;
@@ -413,11 +419,12 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
   });
 
-  it("uses rollback journaling when mount classification times out", () => {
+  it("uses rollback journaling when mount classification times out without native evidence", () => {
     const tempDir = tempDirs.make("openclaw-sqlite-mount-timeout-");
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+    vi.mocked(probeTreeClone).mockReturnValueOnce(undefined);
     vi.spyOn(fs, "readFileSync").mockImplementation(() => {
       throw new Error("no proc mountinfo");
     });
@@ -558,7 +565,7 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.mocked(db["exec"]).mockImplementation((sql) => {
-      if (sql === "PRAGMA incremental_vacuum(512);") {
+      if (sql === "PRAGMA incremental_vacuum(8);") {
         periodic.resolve([requestScope.getStore(), sessionScope.getStore()]);
       }
     });
@@ -575,7 +582,7 @@ describe("sqlite WAL maintenance", () => {
 
           expect(await periodic.promise).toEqual([undefined, undefined]);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-          expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
+          expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(8);");
           expect(maintenance.close()).toBe(true);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
           expect(requestScope.getStore()).toBe(request);
@@ -600,7 +607,7 @@ describe("sqlite WAL maintenance", () => {
     { kind: "unlinked", sidecar: "shm" },
     { kind: "replaced", sidecar: "wal" },
     { kind: "replaced", sidecar: "shm" },
-  ] as const)("hard-stops without closing a $kind -$sidecar handle", ({ kind, sidecar }) => {
+  ] as const)("hard-stops without closing a $kind -$sidecar handle", async ({ kind, sidecar }) => {
     vi.useFakeTimers();
     const tempDir = tempDirs.make("openclaw-sqlite-wal-split-brain-");
     const databasePath = path.join(tempDir, "state.sqlite");
@@ -641,7 +648,7 @@ describe("sqlite WAL maintenance", () => {
       throw new Error("process abort intercepted");
     });
 
-    expect(() => vi.advanceTimersByTime(100)).toThrow("process abort intercepted");
+    await expect(vi.advanceTimersByTimeAsync(100)).rejects.toThrow("process abort intercepted");
 
     expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
     expect(abort).toHaveBeenCalledOnce();
@@ -653,79 +660,48 @@ describe("sqlite WAL maintenance", () => {
     );
   });
 
-  it.runIf(process.platform === "linux").each(["main", "worker"] as const)(
-    "preserves the replacement WAL family across fatal containment and reopen from a %s thread",
+  it.runIf(process.platform === "linux").each(["main", "worker", "agent", "shared"] as const)(
+    "preserves the replacement WAL family across fatal containment and reopen from a %s owner",
     async (thread) => {
       const tempDir = tempDirs.make("openclaw-sqlite-wal-replacement-");
       const databasePath = path.join(tempDir, "state.sqlite");
       const staleCloseMarker = path.join(tempDir, "stale-close-marker");
-      const childScript = path.join(tempDir, "split-brain-child.mts");
-      const sqliteWalModuleUrl = pathToFileURL(path.resolve("src/infra/sqlite-wal.ts")).href;
       const { DatabaseSync } = requireNodeSqlite();
-      const seed = new DatabaseSync(databasePath);
-      seed.exec(
-        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE events (value TEXT PRIMARY KEY);",
-      );
-      seed.prepare("INSERT INTO events VALUES (?)").run("base");
-      seed.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-      seed.close();
-      fs.writeFileSync(
-        childScript,
-        `
-          import fs from "node:fs";
-          import { Worker } from "node:worker_threads";
-          import { DatabaseSync } from "node:sqlite";
-          import { configureSqliteWalMaintenance } from ${JSON.stringify(sqliteWalModuleUrl)};
-
-          const role = process.argv[2];
-          const databasePath = process.argv[3];
-          const staleCloseMarker = process.argv[4];
-          if (role === "worker") {
-            new Worker(new URL(import.meta.url), { argv: ["stale", databasePath, staleCloseMarker] });
-          } else if (role === "stale") {
-            const stale = new DatabaseSync(databasePath);
-            setTimeout(() => {
-              fs.writeFileSync(staleCloseMarker, stale.isOpen ? "open" : "closed");
-              process.kill(process.pid, "SIGKILL");
-            }, 5_000);
-            configureSqliteWalMaintenance(stale, {
-              autoCheckpointPages: 0,
-              checkpointIntervalMs: 2_500,
-              databaseLabel: "replacement-family-test",
-              databasePath,
-            });
-            stale.prepare("INSERT INTO events VALUES (?)").run("stale");
-            process.stdout.write("stale-ready\\n");
-          } else {
-            const current = new DatabaseSync(databasePath);
-            current.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
-            current.prepare("INSERT INTO events VALUES (?)").run("current");
-            process.stdout.write("current-ready\\n");
-          }
-          setInterval(() => {}, 1_000);
-        `,
-      );
+      const registered = thread === "agent" || thread === "shared";
+      if (!registered) {
+        const seed = new DatabaseSync(databasePath);
+        seed.exec(
+          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE events (value TEXT PRIMARY KEY);",
+        );
+        seed.prepare("INSERT INTO events VALUES (?)").run("base");
+        seed.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        seed.close();
+      }
 
       const spawnRole = (role: "current" | "stale", readyLine: string) => {
         let stdout = "";
         let stderr = "";
+        const survived = createDeferredCore();
+        const childRole = role === "current" ? role : thread === "main" ? "stale" : thread;
         const child = spawn(
           process.execPath,
           [
-            "--import",
-            "tsx",
-            childScript,
-            role === "stale" && thread === "worker" ? "worker" : role,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(sqliteMaintenanceEntrypoints.walReplacement),
+            ),
+            childRole,
             databasePath,
             staleCloseMarker,
           ],
           {
             env: { ...process.env, OPENCLAW_TEST_CONSOLE: "1" },
-            stdio: ["ignore", "pipe", "pipe"],
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
           },
         );
+        const childStdout = expectDefined(child.stdout, "WAL fixture stdout");
+        const childStderr = expectDefined(child.stderr, "WAL fixture stderr");
         const ready = new Promise<void>((resolve, reject) => {
-          child.stdout.on("data", (chunk) => {
+          childStdout.on("data", (chunk) => {
             stdout += chunk;
             if (stdout.includes(readyLine)) {
               resolve();
@@ -738,21 +714,36 @@ describe("sqlite WAL maintenance", () => {
             }
           });
         });
-        child.stderr.on("data", (chunk) => (stderr += chunk));
+        childStderr.on("data", (chunk) => (stderr += chunk));
+        child.on("message", (message) => {
+          if (message === "survived-tick") {
+            survived.resolve();
+          }
+        });
         const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolve) => {
             child.once("close", (code, signal) => resolve({ code, signal }));
           },
         );
-        return { child, closed, ready, stderr: () => stderr };
+        return { child, closed, ready, survived: survived.promise, stderr: () => stderr };
       };
 
       const stale = spawnRole("stale", "stale-ready");
       let current: ReturnType<typeof spawnRole> | undefined;
       try {
         await stale.ready;
+        const originalIdentity = fs.statSync(databasePath, { bigint: true });
         fs.unlinkSync(`${databasePath}-wal`);
         fs.unlinkSync(`${databasePath}-shm`);
+        if (registered) {
+          fs.unlinkSync(databasePath);
+          fs.copyFileSync(`${databasePath}.seed`, databasePath);
+          const replacementIdentity = fs.statSync(databasePath, { bigint: true });
+          expect([replacementIdentity.dev, replacementIdentity.ino]).not.toEqual([
+            originalIdentity.dev,
+            originalIdentity.ino,
+          ]);
+        }
         current = spawnRole("current", "current-ready");
         await current.ready;
 
@@ -761,8 +752,20 @@ describe("sqlite WAL maintenance", () => {
           containmentWatchdogFired = true;
           stale.child.kill("SIGKILL");
         }, 20_000);
-        const childResult = await stale.closed;
-        clearTimeout(timeout);
+        let childResult: Awaited<typeof stale.closed>;
+        try {
+          if (registered) {
+            stale.child.send("tick");
+          }
+          childResult = await Promise.race([
+            stale.closed,
+            stale.survived.then(() => {
+              throw new Error("Published WAL timer returned before fatal containment");
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+        }
 
         expect(childResult, stale.stderr()).toEqual({ code: null, signal: "SIGKILL" });
         expect(containmentWatchdogFired).toBe(false);
@@ -779,7 +782,12 @@ describe("sqlite WAL maintenance", () => {
           subsystem: "infra/sqlite-wal",
           message: "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup",
           databasePath,
-          databaseLabel: "replacement-family-test",
+          databaseLabel:
+            thread === "agent"
+              ? "openclaw-agent:main"
+              : thread === "shared"
+                ? "openclaw-state"
+                : "replacement-family-test",
           pid: stale.child.pid,
           descriptorDevice: expect.stringMatching(/^\d+$/u),
           descriptorInode: expect.stringMatching(/^\d+$/u),
@@ -821,7 +829,7 @@ describe("sqlite WAL maintenance", () => {
 
   it.runIf(process.platform === "linux").each(["EACCES", "EPERM"] as const)(
     "disables split-brain detection after a %s scan error",
-    (code) => {
+    async (code) => {
       vi.useFakeTimers();
       const tempDir = tempDirs.make("openclaw-sqlite-wal-tripwire-error-");
       const databasePath = path.join(tempDir, "state.sqlite");
@@ -840,7 +848,7 @@ describe("sqlite WAL maintenance", () => {
       try {
         writer.exec("CREATE TABLE events (value TEXT NOT NULL);");
 
-        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        await vi.advanceTimersByTimeAsync(100);
         expect(readdir).toHaveBeenCalledTimes(1);
         expect(() =>
           writer.prepare("INSERT INTO events VALUES (?)").run("still-open"),
@@ -848,7 +856,7 @@ describe("sqlite WAL maintenance", () => {
 
         fs.unlinkSync(`${databasePath}-wal`);
         fs.unlinkSync(`${databasePath}-shm`);
-        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        await vi.advanceTimersByTimeAsync(100);
 
         expect(readdir).toHaveBeenCalledTimes(1);
         expect(
@@ -890,7 +898,7 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
-    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(8);");
 
     expect(maintenance.close({ checkpointMode: "PASSIVE" })).toBe(true);
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");

@@ -1,26 +1,39 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
-import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { html, nothing, ReactiveElement, render, type TemplateResult } from "lit";
+import { nothing, ReactiveElement, render } from "lit";
 import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { i18n, t } from "../i18n/index.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { i18n } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
-import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
-import "../styles/link-reader-hovercard.css";
+import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
+import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
 import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import "../styles/link-reader-hovercard.css";
+import { linkReaderErrorMessage } from "./link-reader-error.ts";
+import { renderPagePreview, type PageActivation } from "./link-reader-page-preview.ts";
+import {
+  parsePreviewResponse,
+  previewContextFor,
+  type PreviewContext,
+  type CacheEntry,
+  renderLoading,
+  renderPreview,
+  renderPreviewError,
+  type LinkPreview,
+} from "./link-reader-preview.ts";
 import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
   resolveLinkReaderTarget,
   linkReaderTargetKey,
-  linkReaderResponseMatchesTarget,
   EMPTY_LINK_READERS,
+  resolveHoverPreviewTarget,
+  canPreviewPages,
+  type HoverPreviewTarget,
+  type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -31,186 +44,7 @@ const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
 
-type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
-
-type CacheEntry = {
-  preview?: ControlUiLinkReaderPreview;
-  failed?: boolean;
-  expiresAt: number;
-  promise: Promise<ControlUiLinkReaderPreview>;
-  controller: AbortController;
-  subscribers: Set<object>;
-};
-
-type PreviewContext = {
-  generation: number;
-  recoveryScope: string;
-  succeeded: boolean;
-};
-
-// Page-memory only. Providers share success, never credentials or persisted state.
-const previewContexts = new WeakMap<GatewayBrowserClient, Map<string, PreviewContext>>();
-
-function previewContextFor(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-): PreviewContext {
-  let contexts = previewContexts.get(client);
-  if (!contexts) {
-    contexts = new Map();
-    previewContexts.set(client, contexts);
-  }
-  const key = agentId ?? "";
-  let context = contexts.get(key);
-  if (
-    !context ||
-    context.generation !== client.connectionGeneration ||
-    context.recoveryScope !== client.recoveryScope
-  ) {
-    context = {
-      generation: client.connectionGeneration,
-      recoveryScope: client.recoveryScope,
-      succeeded: false,
-    };
-    contexts.set(key, context);
-  }
-  return context;
-}
-
 let nextHovercardId = 0;
-
-function safePreviewImage(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  if (/^data:image\/(?:gif|jpeg|png|webp);base64,/u.test(value)) {
-    return value;
-  }
-  try {
-    const url = new URL(value);
-    const host = url.hostname.replace(/\.+$/u, "");
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.origin !== window.location.origin &&
-      host.includes(".") &&
-      !/(?:^|\.)(?:localhost|local|internal|localdomain)$/u.test(host) &&
-      !parseCanonicalIpAddress(host)
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parsePreviewResponse(
-  target: LinkReaderTarget,
-  value: unknown,
-): ControlUiLinkReaderPreview {
-  const title = isRecord(value) ? readNonBlankString(value.title) : undefined;
-  if (
-    !isRecord(value) ||
-    !title ||
-    typeof value.url !== "string" ||
-    !linkReaderResponseMatchesTarget(target, value.url)
-  ) {
-    throw new Error("Invalid link preview response");
-  }
-  const badgeValue = isRecord(value.badge) ? value.badge : undefined;
-  const tone = (["neutral", "positive", "negative", "attention", "accent"] as const).find(
-    (item) => item === badgeValue?.tone,
-  );
-  const badge =
-    badgeValue && typeof badgeValue.label === "string" && tone
-      ? { label: badgeValue.label, tone }
-      : undefined;
-  return {
-    url: value.url,
-    title,
-    subtitle: readNonBlankString(value.subtitle),
-    badge,
-    author: readNonBlankString(value.author),
-    createdAt: readNonBlankString(value.createdAt),
-    updatedAt: readNonBlankString(value.updatedAt),
-    imageUrl: safePreviewImage(readNonBlankString(value.imageUrl)),
-    metadata: Array.isArray(value.metadata)
-      ? value.metadata.flatMap((entry) =>
-          isRecord(entry) && typeof entry.label === "string" && typeof entry.value === "string"
-            ? [{ label: entry.label, value: entry.value }]
-            : [],
-        )
-      : undefined,
-  };
-}
-
-function renderAvatar(imageUrl: string | undefined) {
-  return imageUrl
-    ? html`<img
-        class="link-reader-hovercard__image"
-        alt=""
-        decoding="async"
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer"
-        src=${imageUrl}
-        @error=${(event: Event) => {
-          if (event.currentTarget instanceof HTMLImageElement) {
-            event.currentTarget.remove();
-          }
-        }}
-      />`
-    : nothing;
-}
-
-function renderCardLink(className: string, href: string, content: string | TemplateResult) {
-  return html`<a
-    class=${className}
-    href=${href}
-    target=${EXTERNAL_LINK_TARGET}
-    rel=${buildExternalLinkRel()}
-    >${content}</a
-  >`;
-}
-
-function renderLoading(card: HTMLDivElement): void {
-  card.dataset.loading = "true";
-  card.removeAttribute("data-state");
-  card.removeAttribute("data-cached");
-  card.setAttribute("aria-label", t("linkReader.loadingPreview"));
-  const rows = [
-    ["header", ["badge", "subtitle", "time"]],
-    ["title", ["title"]],
-    ["footer", ["author", "metadata"]],
-  ] as const;
-  render(
-    html`<div class="link-reader-hovercard__skeleton" aria-hidden="true">
-      ${rows.map(([rowClass, parts]) => html`<div class=${"link-reader-hovercard__" + rowClass}>${parts.map((part) => html`<span class=${"skeleton link-reader-hovercard__placeholder--" + part}></span>`)}</div>`)}
-    </div>`,
-    card,
-  );
-}
-
-function renderPreview(card: HTMLDivElement, preview: LinkPreview, seeded = false): void {
-  card.dataset.loading = "false";
-  card.dataset.cached = String(seeded);
-  card.dataset.state = preview.badge?.tone ?? "neutral";
-  const timestamp = preview.updatedAt ?? preview.createdAt;
-  render(
-    html`<div class="link-reader-hovercard__header">
-        ${preview.badge ? html`<span class="link-reader-hovercard__state" data-tone=${preview.badge.tone}><span class="link-reader-hovercard__state-dot" aria-hidden="true"></span>${preview.badge.label}</span>` : nothing}
-        ${renderCardLink("link-reader-hovercard__subtitle", preview.href, preview.subtitle ?? preview.reader.label)}
-        ${seeded ? html`<span class="link-reader-hovercard__time">${t("linkReader.cachedPreview")}</span>` : timestamp ? html`<time class="link-reader-hovercard__time" datetime=${timestamp}>${formatRelativeTimestamp(Date.parse(timestamp))}</time>` : nothing}
-      </div>
-      ${renderCardLink("link-reader-hovercard__title", preview.href, preview.title)}
-      <div class="link-reader-hovercard__footer">
-        ${preview.author || preview.imageUrl ? html`<span class="link-reader-hovercard__author">${renderAvatar(preview.imageUrl)}${preview.author}</span>` : nothing}
-        <span class="link-reader-hovercard__metadata"
-          >${preview.metadata?.map(({ label, value }) => html`<span class="link-reader-hovercard__metric">${label ? label + ": " : ""}${value}</span>`)}</span
-        >
-      </div>`,
-    card,
-  );
-  card.setAttribute("aria-label", t("linkReader.previewAriaLabel", { title: preview.title }));
-}
 
 export class LinkReaderHovercardProvider extends ReactiveElement {
   // Lit must replay values assigned before the lazy custom element upgrades,
@@ -220,7 +54,45 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     agentId: { attribute: false, noAccessor: true },
     readers: { attribute: false, noAccessor: true },
     previewSeeds: { attribute: false, noAccessor: true },
+    pagePreviewContext: { attribute: false },
+    claimedReaders: { attribute: false, noAccessor: true },
   };
+
+  declare pagePreviewContext?: ApplicationContext;
+  private page: PageActivation | null = null;
+  private allReaders: readonly ControlUiLinkReaderDescriptor[] = EMPTY_LINK_READERS;
+  get claimedReaders() {
+    return this.allReaders;
+  }
+  set claimedReaders(value: readonly ControlUiLinkReaderDescriptor[]) {
+    if (
+      value.length === this.allReaders.length &&
+      value.every((reader, index) => reader === this.allReaders[index])
+    ) {
+      return;
+    }
+    this.allReaders = value;
+    this.retirePage();
+  }
+  private readonly subscriptions = new SubscriptionsController(this);
+  constructor() {
+    super();
+    this.subscriptions.watch(
+      () => this.pagePreviewContext?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      () => this.retirePage(),
+    );
+    this.subscriptions.watch(
+      () => this.pagePreviewContext?.config,
+      (config, notify) => config.subscribe(notify),
+      () => {
+        if (this.client && !this.pagePreviewContext?.config.current.automaticallyFetchFavicons) {
+          clearLinkPreviews(this.client);
+        }
+        this.retirePage();
+      },
+    );
+  }
 
   private gatewayClient: GatewayBrowserClient | null = null;
   private selectedAgentId: string | undefined;
@@ -237,10 +109,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.invalidatePreviewContext();
-    this.close();
-    this.clearPreviews();
     this.readerDescriptors = value;
-    this.seeds = null;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
 
@@ -294,8 +163,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.invalidatePreviewContext();
-    this.close();
-    this.clearPreviews();
     this.gatewayClient = value;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
@@ -309,8 +176,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.invalidatePreviewContext();
-    this.close();
-    this.clearPreviews();
     this.selectedAgentId = value;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
@@ -323,6 +188,8 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   private invalidatePreviewContext(): void {
     this.seeds = null;
     this.previewContext = null;
+    this.close();
+    this.clearPreviews();
   }
 
   private syncPreviewContext(): PreviewContext | null {
@@ -339,11 +206,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     this.syncPreviewContext();
     for (const anchor of this.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")) {
       // Nested providers retain their own agent and connection identity.
-      let owner = anchor.parentElement;
-      while (owner && !(owner instanceof LinkReaderHovercardProvider)) {
-        owner = owner.parentElement;
-      }
-      if (owner !== this) {
+      if (!this.ownsAnchor(anchor)) {
         continue;
       }
       const target = resolveLinkReaderTarget(anchor.href, this.readers);
@@ -401,10 +264,14 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       target ? { ...(await this.loadPreview(target, signal)), ...target } : initialState,
   });
   private readonly activeAnchorObserver = new MutationObserver(() => {
+    if (this.page) {
+      this.retirePage();
+      return;
+    }
     const anchor = this.activeAnchor;
     // The card is portaled outside the routed tree, whose replacement can remove
     // a hovered link without a pointer event reaching this delegated handler.
-    if (anchor && (!this.contains(anchor) || anchor.href !== this.activeTarget?.href)) {
+    if (anchor && (!this.ownsAnchor(anchor) || anchor.href !== this.activeTarget?.href)) {
       this.close();
     }
   });
@@ -449,7 +316,11 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   protected override updated(): void {
     const context = this.syncPreviewContext();
     this.syncInlineStates();
-    if (!this.activeAnchor) {
+    if (this.page) {
+      this.retirePage();
+      if (this.page && this.hovercard.card) {
+        this.showPage(this.page);
+      }
       return;
     }
     const anchor = this.activeAnchor;
@@ -457,7 +328,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     if (!anchor || !target || !this.requestStarted) {
       return;
     }
-    if (!this.isConnected || !this.contains(anchor) || anchor.href !== target.href) {
+    if (!this.isConnected || !this.ownsAnchor(anchor) || anchor.href !== target.href) {
       this.close();
       return;
     }
@@ -477,12 +348,9 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
           this.show(anchor, preview);
         }
       },
-      error: () => {
-        const seed = this.seedPreview(target);
-        if (seed && (this.hovercard.card || this.hovercard.held)) {
-          this.show(anchor, seed, true);
-        } else {
-          this.close();
+      error: (error) => {
+        if (this.hovercard.card || this.hovercard.held) {
+          this.show(anchor, this.seedPreview(target), true, linkReaderErrorMessage(error));
         }
       },
     });
@@ -493,8 +361,8 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     const anchor = anchorFromNavigationEvent(event);
-    const target = anchor ? resolveLinkReaderTarget(anchor.href, this.readers) : null;
-    if (!anchor || !target?.reader.linkReader.previewMethod) {
+    const target = anchor ? resolveHoverPreviewTarget(anchor, this) : null;
+    if (!anchor || !target) {
       return;
     }
     this.activateFromBootstrap(anchor, target, "pointer", LINK_READER_HOVERCARD_OPEN_DELAY_MS);
@@ -506,6 +374,10 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
+      return;
+    }
+    if (this.page) {
+      this.hovercard.schedulePointerExit();
       return;
     }
     this.hovercard.pointerInside = false;
@@ -536,8 +408,11 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     const anchor = anchorFromNavigationEvent(event);
-    const target = anchor ? resolveLinkReaderTarget(anchor.href, this.readers) : null;
-    if (!anchor || !target?.reader.linkReader.previewMethod) {
+    const target = anchor ? resolveHoverPreviewTarget(anchor, this) : null;
+    if (!anchor || !target) {
+      return;
+    }
+    if (!target.reader && !anchor.matches(":focus-visible")) {
       return;
     }
     this.activateFromBootstrap(anchor, target, "focus", 0);
@@ -560,16 +435,16 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
 
   activateFromBootstrap(
     anchor: HTMLAnchorElement,
-    target: LinkReaderTarget,
+    target: HoverPreviewTarget,
     trigger: "focus" | "pointer",
     delay: number,
   ): void {
-    let owner: Element | null = anchor.parentElement;
-    while (owner && !(owner instanceof LinkReaderHovercardProvider)) {
-      owner = owner.parentElement;
+    // Nested providers retain their own agent scope when intent bubbles.
+    if (!this.ownsAnchor(anchor)) {
+      return;
     }
-    // Nested providers own their agent scope even when intent bubbles to the app provider.
-    if (owner !== this) {
+    if (!target.reader) {
+      this.activatePage(anchor, target, trigger, delay);
       return;
     }
     if (
@@ -594,10 +469,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.close();
-    // Known session details remain useful while remote enrichment is unavailable.
-    if (this.cachedPreview(target)?.failed && !this.seedPreview(target)) {
-      return;
-    }
     this.allowLoading = Boolean(context?.succeeded && !this.cachedPreview(target));
     this.activeAnchor = anchor;
     this.activeTarget = target;
@@ -607,7 +478,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       attributes: true,
       attributeFilter: ["href"],
     });
-    // Unseeded links stay quiet until this identity has shown useful remote details.
+    // Unseeded links stay quiet while this identity's first request is pending.
     this.hovercard.scheduleOpen(
       delay,
       () => {
@@ -625,7 +496,12 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     );
   }
 
-  private show(anchor: HTMLAnchorElement, preview?: LinkPreview, seeded = false): void {
+  private show(
+    anchor: HTMLAnchorElement,
+    preview?: LinkPreview,
+    seeded = false,
+    error?: string,
+  ): void {
     const existing = this.hovercard.card;
     const card =
       existing ??
@@ -634,22 +510,158 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
         "link-reader-hovercard",
       );
     if (preview) {
-      renderPreview(card, preview, seeded);
+      renderPreview(card, preview, seeded, error);
+    } else if (error && this.activeTarget) {
+      renderPreviewError(card, this.activeTarget, error);
     } else {
       renderLoading(card);
     }
+    this.mountPreview(anchor, card, Boolean(existing));
+    if (preview && !seeded && this.previewContext) {
+      this.previewContext.succeeded = true;
+    }
+  }
+
+  private mountPreview(anchor: HTMLAnchorElement, card: HTMLDivElement, existing: boolean): void {
     if (existing) {
       this.hovercard.position();
     } else {
-      // The provider's delegated listeners do not see the portaled card.
       card.addEventListener("pointerleave", this.handleCardPointerLeave);
       card.addEventListener("keydown", this.hovercard.handleCardKeyDown);
       this.hovercard.markTrigger(anchor);
       this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
     }
-    if (preview && !seeded && this.previewContext) {
-      this.previewContext.succeeded = true;
+  }
+
+  private ownsAnchor(anchor: HTMLAnchorElement): boolean {
+    let owner = composedParent(anchor);
+    while (owner && !(owner instanceof LinkReaderHovercardProvider)) {
+      owner = composedParent(owner);
     }
+    return owner === this;
+  }
+
+  private currentPage(page: PageActivation): boolean {
+    const current = resolveHoverPreviewTarget(page.anchor, this);
+    return (
+      this.isConnected &&
+      this.page === page &&
+      page.anchor.isConnected &&
+      this.ownsAnchor(page.anchor) &&
+      Boolean(current && !current.reader && current.href === page.href) &&
+      canPreviewPages(this) &&
+      this.client === page.client &&
+      page.client.connectionGeneration === page.generation &&
+      page.client.recoveryScope === page.recoveryScope
+    );
+  }
+
+  private retirePage(): void {
+    if (this.page && !this.currentPage(this.page)) {
+      this.close();
+    }
+  }
+
+  private activatePage(
+    anchor: HTMLAnchorElement,
+    target: PageHoverTarget,
+    trigger: "focus" | "pointer",
+    delay: number,
+  ): void {
+    const client = this.client;
+    if (!client || !canPreviewPages(this)) {
+      return;
+    }
+    this.syncPreviewContext();
+    this.retirePage();
+    if (this.page?.anchor !== anchor || this.page.href !== target.href) {
+      this.close();
+      const page: PageActivation = {
+        anchor,
+        href: target.href,
+        client,
+        generation: client.connectionGeneration,
+        recoveryScope: client.recoveryScope,
+        controller: new AbortController(),
+        preview: {},
+        failedImages: new Set(),
+      };
+      this.page = page;
+      this.activeAnchor = anchor;
+      this.activeAnchorObserver.observe(this, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: [
+          "href",
+          "download",
+          "data-file-path",
+          "data-session-href",
+          "data-link-reader-external",
+          "class",
+          "hidden",
+        ],
+      });
+      const root = anchor.getRootNode();
+      if (root instanceof ShadowRoot) {
+        this.activeAnchorObserver.observe(root, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+        });
+      }
+      this.hovercard.scheduleOpen(
+        delay,
+        () => {
+          if (!this.currentPage(page)) {
+            this.close();
+            return;
+          }
+          this.showPage(page);
+          void loadLinkPreview(client, page.href, page.controller.signal)
+            .then((preview) => {
+              if (this.currentPage(page)) {
+                page.preview = preview;
+                this.showPage(page);
+              }
+            })
+            .catch(() => {
+              /* Dismissal releases only this presentation's subscription. */
+            });
+        },
+        anchor,
+      );
+    }
+    this.activeTrigger = trigger;
+    if (trigger === "pointer") {
+      this.hovercard.pointerInside = true;
+    } else {
+      this.hovercard.focusInside = true;
+    }
+    this.hovercard.clearClose();
+  }
+
+  private showPage(page: PageActivation): void {
+    const existing = this.hovercard.card;
+    const card =
+      existing ??
+      createPortaledHovercard("openclaw-link-preview-" + ++nextHovercardId, "link-hovercard");
+    renderPagePreview(
+      card,
+      page.href,
+      page.anchor.textContent?.trim() ?? "",
+      page.preview,
+      page.failedImages,
+      (src) => {
+        if (this.currentPage(page)) {
+          page.failedImages.add(src);
+          this.showPage(page);
+        }
+      },
+      () => this.hovercard.position(),
+    );
+    this.mountPreview(page.anchor, card, Boolean(existing));
+    // Anonymous page metadata never unlocks plugin success-dependent loaders.
   }
 
   private cachedPreview(target: LinkReaderTarget): CacheEntry | undefined {
@@ -715,7 +727,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
         .catch((error: unknown) => {
           // Keep short-lived failures cached so repeatedly crossing a broken or
           // private link does not burn the service rate limit.
-          entry.failed = true;
           entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
           this.syncInlineStates();
           throw error;
@@ -735,6 +746,8 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   }
 
   private close(): void {
+    this.page?.controller.abort();
+    this.page = null;
     this.requestStarted = false;
     this.allowLoading = false;
     this.hovercard.reset();

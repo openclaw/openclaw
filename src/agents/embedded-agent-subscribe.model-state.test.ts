@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
+import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./embedded-agent-runner/run/failover-retry-controller.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "./sessions/session-manager.js";
@@ -188,7 +189,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     overrides: Partial<AssistantMessage>;
     expected: boolean;
   }>)("counts only real completed model progress: $label", ({ overrides, expected }) => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-progress" });
+    const recovery = createEmbeddedRunContextRecoveryState();
+    recovery.overflowCompactionAttempts = 2;
+    recovery.toolResultTruncationAttempted = true;
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-progress",
+      onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
+    });
     const message = makeAssistantMessageFixture({
       content: [{ type: "text", text: "Response" }],
       errorMessage: undefined,
@@ -205,8 +212,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
 
       emit({ type: "message_end", message });
       expect(subscription.hasSuccessfulModelResponse()).toBe(false);
+      expect(recovery.overflowCompactionAttempts).toBe(2);
+      expect(recovery.toolResultTruncationAttempted).toBe(true);
       emit({ type: "turn_end", message, toolResults: [] });
       expect(subscription.hasSuccessfulModelResponse()).toBe(expected);
+      expect(recovery.overflowCompactionAttempts).toBe(expected ? 0 : 2);
+      expect(recovery.toolResultTruncationAttempted).toBe(!expected);
     } finally {
       subscription.unsubscribe();
     }
@@ -217,7 +228,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     async (stopReason) => {
       let nowMs = Date.now();
       const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-      const harness = createSubscribedSessionHarness({ runId: "async-progress" });
+      const recovery = createEmbeddedRunContextRecoveryState();
+      recovery.overflowCompactionAttempts = 2;
+      const harness = createSubscribedSessionHarness({
+        runId: "async-progress",
+        onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
+      });
       const controller = createEmbeddedRunFailoverRetryController({
         runParams: {
           sessionId: "async-progress",
@@ -251,10 +267,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
             if (event.type === "message_end" && event.message.role === "assistant") {
               messages.push(event.message.stopReason);
               expect(harness.subscription.hasSuccessfulModelResponse()).toBe(false);
+              expect(recovery.overflowCompactionAttempts).toBe(2);
             }
           },
         );
         expect(messages).toEqual(["toolUse", stopReason]);
+        expect(recovery.overflowCompactionAttempts).toBe(stopReason === "stop" ? 0 : 2);
         controller.observeAttempt({
           hasSuccessfulModelResponse: harness.subscription.hasSuccessfulModelResponse(),
         });
@@ -466,7 +484,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
         expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
         expect(subscription.hasSuccessfulModelResponse()).toBe(completed?.stopReason === "stop");
-        expect(onContextAccountingEvent.mock.calls).toEqual([[{ kind: "model", contextTokens }]]);
+        expect(onContextAccountingEvent.mock.calls).toEqual([
+          [{ kind: "model", contextTokens, successful: false }],
+          ...(completed?.stopReason === "stop"
+            ? [[{ kind: "model", contextTokens, successful: true }]]
+            : []),
+        ]);
         expect(
           onAgentEvent.mock.calls
             .map(([event]) => event)
@@ -501,7 +524,10 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           ...(priorCall ? [{ usage: makeUsage({ input: 100, output: 20, cost: priorCost }) }] : []),
           { usage },
         ]);
-        expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
+        expect(subscription.getUsageTotals()?.cost).toEqual({
+          total: priorCost + costTotal,
+          ...(priorCall ? {} : { totalOrigin: "provider-billed" }),
+        });
         const lastCallUsage = subscription.getLastAssistantUsage();
         if (priorCall) {
           expect(lastCallUsage).toMatchObject({ input: 100, output: 20, total: 120 });
@@ -663,7 +689,8 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           },
         );
         expect(onContextAccountingEvent.mock.calls).toEqual([
-          [{ kind: "model", contextTokens: undefined }],
+          [{ kind: "model", contextTokens: undefined, successful: false }],
+          [{ kind: "model", contextTokens: undefined, successful: true }],
         ]);
         const usageEvents = onAgentEvent.mock.calls
           .map(([event]) => event)

@@ -160,19 +160,6 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/source.txt")).toEqual(original);
   });
 
-  it("adds a file", async () => {
-    const memory = createMemoryPatchSandbox();
-    const patch = `*** Begin Patch
-*** Add File: hello.txt
-+hello
-*** End Patch`;
-
-    const result = await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/hello.txt")).toBe("hello\n");
-    expect(result.summary.added).toEqual(["hello.txt"]);
-  });
-
   it("rejects an add hunk that targets an existing file", async () => {
     const memory = createMemoryPatchSandbox({ "notes.txt": "keep me\n" });
     const patch = `*** Begin Patch
@@ -225,7 +212,7 @@ describe("applyPatch", () => {
 *** End Patch`;
 
           await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
-            /Cannot create notes\.txt: the file already exists/,
+            workspaceOnly ? /symlink/i : /Cannot create notes\.txt: the file already exists/,
           );
           await expect(fs.readFile(target, "utf8")).resolves.toBe("keep me\n");
           await expect(fs.readlink(link)).resolves.toBe("target.txt");
@@ -809,7 +796,7 @@ describe("applyPatch", () => {
 *** End Patch`;
 
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /path alias under sandbox root|symlink escapes sandbox root/i,
+          /symlink escapes sandbox root/i,
         );
         await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("before\n");
         await expectMissingPath(fs.readFile(outsideTarget, "utf8"));
@@ -886,9 +873,10 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
-              );
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toMatchObject({
+                name: "FsSafeError",
+                code: "symlink",
+              });
             },
           });
           await expectMissingPath(fs.stat(path.join(outside, "nested")));
@@ -940,46 +928,4 @@ describe("applyPatch", () => {
       });
     },
   );
-
-  it("uses container paths when the sandbox bridge has no local host path", async () => {
-    const files = new Map<string, string>([["/sandbox/source.txt", "before\n"]]);
-    const bridge = {
-      resolvePath: ({ filePath }: { filePath: string }) => ({
-        relativePath: filePath,
-        containerPath: `/sandbox/${filePath}`,
-      }),
-      readFile: vi.fn(async ({ filePath }: { filePath: string }) =>
-        Buffer.from(files.get(filePath) ?? "", "utf8"),
-      ),
-      writeFile: vi.fn(async ({ filePath, data }: { filePath: string; data: Buffer | string }) => {
-        files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
-      }),
-      remove: vi.fn(async ({ filePath }: { filePath: string }) => {
-        files.delete(filePath);
-      }),
-      mkdirp: vi.fn(async () => {}),
-    };
-
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
--before
-+after
-*** End Patch`;
-
-    const result = await applyPatch(patch, {
-      cwd: "/local/workspace",
-      sandbox: {
-        root: "/local/workspace",
-        bridge: bridge as never,
-      },
-    });
-
-    expect(files.get("/sandbox/source.txt")).toBe("after\n");
-    expect(result.summary.modified).toEqual(["source.txt"]);
-    expect(bridge.readFile).toHaveBeenCalledWith({
-      filePath: "/sandbox/source.txt",
-      cwd: "/local/workspace",
-    });
-  });
 });

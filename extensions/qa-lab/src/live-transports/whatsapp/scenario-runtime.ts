@@ -20,56 +20,9 @@ import {
   resolveWhatsAppQaNoReplyTarget,
   restartWhatsAppQaDriverSession,
   waitForNoWhatsAppReply,
-  waitForWhatsAppScenarioSutMessage,
+  waitForScenarioObservedMessage,
 } from "./whatsapp-live.operations.js";
 import { waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
-
-export {
-  whatsappQaGroupAudioGatingScenario,
-  whatsappQaGroupOutboundAudioScenario,
-  whatsappQaGroupOutboundMediaScenario,
-  whatsappQaGroupOutboundPollScenario,
-  whatsappQaInboundStructuredMessagesScenario,
-  whatsappQaMessageActionsScenario,
-  whatsappQaOutboundDocumentPreservesFilenameScenario,
-  whatsappQaOutboundPollScenario,
-  whatsappQaOutboundSendSerializationScenario,
-} from "./whatsapp-live.scenario-implementations.capabilities.js";
-export {
-  whatsappQaBroadcastGroupFanoutScenario,
-  whatsappQaCanaryScenario,
-  whatsappQaGroupActivationAlwaysScenario,
-  whatsappQaGroupPendingHistoryContextScenario,
-  whatsappQaGroupReplyToBotTriggersScenario,
-  whatsappQaGroupReplyToMessageScenario,
-  whatsappQaMentionGatingScenario,
-  whatsappQaReplyToMessageScenario,
-  whatsappQaReplyToModeBatchedScenario,
-  whatsappQaTopLevelReplyShapeScenario,
-} from "./whatsapp-live.scenario-implementations.conversation.js";
-export {
-  whatsappQaApprovalExecDenyNativeScenario,
-  whatsappQaApprovalExecGroupReactionNativeScenario,
-  whatsappQaApprovalExecNativeScenario,
-  whatsappQaApprovalExecReactionNativeScenario,
-  whatsappQaApprovalPluginNativeScenario,
-  whatsappQaGroupAllowlistBlockScenario,
-  whatsappQaReplyDeliveryShapeScenario,
-  whatsappQaStatusReactionLifecycleScenario,
-  whatsappQaStatusReactionsScenario,
-  whatsappQaStreamFinalMessageAccountingScenario,
-} from "./whatsapp-live.scenario-implementations.delivery.js";
-export {
-  whatsappQaAgentMessageActionReactScenario,
-  whatsappQaAgentMessageActionUploadFileScenario,
-  whatsappQaAudioPreflightScenario,
-  whatsappQaGroupAgentMessageActionReactScenario,
-  whatsappQaGroupAgentMessageActionUploadFileScenario,
-  whatsappQaInboundImageCaptionScenario,
-  whatsappQaInboundReactionNoTriggerScenario,
-  whatsappQaOutboundMediaMatrixScenario,
-  whatsappQaReplyContextIsolationScenario,
-} from "./whatsapp-live.scenario-implementations.user-path.js";
 
 async function runWhatsAppScenarioAttempt(params: {
   environment: WhatsAppQaScenarioEnvironment;
@@ -219,10 +172,9 @@ async function runWhatsAppScenarioAttempt(params: {
       details: ["no reply", afterSendDetails].filter(Boolean).join("; "),
     };
   }
-  const reply = await waitForWhatsAppScenarioSutMessage(scenarioContext, {
+  const reply = await waitForScenarioObservedMessage(scenarioContext, {
     observedAfter: requestStartedAt,
     timeoutMs: params.scenario.timeoutMs,
-    targetKind: scenarioRun.target,
     match: (message) => messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText),
   });
   scenarioRun.verify?.(reply, scenarioContext);
@@ -253,12 +205,12 @@ async function runWhatsAppScenarioAttempt(params: {
   };
 }
 
-export async function runWhatsAppScenario(
-  environment: WhatsAppQaScenarioEnvironment,
-  implementation: WhatsAppQaScenarioImplementation,
-) {
+export async function runWhatsAppScenario(environment: WhatsAppQaScenarioEnvironment) {
   const scenario = environment.scenario;
-  const { run: configuredRun } = await environment.configureScenario(implementation);
+  if (!environment.preparedScenario) {
+    throw new Error(`WhatsApp scenario ${scenario.id} has no prepared implementation`);
+  }
+  const { implementation, run: configuredRun } = environment.preparedScenario;
   for (let attempt = 1; attempt <= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS; attempt += 1) {
     try {
       // Retry with fresh markers and callback state while retaining the gateway config

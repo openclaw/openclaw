@@ -1,16 +1,12 @@
 // Device metadata normalization for auth payloads and policy matching.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-function normalizeTrimmedMetadata(value?: string | null): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : "";
-}
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 
 /** Normalize device metadata for policy classification. */
 export function normalizeDeviceMetadataForPolicy(value?: string | null): string {
-  const trimmed = normalizeTrimmedMetadata(value);
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "";
   }

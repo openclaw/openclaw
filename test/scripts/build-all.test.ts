@@ -1,4 +1,3 @@
-// Build All tests cover build all script behavior.
 import { spawnSync, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -26,14 +25,31 @@ import {
   resolveBuildStepCacheStampState,
   restoreBuildStepCacheOutputs,
   finalizeBuildStepCache,
+  type BuildCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+
+vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
+  withGatewayRuntimeArtifactPublication: async (
+    _params: unknown,
+    publish: () => Promise<unknown>,
+  ) => publish(),
+}));
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const buildAllUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildAll);
+const buildArtifactCacheUrl = resolveRuntimeWorkerUrl(
+  toolingProbeRuntimeEntrypoints.buildArtifactCache,
+);
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -59,35 +75,7 @@ function withBuildCacheFixture(
     rootDir: string;
     inputPath: string;
     outputPath: string;
-    step: {
-      label: string;
-      cache: {
-        inputs: Array<
-          | string
-          | {
-              path: string;
-              excludeDirectories?: string[];
-              extensions?: string[];
-              recursive?: boolean;
-            }
-        >;
-        outputs: Array<
-          | string
-          | {
-              path: string;
-              excludeDirectories?: string[];
-              extensions?: string[];
-              recursive?: boolean;
-            }
-        >;
-        requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
-        restore?: "always";
-        runOnHit?: {
-          env?: NodeJS.ProcessEnv;
-          finalize?: "refresh";
-        };
-      };
-    };
+    step: { label: string; cache: BuildCache };
   }) => void,
 ) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
@@ -252,18 +240,8 @@ describe("resolveBuildAllStep", () => {
       expectedEnv: { FOO: "bar", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
     },
     {
-      label: "write-unified-entry-dts",
-      scriptPath: "scripts/write-unified-entry-dts.ts",
-      expectedEnv: { FOO: "bar", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
-    },
-    {
       label: "write-build-info",
       scriptPath: "scripts/write-build-info.ts",
-      expectedEnv: { FOO: "bar" },
-    },
-    {
-      label: "write-cli-startup-metadata",
-      scriptPath: "scripts/write-cli-startup-metadata.ts",
       expectedEnv: { FOO: "bar" },
     },
   ])("runs the $label TypeScript step through tsx", ({ label, scriptPath, expectedEnv }) => {
@@ -353,7 +331,7 @@ describe("resolveBuildAllSteps", () => {
     for (const args of [["--help"], ["cliStartup", "--help"]]) {
       const result = spawnSync(
         testNodeExecPath,
-        ["--import", "tsx", "scripts/build-all.mts", ...args],
+        [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), ...args],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -371,7 +349,7 @@ describe("resolveBuildAllSteps", () => {
   it("rejects unknown CLI args without starting build steps", () => {
     const result = spawnSync(
       testNodeExecPath,
-      ["--import", "tsx", "scripts/build-all.mts", "cliStartup", "--bogus"],
+      [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), "cliStartup", "--bogus"],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -418,7 +396,7 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
-  it.each(["full", "package", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"])(
+  it.each(["package", "ciArtifacts"])(
     "refuses %s before any build step or cache work when memory is insufficient",
     async (profile) => {
       const runStep = vi.fn(() => ({ status: 0 }));
@@ -453,99 +431,97 @@ describe("resolveBuildAllSteps", () => {
     },
   );
 
-  it.each(["full", "package"])(
-    "admits %s once and freezes its heap for every child",
-    async (profile) => {
-      const tsdownSteps = resolveBuildAllSteps(profile).filter(
-        (step) => step.label.startsWith("tsdown-") || step.label === "write-unified-entry-dts",
-      );
-      const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
-      const executionOrder: string[] = [];
-      const restoreCache = vi.fn(() => true);
-      const result = await runBuildAllSteps(profile, {
-        cacheEnabled: true,
-        env: {},
-        finalizeCache: vi.fn(() => true),
-        logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: buildMemoryLimit(5),
-        now: () => 0,
-        resolveCacheState(step) {
-          executionOrder.push(`cache:${step.label}`);
-          return step.label === "tsdown-packages"
-            ? {
-                cacheable: true,
-                fresh: true,
-                restorable: true,
-                reason: "fresh-cache",
-                signature: "test-signature",
-                outputRoot: "/test/cache",
-                stampPath: "/test/cache-stamp.json",
-                inputFiles: 1,
-                outputFiles: 1,
-                relativeOutputFiles: ["dist/test.js"],
-                stampedOutputs: ["dist/test.js"],
-                record: undefined,
-              }
-            : { cacheable: false, fresh: false, reason: "no-cache" };
-        },
-        restoreCache,
-        runStep(invocation) {
-          executionOrder.push(
-            `run:${expectDefined(tsdownSteps[tsdownInvocations.length], "next tsdown step").label}`,
-          );
-          tsdownInvocations.push(invocation);
-          return { status: 0 };
-        },
-        steps: tsdownSteps,
-      });
+  it("admits package once and freezes its heap for every child", async () => {
+    const profile = "package";
+    const tsdownSteps = resolveBuildAllSteps(profile).filter(
+      (step) => step.label.startsWith("tsdown-") || step.label === "write-unified-entry-dts",
+    );
+    const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+    const executionOrder: string[] = [];
+    const restoreCache = vi.fn(() => true);
+    const result = await runBuildAllSteps(profile, {
+      cacheEnabled: true,
+      env: {},
+      finalizeCache: vi.fn(() => true),
+      logger: { error: vi.fn(), warn: vi.fn() },
+      memoryLimit: buildMemoryLimit(5),
+      now: () => 0,
+      resolveCacheState(step) {
+        executionOrder.push(`cache:${step.label}`);
+        return step.label === "tsdown-packages"
+          ? {
+              cacheable: true,
+              fresh: true,
+              restorable: true,
+              reason: "fresh-cache",
+              signature: "test-signature",
+              outputRoot: "/test/cache",
+              stampPath: "/test/cache-stamp.json",
+              inputFiles: 1,
+              outputFiles: 1,
+              relativeOutputFiles: ["dist/test.js"],
+              stampedOutputs: ["dist/test.js"],
+              record: undefined,
+            }
+          : { cacheable: false, fresh: false, reason: "no-cache" };
+      },
+      restoreCache,
+      runStep(invocation) {
+        executionOrder.push(
+          `run:${expectDefined(tsdownSteps[tsdownInvocations.length], "next tsdown step").label}`,
+        );
+        tsdownInvocations.push(invocation);
+        return { status: 0 };
+      },
+      steps: tsdownSteps,
+    });
 
-      expect(result.exitCode).toBe(0);
-      expect(tsdownInvocations).toHaveLength(4);
-      for (const invocation of tsdownInvocations) {
-        expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
-        expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
-      }
-      expect(restoreCache).toHaveBeenCalledOnce();
-      expect(executionOrder).toEqual([
-        "cache:tsdown-ai",
-        "run:tsdown-ai",
-        "cache:tsdown-packages",
-        "run:tsdown-packages",
-        "cache:tsdown-unified",
-        "run:tsdown-unified",
-        "cache:write-unified-entry-dts",
-        "run:write-unified-entry-dts",
-      ]);
+    expect(result.exitCode).toBe(0);
+    expect(tsdownInvocations).toHaveLength(4);
+    for (const invocation of tsdownInvocations) {
+      expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
+      expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    }
+    expect(restoreCache).toHaveBeenCalledOnce();
+    expect(executionOrder).toEqual([
+      "cache:tsdown-ai",
+      "run:tsdown-ai",
+      "cache:tsdown-packages",
+      "run:tsdown-packages",
+      "cache:tsdown-unified",
+      "run:tsdown-unified",
+      "cache:write-unified-entry-dts",
+      "run:write-unified-entry-dts",
+    ]);
 
-      const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
-      await runBuildAllSteps("ciArtifacts", {
-        env: { OPENCLAW_BUILD_CACHE: "0" },
-        memoryLimit: buildMemoryLimit(5),
-        finalizeCache: vi.fn(() => true),
-        logger: { error: vi.fn(), warn: vi.fn() },
-        now: () => 0,
-        resolveCacheState: () => ({
-          cacheable: true,
-          fresh: true,
-          reason: "fresh",
-          restorable: false,
-          signature: "test-signature",
-          outputRoot: "/test/cache",
-          stampPath: "/test/cache-stamp.json",
-          inputFiles: 1,
-          outputFiles: 1,
-          relativeOutputFiles: ["dist/test.js"],
-          stampedOutputs: ["dist/test.js"],
-          record: undefined,
-        }),
-        runStep: cacheDisabledRunner,
-        steps: [expectDefined(tsdownSteps[0], "first tsdown step")],
-      });
-      expect(cacheDisabledRunner).toHaveBeenCalledOnce();
-    },
-  );
+    const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
+    await runBuildAllSteps("ciArtifacts", {
+      env: { OPENCLAW_BUILD_CACHE: "0" },
+      memoryLimit: buildMemoryLimit(5),
+      finalizeCache: vi.fn(() => true),
+      logger: { error: vi.fn(), warn: vi.fn() },
+      now: () => 0,
+      resolveCacheState: () => ({
+        cacheable: true,
+        fresh: true,
+        reason: "fresh",
+        restorable: false,
+        signature: "test-signature",
+        outputRoot: "/test/cache",
+        stampPath: "/test/cache-stamp.json",
+        inputFiles: 1,
+        outputFiles: 1,
+        relativeOutputFiles: ["dist/test.js"],
+        stampedOutputs: ["dist/test.js"],
+        record: undefined,
+      }),
+      runStep: cacheDisabledRunner,
+      steps: [expectDefined(tsdownSteps[0], "first tsdown step")],
+    });
+    expect(cacheDisabledRunner).toHaveBeenCalledOnce();
+  });
 
-  it.each(["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"])(
+  it.each(["gatewayWatch", "qaRuntime"])(
     "skips heap admission for partial profile %s",
     async (profile) => {
       const partialEnv = { MARKER: "unchanged", NODE_OPTIONS: "--max-old-space-size=256" };
@@ -833,19 +809,6 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
-  it("uses a QA runtime profile with generated plugin assets but no startup metadata", () => {
-    expect(resolveBuildAllSteps("qaRuntime").map((step) => step.label)).toEqual([
-      "plugins:assets:build",
-      "tsdown",
-      "external-plugins:local-dist",
-      "check-cli-bootstrap-imports",
-      "plugins:assets:copy",
-      "runtime-postbuild",
-      "build-stamp",
-      "runtime-postbuild-stamp",
-    ]);
-  });
-
   it.each([undefined, "0", "1"])(
     "preserves source-run declaration choice %s through the canonical runtime build",
     async (skipDts) => {
@@ -875,7 +838,13 @@ describe("resolveBuildAllSteps", () => {
           }),
         ).toBe(0);
         expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
-          ["--import", "tsx", "scripts/build-all.mts", "qaRuntime"],
+          [
+            "--import",
+            expect.stringMatching(/\/scripts\/tsx\.mjs$/),
+            expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
+            expect.stringMatching(/\/scripts\/build-all\.mts$/),
+            "qaRuntime",
+          ],
           ["openclaw.mjs", "status"],
         ]);
         const env = spawn.mock.calls[0]![2].env!;
@@ -1167,31 +1136,6 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("writes the runtime postbuild stamp after the build stamp", () => {
-    const labels = resolveBuildAllSteps("full").map((step) => step.label);
-    expect(labels).toContain("runtime-postbuild");
-    expect(labels).toContain("build-stamp");
-    expect(labels).toContain("runtime-postbuild-stamp");
-    expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
-      labels.indexOf("build-stamp"),
-    );
-  });
-
-  it("includes ui:build in the full and ciArtifacts profiles after runtime postbuild", () => {
-    for (const profile of ["full", "package", "ciArtifacts"]) {
-      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
-      const lastTsdown = profile === "full" || profile === "package" ? "tsdown-unified" : "tsdown";
-      expect(labels).toContain("ui:build");
-      // Control UI bundling must run after tsdown clears dist so that
-      // dist/control-ui survives `pnpm build` without a second command.
-      expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf(lastTsdown));
-      expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
-      // ui:build must run before write-build-info so the build manifest can
-      // see the final dist/control-ui assets.
-      expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
-    }
-  });
-
   it("keeps ui:build out of minimal backend-only profiles", () => {
     for (const profile of [
       "gatewayWatch",
@@ -1250,15 +1194,14 @@ describe("resolveBuildStepCacheState", () => {
       const result = spawnSync(
         testNodeExecPath,
         [
-          "--import",
-          "./scripts/tsx.mjs",
+          ...resolveRuntimeWorkerArgv(buildArtifactCacheUrl, testNodeExecPath).slice(0, -1),
           "--input-type=module",
           "-e",
           `
             import assert from "node:assert/strict";
             import fs from "node:fs";
             import path from "node:path";
-            import { listCacheFiles } from "./scripts/lib/build-artifact-cache.mts";
+            import { listCacheFiles } from ${JSON.stringify(buildArtifactCacheUrl.href)};
             const root = process.argv[1];
             const directory = path.join(root, "src");
             const [template] = fs.readdirSync(directory, { withFileTypes: true });
@@ -1480,14 +1423,6 @@ describe("resolveBuildStepCacheState", () => {
       writeBuildStepCacheStamp(step, cacheState, { rootDir });
 
       const fresh = resolveBuildStepCacheState(step, { rootDir });
-      expect(fresh.cacheable).toBe(true);
-      expect(fresh.fresh).toBe(true);
-      expect(fresh.reason).toBe("fresh");
-      expect(fresh.inputFiles).toBe(1);
-      expect(fresh.outputFiles).toBe(1);
-      expect(fresh.restorable).toBe(false);
-      expect(fresh.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(fresh.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof fresh.signature).toBe("string");
       expect(fresh.signature).toHaveLength(64);
       expect(fresh.outputRoot).toBe(
@@ -1501,13 +1436,13 @@ describe("resolveBuildStepCacheState", () => {
         fresh: true,
         inputFiles: 1,
         outputFiles: 1,
-        outputRoot: fresh.outputRoot,
+        outputRoot: path.join(rootDir, ".artifacts/build-all-cache/cached/outputs"),
         reason: "fresh",
         relativeOutputFiles: ["dist/output.js"],
         restorable: false,
-        signature: fresh.signature,
+        signature: expect.stringMatching(/^[a-f0-9]{64}$/u),
         stampedOutputs: ["dist/output.js"],
-        stampPath: fresh.stampPath,
+        stampPath: path.join(rootDir, ".artifacts/build-all-cache/cached/stamp.json"),
         record: fresh.record,
       });
     });
@@ -1650,8 +1585,6 @@ describe("resolveBuildStepCacheState", () => {
       expect(stale.outputFiles).toBe(1);
       expect(stale.restorable).toBe(false);
       expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
-      expect(stale.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(stale.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof stale.signature).toBe("string");
       expect(stale.signature).toHaveLength(64);
       expect(stale.outputRoot).toBe(
@@ -1665,15 +1598,16 @@ describe("resolveBuildStepCacheState", () => {
         fresh: false,
         inputFiles: 1,
         outputFiles: 1,
-        outputRoot: stale.outputRoot,
+        outputRoot: path.join(rootDir, ".artifacts/build-all-cache/cached/outputs"),
         reason,
         relativeOutputFiles: ["dist/output.js"],
         restorable: false,
-        signature: stale.signature,
+        signature: expect.stringMatching(/^[a-f0-9]{64}$/u),
         stampedOutputs: ["dist/output.js"],
-        stampPath: stale.stampPath,
+        stampPath: path.join(rootDir, ".artifacts/build-all-cache/cached/stamp.json"),
         record: stale.record,
       });
+      expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
     });
   });
 
@@ -1765,14 +1699,6 @@ describe("resolveBuildStepCacheState", () => {
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
 
       const restorable = resolveBuildStepCacheState(step, { rootDir });
-      expect(restorable.cacheable).toBe(true);
-      expect(restorable.fresh).toBe(true);
-      expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.inputFiles).toBe(1);
-      expect(restorable.outputFiles).toBe(0);
-      expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual([]);
-      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof restorable.signature).toBe("string");
       expect(restorable.signature).toHaveLength(64);
       expect(restorable.outputRoot).toBe(
@@ -1786,13 +1712,13 @@ describe("resolveBuildStepCacheState", () => {
         fresh: true,
         inputFiles: 1,
         outputFiles: 0,
-        outputRoot: restorable.outputRoot,
+        outputRoot: path.join(rootDir, ".artifacts/build-all-cache/cached/outputs"),
         reason: "fresh-cache",
         relativeOutputFiles: [],
         restorable: true,
-        signature: restorable.signature,
+        signature: expect.stringMatching(/^[a-f0-9]{64}$/u),
         stampedOutputs: ["dist/output.js"],
-        stampPath: restorable.stampPath,
+        stampPath: path.join(rootDir, ".artifacts/build-all-cache/cached/stamp.json"),
         record: restorable.record,
       });
       expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);

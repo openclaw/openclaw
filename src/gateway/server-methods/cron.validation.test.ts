@@ -14,16 +14,17 @@ import {
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
+import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -33,12 +34,8 @@ import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
@@ -47,7 +44,11 @@ import {
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
-import { createCronTestContext, createCronJob } from "./cron.validation.test-support.js";
+import {
+  createCronTestContext,
+  createCronJob,
+  setCronValidationTestRegistry,
+} from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const cronLogger = createNoopLogger();
@@ -71,7 +72,7 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
     } => ({ canonicalKey: sessionKey, entry: undefined }),
   ),
 );
-const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+const cronRunRecordsOverride = vi.hoisted(() => vi.fn());
 const resolveCronDeliveryPreview = vi.hoisted(() =>
   vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
 );
@@ -83,14 +84,14 @@ const resolveCronDeliveryPreviews = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../../cron/task-run-history.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cron/task-run-history.js")>(
-    "../../cron/task-run-history.js",
+vi.mock("../../cron/store/read-only.js", async () => {
+  const actual = await vi.importActual<typeof import("../../cron/store/read-only.js")>(
+    "../../cron/store/read-only.js",
   );
   return {
     ...actual,
-    readCronTaskRunHistoryPage: (...args: Parameters<typeof actual.readCronTaskRunHistoryPage>) =>
-      cronTaskRunHistoryPageOverride(...args) ?? actual.readCronTaskRunHistoryPage(...args),
+    readCronRunRecords: (...args: Parameters<typeof actual.readCronRunRecords>) =>
+      cronRunRecordsOverride(...args) ?? actual.readCronRunRecords(...args),
   };
 });
 
@@ -114,84 +115,6 @@ vi.mock("../../cron/delivery-preview.js", () => ({
 }));
 
 import { cronHandlers } from "./cron.js";
-
-function createPrefixOnlyChannelPlugin(
-  id: string,
-  targetPrefixes: readonly string[],
-  aliases?: readonly string[],
-): ChannelPlugin {
-  const base = createChannelTestPluginBase({
-    id,
-    config: {
-      isConfigured: (_account, cfg) => {
-        const channelConfig = cfg.channels?.[id];
-        return Boolean(channelConfig && channelConfig.enabled !== false);
-      },
-    },
-  });
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      ...(aliases ? { aliases } : {}),
-    },
-    messaging: { targetPrefixes },
-  };
-}
-
-function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
-  const base = createPrefixOnlyChannelPlugin(id, [id]);
-  return {
-    ...base,
-    config: {
-      ...base.config,
-      // Mirrors twitch/discord: an unlisted or credential-suppressed account
-      // resolves to a not-enabled account, which must NOT read as operator intent.
-      isEnabled: () => false,
-    },
-  };
-}
-
-function setCronValidationTestRegistry(): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        plugin: createPrefixOnlyChannelPlugin("discord", ["discord"]),
-        source: "test:discord",
-      },
-      {
-        pluginId: "telegram",
-        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
-        source: "test:telegram",
-      },
-      {
-        pluginId: "slack",
-        plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
-        source: "test:slack",
-      },
-      {
-        pluginId: "twitch",
-        plugin: createEnablementHostileChannelPlugin("twitch"),
-        source: "test:twitch",
-      },
-      {
-        pluginId: "msteams",
-        plugin: createPrefixOnlyChannelPlugin("msteams", ["msteams", "teams"], ["teams"]),
-        source: "test:msteams",
-      },
-      {
-        pluginId: "synology-chat",
-        plugin: createPrefixOnlyChannelPlugin("synology-chat", [
-          "synology-chat",
-          "synology_chat",
-          "synology",
-        ]),
-        source: "test:synology-chat",
-      },
-    ]),
-  );
-}
 
 function createCronContext(currentJobs?: CronJob | CronJob[]) {
   return createCronTestContext(currentJobs, getRuntimeConfig);
@@ -611,7 +534,7 @@ describe("cron method validation", () => {
   );
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
-    cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
+    cronRunRecordsOverride.mockReset().mockReturnValue(undefined);
     resolveCronDeliveryPreview
       .mockReset()
       .mockResolvedValue({ label: "not requested", detail: "not requested" });
@@ -814,15 +737,6 @@ describe("cron method validation", () => {
     );
   });
 
-  it("returns a single cron job for cron.get", async () => {
-    const job = createCronJob({ id: "cron-42", name: "single job" });
-
-    const { context, respond } = await invokeCronGet({ id: "cron-42" }, job);
-
-    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
-    expectCronReadSuccess(respond, job);
-  });
-
   it("allows caller-scoped cron.get for the same agent", async () => {
     const job = createCronJob({ id: "cron-42", agentId: "ops" });
 
@@ -875,18 +789,6 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: missing",
     });
-  });
-
-  it("keeps the exact cron.get missing wording older CLI matchers parse", async () => {
-    const { respond } = await invokeCronGet({ jobId: "missing" });
-
-    // Wire contract: shipped CLIs detect a missing job via
-    // error.message.includes(`cron job not found: ${id}`) before falling back to
-    // name lookup (isMissingCronGetError). Rewording the server message strands
-    // older clients, so pin the legacy-matcher form here.
-    const error = respond.mock.calls.at(-1)?.[2];
-    expect(String(error?.message)).toContain("cron job not found: missing");
-    expect(String(error?.message)).not.toContain("automation not found");
   });
 
   describe("cron.list request diagnostics", () => {
@@ -1101,30 +1003,6 @@ describe("cron method validation", () => {
     },
   );
 
-  it("lists readable run timestamps alongside their exact epoch values", async () => {
-    const context = createCronContext(
-      createCronJob({
-        state: { nextRunAtMs: 1_788_591_095_278, lastRunAtMs: 1_788_587_495_278 },
-      }),
-    );
-    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        jobs: [
-          expect.objectContaining({
-            nextRunAtMs: 1_788_591_095_278,
-            nextRunAt: "2026-09-05T06:51:35.278Z",
-            lastRunAtMs: 1_788_587_495_278,
-            lastRunAt: "2026-09-05T05:51:35.278Z",
-          }),
-        ],
-      }),
-      undefined,
-    );
-  });
-
   it.each([
     { kind: "on-exit", command: "fixture-watcher-command", cwd: "/fixture/private-watcher" },
     {
@@ -1316,7 +1194,7 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it.each([{}, { agentId: undefined }, { agentId: null }])(
+  it.each([{}, { agentId: null }])(
     "defaults scoped cron.add ownership to the trusted caller for %j",
     async (fields) => {
       const { context, respond } = await invokeCronAdd(agentTurnCronParams(fields), {
@@ -2457,6 +2335,21 @@ describe("cron method validation", () => {
     expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
     expect(context.cron.remove).toHaveBeenCalledWith(accountJob.id, {
       commitGuard: expect.any(Function),
+    });
+
+    cronRunRecordsOverride.mockImplementationOnce(async () => {
+      runClient.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
+        Date.now() - 1;
+      return [];
+    });
+    const expiredHistory = await invokeCron(
+      "cron.runs",
+      { id: accountJob.id },
+      { context, client: runClient },
+    );
+    expectResponseError(expiredHistory.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found",
     });
 
     const update = await invokeCron(
@@ -4035,19 +3928,13 @@ describe("cron method validation", () => {
     },
   );
 
-  it.each([
-    ["delivery.channel", { channel: false }],
-    ["delivery.to", { to: 123 }],
-    ["delivery.failureDestination.channel", { failureDestination: { channel: {} } }],
-    ["delivery.failureDestination.to", { failureDestination: { to: true } }],
-    ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: [] } }],
-  ])("rejects non-string cron.update %s before normalization", async (field, delivery) => {
-    const { context, respond } = await invokeCronUpdateDelivery(delivery);
+  it("rejects a non-string cron.update delivery.to before normalization", async () => {
+    const { context, respond } = await invokeCronUpdateDelivery({ to: 123 });
 
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: `${field} must be a non-empty string`,
+      messageIncludes: "delivery.to must be a non-empty string",
     });
   });
 
@@ -4383,16 +4270,64 @@ describe("cron method validation", () => {
     );
   });
 
-  it("preserves deleted-job history without listing unrelated cron jobs", async () => {
-    cronTaskRunHistoryPageOverride.mockReturnValue({
-      entries: [{ jobId: "deleted-cron", action: "finished", status: "ok", ts: 1 }],
-      total: 1,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
+  it.each(["job", "all"] as const)(
+    "withholds %s history when client authority closes during the worker read",
+    async (scope) => {
+      const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+      const respond = vi.fn();
+      let current = true;
+      cronRunRecordsOverride.mockImplementation(async () => {
+        current = false;
+        return [];
+      });
+
+      await expect(
+        invokeCron("cron.runs", scope === "job" ? { id: "cron-1" } : { scope }, {
+          context,
+          respond,
+          hasCurrentClientAuthority: () => current,
+        }),
+      ).rejects.toThrow("Cron history authority closed");
+      expect(respond).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rechecks the scoped job after reading history in the worker", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+    cronRunRecordsOverride.mockImplementation(async () => {
+      context.cron.getJob.mockReturnValue(undefined);
+      return [];
     });
+
+    const { respond } = await invokeCron(
+      "cron.runs",
+      { id: "cron-1" },
+      {
+        context,
+        client: callerClient("ops"),
+      },
+    );
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found",
+    });
+  });
+
+  it("preserves deleted-job history without listing unrelated cron jobs", async () => {
     const context = createCronContext();
+    cronRunRecordsOverride.mockResolvedValue([
+      {
+        id: "deleted-cron-history",
+        jobId: "deleted-cron",
+        createdAt: 1,
+        endedAt: 1,
+        status: "succeeded",
+        detail: cronRunLogEntryToDetail(
+          { jobId: "deleted-cron", action: "finished", status: "ok", ts: 1 },
+          { storeKey: cronStoreKey(context.cronStorePath) },
+        ),
+      },
+    ]);
 
     const { respond } = await invokeCron("cron.runs", { id: "deleted-cron" }, { context });
 

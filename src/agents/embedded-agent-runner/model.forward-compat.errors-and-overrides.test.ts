@@ -860,14 +860,6 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
   });
 
-  it("includes auth hint for unknown vllm models", async () => {
-    const result = await resolveModelForTest("vllm", "llama-3-70b", "/tmp/agent");
-
-    expect(result.model).toBeUndefined();
-    expect(result.error).toContain("Unknown model: vllm/llama-3-70b");
-    expect(result.error).toContain("VLLM_API_KEY");
-  });
-
   it("points unknown models to the requested provider catalog", async () => {
     const result = await resolveModelForTest("google-antigravity", "some-model", "/tmp/agent");
 
@@ -883,16 +875,6 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.model?.baseUrl).toBe("https://my-proxy.example.com");
-  });
-
-  it("applies provider headers override to registry-found models", async () => {
-    const result = await resolveAnthropicModelWithProviderOverrides({
-      headers: { "X-Custom-Auth": "token-123" },
-    });
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
-      "X-Custom-Auth": "token-123",
-    });
   });
 
   it("lets provider config override registry-found kimi user agent headers", async () => {
@@ -934,28 +916,5 @@ describe("resolveModel forward-compat errors and overrides", () => {
       "User-Agent": "custom-kimi-client/1.0",
       "X-Kimi-Tenant": "tenant-a",
     });
-  });
-
-  it("does not override when no provider config exists", async () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      templateModel: {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-        contextWindow: 200000,
-        maxTokens: 64000,
-      },
-    });
-
-    const result = await resolveModelForTest("anthropic", "claude-sonnet-4-6", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 });

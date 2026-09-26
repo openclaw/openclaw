@@ -293,18 +293,20 @@ export async function loginChutes(params: {
     state,
     challenge,
   });
-
-  let codeAndState: { code: string; state: string };
-  if (params.manual) {
-    await params.onAuth({ url });
-    params.onProgress?.("Waiting for redirect URL...");
-    codeAndState = parseManualOAuthInput(
+  const promptForCode = async () =>
+    parseManualOAuthInput(
       await params.onPrompt({
         message: "Paste the redirect URL",
         placeholder: `${params.app.redirectUri}?code=...&state=...`,
       }),
       state,
     );
+
+  let codeAndState: { code: string; state: string };
+  if (params.manual) {
+    await params.onAuth({ url });
+    params.onProgress?.("Waiting for redirect URL...");
+    codeAndState = await promptForCode();
   } else {
     const redirect = parseRedirectUri(params.app.redirectUri);
     const callback = waitForLocalOAuthCallback({
@@ -322,13 +324,7 @@ export async function loginChutes(params: {
         throw error;
       }
       params.onProgress?.("OAuth callback not detected; paste redirect URL...");
-      return parseManualOAuthInput(
-        await params.onPrompt({
-          message: "Paste the redirect URL",
-          placeholder: `${params.app.redirectUri}?code=...&state=...`,
-        }),
-        state,
-      );
+      return await promptForCode();
     });
 
     await params.onAuth({ url });

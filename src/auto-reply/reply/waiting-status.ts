@@ -1,24 +1,18 @@
+import type { ReplyCompletion } from "../../agents/reply-completion.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 export function buildWaitingStatusPayload(params: {
-  yielded: boolean;
+  completion: ReplyCompletion;
   continuationPending?: boolean;
   yieldAcknowledgment?: string;
-  isInteractive: boolean;
-  isHeartbeat?: boolean;
-  silentExpected?: boolean;
-  isSubagentSession: boolean;
-  hasExplicitSilentReply: boolean;
+  yielded?: boolean;
   hasVisibleMessageDelivery: boolean;
 }): ReplyPayload | undefined {
   if (
+    params.completion.expectation !== "required" ||
+    params.completion.outcome !== "pending" ||
     (!params.yielded && !params.continuationPending) ||
-    !params.isInteractive ||
-    params.isHeartbeat === true ||
-    params.silentExpected === true ||
-    params.isSubagentSession ||
-    params.hasExplicitSilentReply ||
     params.hasVisibleMessageDelivery
   ) {
     return undefined;

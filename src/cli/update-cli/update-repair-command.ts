@@ -4,6 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -13,7 +14,7 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   inspectUpdateRepairDriverAdmission,
-  isUnacknowledgedAbandonedUpdateRun,
+  isFreshUnacknowledgedAbandonedUpdateRun,
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -23,6 +24,7 @@ import {
   recordUpdateRunRepairContinuation,
 } from "../../infra/update-run-ledger.js";
 import {
+  isAbandonedUpdateRun,
   isAcknowledgedAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
   type UpdateRunRecord,
@@ -32,6 +34,7 @@ import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
@@ -41,7 +44,6 @@ import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
   resolveTargetVersion,
-  tryResolveInvocationCwd,
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
@@ -62,12 +64,11 @@ function needsPostCoreRepair(run: UpdateRunRecord): boolean {
   );
 }
 
-function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], env: NodeJS.ProcessEnv) {
+function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], history: UpdateRunRecord[]) {
   if (!recoveryRuns.length) {
     return { postCoreRuns: [], incomplete: false };
   }
   const oldestRecovery = Math.min(...recoveryRuns.map((run) => run.createdAtMs));
-  const history = listUpdateRuns({ limit: 100 }, { env });
   const postCoreRuns = history.filter(
     (run) =>
       run.createdAtMs >= oldestRecovery &&
@@ -86,7 +87,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (timeoutMs === null) {
     return;
   }
-  const env = resolveServiceRefreshEnv(process.env, tryResolveInvocationCwd());
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
   assertConfigWriteAllowedInCurrentMode({ env });
   await assertOpenClawStateWriteAllowedAtPath({
@@ -100,18 +101,27 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
+  // Capture Doctor-visible history before finalization admits its own newer run.
+  // Terminal age limits the shortcut below, not successful repair acknowledgment.
+  const recentRuns = listUpdateRuns({ limit: 100 }, options);
+  const historicalRuns = recentRuns.filter(
+    (run) => isAbandonedUpdateRun(run) && !isAcknowledgedAbandonedUpdateRun(run),
+  );
   if (admission.kind === "continuation") {
     const continuation = admission.run;
     recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, options);
     await updateFinalizeCommand(
       opts,
-      activeRuns.filter((run) => run.runId !== continuation.runId).map((run) => run.runId),
+      [...activeRuns, ...historicalRuns]
+        .filter((run) => run.runId !== continuation.runId)
+        .map((run) => run.runId),
     );
     return;
   }
-  const lastRun = listUpdateRuns({ limit: 1 }, options)[0];
+  const lastRun = recentRuns[0];
   if (
     !activeRuns.length &&
+    !historicalRuns.length &&
     opts.channel === undefined &&
     !opts.acceptCapabilities &&
     lastRun &&
@@ -152,18 +162,21 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   }
   const recoveryRuns = activeRuns.length
     ? activeRuns
-    : lastRun && isUnacknowledgedAbandonedUpdateRun(lastRun)
+    : lastRun && isFreshUnacknowledgedAbandonedUpdateRun(lastRun)
       ? [lastRun]
       : [];
-  const history = inspectNewerRecoveryHistory(recoveryRuns, env);
+  const history = inspectNewerRecoveryHistory(recoveryRuns, recentRuns);
   const recoveryRunIds = [
-    ...new Set([...recoveryRuns, ...history.postCoreRuns].map((run) => run.runId)),
+    ...new Set(
+      [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
+    ),
   ];
 
   if (
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoveryRuns.length === 0 ||
+    recoveryRunIds.length !== recoveryRuns.length ||
     recoveryRuns.some(needsPostCoreRepair) ||
     history.postCoreRuns.length > 0 ||
     history.incomplete
@@ -217,14 +230,17 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (currentAdmission.kind === "conflict") {
     throw new Error(currentAdmission.message);
   }
-  const currentHistory = inspectNewerRecoveryHistory(recoveryRuns, env);
+  const currentHistory = inspectNewerRecoveryHistory(
+    recoveryRuns,
+    listUpdateRuns({ limit: 100 }, options),
+  );
   if (
     currentRuns.some(needsPostCoreRepair) ||
     currentHistory.postCoreRuns.length > 0 ||
     currentHistory.incomplete
   ) {
     throw new Error(
-      "Update repair needs post-core maintenance. Stop the Gateway service through its owner before retrying; repair will not stop or restart it.",
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
     );
   }
   const reconciled = activeRuns.length
@@ -236,17 +252,13 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (listUpdateRuns({ active: true, limit: 1 }, options).length) {
     throw new Error("An update is still in progress; retry update repair after it finishes.");
   }
-  for (const runId of new Set([...recoveryRuns, ...reconciled].map((run) => run.runId))) {
-    acknowledgeAbandonedUpdateRun(runId, options);
-  }
+  const acknowledged = recoveryRunIds.filter((runId) =>
+    acknowledgeAbandonedUpdateRun(runId, options),
+  );
   const message = reconciled.length
     ? `Gateway is healthy. Reconciled ${reconciled.length} abandoned update run${reconciled.length === 1 ? "" : "s"}. No maintenance or service restart was needed.`
     : "Gateway is healthy. Abandoned update runs are already reconciled. No maintenance or service restart was needed.";
-  reportRepairResult(
-    opts,
-    reconciled.map((run) => run.runId),
-    message,
-  );
+  reportRepairResult(opts, acknowledged, message);
 }
 
 function reportRepairResult(

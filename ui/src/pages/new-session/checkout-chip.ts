@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
@@ -124,6 +126,7 @@ export function resolveCheckoutChip(params: {
 }
 
 function renderWorktreeFields(params: {
+  idPrefix?: string;
   branches: DraftBranches | null;
   branchesLoading: boolean;
   baseRef: string;
@@ -179,13 +182,13 @@ function renderWorktreeFields(params: {
   const suggestions = (params.branches?.branches ?? []).slice(0, 8);
   const branchName = params.worktreeName.trim();
   const baseRefInput = html`<input
-    id="new-session-worktree-base-ref"
+    id=${(params.idPrefix ?? "new-session") + "-worktree-base-ref"}
     type="text"
     role=${suggestions.length ? "combobox" : nothing}
     aria-label=${t("newSession.worktreeBaseRef")}
     aria-autocomplete=${suggestions.length ? "list" : nothing}
-    aria-controls=${suggestions.length ? "new-session-worktree-branch-suggestions" : nothing}
-    aria-expanded="false"
+    aria-controls=${suggestions.length ? (params.idPrefix ?? "new-session") + "-worktree-branch-suggestions" : nothing}
+    aria-expanded=${suggestions.length ? "false" : nothing}
     ?disabled=${params.submitting || params.pendingPlacement}
     placeholder=${
       params.branchesLoading
@@ -226,18 +229,19 @@ function renderWorktreeFields(params: {
               ${baseRefInput}
               <wa-popup
                 class="new-session-page__branch-popup"
-                anchor="new-session-worktree-base-ref"
+                anchor=${(params.idPrefix ?? "new-session") + "-worktree-base-ref"}
                 placement="bottom-start"
                 sync="width"
               >
                 <div
-                  id="new-session-worktree-branch-suggestions"
+                  id=${(params.idPrefix ?? "new-session") + "-worktree-branch-suggestions"}
                   class="new-session-page__branch-suggestions"
                   role="listbox"
+                  aria-label=${t("newSession.worktreeBaseRef")}
                 >
                   ${suggestions.map(
                     (branch, index) => html`<button
-                      id=${`new-session-worktree-branch-suggestion-${index}`}
+                      id=${`${params.idPrefix ?? "new-session"}-worktree-branch-suggestion-${index}`}
                       type="button"
                       role="option"
                       aria-selected="false"
@@ -300,6 +304,7 @@ function renderWorktreeFields(params: {
 }
 
 export function renderCheckoutChip(params: {
+  idPrefix?: string;
   state: CheckoutChipState;
   remotePlacement: boolean;
   repository?: boolean;
@@ -327,7 +332,7 @@ export function renderCheckoutChip(params: {
   return html`
     <span class="new-session-page__select">
       <button
-        id="new-session-checkout-trigger"
+        id=${(params.idPrefix ?? "new-session") + "-checkout-trigger"}
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -355,8 +360,9 @@ export function renderCheckoutChip(params: {
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__checkout-popover new-session-page__picker-popover"
-      for="new-session-checkout-trigger"
+      for=${(params.idPrefix ?? "new-session") + "-checkout-trigger"}
       placement="bottom-start"
       without-arrow
       @wa-show=${(event: Event) => {

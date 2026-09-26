@@ -129,6 +129,26 @@ type MovePendingDeliveryQueueEntryNamespaceParams = {
   retainSourceCompletionFence?: boolean;
 };
 
+function matchesPendingDeliveryQueueEntry(
+  database: OpenClawStateDatabase,
+  queueName: string,
+  expectedEntry: DeliveryQueueEntryState,
+): boolean {
+  const source = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getNodeSqliteKysely<DeliveryQueueDatabase>(database.db)
+      .selectFrom("delivery_queue_entries")
+      .select(["entry_json", "status"])
+      .where("queue_name", "=", queueName)
+      .where("id", "=", expectedEntry.id),
+  );
+  return (
+    source != null &&
+    source.status === "pending" &&
+    source.entry_json === JSON.stringify(expectedEntry)
+  );
+}
+
 /** Replaces a pending entry only while its authoritative serialized value is unchanged. */
 export function replacePendingDeliveryQueueEntryInDatabase(
   database: OpenClawStateDatabase,
@@ -146,20 +166,7 @@ export function replacePendingDeliveryQueueEntryInDatabase(
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-      const source = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select(["entry_json", "status"])
-          .where("queue_name", "=", params.queueName)
-          .where("id", "=", params.expectedEntry.id),
-      );
-      if (
-        !source ||
-        source.status !== "pending" ||
-        source.entry_json !== JSON.stringify(params.expectedEntry)
-      ) {
+      if (!matchesPendingDeliveryQueueEntry(database, params.queueName, params.expectedEntry)) {
         return false;
       }
       return upsertDeliveryQueueEntryInDatabase(
@@ -189,20 +196,7 @@ export function completePendingDeliveryQueueEntryInDatabase(
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-      const source = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select(["entry_json", "status"])
-          .where("queue_name", "=", params.queueName)
-          .where("id", "=", params.expectedEntry.id),
-      );
-      if (
-        !source ||
-        source.status !== "pending" ||
-        source.entry_json !== JSON.stringify(params.expectedEntry)
-      ) {
+      if (!matchesPendingDeliveryQueueEntry(database, params.queueName, params.expectedEntry)) {
         return false;
       }
       completeDeliveryQueueEntryInDatabase(database, params.queueName, params.expectedEntry.id);
@@ -227,18 +221,12 @@ export function movePendingDeliveryQueueEntryNamespaceInDatabase(
     database.db,
     () => {
       const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-      const source = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select(["entry_json", "status"])
-          .where("queue_name", "=", params.sourceQueueName)
-          .where("id", "=", params.expectedSourceEntry.id),
-      );
       if (
-        !source ||
-        source.status !== "pending" ||
-        source.entry_json !== JSON.stringify(params.expectedSourceEntry)
+        !matchesPendingDeliveryQueueEntry(
+          database,
+          params.sourceQueueName,
+          params.expectedSourceEntry,
+        )
       ) {
         return "source-changed";
       }

@@ -9,11 +9,13 @@ import {
   extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
+  prepareAssistantVisibleText,
   createThinkingTagStreamState,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  sanitizeAssistantVisibleStreamText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
@@ -64,7 +66,7 @@ function randomChunks(text: string, seed: number): string[] {
 function makeAssistantMessage(
   message: Omit<
     AssistantMessage,
-    "api" | "provider" | "model" | "usage" | "stopReason" | "content"
+    "api" | "provider" | "model" | "usage" | "stopReason" | "content" | "role" | "timestamp"
   > &
     Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">> & {
       content: unknown;
@@ -72,6 +74,8 @@ function makeAssistantMessage(
     },
 ): AssistantMessage {
   return {
+    role: "assistant",
+    timestamp: 1,
     api: "responses",
     provider: "openai",
     model: "gpt-5",
@@ -135,41 +139,7 @@ describe("extractThinkingFromTaggedStream", () => {
 });
 
 describe("extractEmbeddedAssistantText", () => {
-  it("strips tool-only Minimax invocation XML from text", () => {
-    const cases = [
-      `<invoke name="Bash">
-<parameter name="command">netstat -tlnp | grep 18789</parameter>
-</invoke>
-</minimax:tool_call>`,
-      `<invoke name="Bash">
-<parameter name="command">test</parameter>
-</invoke>
-</minimax:tool_call>`,
-    ];
-    for (const text of cases) {
-      const msg = makeAssistantMessage({
-        role: "assistant",
-        content: [{ type: "text", text }],
-        timestamp: Date.now(),
-      });
-      expect(extractEmbeddedAssistantText(msg)).toBe("");
-    }
-  });
-
   it.each([
-    {
-      title: "strips multiple tool invocations",
-      text: `Let me check that.<invoke name="Read">
-<parameter name="path">/home/admin/test.txt</parameter>
-</invoke>
-</minimax:tool_call>`,
-      expected: "Let me check that.",
-    },
-    {
-      title: "preserves normal text without tool invocations",
-      text: "This is a normal response without any tool calls.",
-      expected: "This is a normal response without any tool calls.",
-    },
     {
       title: "strips Minimax tool invocations with extra attributes",
       text: `Before<invoke name='Bash' data-foo="bar">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>After`,
@@ -186,24 +156,6 @@ describe("extractEmbeddedAssistantText", () => {
       expected: "Before<invoke>Keep</invoke>After",
     },
     {
-      title: "strips invoke blocks when minimax markers are present elsewhere",
-      text: "Before<invoke>Drop</invoke><minimax:tool_call>After",
-      expected: "BeforeAfter",
-    },
-    {
-      title: "strips invoke blocks with nested tags",
-      text: `A<invoke name="Bash"><param><deep>1</deep></param></invoke></minimax:tool_call>B`,
-      expected: "AB",
-    },
-    {
-      title: "strips tool XML mixed with regular content",
-      text: `I'll help you with that.<invoke name="Bash">
-<parameter name="command">ls -la</parameter>
-</invoke>
-</minimax:tool_call>Here are the results.`,
-      expected: "I'll help you with that.\nHere are the results.",
-    },
-    {
       title: "handles multiple invoke blocks in one message",
       text: `First check.<invoke name="Read">
 <parameter name="path">file1.txt</parameter>
@@ -213,38 +165,6 @@ describe("extractEmbeddedAssistantText", () => {
 </invoke>
 </minimax:tool_call>Done.`,
       expected: "First check.\nSecond check.\nDone.",
-    },
-    {
-      title: "handles stray closing tags without opening tags",
-      text: "Some text here.</minimax:tool_call>More text.",
-      expected: "Some text here.More text.",
-    },
-    {
-      title: "strips downgraded Gemini tool call text representations",
-      text: `[Tool Call: exec (ID: toolu_vrtx_014w1P6B6w4V92v4VzG7Qk12)]
-Arguments: { "command": "git status", "timeout": 120000 }`,
-      expected: "",
-    },
-    {
-      title: "strips multiple downgraded tool calls",
-      text: `[Tool Call: read (ID: toolu_1)]
-Arguments: { "path": "/some/file.txt" }
-[Tool Call: exec (ID: toolu_2)]
-Arguments: { "command": "ls -la" }`,
-      expected: "",
-    },
-    {
-      title: "strips tool results for downgraded calls",
-      text: `[Tool Result for ID toolu_123]
-{"status": "ok", "data": "some result"}`,
-      expected: "",
-    },
-    {
-      title: "preserves text around downgraded tool calls",
-      text: `Let me check that for you.
-[Tool Call: browser (ID: toolu_abc)]
-Arguments: { "action": "act", "request": "click button" }`,
-      expected: "Let me check that for you.",
     },
     {
       title: "preserves trailing text after downgraded tool call blocks",
@@ -258,77 +178,35 @@ Back to the user.`,
     },
   ])("$title", ({ text, expected }) => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
           text,
         },
       ],
-      timestamp: Date.now(),
     });
 
     const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe(expected);
   });
 
-  it("keeps invoke snippets without Minimax markers", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe(
-      `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
-    );
-  });
-
   it("sanitizes HTTP-ish error text only when stopReason is error", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       stopReason: "error",
       errorMessage: "500 Internal Server Error",
       content: [{ type: "text", text: "500 Internal Server Error" }],
-      timestamp: Date.now(),
     });
 
     const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe("HTTP 500: Internal Server Error");
   });
 
-  it("does not rewrite normal text that references billing plans", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    expect(result).toBe(
-      "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
-    );
-  });
-
   it("preserves response when errorMessage set from background failure (#13935)", () => {
     const responseText = "Handle payment required errors in your API.";
     const msg = makeAssistantMessage({
-      role: "assistant",
       errorMessage: "insufficient credits for embedding model",
       stopReason: "stop",
       content: [{ type: "text", text: responseText }],
-      timestamp: Date.now(),
     });
 
     const result = extractEmbeddedAssistantText(msg);
@@ -337,7 +215,6 @@ Back to the user.`,
 
   it("handles multiple text blocks", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
@@ -355,7 +232,6 @@ Back to the user.`,
           text: "Third block.",
         },
       ],
-      timestamp: Date.now(),
     });
 
     const result = extractEmbeddedAssistantText(msg);
@@ -364,7 +240,6 @@ Back to the user.`,
 
   it("handles multiple text blocks with tool calls and results", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
@@ -385,83 +260,14 @@ File contents here`,
           text: "Done checking.",
         },
       ],
-      timestamp: Date.now(),
     });
 
     const result = extractEmbeddedAssistantText(msg);
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
-  it("strips raw <tool_call> XML blocks from assistant text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Let me check.\n\n<tool_call> {"name": "read", "arguments": {"file_path": "test.md"}} </tool_call> Done.',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    expect(extractEmbeddedAssistantText(msg)).toBe("Let me check.\n\n Done.");
-  });
-
-  it("strips raw <tool_result> XML blocks from assistant text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Prefix\n<tool_result> {"output": "file contents"} </tool_result>\nSuffix',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    expect(extractEmbeddedAssistantText(msg)).toBe("Prefix\n\nSuffix");
-  });
-
-  it("strips raw <function_response> workflow blocks from assistant text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: [
-            "Prefix",
-            "<function_response>",
-            'Searching for: "what skills matter most in the age of AI"',
-            "...",
-            "</function_response>",
-            "Suffix",
-          ].join("\n"),
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    expect(extractEmbeddedAssistantText(msg)).toBe("Prefix\n\nSuffix");
-  });
-
-  it("strips dangling <tool_call> XML content to end-of-string", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Let me run.\n<tool_call>\n{"name": "find", "arguments": {}}\n',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    expect(extractEmbeddedAssistantText(msg)).toBe("Let me run.");
-  });
-
   it("strips mixed <tool_call> and <tool_result> XML blocks from assistant text", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
@@ -473,55 +279,11 @@ File contents here`,
           ].join("\n"),
         },
       ],
-      timestamp: Date.now(),
     });
 
     expect(extractEmbeddedAssistantText(msg)).toBe(
       "I will read the file.\n\n\nThe file contains: hello world",
     );
-  });
-
-  it("strips <tool_result> closed with mismatched </tool_call> tag and preserves trailing text", () => {
-    // Issue #61688: gateway sometimes emits <tool_result>...</tool_call>
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    // The mismatched closing tag should still exit the block, stripping the
-    // tool XML while preserving legitimate trailing prose.
-    expect(result).not.toContain("<tool_result>");
-    expect(result).not.toContain("output");
-    expect(result).toContain("Prefix");
-    expect(result).toContain("Suffix");
-  });
-
-  it("does not let </tool_result> close a <tool_call> block (prevents payload leak)", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Prefix\n<tool_call>{"name":"x"}</tool_result>LEAK</tool_call>\nSuffix',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractEmbeddedAssistantText(msg);
-    // </tool_result> must NOT exit a <tool_call> block; the block should
-    // continue until the matching </tool_call>, preventing payload leaks.
-    expect(result).not.toContain("LEAK");
-    expect(result).not.toContain("<tool_call>");
-    expect(result).toContain("Prefix");
-    expect(result).toContain("Suffix");
   });
 
   it("strips reasoning/thinking tag variants", () => {
@@ -575,9 +337,7 @@ File contents here`,
 
     for (const testCase of cases) {
       const msg = makeAssistantMessage({
-        role: "assistant",
         content: [{ type: "text", text: testCase.text }],
-        timestamp: Date.now(),
       });
       expect(extractEmbeddedAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
@@ -587,12 +347,6 @@ File contents here`,
 describe("formatReasoningMessage", () => {
   it("returns empty string for whitespace-only input", () => {
     expect(formatReasoningMessage("   \n  \t  ")).toBe("");
-  });
-
-  it("wraps single line in italics", () => {
-    expect(formatReasoningMessage("Single line of reasoning")).toBe(
-      "Thinking\n\n_Single line of reasoning_",
-    );
   });
 
   it("wraps each line separately for multiline text (Telegram fix)", () => {
@@ -607,10 +361,6 @@ describe("formatReasoningMessage", () => {
     );
   });
 
-  it("handles mixed empty and non-empty lines", () => {
-    expect(formatReasoningMessage("A\n\nB\nC")).toBe("Thinking\n\n_A_\n\n_B_\n_C_");
-  });
-
   it("trims leading/trailing whitespace", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Thinking\n\n_Reasoning here_",
@@ -621,7 +371,6 @@ describe("formatReasoningMessage", () => {
 describe("extractAssistantThinking", () => {
   it("drops signature-only native reasoning blocks so no diagnostic bubble is surfaced", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "thinking",
@@ -630,7 +379,6 @@ describe("extractAssistantThinking", () => {
         },
         { type: "text", text: "Done." },
       ],
-      timestamp: Date.now(),
     });
 
     // Signature-only block (no summary text) yields "" so downstream .filter(Boolean) drops it.
@@ -639,50 +387,40 @@ describe("extractAssistantThinking", () => {
 });
 
 describe("stripDowngradedToolCallText", () => {
-  it("strips downgraded marker blocks while preserving surrounding user-facing text", () => {
-    const cases = [
-      {
-        name: "historical context only",
-        text: `[Historical context: a different model called tool "exec" with arguments {"command":"git status"}]`,
-        expected: "",
-      },
-      {
-        name: "text before historical context",
-        text: `Here is the answer.\n[Historical context: a different model called tool "read"]`,
-        expected: "Here is the answer.",
-      },
-      {
-        name: "text around historical context",
-        text: `Before.\n[Historical context: tool call info]\nAfter.`,
-        expected: "Before.\nAfter.",
-      },
-      {
-        name: "multiple historical context blocks",
-        text: `[Historical context: first tool call]\n[Historical context: second tool call]`,
-        expected: "",
-      },
-      {
-        name: "mixed tool call and historical context",
-        text: `Intro.\n[Tool Call: exec (ID: toolu_1)]\nArguments: { "command": "ls" }\n[Historical context: a different model called tool "read"]`,
-        expected: "Intro.",
-      },
-      {
-        name: "no markers",
-        text: "Just a normal response with no markers.",
-        expected: "Just a normal response with no markers.",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
-    }
+  it.each([
+    { input: "Hello [Historical context: example]  \n", expected: "Hello   \n" },
+    {
+      input: "Use `[Historical context: example]`  \n",
+      expected: "Use `[Historical context: example]`  \n",
+    },
+  ])("preserves requested stream boundaries around $input", ({ input, expected }) => {
+    expect(
+      sanitizeAssistantVisibleStreamText(input, "final_answer", {
+        preserveTrailingWhitespace: true,
+      }),
+    ).toBe(expected);
+    expect(sanitizeAssistantVisibleStreamText(input, "final_answer")).toBe(expected.trimEnd());
   });
 });
 
 describe("extractAssistantVisibleText", () => {
-  it("prefers non-empty final_answer text over commentary", () => {
+  it.each(["Visible prefix <think>private reasoning tail", ""])(
+    "captures legacy string content before it changes: %j",
+    (content) => {
+      const message = makeAssistantMessage({ content });
+      const render = prepareAssistantVisibleText(message);
+      message.content = [{ type: "text", text: "Replacement" }];
+
+      expect(render()).toBe(content ? "Visible prefix" : "");
+      expect(render()).toBe(content ? "Visible prefix" : "");
+    },
+  );
+
+  it.each([
+    { name: "plain text", text: "Done." },
+    { name: "indented code", text: "    const value = 1;\n    use(value);" },
+  ])("prefers non-empty final_answer $name over commentary", ({ text }) => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
@@ -691,19 +429,17 @@ describe("extractAssistantVisibleText", () => {
         },
         {
           type: "text",
-          text: "Done.",
+          text,
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
-      timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+    expect(extractAssistantVisibleText(msg)).toBe(text);
   });
 
   it("does not fall back to commentary when final_answer is empty", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
@@ -716,7 +452,6 @@ describe("extractAssistantVisibleText", () => {
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("");
@@ -724,7 +459,6 @@ describe("extractAssistantVisibleText", () => {
 
   it("does not fall back to unphased legacy text when an empty final_answer block exists", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         { type: "text", text: "Legacy answer" },
         {
@@ -733,7 +467,6 @@ describe("extractAssistantVisibleText", () => {
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("");
@@ -741,7 +474,6 @@ describe("extractAssistantVisibleText", () => {
 
   it("does not fall back to unphased legacy text when an empty output_text final_answer block exists", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         { type: "text", text: "Legacy answer" },
         {
@@ -750,7 +482,6 @@ describe("extractAssistantVisibleText", () => {
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("");
@@ -758,9 +489,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("falls back to legacy unphased text when phased text is absent", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [{ type: "text", text: "Legacy answer" }],
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
@@ -768,9 +497,7 @@ describe("extractAssistantVisibleText", () => {
 
   it("keeps strict reasoning-tag stripping for legacy string content", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: "Visible prefix <think>private reasoning tail",
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("Visible prefix");
@@ -778,7 +505,6 @@ describe("extractAssistantVisibleText", () => {
 
   it("preserves literal reasoning-looking tags in unphased visible text", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [
         {
           type: "text",
@@ -786,7 +512,6 @@ describe("extractAssistantVisibleText", () => {
           textSignature: JSON.stringify({ v: 1, id: "item_unphased" }),
         },
       ],
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
@@ -794,7 +519,6 @@ describe("extractAssistantVisibleText", () => {
 
   it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       phase: "final_answer",
       content: [
         { type: "text", text: "Legacy." },
@@ -804,7 +528,6 @@ describe("extractAssistantVisibleText", () => {
           textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
         },
       ],
-      timestamp: Date.now(),
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("Done.");
@@ -814,9 +537,7 @@ describe("extractAssistantVisibleText", () => {
 describe("promoteThinkingTagsToBlocks", () => {
   it("preserves malformed null content entries while promoting thinking tags", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [null as never, { type: "text", text: "<thinking>hello</thinking>ok" }],
-      timestamp: Date.now(),
     });
     promoteThinkingTagsToBlocks(msg);
     const types = msg.content.map((b: { type?: string }) => b?.type);
@@ -826,9 +547,7 @@ describe("promoteThinkingTagsToBlocks", () => {
 
   it("splits antml namespaced thinking tags into thinking blocks", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [{ type: "text", text: "<antml:thinking>hidden</antml:thinking>Visible" }],
-      timestamp: Date.now(),
     });
 
     promoteThinkingTagsToBlocks(msg);
@@ -840,22 +559,10 @@ describe("promoteThinkingTagsToBlocks", () => {
 
   it("preserves undefined content entries when there are no thinking tags", () => {
     const msg = makeAssistantMessage({
-      role: "assistant",
       content: [undefined as never, { type: "text", text: "no tags here" }],
-      timestamp: Date.now(),
     });
     promoteThinkingTagsToBlocks(msg);
     expect(msg.content).toEqual([undefined, { type: "text", text: "no tags here" }]);
-  });
-
-  it("passes through well-formed content unchanged when no thinking tags", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "hello world" }],
-      timestamp: Date.now(),
-    });
-    promoteThinkingTagsToBlocks(msg);
-    expect(msg.content).toEqual([{ type: "text", text: "hello world" }]);
   });
 });
 

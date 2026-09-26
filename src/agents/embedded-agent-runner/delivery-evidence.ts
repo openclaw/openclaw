@@ -2,9 +2,17 @@ import {
   asOptionalObjectRecord,
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalLowercaseString as normalizeEvidenceStatus,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeSingleOrTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
+import type { ReplyDeliveryState } from "../reply-completion.js";
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
 export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
 
@@ -37,6 +45,7 @@ export type AgentDeliveryEvidence = {
   successfulCronAdds?: unknown;
   meta?: {
     yielded?: unknown;
+    continuationPending?: unknown;
     error?: unknown;
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
@@ -47,6 +56,8 @@ export type AgentDeliveryEvidence = {
 };
 
 type SourceReplyDeliveryEvidence = {
+  sourceReplyDelivered?: unknown;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   didDeliverSourceReplyViaMessageTool?: unknown;
   messagingToolSourceReplyPayloads?: unknown;
 };
@@ -81,10 +92,23 @@ export function resolveExplicitFinalSourceReplyDeliveryEvidence(
 export function hasCompletedSourceReplyDeliveryEvidence(
   result: SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
 ): boolean {
-  return (
-    resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
-    hasCommittedSourceReplyDeliveryEvidence(result)
-  );
+  return resolveSourceReplyDelivery(result) === "delivered";
+}
+
+/** Only a final reply to this input's source can satisfy its reply requirement. */
+export function resolveSourceReplyDelivery(
+  result: SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+  observedDelivery: ReplyDeliveryState = "missing",
+): ReplyDeliveryState {
+  if (result.sourceReplyDeliveryState !== undefined) {
+    return result.sourceReplyDeliveryState === "missing" || observedDelivery === "delivered"
+      ? observedDelivery
+      : result.sourceReplyDeliveryState;
+  }
+  return (resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
+    (result.sourceReplyDelivered === true || hasCommittedSourceReplyDeliveryEvidence(result)))
+    ? "delivered"
+    : observedDelivery;
 }
 
 /** Returns whether messaging-tool evidence completes the current source reply. */
@@ -94,18 +118,6 @@ export function hasCompletedMessagingToolDeliveryEvidence(
   return (
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
     hasMessagingToolDeliveryEvidence(result)
-  );
-}
-
-/** Returns whether delivery evidence completes the current interactive turn. */
-export function hasCompletedTerminalDeliveryEvidence(
-  result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
-): boolean {
-  const explicitFinal = resolveExplicitFinalSourceReplyDeliveryEvidence(result);
-  return (
-    hasCompletedSourceReplyDeliveryEvidence(result) ||
-    (explicitFinal === undefined && hasVisibleOutboundDeliveryEvidence(result)) ||
-    result.didSendDeterministicApprovalPrompt === true
   );
 }
 
@@ -120,18 +132,6 @@ function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
         return hasNonEmptyString(spawn?.runId) && hasNonEmptyString(spawn?.childSessionKey);
       })
     : false;
-}
-
-function collectStringValues(value: unknown, output: Set<string>) {
-  if (typeof value === "string" && value.trim()) {
-    output.add(value.trim());
-  } else if (Array.isArray(value)) {
-    value.filter(hasNonEmptyString).forEach((entry) => output.add(entry.trim()));
-  }
-}
-
-function normalizeEvidenceStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined;
 }
 
 function hasVisibleMessagingToolTarget(value: unknown): boolean {
@@ -181,8 +181,7 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
-  const urls = new Set<string>();
-  collectStringValues(result.messagingToolSentMediaUrls, urls);
+  const urls = new Set(normalizeSingleOrTrimmedStringList(result.messagingToolSentMediaUrls));
   for (const url of collectPayloadMediaUrls(result.messagingToolSentTargets)) {
     urls.add(url);
   }
@@ -399,12 +398,6 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-function collectNonEmptyStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []))
-    : [];
-}
-
 function hasUnaccountedStrings(aggregate: string[], accounted: string[]): boolean {
   const remaining = new Map<string, number>();
   for (const value of accounted) {
@@ -415,11 +408,7 @@ function hasUnaccountedStrings(aggregate: string[], accounted: string[]): boolea
     if (count === 0) {
       return true;
     }
-    if (count === 1) {
-      remaining.delete(value);
-    } else {
-      remaining.set(value, count - 1);
-    }
+    remaining.set(value, count - 1);
   }
   return false;
 }
@@ -440,13 +429,13 @@ export function hasUnaccountedMessagingToolAggregateEvidence(
         return record && hasNonEmptyString(record.to) ? [record] : [];
       })
     : [];
-  const aggregateTexts = collectNonEmptyStringArray(result.messagingToolSentTexts);
-  const aggregateMediaUrls = collectNonEmptyStringArray(result.messagingToolSentMediaUrls);
+  const aggregateTexts = normalizeTrimmedStringList(result.messagingToolSentTexts);
+  const aggregateMediaUrls = normalizeTrimmedStringList(result.messagingToolSentMediaUrls);
   const accountedTexts = routeCheckableTargets.flatMap((target) =>
     typeof target.text === "string" && target.text.trim() ? [target.text.trim()] : [],
   );
   const accountedMediaUrls = routeCheckableTargets.flatMap((target) =>
-    collectNonEmptyStringArray(target.mediaUrls),
+    normalizeTrimmedStringList(target.mediaUrls),
   );
   if (
     hasUnaccountedStrings(aggregateTexts, accountedTexts) ||

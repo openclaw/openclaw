@@ -3,6 +3,7 @@ import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
+import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
   decodeGitHubPathSegment,
   parseGitHubItemPath,
@@ -24,7 +25,7 @@ import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
@@ -48,11 +49,6 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // generated label exactly like linkify output.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
-
-function isGitHubHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return host === "github.com" || host === "www.github.com";
-}
 
 // Inline-code file links are rendered by the code_inline rule, which runs after
 // every core rule. The core rule therefore parks the resolved target here so the
@@ -132,14 +128,20 @@ function formatGitHubLinkLabel(url: URL): string {
   if (segments.length === 2) {
     return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
   }
-  if (segments[2] === "blob" && segments.length > 4) {
-    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
-    if (filename) {
-      return filename;
+  if ((segments[2] === "blob" || segments[2] === "tree") && segments.length > 4) {
+    const basename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (basename) {
+      // Tree URLs can contain slash-separated refs, not just folder paths.
+      // Show the omission rather than presenting the suffix as a folder name.
+      return segments[2] === "tree"
+        ? `${segments
+            .slice(0, 2)
+            .map((segment) => decodeGitHubPathSegment(segment) ?? segment)
+            .join("/")}/…/${basename}`
+        : basename;
     }
   }
-  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
-  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
   return ["github.com", ...path].join("/");
 }
 
@@ -152,8 +154,6 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.use(markdownItCjkFriendly);
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
-  // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
-  // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
@@ -162,13 +162,6 @@ export function createMarkdownParser(): MarkdownItParser {
   // Disable fuzzy link detection to prevent bare filenames like "README.md"
   // from being auto-linked as "http://README.md". URLs with explicit protocol
   // (https://...) and emails are still linkified.
-  //
-  // Alternative considered: extensions/matrix/src/matrix/format.ts uses fuzzyLink
-  // with a file-extension blocklist to filter false positives at render time.
-  // We chose the www-only approach instead because:
-  // 1. Matches original marked.js GFM behavior exactly (bare domains were never linked)
-  // 2. No blocklist to maintain — new TLDs like .ai, .io, .dev would need constant updates
-  // 3. Predictable behavior — users can always use explicit https:// for any URL
   markdownParser.linkify.set({ fuzzyLink: false });
 
   // Re-enable www. prefix detection per GFM spec: bare URLs without protocol
@@ -190,10 +183,6 @@ export function createMarkdownParser(): MarkdownItParser {
       }
       let length = match[0].length;
 
-      // Strip trailing punctuation per GFM extended autolink spec.
-      // GFM says: ?, !, ., ,, :, *, _, ~ are not part of the autolink if trailing.
-
-      // Balance checking config: closeChar -> openChar mapping.
       // Strip trailing close chars only when unbalanced (more closes than opens).
       // For self-matching pairs like "", open === close (strip if odd count).
       const balancePairs: Record<string, string> = {
@@ -212,7 +201,6 @@ export function createMarkdownParser(): MarkdownItParser {
         for (let index = 0; index < length; index++) {
           const character = tail.charAt(index);
           if (open === close) {
-            // Self-matching pair (e.g., "") — toggle between 0 and 1
             if (character === open) {
               balance[close] = balance[close] === 0 ? 1 : 0;
             }
@@ -226,7 +214,6 @@ export function createMarkdownParser(): MarkdownItParser {
 
       while (length > 0) {
         const character = tail.charAt(length - 1);
-        // GFM trailing punctuation: ?, !, ., ,, :, *, _, ~ stripped unconditionally.
         if (/[?!.,:*_~]/.test(character)) {
           length--;
           continue;
@@ -243,10 +230,8 @@ export function createMarkdownParser(): MarkdownItParser {
             length = index;
             continue;
           }
-          // Not an entity reference, stop stripping
           break;
         }
-        // Handle balanced pairs — only strip close char if unbalanced.
         const open = balancePairs[character];
         if (open !== undefined) {
           if (open === character) {
@@ -333,7 +318,6 @@ export function createMarkdownParser(): MarkdownItParser {
         if (cjkIndex <= 0 || cjkIndex === displayText.length) {
           continue;
         }
-        // Split: URL part and CJK tail from display text
         const trimmedDisplay = displayText.slice(0, cjkIndex);
         const cjkTail = displayText.slice(cjkIndex);
         // Rebuild href by preserving the scheme prefix that linkify added but
@@ -343,7 +327,6 @@ export function createMarkdownParser(): MarkdownItParser {
         const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
         token.attrSet("href", hrefPrefix + trimmedDisplay);
         textToken.content = trimmedDisplay;
-        // Find link_close and insert CJK text after it
         for (let closeIndex = index + 1; closeIndex < children.length; closeIndex++) {
           if (children[closeIndex]?.type === "link_close") {
             const tailToken = new state.Token("text", "", 0);
@@ -514,7 +497,7 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  installMarkdownSessionLinks(markdownParser, SESSION_LINK_SCAN_RE);
+  installMarkdownSessionLinks(markdownParser);
 
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
@@ -728,7 +711,6 @@ export function createMarkdownParser(): MarkdownItParser {
       ? `<div class="markdown-mermaid">${code}</div>`
       : code;
   };
-  // Override indented code blocks (code_block) with the same treatment as fence
   markdownParser.renderer.rules.code_block = (tokens, index, _options, env) => {
     const content = tokens[index]?.content;
     if (content === undefined) {

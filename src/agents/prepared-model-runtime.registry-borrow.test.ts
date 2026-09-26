@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -15,6 +16,8 @@ import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { loadPreparedInboundPluginRegistry } from "./prepared-model-runtime.inbound-registry.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -94,6 +97,50 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
 }
 
 describe("prepared registry construction borrows", () => {
+  it("retires a prepared registry after its borrowing request scope has closed", async () => {
+    const caller = new AsyncWorkScope();
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "late-catalog-lease", status: "loaded" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const entered = createDeferred();
+    const finish = createDeferred();
+    const cleaned = vi.fn();
+    instance.lifecycle.onDispose(async () => {
+      entered.resolve();
+      await finish.promise;
+      cleaned();
+    });
+    const borrower = await caller.track(() => {
+      const release = retainPreparedPluginRegistry(registry);
+      expect(release).toBeDefined();
+      return { release: release!, run: AsyncLocalStorage.snapshot() };
+    });
+    await caller.drain();
+    let retired = false;
+    const closing = borrower
+      .run(async () => {
+        await borrower.release();
+      })
+      .then(() => {
+        retired = true;
+      });
+    void closing.catch(() => {});
+    try {
+      await Promise.race([entered.promise, closing]);
+      expect(retired).toBe(false);
+      finish.resolve();
+      await closing;
+      expect(cleaned).toHaveBeenCalledOnce();
+      expect(retired).toBe(true);
+      await expect(caller.track(() => undefined)).rejects.toThrow("Async work scope is closed");
+      expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+    } finally {
+      finish.resolve();
+      await closing.catch(() => {});
+    }
+  });
+
   it("reacquires a refused source and rejects admission after construction closes", async () => {
     const { registry, borrower, instance } = await acquireConfiguredRegistryBorrower();
     const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
@@ -103,9 +150,10 @@ describe("prepared registry construction borrows", () => {
       expect(() => construction.retainRegistry(registry)).toThrow("replacement is in progress");
       releaseReplacement();
       construction.retainRegistry(registry);
-      expect(() => instance.reserveReplacement()()).toThrow("active retained work");
-      await construction[Symbol.asyncDispose]();
       instance.reserveReplacement()();
+      expect(instance.retainedWorkCount).toBeGreaterThan(0);
+      await construction[Symbol.asyncDispose]();
+      expect(instance.retainedWorkCount).toBe(0);
       expect(() => construction.retainRegistry(registry)).toThrow(
         "construction resources have been released",
       );
@@ -155,10 +203,13 @@ describe("prepared registry construction borrows", () => {
       markPreparedModelRuntimeSnapshotsStale("configuration replaced during run admission");
       await borrower[Symbol.asyncDispose]();
       expect(isPluginRegistryRetired(registry)).toBe(false);
-      expect(() => instance.reserveReplacement()()).toThrow("active retained work");
+      instance.reserveReplacement()();
+      expect(instance.retainedWorkCount).toBeGreaterThan(0);
       finishInspection.resolve();
       await expect(pending).rejects.toThrow("superseded");
+      await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
       expect(isPluginRegistryRetired(registry)).toBe(true);
+      expect(instance.retainedWorkCount).toBe(0);
     } finally {
       finishInspection.resolve();
       const [outcome] = await settled;
@@ -194,14 +245,15 @@ describe("prepared registry construction borrows", () => {
       ]);
       await borrower[Symbol.asyncDispose]();
       // The build still uses this registry after the final admitted caller releases it.
-      expect(() => instance.reserveReplacement()()).toThrow("active retained work");
+      instance.reserveReplacement()();
+      expect(instance.retainedWorkCount).toBeGreaterThan(0);
       finishPreparation.resolve();
       await replacement;
       const published = await prepareModelRuntimeSnapshot(input);
       expect(published).not.toBe(borrower.snapshot);
       expect(published.pluginRegistry).toBe(registry);
       expect(published.config).toBe(config);
-      instance.reserveReplacement()();
+      expect(instance.retainedWorkCount).toBe(0);
     } finally {
       finishPreparation.resolve();
       await Promise.allSettled([borrower[Symbol.asyncDispose](), settled]);
@@ -230,7 +282,7 @@ describe("prepared registry construction borrows", () => {
       (["owned", "gateway"] as const).map((source) => ({ owner, source })),
     ),
   )(
-    "keeps $owner/$source busy through post-facts projection, then permits idle replacement",
+    "retains $owner/$source work through post-facts projection, then releases it",
     async ({ owner, source }) => {
       const { registry, config, input, borrower, instance, metadata } =
         await acquireConfiguredRegistryBorrower(source);
@@ -279,16 +331,17 @@ describe("prepared registry construction borrows", () => {
         ]);
         await borrower[Symbol.asyncDispose]();
         expect(isPluginRegistryRetired(registry)).toBe(false);
-        expect(() => instance.reserveReplacement()()).toThrow("active retained work");
+        instance.reserveReplacement()();
+        expect(instance.retainedWorkCount).toBeGreaterThan(0);
         finishProjection.resolve();
         const snapshot = await pending;
         expect(snapshot.pluginRegistry).toBe(registry);
         if (lease) {
-          expect(() => instance.reserveReplacement()()).toThrow("active retained work");
+          expect(instance.retainedWorkCount).toBeGreaterThan(0);
           await lease[Symbol.asyncDispose]();
         }
         expect(isPluginRegistryRetired(registry)).toBe(false);
-        instance.reserveReplacement()();
+        expect(instance.retainedWorkCount).toBe(0);
       } finally {
         finishProjection.resolve();
         await settled;

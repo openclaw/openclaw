@@ -29,25 +29,6 @@ export async function waitForGatewayHealthyListener(params: {
     config: {},
   }));
   const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
-  let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
-    ? {
-        portUsage: {
-          port: params.port,
-          status: "unknown",
-          listeners: [],
-          hints: [],
-          errors: [
-            `Previous gateway lock owner ${previousLockIdentity.ownerId ?? previousLockIdentity.pid} is still active.`,
-          ],
-        },
-        healthy: false,
-      }
-    : await inspectGatewayPortHealth({
-        port: params.port,
-        auth: probeContext.auth,
-        config: probeContext.config,
-        configuredProbe,
-      });
 
   let attempt = 0;
   let expectedListenerPid: number | undefined;
@@ -60,36 +41,36 @@ export async function waitForGatewayHealthyListener(params: {
       waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
     });
     if (replacement.status === "timeout") {
-      return snapshot;
+      return {
+        portUsage: {
+          port: params.port,
+          status: "unknown",
+          listeners: [],
+          hints: [],
+          errors: [
+            `Previous gateway lock owner ${previousLockIdentity.ownerId ?? previousLockIdentity.pid} is still active.`,
+          ],
+        },
+        healthy: false,
+      };
     }
     attempt = replacement.attemptsUsed;
     expectedListenerPid = replacement.lockIdentity.pid;
-    snapshot = await inspectGatewayPortHealth({
+  }
+
+  for (;;) {
+    const snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeContext.auth,
       config: probeContext.config,
       configuredProbe,
       expectedListenerPid,
     });
-  }
-
-  if (snapshot.healthy) {
+    if (!snapshot.healthy && attempt < attempts) {
+      attempt += 1;
+      await sleep(delayMs);
+      continue;
+    }
     return snapshot;
   }
-  while (attempt < attempts) {
-    attempt += 1;
-    await sleep(delayMs);
-    snapshot = await inspectGatewayPortHealth({
-      port: params.port,
-      auth: probeContext.auth,
-      config: probeContext.config,
-      configuredProbe,
-      expectedListenerPid,
-    });
-    if (snapshot.healthy) {
-      return snapshot;
-    }
-  }
-
-  return snapshot;
 }

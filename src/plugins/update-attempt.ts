@@ -390,6 +390,7 @@ export async function runPluginUpdateAttempt(params: {
   effectiveSpec?: string;
   extensionsDir?: string;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
@@ -405,6 +406,18 @@ export async function runPluginUpdateAttempt(params: {
   const installNpmSpec = params.dryRun ? installPluginFromNpmSpec : params.installNpmSpecForUpdate;
   const installParams = <T extends object>(value: T): T =>
     copyPluginInstallTransactionRequest(params, value);
+  const commonInstallOptions = () => ({
+    config: params.config,
+    mode: "update" as const,
+    extensionsDir: params.extensionsDir,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
+    ...dryRunOption,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+    expectedPluginId: params.pluginId,
+    logger: params.logger,
+  });
   let result: PluginUpdateInstallResult;
   try {
     result =
@@ -412,15 +425,8 @@ export async function runPluginUpdateAttempt(params: {
         ? await installNpmSpec(
             installParams({
               spec: params.effectiveSpec!,
-              config: params.config,
-              mode: "update",
-              extensionsDir: params.extensionsDir,
-              timeoutMs: params.timeoutMs,
-              ...dryRunOption,
-              onInstallPolicyWarning: params.onInstallPolicyWarning,
-              onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+              ...commonInstallOptions(),
               trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-              expectedPluginId: params.pluginId,
               expectedReplacementPluginId: params.expectedReplacementPluginId,
               expectedIntegrity: params.expectedIntegrity,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -429,53 +435,28 @@ export async function runPluginUpdateAttempt(params: {
                 logger: params.logger,
                 onIntegrityDrift: params.onIntegrityDrift,
               }),
-              logger: params.logger,
             }),
           )
         : params.record.source === "clawhub"
           ? await installPluginFromClawHub(
               installParams({
                 spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
-                config: params.config,
                 baseUrl: params.record.clawhubUrl,
-                mode: "update",
-                extensionsDir: params.extensionsDir,
-                timeoutMs: params.timeoutMs,
-                ...dryRunOption,
-                onInstallPolicyWarning: params.onInstallPolicyWarning,
-                onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-                expectedPluginId: params.pluginId,
-                logger: params.logger,
+                ...commonInstallOptions(),
               }),
             )
           : params.record.source === "git"
             ? await installPluginFromGitSpec(
                 installParams({
                   spec: params.effectiveSpec!,
-                  config: params.config,
-                  mode: "update",
-                  extensionsDir: params.extensionsDir,
-                  timeoutMs: params.timeoutMs,
-                  ...dryRunOption,
-                  onInstallPolicyWarning: params.onInstallPolicyWarning,
-                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-                  expectedPluginId: params.pluginId,
-                  logger: params.logger,
+                  ...commonInstallOptions(),
                 }),
               )
             : await installPluginFromMarketplace(
                 installParams({
                   marketplace: params.record.marketplaceSource!,
                   plugin: params.record.marketplacePlugin!,
-                  config: params.config,
-                  mode: "update",
-                  extensionsDir: params.extensionsDir,
-                  timeoutMs: params.timeoutMs,
-                  ...dryRunOption,
-                  onInstallPolicyWarning: params.onInstallPolicyWarning,
-                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-                  expectedPluginId: params.pluginId,
-                  logger: params.logger,
+                  ...commonInstallOptions(),
                 }),
               );
   } catch (error) {
@@ -507,16 +488,8 @@ export async function runPluginUpdateAttempt(params: {
     result = await installPluginFromClawHub(
       installParams({
         spec: params.clawhubSpecs.fallbackSpec,
-        config: params.config,
         baseUrl: params.record.clawhubUrl,
-        mode: "update",
-        extensionsDir: params.extensionsDir,
-        timeoutMs: params.timeoutMs,
-        ...dryRunOption,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-        expectedPluginId: params.pluginId,
-        logger: params.logger,
+        ...commonInstallOptions(),
       }),
     );
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;

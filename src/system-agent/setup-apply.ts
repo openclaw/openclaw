@@ -343,16 +343,12 @@ export async function applySystemAgentSetup(
     }
     const preserveWorkspace = currentHasRoster && !params.allowWorkspaceChange;
     if (preserveWorkspace) {
-      const defaults = { ...setupBaseConfig.agents?.defaults };
-      const currentDefaults = currentBaseConfig.agents?.defaults;
-      if (currentDefaults && Object.hasOwn(currentDefaults, "workspace")) {
-        defaults.workspace = currentDefaults.workspace;
-      } else {
-        delete defaults.workspace;
-      }
       setupBaseConfig = {
         ...setupBaseConfig,
-        agents: { ...setupBaseConfig.agents, defaults },
+        agents: {
+          ...setupBaseConfig.agents,
+          defaults: { ...setupBaseConfig.agents?.defaults },
+        },
       };
     }
 

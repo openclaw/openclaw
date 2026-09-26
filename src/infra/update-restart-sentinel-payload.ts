@@ -1,13 +1,24 @@
-// Builds restart sentinel payloads for update handoff reporting.
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
+import { updateRunStepKey } from "./update-run-step-key.js";
 import { isUpdateGatewayReadinessPending } from "./update-run-step.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
-// Update restart sentinel payloads carry update result details across a process
-// restart so the next gateway can report completion or failure.
+export type ForegroundUpdateOrigin = {
+  owner: string;
+  pid: number;
+  host: string;
+  startedAt: number;
+  port: number;
+  stateDatabasePath: string;
+  configPath: string;
+};
+
 /** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
   runId?: string;
+  /** The foreground replacement Gateway verifies success after the CLI settles. */
+  completionOwner?: "gateway-restart";
+  foregroundOrigin?: ForegroundUpdateOrigin;
   /** Internal helper fact: when the owning service stop was issued. */
   serviceStoppedAtMs?: number;
   root?: string;
@@ -24,7 +35,12 @@ export type UpdateRestartSentinelMeta = {
   continuationMessage?: string | null;
 };
 
-export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): UpdateRunResult {
+export function normalizeControlPlaneUpdateResult(input: UpdateRunResult): UpdateRunResult {
+  const lint = input.postUpdate?.plugins?.doctorLint;
+  const result =
+    lint && !input.steps.some((step) => step.name === lint.name)
+      ? { ...input, steps: [...input.steps, lint] }
+      : input;
   if (
     (result.status === "ok" ||
       (result.status === "skipped" && result.reason === "already-current")) &&
@@ -37,16 +53,7 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
         result.reason === "still-starting" ? "still-starting" : "gateway-readiness-unverified",
     };
   }
-  const beforeSha = result.before?.sha?.trim();
-  const afterSha = result.after?.sha?.trim();
-  return result.status === "ok" &&
-    result.mode === "git" &&
-    result.postUpdate?.plugins?.changed !== true &&
-    beforeSha &&
-    afterSha &&
-    beforeSha === afterSha
-    ? { ...result, status: "skipped", reason: "already-current" }
-    : result;
+  return result;
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
@@ -65,7 +72,6 @@ function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["rec
     : { serviceRestartSafe: false, reason: recovery.reason };
 }
 
-/** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
@@ -98,7 +104,7 @@ export function buildUpdateRestartSentinelPayload(params: {
       before: result.before ?? null,
       after: result.after ?? null,
       steps: result.steps.map((step) => ({
-        name: step.name,
+        name: updateRunStepKey(step.name),
         command: step.command,
         cwd: step.cwd,
         durationMs: step.durationMs,

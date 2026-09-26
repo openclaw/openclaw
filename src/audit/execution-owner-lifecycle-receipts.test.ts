@@ -1,14 +1,17 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
-import { bindCronRunReceiptExecution } from "../cron/store/run-receipt-store.js";
+import { bindCronRunReceiptExecution } from "../cron/store/run-receipt-execution-binding.js";
+import { observeDeviceAuthHostSql } from "../infra/device-auth-store.sql.test-support.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -18,7 +21,10 @@ import { presentExecutionDecisionReceiptsInDatabase } from "./execution-decision
 import { createExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
 import { pageOwnerLifecycleReceiptsInDatabase } from "./execution-owner-lifecycle-receipts.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function oldSchemaSql(): string {
@@ -124,8 +130,93 @@ const receiptHandle = {
   startedAtMs: 60,
 };
 
+function bindOwner(
+  ownerKind: "task" | "flow" | "cron",
+  options: ReturnType<typeof createOldOwnerDatabase>,
+  assertCurrent?: () => void,
+) {
+  const params = { admitted: admitted(), options, assertCurrent };
+  switch (ownerKind) {
+    case "task":
+      return bindTaskRunExecution({ ...params, taskId: "task-1" });
+    case "flow":
+      return bindTaskFlowExecution({ ...params, flowId: "flow-1" });
+    case "cron":
+      return bindCronRunReceiptExecution({ ...params, handle: receiptHandle });
+    default:
+      throw new Error("Unknown execution owner binding fixture");
+  }
+}
+
 describe("owner-native execution lifecycle receipts", () => {
-  it("lazily binds exact owner rows while disabled collection allocates nothing", () => {
+  it.each(["task", "flow", "cron"] as const)(
+    "binds the exact %s owner off the calling thread",
+    async (ownerKind) => {
+      const options = createOldOwnerDatabase();
+      const current = openOpenClawStateDatabase(options).db;
+      const hostSql = observeDeviceAuthHostSql(options.path);
+      const prepare = vi.spyOn(current, "prepare").mockImplementation(() => {
+        throw new Error("Execution binding attempted SQLite on the calling thread");
+      });
+      try {
+        expect(await bindOwner(ownerKind, options)).toBe("bound");
+        const counts = hostSql.counts();
+        console.info("Execution binding host SQLite", { ownerKind, counts });
+        for (const group of Object.values(counts)) {
+          expect(Object.values(group)).toEqual(Array(Object.keys(group).length).fill(0));
+        }
+      } finally {
+        prepare.mockRestore();
+        hostSql.restore();
+      }
+      expect(
+        current
+          .prepare(
+            "SELECT context_id, execution_id FROM execution_owner_lifecycle_bindings WHERE owner_kind = ?",
+          )
+          .get(ownerKind),
+      ).toEqual({ context_id: "context-1", execution_id: "execution-1" });
+    },
+  );
+
+  it.each(
+    (["task", "flow", "cron"] as const).flatMap((ownerKind) =>
+      (["transaction", "commit"] as const).map((stage) => ({ ownerKind, stage })),
+    ),
+  )(
+    "rejects revoked $ownerKind authority at native $stage admission",
+    async ({ ownerKind, stage }) => {
+      const options = createOldOwnerDatabase();
+      const current = openOpenClawStateDatabase(options).db;
+      let revoked = false;
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              revoked = true;
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await expect(
+          bindOwner(ownerKind, options, () => {
+            if (revoked) {
+              throw new Error("Synthetic binding owner was revoked");
+            }
+          }),
+        ).rejects.toThrow("Synthetic binding owner was revoked");
+      } finally {
+        admission.mockRestore();
+      }
+      expect(revoked).toBe(true);
+      expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
+    },
+  );
+
+  it("lazily binds exact owner rows while disabled collection allocates nothing", async () => {
     const options = createOldOwnerDatabase();
     const current = openOpenClawStateDatabase(options).db;
     expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
@@ -138,12 +229,12 @@ describe("owner-native execution lifecycle receipts", () => {
       operationalRunInstance: { instanceId: "instance-disabled", runId: "run-1" },
     };
     expect(
-      bindCronRunReceiptExecution({ admitted: disabled, handle: receiptHandle, options }),
+      await bindCronRunReceiptExecution({ admitted: disabled, handle: receiptHandle, options }),
     ).toBe("disabled");
-    expect(bindTaskRunExecution({ admitted: disabled, taskId: "task-1", options })).toBe(
+    expect(await bindTaskRunExecution({ admitted: disabled, taskId: "task-1", options })).toBe(
       "disabled",
     );
-    expect(bindTaskFlowExecution({ admitted: disabled, flowId: "flow-1", options })).toBe(
+    expect(await bindTaskFlowExecution({ admitted: disabled, flowId: "flow-1", options })).toBe(
       "disabled",
     );
     expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
@@ -153,10 +244,12 @@ describe("owner-native execution lifecycle receipts", () => {
     }
 
     expect(
-      bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+      await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
     ).toBe("bound");
-    expect(bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options })).toBe("bound");
-    expect(bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options })).toBe(
+    expect(await bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options })).toBe(
+      "bound",
+    );
+    expect(await bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options })).toBe(
       "bound",
     );
     expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(true);
@@ -164,11 +257,11 @@ describe("owner-native execution lifecycle receipts", () => {
       expect(tableHasColumn(current, table, "context_id")).toBe(false);
       expect(tableHasColumn(current, table, "execution_id")).toBe(false);
     }
-    expect(bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options })).toBe(
+    expect(await bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options })).toBe(
       "already-bound",
     );
     expect(
-      bindTaskRunExecution({
+      await bindTaskRunExecution({
         admitted: admitted("context-1", "execution-other"),
         taskId: "task-1",
         options,
@@ -178,6 +271,7 @@ describe("owner-native execution lifecycle receipts", () => {
     current.prepare("UPDATE task_runs SET status = 'succeeded'").run();
     current.prepare("UPDATE flow_runs SET status = 'succeeded', ended_at = 70").run();
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const oldReader = new DatabaseSync(options.path);
     expect(
@@ -237,11 +331,11 @@ describe("owner-native execution lifecycle receipts", () => {
     ).toEqual({ count: 0 });
   });
 
-  it("uses stable c/t/f cursors and rejects a mismatched exact execution", () => {
+  it("uses stable c/t/f cursors and rejects a mismatched exact execution", async () => {
     const options = createOldOwnerDatabase();
-    bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options });
-    bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options });
-    bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options });
+    await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options });
+    await bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options });
+    await bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options });
     const db = openOpenClawStateDatabase(options).db;
     db.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
     db.prepare("UPDATE task_runs SET status = 'succeeded'").run();
@@ -334,8 +428,8 @@ describe("owner-native execution lifecycle receipts", () => {
     {
       stage: "cron",
       cursor: "c:0:0",
-      bindFirst: (options: ReturnType<typeof createOldOwnerDatabase>) =>
-        bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+      bindFirst: async (options: ReturnType<typeof createOldOwnerDatabase>) =>
+        await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
       addSuccessor: (db: DatabaseSync) => {
         db.prepare(
           `INSERT INTO cron_run_receipts (
@@ -359,8 +453,8 @@ describe("owner-native execution lifecycle receipts", () => {
     {
       stage: "task",
       cursor: "t:0:0",
-      bindFirst: (options: ReturnType<typeof createOldOwnerDatabase>) =>
-        bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options }),
+      bindFirst: async (options: ReturnType<typeof createOldOwnerDatabase>) =>
+        await bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options }),
       addSuccessor: (db: DatabaseSync) => {
         db.prepare(
           `INSERT INTO task_runs (
@@ -394,8 +488,8 @@ describe("owner-native execution lifecycle receipts", () => {
     {
       stage: "flow",
       cursor: "f:0:0",
-      bindFirst: (options: ReturnType<typeof createOldOwnerDatabase>) =>
-        bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options }),
+      bindFirst: async (options: ReturnType<typeof createOldOwnerDatabase>) =>
+        await bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options }),
       addSuccessor: (db: DatabaseSync) => {
         db.prepare(
           `INSERT INTO flow_runs (
@@ -419,9 +513,9 @@ describe("owner-native execution lifecycle receipts", () => {
 
   it.each(deletedAnchorCases)(
     "rejects a nonzero $stage cursor after its exact owner anchor is deleted",
-    ({ cursor, bindFirst, addSuccessor, deleteAnchor }) => {
+    async ({ cursor, bindFirst, addSuccessor, deleteAnchor }) => {
       const options = createOldOwnerDatabase();
-      expect(bindFirst(options)).toBe("bound");
+      expect(await bindFirst(options)).toBe("bound");
       const db = openOpenClawStateDatabase(options).db;
       addSuccessor(db);
       const firstPage = presentExecutionDecisionReceiptsInDatabase(db, {
@@ -445,10 +539,10 @@ describe("owner-native execution lifecycle receipts", () => {
     },
   );
 
-  it("rejects a nonzero owner cursor when its retained anchor belongs to another context", () => {
+  it("rejects a nonzero owner cursor when its retained anchor belongs to another context", async () => {
     const options = createOldOwnerDatabase();
     expect(
-      bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+      await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
     ).toBe("bound");
     const db = openOpenClawStateDatabase(options).db;
     deletedAnchorCases[0].addSuccessor(db);
@@ -470,7 +564,7 @@ describe("owner-native execution lifecycle receipts", () => {
     ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
   });
 
-  it("rejects a reused owner rowid whose binding belongs to another execution", () => {
+  it("rejects a reused owner rowid whose binding belongs to another execution", async () => {
     const options = createOldOwnerDatabase();
     const db = openOpenClawStateDatabase(options).db;
     db.prepare("DELETE FROM cron_run_receipts WHERE receipt_id = 'cron-1'").run();
@@ -487,7 +581,7 @@ describe("owner-native execution lifecycle receipts", () => {
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
     expect(
-      bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
+      await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options }),
     ).toBe("bound");
     db.prepare(
       `INSERT INTO execution_owner_lifecycle_bindings (
@@ -539,11 +633,11 @@ describe("owner-native execution lifecycle receipts", () => {
     ).toThrow("decision cursor is no longer retained; restart inspection without --cursor");
   });
 
-  it("projects every owner terminal state without rederiving lifecycle precedence", () => {
+  it("projects every owner terminal state without rederiving lifecycle precedence", async () => {
     const options = createOldOwnerDatabase();
-    bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options });
-    bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options });
-    bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options });
+    await bindCronRunReceiptExecution({ admitted: admitted(), handle: receiptHandle, options });
+    await bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options });
+    await bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options });
     const context = executionContext();
     const db = openOpenClawStateDatabase(options).db;
 

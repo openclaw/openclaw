@@ -3,17 +3,28 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { walkDirectorySync } from "../infra/fs-safe.js";
+import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
+import { FsSafeError, walkDirectorySync } from "../infra/fs-safe.js";
 import type { OpenClawPackageBuild } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import {
+  loadPluginRegistrySnapshot,
+  type LoadPluginRegistryParams,
+} from "./plugin-registry-snapshot.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import {
+  prefersBuiltPluginArtifacts,
+  resolvePluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
+import { getPluginRegistryForContext } from "./runtime.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 const MAX_RUNTIME_ARTIFACT_DEPTH = 64;
 const MAX_RUNTIME_ARTIFACT_ENTRIES = 50_000;
 const MAX_RUNTIME_ARTIFACT_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_RUNTIME_ARTIFACT_TOTAL_BYTES = 512 * 1024 * 1024;
-const READ_CHUNK_BYTES = 64 * 1024;
 const EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules"]);
 
 export type PluginRuntimeArtifactIdentitySource = Readonly<{
@@ -22,7 +33,24 @@ export type PluginRuntimeArtifactIdentitySource = Readonly<{
   rootDir: string;
   source?: string;
   packageBuild?: OpenClawPackageBuild;
+  sourcePreferred?: true;
 }>;
+
+export function loadPluginRuntimeArtifactIdentitySources(
+  params: Pick<LoadPluginRegistryParams, "config" | "workspaceDir" | "env">,
+): PluginRuntimeArtifactIdentitySource[] {
+  const registry = loadPluginRegistrySnapshot(params);
+  const metadata = loadPluginMetadataSnapshot({ ...params, index: registry });
+  return registry.plugins.map((record) => ({
+    pluginId: record.pluginId,
+    origin: record.origin,
+    rootDir: record.rootDir,
+    source: record.source,
+    packageBuild: record.packageBuild,
+    // Source overlays and explicit bundled paths are process-local selection facts.
+    sourcePreferred: metadata.byPluginId.get(record.pluginId)?.sourcePreferred,
+  }));
+}
 
 function normalizeRelativePath(filePath: string): string {
   return filePath.split(path.sep).join("/");
@@ -80,31 +108,19 @@ function hashRuntimeArtifactFile(params: {
   if (!opened.ok) {
     throw new Error(`plugin runtime artifact file is not readable: ${params.relativePath}`);
   }
+  const changedMessage = `plugin runtime artifact file changed while reading: ${params.relativePath}`;
   try {
-    const hash = crypto.createHash("sha256");
-    const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-    let offset = 0;
-    while (offset < opened.stat.size) {
-      const read = fs.readSync(
-        opened.fd,
-        buffer,
-        0,
-        Math.min(buffer.length, opened.stat.size - offset),
-        offset,
-      );
-      if (read === 0) {
-        throw new Error(
-          `plugin runtime artifact file changed while reading: ${params.relativePath}`,
-        );
-      }
-      hash.update(buffer.subarray(0, read));
-      offset += read;
-    }
+    const hashed = hashFileDescriptorSync(opened.fd, opened.stat.size);
     const after = fs.fstatSync(opened.fd);
-    if (!sameOpenedFile(opened.stat, after)) {
-      throw new Error(`plugin runtime artifact file changed while reading: ${params.relativePath}`);
+    if (hashed.sizeBytes !== opened.stat.size || !sameOpenedFile(opened.stat, after)) {
+      throw new Error(changedMessage);
     }
-    return { hash: hash.digest("hex"), size: opened.stat.size, mode: opened.stat.mode };
+    return { hash: hashed.sha256, size: opened.stat.size, mode: opened.stat.mode };
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "too-large") {
+      throw new Error(changedMessage, { cause: error });
+    }
+    throw error;
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -124,8 +140,15 @@ export function fingerprintPluginRuntimeArtifact(
         source: record.source,
         rootDir: record.rootDir,
         origin: record.origin,
-        // Gateway and standalone agent runtimes select built artifacts.
-        preferBuiltPluginArtifacts: true,
+        // Identity must choose the same source/build policy as runtime registration.
+        preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
+          resolvePluginRuntimeArtifactPreference(
+            getPluginRuntimeLoadContextState(getPluginRegistryForContext() ?? undefined)
+              ?.preferBuiltPluginArtifacts,
+          ),
+          record.origin,
+        ),
+        sourcePreferred: record.sourcePreferred,
         ...(record.packageBuild ? { packageManifest: { build: record.packageBuild } } : {}),
       })
     : { rootDir: record.rootDir, source: undefined };

@@ -12,8 +12,10 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import { execSchema } from "../../src/agents/bash-tools.schemas.js";
+import { createCodeModeTools } from "../../src/agents/code-mode.js";
 import { writeJsonAtomic } from "../../src/infra/json-files.js";
 import { redactSensitiveText } from "../../src/logging/redact.js";
+import { wrapExternalContent } from "../../src/security/external-content.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
@@ -263,6 +265,128 @@ describe("mock server readiness diagnostics", () => {
 });
 
 describe("mock OpenAI response markers", () => {
+  it.each([false, true])(
+    "drives one Telegram topic spawn and current-turn acknowledgments (stream=%s)",
+    async (stream) => {
+      await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+        const run = "topic-proof";
+        const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
+        const create = user(`TELEGRAM_BINDING_SPAWN_${run}`);
+        const tools = [
+          { type: "function", name: "sessions_spawn", parameters: { type: "object" } },
+        ];
+        const context = user(
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime facts.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        );
+        const request = async (input: unknown[], declaredTools: unknown[] = tools) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: "fixture-agent", input, tools: declaredTools, stream }),
+          });
+          expect(response.status).toBe(200);
+          if (!stream) {
+            return (await response.json()).output;
+          }
+          const events = (await response.text())
+            .split("\n\n")
+            .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+            .map((line) => JSON.parse(line.slice(6)));
+          return events.find((event) => event.type === "response.completed").response.output;
+        };
+        const expectText = (output: unknown, text: string) => {
+          expect(output).toEqual([
+            expect.objectContaining({
+              type: "message",
+              content: [{ type: "output_text", text, annotations: [] }],
+            }),
+          ]);
+        };
+
+        // Utility traffic must not consume the spawn slot.
+        expectText(await request([user("ordinary startup request")]), "OPENCLAW_E2E_OK");
+        const first = await request([create, context]);
+        expect(first).toHaveLength(1);
+        const call = first[0];
+        expect(call).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+        const args = JSON.parse(call.arguments);
+        expect(args).toEqual({
+          task: `TELEGRAM_BINDING_CHILD_${run}. Reply with the child fixture acknowledgment.`,
+          taskName: `telegram-binding-${run}`,
+          runtime: "subagent",
+          thread: true,
+          mode: "session",
+          cleanup: "keep",
+          context: "isolated",
+        });
+        expectText(await request([create]), `TELEGRAM_BINDING_WAITING_${run}`);
+
+        const receipt = {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:main:subagent:synthetic-child",
+            taskName: args.taskName,
+            mode: "session",
+          }),
+        };
+        const completed = [create, call, receipt, context];
+        expectText(await request(completed), `TELEGRAM_BINDING_ACK_PARENT_${run}`);
+        expectText(
+          await request([create, call, { ...receipt, call_id: "unrelated" }]),
+          `TELEGRAM_BINDING_WAITING_${run}`,
+        );
+        expectText(
+          await request([create, call, { ...receipt, output: '{"status":"error"}' }]),
+          `TELEGRAM_BINDING_FAIL_SPAWN_${run}`,
+        );
+
+        // Child tasks and follow-ups may carry parent history and still expose spawn.
+        for (const phase of ["CHILD", "BEFORE", "AFTER"]) {
+          expectText(
+            await request([...completed, user(`TELEGRAM_BINDING_${phase}_${run}`), context]),
+            `TELEGRAM_BINDING_ACK_${phase}_${run}`,
+          );
+        }
+        expectText(
+          await request([...completed, user("ordinary later request")]),
+          "OPENCLAW_E2E_OK",
+        );
+        expectText(
+          await request([
+            user(
+              [
+                "[Chat messages since your last reply - for context]",
+                `TELEGRAM_BINDING_SPAWN_${run}`,
+                "",
+                "[Current message - respond to this]",
+                "ordinary latest message",
+              ].join("\n"),
+            ),
+          ]),
+          "OPENCLAW_E2E_OK",
+        );
+        expectText(
+          await request([user(`TELEGRAM_BINDING_SPAWN_${run} TELEGRAM_BINDING_CHILD_${run}`)]),
+          "TELEGRAM_BINDING_FAIL_AMBIGUOUS_MARKER",
+        );
+
+        // An old successful receipt cannot acknowledge or suppress a distinct new turn.
+        expectText(
+          await request([user("TELEGRAM_BINDING_SPAWN_second-proof")], []),
+          "TELEGRAM_BINDING_FAIL_TOOL_NOT_DECLARED_second-proof",
+        );
+        const next = await request([...completed, user("TELEGRAM_BINDING_SPAWN_second-proof")]);
+        expect(next).toHaveLength(1);
+        expect(next[0]).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+        expect(JSON.parse(next[0].arguments).taskName).toBe("telegram-binding-second-proof");
+        const health = await (await fetch(`${baseUrl}/health`)).json();
+        expect(health.requests.selections.automaticTool).toBe(2);
+      });
+    },
+  );
+
   it.concurrent.for(
     [
       { api: "responses", stream: false },
@@ -397,7 +521,7 @@ describe("mock OpenAI response markers", () => {
               name: call.name,
               arguments: args,
             });
-            taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+            taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
             let toolOutput = "openclaw-draft-proof\n";
             // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
             if (process.platform !== "win32") {
@@ -411,7 +535,7 @@ describe("mock OpenAI response markers", () => {
               taskExpect(execution.child.exitCode, result.stderr).toBe(0);
               taskExpect(execution.child.signalCode).toBeNull();
               taskExpect(result.stdout).toBe(toolOutput);
-              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
               toolOutput = result.stdout;
             }
 
@@ -939,8 +1063,10 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
-  it("resumes the MCP Code Mode fixture until the latest result completes", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+  it.each(["current", "legacy"])("resumes the MCP Code Mode fixture (%s catalog)", async (mode) => {
+    const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
+    const tools = createCodeModeTools({});
+    await withMockServer(mockOpenAiPath, env, async (baseUrl) => {
       const input: Record<string, unknown>[] = [
         { content: "mcp code mode api file qa check", role: "user" },
       ];
@@ -951,22 +1077,42 @@ describe("mock OpenAI response markers", () => {
           body: JSON.stringify({
             input,
             stream: false,
-            tools: ["exec", "wait"].map((name) => ({
+            tools: tools.map(({ name, parameters }) => ({
               name,
-              parameters: { type: "object" },
+              parameters,
               type: "function",
             })),
           }),
         });
         expect(response.status).toBe(200);
-        return await response.json();
+        const result = await response.json();
+        for (const call of result.output ?? []) {
+          if (call.type !== "function_call") {
+            continue;
+          }
+          const tool = tools.find((entry) => entry.name === call.name);
+          if (!tool) {
+            throw new Error(`Mock emitted undeclared tool: ${call.name}`);
+          }
+          validateToolArguments(tool, {
+            type: "toolCall",
+            id: call.call_id,
+            name: call.name,
+            arguments: JSON.parse(call.arguments),
+          });
+        }
+        return result;
       };
       const first = await request();
       expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
-      expect(JSON.parse(first.output[0].arguments)).toMatchObject({
-        language: "javascript",
+      const execArguments = JSON.parse(first.output[0].arguments);
+      expect(execArguments).toEqual({
+        title: expect.any(String),
         code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
       });
+      expect(execArguments.code).toContain(
+        mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
+      );
 
       for (const reason of ["pending_tools", "yield"]) {
         input.push({
@@ -1074,75 +1220,132 @@ describe("mock OpenAI response markers", () => {
     });
   });
 
-  it("drives the Agent Plugins bundle tool and validates its environment output", async () => {
+  it("discovers the Agent Plugins bundle tool and validates its target receipt", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const missingTool = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [{ content: "agent plugin bundle qa check", role: "user" }],
-          stream: false,
-        }),
-      });
-      const missingToolBody = await missingTool.json();
-      expect(missingToolBody.output?.[0]?.content?.[0]?.text).toBe(
-        "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
-      );
-
-      const first = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [{ content: "agent plugin bundle qa check", role: "user" }],
-          stream: false,
-          tools: [
-            {
-              name: "weather-probe__weather_probe",
-              parameters: { type: "object" },
+      const runtimeContext = {
+        role: "user",
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nCurrent fixture context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      };
+      const input: unknown[] = [
+        { content: "agent plugin bundle qa check", role: "user" },
+        runtimeContext,
+      ];
+      const controls = ["tool_search", "tool_describe", "tool_call"];
+      const request = async (names = controls) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input,
+            stream: false,
+            tools: names.map((name) => ({
               type: "function",
-            },
-          ],
-        }),
-      });
-      const firstBody = await first.json();
-      expect(firstBody.output?.[0]).toMatchObject({
-        arguments: "{}",
+              name,
+              parameters: { type: "object" },
+            })),
+          }),
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()).output[0];
+      };
+      const appendResult = (call: { call_id: string }, output: unknown) =>
+        input.push(call, {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: wrapExternalContent(JSON.stringify(output), { source: "api" }),
+        });
+      expect((await request([])).content[0].text).toBe("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+      const target = {
+        id: "mcp:weather-probe:weather-probe__weather_probe",
         name: "weather-probe__weather_probe",
-        type: "function_call",
+        source: "mcp",
+      };
+      const search = await request();
+      expect(search).toMatchObject({ type: "function_call", name: "tool_search" });
+      expect(JSON.parse(search.arguments)).toEqual({ query: target.name, limit: 1 });
+      appendResult(search, [target]);
+      const description = await request();
+      expect(description).toMatchObject({ type: "function_call", name: "tool_describe" });
+      expect(JSON.parse(description.arguments)).toEqual({ id: target.id });
+      appendResult(description, {
+        ...target,
+        parameters: { type: "object", properties: {}, additionalProperties: false },
       });
-
-      const second = await fetch(`${baseUrl}/v1/responses`, {
+      const recap = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          stream: true,
+          store: false,
+          max_output_tokens: 240,
           input: [
-            { content: "agent plugin bundle qa check", role: "user" },
             {
-              output: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data",
-              type: "function_call_output",
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
+                },
+              ],
+            },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: JSON.stringify({
+                    previousRecap: "",
+                    messages: ["user: agent plugin bundle qa check"],
+                    omittedContent: false,
+                  }),
+                },
+              ],
             },
           ],
-          stream: false,
         }),
       });
-      const secondBody = await second.json();
-      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("AGENT_BUNDLE_MCP_OK");
-
-      const unexpectedOutput = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [
-            { content: "agent plugin bundle qa check", role: "user" },
-            { output: "probe failed", type: "function_call_output" },
+      expect(recap.status).toBe(200);
+      const recapEvents = (await recap.text())
+        .split("\n\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => JSON.parse(line.slice(6)));
+      expect(
+        recapEvents.find((event) => event.type === "response.completed").response.output,
+      ).toMatchObject([
+        { type: "message", content: [{ type: "output_text", text: "OPENCLAW_E2E_OK" }] },
+      ]);
+      const call = await request();
+      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
+      expect(JSON.parse(call.arguments)).toEqual({ id: target.id, args: {} });
+      appendResult(call, {
+        tool: target,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data; PROBE_MODE=live",
+            },
           ],
-          stream: false,
-        }),
+          details: { mcpServer: "weather-probe", mcpTool: "weather_probe" },
+        },
       });
-      const unexpectedOutputBody = await unexpectedOutput.json();
-      expect(unexpectedOutputBody.output?.[0]?.content?.[0]?.text).toBe(
-        "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-      );
+      expect((await request()).content[0].text).toBe("AGENT_BUNDLE_MCP_OK");
+      input[input.length - 1] = {
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: "probe failed",
+      };
+      const failed = await request();
+      expect(failed.content[0].text).toBe("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+      input.push(failed, { role: "user", content: "OPENCLAW_E2E_NEXT_TURN" }, runtimeContext);
+      expect(await request()).toMatchObject({
+        type: "message",
+        content: [{ type: "output_text", text: "OPENCLAW_E2E_NEXT_TURN" }],
+      });
     });
   });
 });
@@ -1347,6 +1550,8 @@ describe("SQLite flip mock endpoint ownership", () => {
       const stopFailure = new Error("mock process closure could not be verified");
       let instance: OpenClawTestInstance | undefined;
       let publishedPort: number | undefined;
+      let mockChild: ChildProcess | undefined;
+      const mockClosed = vi.fn();
       let competingBind: unknown;
       let requestLog = "";
       let initialConfig: Record<string, unknown> | undefined;
@@ -1369,11 +1574,16 @@ describe("SQLite flip mock endpoint ownership", () => {
           publicationCount++;
           publishedConfig = record;
           publishedPort = Number(new URL(provider.baseUrl).port);
-          const mockSpawn = vi
+          const mockSpawnIndex = vi
             .mocked(spawn)
-            .mock.calls.find(
-              ([, args]) => Array.isArray(args) && args[0] === "scripts/e2e/mock-openai-server.mjs",
-            );
+            .mock.calls.findIndex(([, args]) => Array.isArray(args) && args[0] === mockOpenAiPath);
+          const mockSpawn = vi.mocked(spawn).mock.calls[mockSpawnIndex];
+          const spawned = vi.mocked(spawn).mock.results[mockSpawnIndex];
+          if (spawned?.type !== "return") {
+            throw new Error("mock OpenAI listener child was not started");
+          }
+          mockChild = spawned.value;
+          mockChild.on("close", mockClosed);
           childEnv = mockSpawn?.[2]?.env;
           competingBind = await tryBind(publishedPort);
           if (asRecord(competingBind)?.code === "EADDRINUSE") {
@@ -1408,6 +1618,11 @@ describe("SQLite flip mock endpoint ownership", () => {
         const result = await runSqliteSessionsTranscriptsFlipProof().catch(
           (error: unknown) => error,
         );
+        const mockAtSettlement = {
+          closeCount: mockClosed.mock.calls.length,
+          exitCode: mockChild?.exitCode,
+          signalCode: mockChild?.signalCode,
+        };
         expect(publicationCount).toBe(1);
         expect(competingBind).toMatchObject({ code: "EADDRINUSE" });
         expect(initialConfig).toBeDefined();
@@ -1422,6 +1637,7 @@ describe("SQLite flip mock endpoint ownership", () => {
           Object.keys(previousEnv).filter((key) => process.env[key] !== previousEnv[key]),
         ).toEqual([]);
         expect(instance).toBeDefined();
+        expect(mockChild).toBeDefined();
         expect({ HOME: childEnv?.HOME, OPENCLAW_STATE_DIR: childEnv?.OPENCLAW_STATE_DIR }).toEqual({
           HOME: instance!.homeDir,
           OPENCLAW_STATE_DIR: instance!.stateDir,
@@ -1433,13 +1649,20 @@ describe("SQLite flip mock endpoint ownership", () => {
           expect((result as AggregateError).errors[0]).toBe(configFailure);
           await expect(stat(instance!.stateDir)).resolves.toBeDefined();
           expect(await tryBind(publishedPort!)).toMatchObject({ code: "EADDRINUSE" });
+          expect(mockAtSettlement.closeCount).toBe(0);
+          expect(mockAtSettlement.exitCode).toBeNull();
+          expect(mockAtSettlement.signalCode).toBeNull();
         } else {
           expect(result).toMatchObject({
             ok: false,
             failures: [expect.stringContaining(configFailure.message)],
           });
           await expect(stat(instance!.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await tryBind(publishedPort!)).toBeUndefined();
+          // This direct Node child owns the socket; a released port may already be reused.
+          expect(mockAtSettlement.closeCount).toBe(1);
+          expect(mockAtSettlement.exitCode !== null || mockAtSettlement.signalCode !== null).toBe(
+            true,
+          );
         }
       } finally {
         for (const [child, timeout] of vi.mocked(stopChildProcess).mock.calls) {

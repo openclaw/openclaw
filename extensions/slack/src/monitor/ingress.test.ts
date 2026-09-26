@@ -22,6 +22,7 @@ import {
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
@@ -124,6 +125,7 @@ function attachBoltMemberIngress(params: {
   usersInfoFetch?: NonNullable<WebClientOptions["fetch"]>;
   pollIntervalMs?: number;
 }) {
+  installSlackTestRuntime();
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue: params.queue,

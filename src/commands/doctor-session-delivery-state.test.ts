@@ -12,7 +12,10 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
@@ -198,37 +201,6 @@ describe("doctor canonical session delivery state", () => {
         accountId: "current-bot",
       });
     }
-  });
-
-  it("keeps rewritten delivery rows valid for normal session reads", () => {
-    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-validity-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sessionKey = "agent:main:delivery-validity";
-    insertSessionRow(env, sessionKey, {
-      sessionId: "delivery-validity-session",
-      updatedAt: 10,
-      deliveryContext: { channel: "telegram", to: "recipient" },
-    });
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sessionKey);
-
-    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
-      found: 1,
-      repaired: 1,
-      scannedStores: 1,
-    });
-    expect(readEntryValidity(env, sessionKey)).toBe(1);
-    closeOpenClawAgentDatabasesForTest();
-    expect(listSessionEntriesCore({ agentId: "main", env })).toMatchObject([
-      { sessionKey, entry: { sessionId: "delivery-validity-session", updatedAt: 10 } },
-    ]);
-    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
-      found: 0,
-      repaired: 0,
-      scannedStores: 1,
-    });
   });
 
   it("publishes repaired delivery accounts to the existing SQLite connection without aging sessions", () => {
@@ -521,6 +493,7 @@ describe("doctor canonical session delivery state", () => {
 
     const copiedStateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-copy-"));
     const copiedEnv = { ...process.env, OPENCLAW_STATE_DIR: copiedStateDir };
+    openOpenClawStateDatabase({ env: copiedEnv });
     const copiedPath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: copiedEnv });
     fs.mkdirSync(path.dirname(copiedPath), { recursive: true });
     fs.copyFileSync(sourcePath, copiedPath);

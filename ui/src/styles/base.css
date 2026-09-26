@@ -270,6 +270,9 @@
   --space-7: 32px;
   --space-8: 40px;
 
+  /* Shared by mobile headers, transcripts, and independently loaded composers. */
+  --chat-mobile-edge-inset: var(--space-3);
+
   /* One inset shared by every widget frame (chat preview panel, board card)
      so agent-authored widget documents meet identical breathing room on all
      surfaces. Board layout math mirrors this value numerically. */
@@ -302,6 +305,9 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
+  /* Theme-facing composer corner family; themes may pick e.g. `scoop scoop round round`.
+     Engines without corner-shape keep the circular radius. */
+  --chat-composer-corner-shape: superellipse(1.5);
 
   /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
      = panel radius 10. Shared knobs keep transient menus from drifting again. */
@@ -369,15 +375,15 @@
    border-radius declaration in its home file, which always loads later.
    Each selector below is doubled (`.card.card`) to outrank that one bare
    declaration by specificity regardless of load order — deliberately not
-   !important, so a genuinely more specific state override elsewhere (e.g.
-   `.chat:has(> .agent-chat__search-bar)`) keeps winning as it did before
-   this block existed, instead of every such rule needing a matching
-   !important of its own. */
+   !important, so a genuinely more specific state override elsewhere keeps
+   winning as it did before this block existed, instead of every such rule
+   needing a matching !important of its own. */
 @supports (corner-shape: superellipse(1.5)) {
   :root {
     --openclaw-corner-radius-scale: 1.25;
   }
 
+  .agent-chat__search-bar.agent-chat__search-bar,
   .exec-approval-card.exec-approval-card,
   .exec-approval-list.exec-approval-list,
   .cmd-palette.cmd-palette,
@@ -405,27 +411,23 @@
     corner-shape: superellipse(1.5);
   }
 
-  .code-block-wrapper.code-block-wrapper {
+  /* CRT owns its near-square geometry; rounded transcript bubbles share the fence shape. */
+  .code-block-wrapper.code-block-wrapper,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    .chat-bubble,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
+    > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
   .option-card.option-card {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  /* The transcript search bar's bottom corners round with its .chat ancestor
-     so the two edges stay optically parallel; only two corners are rounded,
-     and .chat:has(> .agent-chat__search-bar) zeroes .chat's own radius while
-     the search bar is present (see chat/layout.css). corner-shape still
-     needs to be set here even though the top two corners are 0 (a 0-radius
-     corner draws no curve either way): the bottom two are standing in for
-     .chat's own squircle corner at the seam, so they need the same shape,
-     not just the same radius, to actually match it. */
-  .agent-chat__search-bar.agent-chat__search-bar {
-    border-radius: 0 0 calc(14px * var(--openclaw-corner-radius-scale))
-      calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
@@ -497,8 +499,14 @@
   }
 }
 
-/* The claw family deepens only the text-bearing destructive fill. */
+/* Named palette overrides win even when their stylesheet loads before the app. */
+:root:where([data-theme]) {
+  --primary-hover: var(--accent-hover);
+}
+
+/* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
+  --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
 }
@@ -1151,7 +1159,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    /* A positive duration enables the default transition-property: all, even
+       on static controls. Keep reduced-motion updates immediate instead. */
+    transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
 }

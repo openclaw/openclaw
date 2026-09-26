@@ -15,19 +15,20 @@ import {
   hashConfigIncludeRaw,
   resolveConfigIncludeWritePath,
 } from "./includes.js";
-import { hashConfigRaw, rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
+import { hashConfigRaw } from "./io.read-helpers.js";
 import type { ConfigWriteOptions } from "./io.types.js";
 import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import {
   captureConfigFileWritePathProof,
   createGuardedConfigFileSystem,
-  createConfigWriteAuthorityGuard,
   rollbackConfigFileWriteIfUnchanged,
   type ConfigFileWriteRollbackProof,
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot } from "./types.js";
+import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
 export function formatJsonFileValue(value: unknown): string {
   rejectConfigNonFiniteNumbers(value);

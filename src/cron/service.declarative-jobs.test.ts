@@ -371,6 +371,7 @@ describe("CronService declarative jobs", () => {
       store: {},
       skillLibrarySelections: job.skillLibrarySelections,
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
     const restarted = resolveCronSession({
@@ -381,6 +382,7 @@ describe("CronService declarative jobs", () => {
       store: { "agent:ops:cron:test": first.sessionEntry },
       skillLibrarySelections: [],
       forceNew: true,
+      lifecycleTimestamps: {},
     });
     expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
   });
@@ -773,7 +775,7 @@ describe("CronService declarative jobs", () => {
     );
     for (const id of ["nested/job", "..\\job", "nul\0job"]) {
       await expect(writer.add(declaration({ declarationKey: undefined, id }))).rejects.toThrow(
-        "invalid cron task run job id",
+        "invalid cron run job id",
       );
     }
     writer.stop();

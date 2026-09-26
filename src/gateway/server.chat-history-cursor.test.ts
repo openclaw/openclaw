@@ -33,7 +33,10 @@ import * as userProfiles from "../state/user-profiles.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  disposeSessionReadContexts,
+  initializeSessionReadContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -108,9 +111,8 @@ async function createCursorSession(initialEvents?: unknown[]) {
       }),
     ]) as Parameters<typeof replaceTranscriptEvents>[1],
   );
-  const context = createDirectChatContext({
-    getRuntimeConfig: () => ({ session: { store: storePath } }),
-  });
+  const config = { session: { store: storePath } };
+  const context = createDirectChatContext({ getRuntimeConfig: () => config });
   await initializeSessionReadContext(context);
   return { context, storePath };
 }
@@ -156,6 +158,7 @@ function renderedMessages(messages: readonly unknown[]): unknown[] {
 }
 
 afterEach(async () => {
+  await disposeSessionReadContexts();
   for (const directory of tempDirs.dirs) {
     await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);
@@ -715,21 +718,6 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test.each([
-    {
-      name: "plain messages",
-      append: async (storePath: string) => {
-        const user = await appendTranscriptMessage(currentScope(storePath), {
-          eventId: "user-2",
-          parentId: "cached",
-          message: { role: "user", content: "question", timestamp: 2 },
-        });
-        await appendTranscriptMessage(currentScope(storePath), {
-          eventId: "assistant-2",
-          parentId: user?.messageId,
-          message: { role: "assistant", content: "answer", timestamp: 3 },
-        });
-      },
-    },
     {
       name: "tool result pairing",
       append: async (storePath: string) => {

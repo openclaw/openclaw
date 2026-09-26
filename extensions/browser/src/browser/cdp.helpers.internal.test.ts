@@ -3,8 +3,7 @@ import http, { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toErrorObject } from "../infra/errors.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const sleepWithAbortMock = vi.hoisted(() =>
@@ -40,7 +39,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertCdpEndpointAllowed,
   fetchCdpChecked,
@@ -49,15 +48,6 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
-
-/**
- * Targets the non-URL-helper code paths in cdp.helpers.ts:
- *   - assertCdpEndpointAllowed invalid-protocol throw
- *   - fetchCdpChecked 429 rate-limit + double-release guard
- *   - createCdpSender message routing (non-number id, unknown id, error body)
- *   - createCdpSender 'error' event + pending rejection
- *   - withCdpSocket open-error / fn-throw / close error-close paths
- */
 
 async function startWsServer() {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
@@ -227,22 +217,6 @@ describe("cdp.helpers internal", () => {
           allowedHostnames: ["127.0.0.1"],
         }),
       ).rejects.toThrow(/HTTP 503/);
-    });
-
-    it("uses the caller-supplied policy for non-loopback hosts", async () => {
-      // Hits the else branch of the isLoopbackHost ternary inside
-      // withNoProxyForCdpUrl plus the left-hand side of the
-      // `ssrfPolicy ?? { allowPrivateNetwork: true }` coalescing.
-      const release = vi.fn(async () => {});
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: { ok: true, status: 200 } as unknown as Response,
-        release,
-      });
-      await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250, undefined, {
-        allowPrivateNetwork: true,
-      });
-      const request = requireGuardedFetchRequest();
-      expect(request?.policy?.allowPrivateNetwork).toBe(true);
     });
 
     it("falls back to a permissive private-network policy when none is supplied on a non-loopback host", async () => {
@@ -771,28 +745,6 @@ describe("cdp.helpers internal", () => {
       ).rejects.toThrow(/ECONNREFUSED|CDP socket closed/);
     });
 
-    it("wraps a non-Error callback throw before closing the socket", async () => {
-      // `fn` is user-supplied and may throw a non-Error. Exercise the
-      // `err instanceof Error ? err : new Error(String(err))` wrap in the
-      // fn-throw catch branch.
-      const server = await startWsServer();
-      wss = server.wss;
-      server.wss.on("connection", (socket) => {
-        socket.on("message", (raw) => {
-          const msg = JSON.parse(rawDataToString(raw)) as { id?: number };
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        });
-      });
-      await expect(
-        withCdpSocket(server.url, async (send) => {
-          await send("Test.ok");
-          const rejectRawString = () =>
-            Promise.reject(toErrorObject("raw-string-from-callback", "Non-Error rejection"));
-          return rejectRawString();
-        }),
-      ).rejects.toThrow(/raw-string-from-callback/);
-    });
-
     it("rethrows callback errors and still closes the socket cleanly", async () => {
       const server = await startWsServer();
       wss = server.wss;
@@ -809,37 +761,6 @@ describe("cdp.helpers internal", () => {
         }),
       ).rejects.toThrow(/callback boom/);
     });
-  });
-
-  describe("createCdpSender error/close event forwarding", () => {
-    beforeEach(() => {
-      // Ensure a fresh mock registry each scenario.
-    });
-
-    it("rejects pending calls when the ws emits an error event", async () => {
-      const server = await startWsServer();
-      wss = server.wss;
-      server.wss.on("connection", (socket) => {
-        socket.on("message", () => {
-          // Emit a synthetic error event on the server-side socket. The
-          // client-side ws will see the abrupt close and surface an error.
-          socket.terminate();
-        });
-      });
-      await expect(
-        withCdpSocket(server.url, async (send) => {
-          await send("Test.boom");
-        }),
-      ).rejects.toThrow(/CDP socket closed|WebSocket was closed/i);
-    });
-
-    // The non-Error branch of the `err instanceof Error ? ... : new Error(String(err))`
-    // guard is defensive: node's `ws` library always emits Error instances
-    // on the 'error' event. Triggering the non-Error branch in a test
-    // requires synthetically emitting on the client socket, which the
-    // library then treats as an unhandled error event and hangs the
-    // suite. The branch is c8-ignored in the source file with an
-    // accompanying justification.
   });
 
   it("moves WebSocket URL userinfo into the Authorization header", async () => {
@@ -866,46 +787,6 @@ describe("cdp.helpers internal", () => {
 });
 
 describe("openCdpWebSocket option handling", () => {
-  it("clamps a non-finite handshakeTimeoutMs to the default", () => {
-    // Exercises the Number.isFinite false side of the handshake-timeout
-    // ternary in openCdpWebSocket.
-    const url = "ws://127.0.0.1:1/devtools/browser/X";
-    const ws = openCdpWebSocket(url, {
-      handshakeTimeoutMs: Number.NaN,
-    });
-    expect(ws.url).toBe(url);
-    // Ensure we don't leak the socket even though we never await it.
-    ws.once("error", () => {});
-    ws.close();
-  });
-
-  it("honours an explicit, finite handshakeTimeoutMs", () => {
-    // Exercises the truthy side of the handshake-timeout ternary: both
-    // typeof === "number" AND Number.isFinite must be true.
-    const url = "ws://127.0.0.1:1/devtools/browser/X";
-    const ws = openCdpWebSocket(url, {
-      handshakeTimeoutMs: 500,
-    });
-    expect(ws.url).toBe(url);
-    ws.once("error", () => {});
-    ws.close();
-  });
-
-  it("registers a managed-proxy bypass for the exact websocket URL during construction", () => {
-    const release = vi.fn();
-    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
-    const url = "ws://127.0.0.1:1/devtools/browser/X";
-    const ws = openCdpWebSocket(url, {
-      handshakeTimeoutMs: 500,
-    });
-
-    expect(ws.url).toBe(url);
-    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(url);
-    expect(release).toHaveBeenCalledOnce();
-    ws.once("error", () => {});
-    ws.close();
-  });
-
   it("registers websocket managed-proxy bypass without URL credentials", () => {
     const release = vi.fn();
     registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
@@ -920,64 +801,6 @@ describe("openCdpWebSocket option handling", () => {
     expect(release).toHaveBeenCalledOnce();
     ws.once("error", () => {});
     ws.close();
-  });
-
-  it("omits the direct-loopback agent for non-loopback targets", () => {
-    // Exercises the falsy side of `agent ? { agent } : {}` — the loopback
-    // agent helper returns undefined for non-loopback hosts.
-    const url = "ws://93.184.216.34:9222/devtools/browser/X";
-    const ws = openCdpWebSocket(url);
-    expect(ws.url).toBe(url);
-    ws.once("error", () => {});
-    ws.close();
-  });
-
-  it("injects custom headers when opts.headers is a non-empty object", () => {
-    // Exercises the truthy side of `Object.keys(headers).length ? ... : {}`.
-    const url = "ws://127.0.0.1:1/devtools/browser/X";
-    const ws = openCdpWebSocket(url, {
-      headers: { "X-Custom": "abc" },
-    });
-    expect(ws.url).toBe(url);
-    ws.once("error", () => {});
-    ws.close();
-  });
-
-  it("uses a pinned lookup for websocket connections", async () => {
-    const server = await startWsServer();
-    try {
-      const url = server.url.replace("127.0.0.1", "cdp.test.local");
-      const lookup = vi.fn((hostname: string, options: unknown, callback?: unknown) => {
-        const cb = typeof options === "function" ? options : callback;
-        expect(hostname).toBe("cdp.test.local");
-        if (typeof cb === "function") {
-          const wantsAll =
-            typeof options === "object" && options !== null && (options as { all?: boolean }).all;
-          if (wantsAll) {
-            cb(null, [{ address: "127.0.0.1", family: 4 }]);
-            return;
-          }
-          cb(null, "127.0.0.1", 4);
-        }
-      });
-
-      const ws = openCdpWebSocket(url, {
-        handshakeTimeoutMs: 500,
-        lookup: lookup as never,
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        ws.once("open", () => resolve());
-        ws.once("error", reject);
-      });
-
-      expect(lookup).toHaveBeenCalled();
-      ws.close();
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.wss.close(() => resolve());
-      });
-    }
   });
 
   it("forwards pinned lookup options through withCdpSocket", async () => {

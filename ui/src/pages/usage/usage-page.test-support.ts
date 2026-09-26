@@ -25,8 +25,15 @@ export type TestUsagePage = HTMLElement & {
   readonly updateComplete: Promise<boolean>;
 };
 
+type UsagePublicationFixture = {
+  agentId?: string;
+  usageUpdatedAt: number;
+  usageRefreshFailed?: boolean;
+};
+
 export function contextWithClient(client: GatewayBrowserClient): ApplicationContext & {
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  publishUsage: (publication: UsagePublicationFixture) => void;
 } {
   const subscribe = () => () => undefined;
   let snapshot = {
@@ -39,13 +46,38 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     lastErrorCode: null,
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const selectionState: ApplicationContext["agentSelection"]["state"] = {
+    selectedId: null,
+    scopeId: null,
+  };
+  const selectionListeners = new Set<
+    Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]
+  >();
+  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  };
   return {
-    setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
+    setGatewaySnapshot,
+    publishUsage: ({
+      agentId = "main",
+      usageUpdatedAt,
+      usageRefreshFailed,
+    }: UsagePublicationFixture) =>
+      setGatewaySnapshot({
+        usagePublications: {
+          ...snapshot.usagePublications,
+          [agentId]: {
+            usageUpdatedAt,
+            committedAt: usageRefreshFailed
+              ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+              : usageUpdatedAt,
+            usageRefreshFailed: usageRefreshFailed || undefined,
+          },
+        },
+      }),
     basePath: "",
     gateway: {
       get snapshot() {
@@ -62,10 +94,18 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
       subscribe,
     },
     agentSelection: {
-      state: { selectedId: null, scopeId: null },
+      state: selectionState,
       set: vi.fn(),
-      setScope: vi.fn(),
-      subscribe,
+      setScope: vi.fn((scopeId: string | null) => {
+        selectionState.scopeId = scopeId;
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      }),
+      subscribe: (listener: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
@@ -90,6 +130,28 @@ export async function createPage(
 export function focusDocument(): void {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+}
+
+export function createPendingUsageRouteData(
+  gateway: ApplicationContext["gateway"],
+  date: string,
+): UsageRouteData {
+  return {
+    gateway,
+    gatewaySnapshot: gateway.snapshot,
+    query: {
+      startDate: date,
+      endDate: date,
+      scope: "family",
+      timeZone: "local",
+      agentId: null,
+    },
+    result: null,
+    costSummary: null,
+    providerUsage: { state: "pending" },
+    loadedAtMs: null,
+    error: null,
+  };
 }
 
 export function cleanupUsagePageTest(): void {

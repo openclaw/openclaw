@@ -217,7 +217,14 @@ export function createControlledWorkerCompiler(
       ...env,
       ...preloadEnv,
     },
-    read: (): Array<{ pid: number; directory: string; inputs: number; outputs: number }> =>
+    read: (): Array<{
+      pid: number;
+      processStartTime: number;
+      isMainThread: boolean;
+      directory: string;
+      inputs: number;
+      outputs: number;
+    }> =>
       fs
         .readFileSync(receipt, "utf8")
         .trim()
@@ -288,6 +295,7 @@ export function workerProbe(
     import { it, expect, vi, inject } from 'vitest';
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
+    import { scriptModuleEntrypoints } from ${JSON.stringify(path.join(root, "scripts/script-module-runtime.test-support.mjs"))};
     import { vectorKnnProcessEntrypoint } from ${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts"))};
     import { runtimeProcessBuildEntries, runtimeProcessBuildEntrypoints } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
     import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
@@ -301,8 +309,9 @@ export function workerProbe(
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
     const retentionUrl = resolveRuntimeWorkerUrl(pluginRuntimeRetentionEntrypoint).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv).href;
     // Import acquisition must finish during collection, before any fixture hook starts.
-    const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl].every(url => fs.existsSync(new URL(url)));
+    const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl,scriptUrl].every(url => fs.existsSync(new URL(url)));
     vi.mock('node:child_process', async (original) => {
       const actual = await original();
       return {...actual, execFile: vi.fn(actual.execFile)};
@@ -347,8 +356,9 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
-          expect(tuiUrls).toHaveLength(4);
+          expect(tuiUrls).toHaveLength(5);
           expect(setupUrls).toHaveLength(2);
+          expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);

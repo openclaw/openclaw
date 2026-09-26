@@ -3,11 +3,12 @@
  *
  * Loads extensions, skills, prompts, themes, AGENTS files, and system prompt fragments for a cwd.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { expandTildePath } from "../../shared/tilde-path.js";
 import type { Skill } from "../../skills/loading/session.js";
 import { loadSkills } from "../../skills/loading/session.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
@@ -568,7 +569,13 @@ export class DefaultResourceLoader implements ResourceLoader {
         promptPaths,
         includeDefaults: false,
       });
-      promptsResult = this.dedupePrompts(allPrompts);
+      const { resources, diagnostics } = this.dedupeResources(
+        allPrompts,
+        "prompt",
+        (prompt) => prompt.name,
+        (prompt) => prompt.filePath,
+      );
+      promptsResult = { prompts: resources, diagnostics };
     }
     const resolvedPrompts = this.promptsOverride
       ? this.promptsOverride(promptsResult)
@@ -596,9 +603,14 @@ export class DefaultResourceLoader implements ResourceLoader {
       themesResult = { themes: [], diagnostics: [] };
     } else {
       const loaded = this.loadThemes(themePaths);
-      const deduped = this.dedupeThemes(loaded.themes);
+      const deduped = this.dedupeResources(
+        loaded.themes,
+        "theme",
+        (theme) => theme.name ?? "unnamed",
+        (theme) => theme.sourcePath,
+      );
       themesResult = {
-        themes: deduped.themes,
+        themes: deduped.resources,
         diagnostics: [...loaded.diagnostics, ...deduped.diagnostics],
       };
     }
@@ -724,16 +736,7 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   private resolveResourcePath(p: string): string {
-    const trimmed = p.trim();
-    let expanded = trimmed;
-    if (trimmed === "~") {
-      expanded = homedir();
-    } else if (trimmed.startsWith("~/")) {
-      expanded = join(homedir(), trimmed.slice(2));
-    } else if (trimmed.startsWith("~")) {
-      expanded = join(homedir(), trimmed.slice(1));
-    }
-    return resolve(this.cwd, expanded);
+    return resolve(this.cwd, expandTildePath(p));
   }
 
   private loadThemes(paths: string[]): {
@@ -778,22 +781,16 @@ export class DefaultResourceLoader implements ResourceLoader {
     }
 
     try {
-      const entries = readdirSync(dir, { withFileTypes: true });
+      const { entries, failedDirs } = walkDirectorySync(dir, {
+        maxDepth: 1,
+        symlinks: "follow",
+        include: (entry) => entry.kind === "file" && entry.name.endsWith(".json"),
+      });
+      const failure = failedDirs[0];
+      if (failure) {
+        throw failure.error;
+      }
       for (const entry of entries) {
-        let isFile = entry.isFile();
-        if (entry.isSymbolicLink()) {
-          try {
-            isFile = statSync(join(dir, entry.name)).isFile();
-          } catch {
-            continue;
-          }
-        }
-        if (!isFile) {
-          continue;
-        }
-        if (!entry.name.endsWith(".json")) {
-          continue;
-        }
         this.loadThemeFromFile(join(dir, entry.name), themes, diagnostics);
       }
     } catch (error) {
@@ -842,60 +839,35 @@ export class DefaultResourceLoader implements ResourceLoader {
     return { extensions, errors };
   }
 
-  private dedupePrompts(prompts: PromptTemplate[]): {
-    prompts: PromptTemplate[];
-    diagnostics: ResourceDiagnostic[];
-  } {
-    const seen = new Map<string, PromptTemplate>();
+  private dedupeResources<T>(
+    resources: T[],
+    resourceType: "prompt" | "theme",
+    getName: (resource: T) => string,
+    getPath: (resource: T) => string | undefined,
+  ): { resources: T[]; diagnostics: ResourceDiagnostic[] } {
+    const seen = new Map<string, T>();
     const diagnostics: ResourceDiagnostic[] = [];
-
-    for (const prompt of prompts) {
-      const existing = seen.get(prompt.name);
-      if (existing) {
-        diagnostics.push({
-          type: "collision",
-          message: `name "/${prompt.name}" collision`,
-          path: prompt.filePath,
-          collision: {
-            resourceType: "prompt",
-            name: prompt.name,
-            winnerPath: existing.filePath,
-            loserPath: prompt.filePath,
-          },
-        });
-      } else {
-        seen.set(prompt.name, prompt);
-      }
-    }
-
-    return { prompts: Array.from(seen.values()), diagnostics };
-  }
-
-  private dedupeThemes(themes: Theme[]): { themes: Theme[]; diagnostics: ResourceDiagnostic[] } {
-    const seen = new Map<string, Theme>();
-    const diagnostics: ResourceDiagnostic[] = [];
-
-    for (const t of themes) {
-      const name = t.name ?? "unnamed";
+    for (const resource of resources) {
+      const name = getName(resource);
       const existing = seen.get(name);
       if (existing) {
+        const path = getPath(resource);
         diagnostics.push({
           type: "collision",
-          message: `name "${name}" collision`,
-          path: t.sourcePath,
+          message: `name "${resourceType === "prompt" ? "/" : ""}${name}" collision`,
+          path,
           collision: {
-            resourceType: "theme",
+            resourceType,
             name,
-            winnerPath: existing.sourcePath ?? "<builtin>",
-            loserPath: t.sourcePath ?? "<builtin>",
+            winnerPath: getPath(existing) ?? "<builtin>",
+            loserPath: path ?? "<builtin>",
           },
         });
       } else {
-        seen.set(name, t);
+        seen.set(name, resource);
       }
     }
-
-    return { themes: Array.from(seen.values()), diagnostics };
+    return { resources: Array.from(seen.values()), diagnostics };
   }
 
   private discoverPromptFile(filename: "SYSTEM.md" | "APPEND_SYSTEM.md"): string | undefined {

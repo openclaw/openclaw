@@ -1,8 +1,12 @@
 import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import * as cli from "./cli-shared.js";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
-import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
+import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
+import type {
+  inspectMatrixDirectRooms,
+  MatrixDirectRoomCandidate,
+  repairMatrixDirectRooms,
+} from "./matrix/direct-management.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -14,30 +18,18 @@ const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
 
-type MatrixCliDirectRoomCandidate = {
-  roomId: string;
-  source: "account-data" | "joined";
-  strict: boolean;
-  joinedMembers: string[] | null;
-};
-
-type MatrixCliDirectRoomInspection = {
+type MatrixCliDirectRoomCandidate = Omit<MatrixDirectRoomCandidate, "explicit">;
+type MatrixCliDirectRoomInspection = Omit<
+  Awaited<ReturnType<typeof inspectMatrixDirectRooms>>,
+  "mappedRooms"
+> & {
   accountId: string;
-  remoteUserId: string;
-  selfUserId: string | null;
-  mappedRoomIds: string[];
   mappedRooms: MatrixCliDirectRoomCandidate[];
-  discoveredStrictRoomIds: string[];
-  activeRoomId: string | null;
 };
-
-type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection & {
-  encrypted: boolean;
-  createdRoomId: string | null;
-  changed: boolean;
-  directContentBefore: Record<string, string[]>;
-  directContentAfter: Record<string, string[]>;
-};
+type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection &
+  Omit<Awaited<ReturnType<typeof repairMatrixDirectRooms>>, keyof MatrixCliDirectRoomInspection> & {
+    encrypted: boolean;
+  };
 
 function printDirectRoomCandidate(room: MatrixCliDirectRoomCandidate): void {
   const members =
@@ -94,15 +86,7 @@ async function inspectMatrixDirectRoom(params: {
         client,
         remoteUserId: params.userId,
       });
-      return {
-        accountId: params.accountId,
-        remoteUserId: inspection.remoteUserId,
-        selfUserId: inspection.selfUserId,
-        mappedRoomIds: inspection.mappedRoomIds,
-        mappedRooms: inspection.mappedRooms.map(toCliDirectRoomCandidate),
-        discoveredStrictRoomIds: inspection.discoveredStrictRoomIds,
-        activeRoomId: inspection.activeRoomId,
-      };
+      return toCliDirectRoomInspection(params.accountId, inspection);
     },
     "persist",
   );
@@ -113,7 +97,7 @@ async function repairMatrixDirectRoom(params: {
   userId: string;
 }): Promise<MatrixCliDirectRoomRepair> {
   const cfg = getMatrixRuntime().config.current() as CoreConfig;
-  const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
+  const accountConfig = resolveMatrixAccountConfig({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
@@ -122,17 +106,11 @@ async function repairMatrixDirectRoom(params: {
     const repaired = await repairMatrixDirectRooms({
       client,
       remoteUserId: params.userId,
-      encrypted: account.config.encryption === true,
+      encrypted: accountConfig.encryption === true,
     });
     return {
-      accountId: params.accountId,
-      remoteUserId: repaired.remoteUserId,
-      selfUserId: repaired.selfUserId,
-      mappedRoomIds: repaired.mappedRoomIds,
-      mappedRooms: repaired.mappedRooms.map(toCliDirectRoomCandidate),
-      discoveredStrictRoomIds: repaired.discoveredStrictRoomIds,
-      activeRoomId: repaired.activeRoomId,
-      encrypted: account.config.encryption === true,
+      ...toCliDirectRoomInspection(params.accountId, repaired),
+      encrypted: accountConfig.encryption === true,
       createdRoomId: repaired.createdRoomId,
       changed: repaired.changed,
       directContentBefore: repaired.directContentBefore,
@@ -141,12 +119,23 @@ async function repairMatrixDirectRoom(params: {
   });
 }
 
-function toCliDirectRoomCandidate(room: MatrixDirectRoomCandidate): MatrixCliDirectRoomCandidate {
+function toCliDirectRoomInspection(
+  accountId: string,
+  inspection: Omit<MatrixCliDirectRoomInspection, "accountId">,
+): MatrixCliDirectRoomInspection {
   return {
-    roomId: room.roomId,
-    source: room.source,
-    strict: room.strict,
-    joinedMembers: room.joinedMembers,
+    accountId,
+    remoteUserId: inspection.remoteUserId,
+    selfUserId: inspection.selfUserId,
+    mappedRoomIds: inspection.mappedRoomIds,
+    mappedRooms: inspection.mappedRooms.map(({ roomId, source, strict, joinedMembers }) => ({
+      roomId,
+      source,
+      strict,
+      joinedMembers,
+    })),
+    discoveredStrictRoomIds: inspection.discoveredStrictRoomIds,
+    activeRoomId: inspection.activeRoomId,
   };
 }
 

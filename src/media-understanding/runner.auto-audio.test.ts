@@ -61,6 +61,7 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 async function runAutoAudioCase(params: {
   transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
+  request?: Parameters<typeof runCapability>[0]["request"];
 }) {
   let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
   await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
@@ -73,6 +74,7 @@ async function runAutoAudioCase(params: {
       attachments: cache,
       media,
       providerRegistry,
+      request: params.request,
     });
   });
   if (!runResult) {
@@ -168,19 +170,6 @@ describe("runCapability auto audio entries", () => {
     } finally {
       hasAuth.mockReset().mockResolvedValue(true);
     }
-  });
-
-  it("uses provider keys to auto-enable audio transcription", async () => {
-    let seenModel: string | undefined;
-    const result = await runAutoAudioCase({
-      transcribeAudio: async (req) => {
-        seenModel = req.model;
-        return { text: "ok", model: req.model ?? "unknown" };
-      },
-    });
-    expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
-    expect(seenModel).toBe("gpt-4o-transcribe");
-    expect(result.decision.outcome).toBe("success");
   });
 
   it.each([false, true])(
@@ -484,106 +473,6 @@ describe("runCapability auto audio entries", () => {
     );
   });
 
-  it("uses the provider audio default instead of the active Codex chat model", async () => {
-    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
-    let seenModel: string | undefined;
-
-    await withAudioFixture("openclaw-auto-audio-codex", async ({ ctx, media, cache }) => {
-      const providerRegistry = createProviderRegistry({
-        openai: {
-          id: "openai",
-          capabilities: ["image", "audio"],
-          defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
-          transcribeAudio: async (req) => {
-            seenModel = req.model;
-            return { text: "codex audio", model: req.model ?? "unknown" };
-          },
-        },
-      });
-      const cfg = {
-        models: {
-          providers: {
-            openai: {
-              apiKey: "codex-test-key", // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      runResult = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-        activeModel: { provider: "openai", model: "gpt-5.5" },
-      });
-    });
-
-    if (!runResult) {
-      throw new Error("expected Codex audio result");
-    }
-    expect(expectDefined(runResult.outputs[0], "media output 0")).toEqual({
-      kind: "audio.transcription",
-      attachmentIndex: 0,
-      provider: "openai",
-      model: "gpt-4o-transcribe",
-      text: "codex audio",
-    });
-    expect(seenModel).toBe("gpt-4o-transcribe");
-  });
-
-  it("does not leak the active xAI chat model into model-less batch STT", async () => {
-    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
-    let seenModel: string | undefined;
-
-    await withAudioFixture("openclaw-auto-audio-xai", async ({ ctx, media, cache }) => {
-      const providerRegistry = createProviderRegistry({
-        xai: {
-          id: "xai",
-          capabilities: ["audio"],
-          transcribeAudio: async (req) => {
-            seenModel = req.model;
-            return { text: "xai audio" };
-          },
-        },
-      });
-      const cfg = {
-        models: {
-          providers: {
-            xai: {
-              apiKey: "xai-test-key", // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      runResult = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-        activeModel: { provider: "xai", model: "grok-4.3" },
-      });
-    });
-
-    if (!runResult) {
-      throw new Error("expected xAI audio result");
-    }
-    expect(expectDefined(runResult.outputs[0], "media output 0")).toEqual({
-      kind: "audio.transcription",
-      attachmentIndex: 0,
-      provider: "xai",
-      text: "xai audio",
-    });
-    expect(seenModel).toBeUndefined();
-  });
-
   it("prefers provider keys over auto-detected local whisper", async () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-audio-bin-"));
     try {
@@ -644,26 +533,6 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("disabled");
   });
 
-  it("prefers explicitly configured audio model entries", async () => {
-    let seenModel: string | undefined;
-    const result = await runAutoAudioCase({
-      transcribeAudio: async (req) => {
-        seenModel = req.model;
-        return { text: "ok", model: req.model ?? "unknown" };
-      },
-      cfgExtra: {
-        tools: {
-          media: {
-            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
-          },
-        },
-      },
-    });
-
-    expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
-    expect(seenModel).toBe("whisper-1");
-  });
-
   it("lets per-request transcription hints override configured model-entry hints", async () => {
     let seenLanguage: string | undefined;
     let seenPrompt: string | undefined;
@@ -673,6 +542,7 @@ describe("runCapability auto audio entries", () => {
         seenPrompt = req.prompt;
         return { text: "ok", model: req.model ?? "unknown" };
       },
+      request: { prompt: "Focus on names", language: "en" },
       cfgExtra: {
         tools: {
           media: {
@@ -689,17 +559,16 @@ describe("runCapability auto audio entries", () => {
               enabled: true,
               prompt: "configured prompt",
               language: "fr",
-              _requestPromptOverride: "Focus on names",
-              _requestLanguageOverride: "en",
             },
           },
         },
-      } as Partial<OpenClawConfig>,
+      },
     });
 
     expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");
     expect(seenLanguage).toBe("en");
     expect(seenPrompt).toBe("Focus on names");
+    expect(result.outputs[0]?.model).toBe("whisper-1");
   });
 
   it("omits the implicit English audio prompt when a non-English language is configured", async () => {

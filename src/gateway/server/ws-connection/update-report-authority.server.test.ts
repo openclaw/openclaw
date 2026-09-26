@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import {
@@ -13,7 +14,7 @@ import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -22,6 +23,7 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const mocks = vi.hoisted(() => ({
   submitGithubIssue: vi.fn(),
+  reconcileGithubIssue: vi.fn(),
   getLatest: vi.fn<() => RestartSentinelPayload | null>(),
   refreshLatest: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
 }));
@@ -30,7 +32,11 @@ vi.mock("../../../infra/github-issue.js", async () => {
   const actual = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
     "../../../infra/github-issue.js",
   );
-  return { ...actual, submitGithubIssue: mocks.submitGithubIssue };
+  return {
+    ...actual,
+    submitGithubIssue: mocks.submitGithubIssue,
+    reconcileGithubIssue: mocks.reconcileGithubIssue,
+  };
 });
 
 vi.mock("../../server-restart-sentinel.js", async () => {
@@ -121,6 +127,7 @@ function createReportHarness(params: { getGeneration: () => string }) {
   const harness = createDispatchTestHarness({
     extraHandlers: { "update.report": handler },
     buildRequestContext: () => ({
+      getRuntimeConfig: () => ({}),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     }),
     getRequiredSharedGatewaySessionGeneration: params.getGeneration,
@@ -416,33 +423,72 @@ describe("update report live authority boundary", () => {
   );
 
   it.each([
-    { label: "operator.write", scopes: ["operator.write"] },
-    { label: "non-owner administrator", scopes: ["operator.admin"] },
-  ])("rejects an identified $label before report state or transport", async ({ scopes }) => {
-    const client = createOperatorWsClient({
-      connId: `report-denied-${scopes[0]}`,
-      scopes,
-    });
-    identifyNonOwner(client);
-    const { harness } = createReportHarness({ getGeneration: () => "current" });
+    { label: "operator.write", scopes: ["operator.write"], allowed: false },
+    { label: "named administrator", scopes: ["operator.admin"], allowed: true },
+  ])(
+    "enforces the report publication boundary for an identified $label",
+    async ({ scopes, allowed }) => {
+      const client = createOperatorWsClient({
+        connId: `report-denied-${scopes[0]}`,
+        scopes,
+      });
+      identifyNonOwner(client);
+      const { harness } = createReportHarness({ getGeneration: () => "current" });
 
-    await harness.dispatcher.dispatch(
-      {
-        type: "req",
-        id: `denied-${scopes[0]}`,
-        method: "update.report",
-        params: { action: "preview", attemptId: "authority-proof" },
-      },
-      client,
-    );
-    const response = await harness.awaitResponseFrame(`denied-${scopes[0]}`);
+      await harness.dispatcher.dispatch(
+        {
+          type: "req",
+          id: `denied-${scopes[0]}`,
+          method: "update.report",
+          params: { action: "preview", attemptId: "authority-proof" },
+        },
+        client,
+      );
+      const response = await harness.awaitResponseFrame(`denied-${scopes[0]}`);
 
-    expect(response).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-    expect(mocks.refreshLatest).not.toHaveBeenCalled();
-    expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
-    expect(await countReportFiles()).toBe(0);
-    expect(countReportReceipts()).toBe(0);
-  });
+      expect(await countReportFiles()).toBe(0);
+      expect(countReportReceipts()).toBe(0);
+      if (!allowed) {
+        expect(response).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+        expect(mocks.refreshLatest).not.toHaveBeenCalled();
+      } else {
+        expect(response).toMatchObject({ ok: true, payload: { status: "ready" } });
+        const preview = response.payload;
+        if (!isRecord(preview) || typeof preview.previewDigest !== "string") {
+          throw new Error("Missing report preview");
+        }
+        await dispatchSubmit({
+          client,
+          harness,
+          id: "browser-handoff",
+          previewDigest: preview.previewDigest,
+        });
+        const submitted = await harness.awaitResponseFrame("browser-handoff");
+        expect(submitted).toMatchObject({ ok: true, payload: { status: "fallback" } });
+        if (!isRecord(submitted.payload) || typeof submitted.payload.fallbackUrl !== "string") {
+          throw new Error("Missing browser handoff");
+        }
+        const url = new URL(submitted.payload.fallbackUrl);
+        expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
+        expect(url.searchParams.get("body")).toBe(preview.body);
+        expect(url.searchParams.get("title")).toBe(preview.title);
+        await dispatchSubmit({
+          client,
+          harness,
+          id: "browser-repeat",
+          previewDigest: preview.previewDigest,
+        });
+        expect(await harness.awaitResponseFrame("browser-repeat")).toMatchObject({
+          ok: true,
+          payload: { status: "duplicate", fallbackUrl: submitted.payload.fallbackUrl },
+        });
+        expect(countReportReceipts()).toBe(1);
+        expect(await countReportFiles()).toBe(1);
+      }
+      expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
+      expect(mocks.reconcileGithubIssue).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { change: "shared-auth", closeReason: "gateway auth changed" },

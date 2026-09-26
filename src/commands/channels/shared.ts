@@ -154,8 +154,3 @@ export function buildChannelAccountLine(
   });
   return `- ${labelText}: ${bits.join(", ")}`;
 }
-
-/** Return true when the command should use its interactive wizard path. */
-export function shouldUseWizard(params?: { hasFlags?: boolean }) {
-  return params?.hasFlags === false;
-}

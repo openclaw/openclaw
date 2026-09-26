@@ -7,6 +7,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -25,7 +26,6 @@ import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
 } from "./agent-runner-fallback-cycle.types.js";
-import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
@@ -207,7 +207,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {
-        emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
+        emitAgentEvent({
+          runId: params.runId,
+          ...(turn.sessionKey ? { sessionKey: turn.sessionKey } : {}),
+          stream: "lifecycle",
+          data: { phase: "fallback_step", ...step },
+        });
       },
       runCandidate: async (provider, model, runOptions) => {
         clearAgentRunTerminalWriteContext(params.preparedRunAdmission.operationalRunInstance);
@@ -325,6 +330,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           const candidate = await runEmbeddedFallbackCandidate({
             ...common,
             effectiveRun: params.effectiveRun,
+            directBlockDeliveries: params.directBlockDeliveries,
             sessionRuntimeOverride: runtime.sessionRuntimeOverride,
             getLifecycleGeneration: () => params.state.lifecycleGeneration,
             onLifecycleGeneration: (generation) => {

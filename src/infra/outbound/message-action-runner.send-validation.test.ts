@@ -44,7 +44,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -158,6 +158,7 @@ describe("runMessageAction send validation", () => {
       reasonCode: "message_target_missing",
       policyRef: "message-target:required",
     });
+    await expect(failure).rejects.toThrow(/requires a target/i);
   });
 
   it("types disabled broadcast as an outcome-owning policy denial", async () => {
@@ -173,23 +174,6 @@ describe("runMessageAction send validation", () => {
     });
   });
 
-  it("preserves the missing-target user-facing error", async () => {
-    await expect(
-      runMessageAction({
-        cfg: emptyConfig,
-        action: "send",
-        params: {
-          message: "telegram reply",
-        },
-        toolContext: {
-          currentChannelProvider: "telegram",
-        },
-        sessionKey: "agent:main:telegram:direct:123456789",
-        sourceReplyDeliveryMode: "message_tool_only",
-      }),
-    ).rejects.toThrow(/requires a target/i);
-  });
-
   it("strips unsupported citation control markers from internal UI source replies", async () => {
     const result = await runMessageAction({
       cfg: emptyConfig,
@@ -200,7 +184,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -226,7 +210,7 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "automatic",
       }),
     ).rejects.toThrow(/requires a target/i);
@@ -264,7 +248,7 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "message_tool_only",
         dryRun: true,
       });

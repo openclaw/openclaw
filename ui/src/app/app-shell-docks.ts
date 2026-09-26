@@ -9,7 +9,7 @@ import {
   isDesktopPanelAvailable,
 } from "./panel-availability.ts";
 export function renderShellDocks(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   navDrawerOpen: boolean,
   suppressed: boolean,
   selectedAgentId: string,

@@ -8,7 +8,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 import { sessionMachineParts } from "./session-machine.ts";
@@ -17,24 +16,9 @@ export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>[
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"]): string {
-  switch (state) {
-    case "open":
-      return t("chat.pullRequests.open");
-    case "draft":
-      return t("chat.pullRequests.draft");
-    case "merged":
-      return t("chat.pullRequests.merged");
-    case "closed":
-      return t("chat.pullRequests.closed");
-    default:
-      return state satisfies never;
-  }
-}
-
 function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSummary): string {
   const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
-  return `${numbers} · ${pullRequestStateLabel(summary.state)}`;
+  return `${numbers} · ${t(`chat.pullRequests.${summary.state}`)}`;
 }
 
 function renderSessionRowBadge(
@@ -63,7 +47,6 @@ function renderSessionRowBadge(
 
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
-  workspaceKind?: "worktree" | "checkout";
   incognito?: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
@@ -110,7 +93,6 @@ export function renderSessionRowBadges(params: {
       : "";
   if (
     !params.incognito &&
-    !params.workspaceKind &&
     !pullRequestLabel &&
     !params.hasApproval &&
     attentionCount === 0 &&
@@ -152,13 +134,6 @@ export function renderSessionRowBadges(params: {
     : placementLabel;
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
-    ${
-      params.workspaceKind
-        ? html`<span class="session-row-workspace" data-workspace-kind=${params.workspaceKind}
-            >${t(`sessionsView.workspaceKinds.${params.workspaceKind}`)}</span
-          >`
-        : nothing
-    }
     ${
       params.incognito
         ? renderSessionRowBadge(
@@ -222,64 +197,4 @@ export function renderSessionRowBadges(params: {
         : nothing
     }
   </span>`;
-}
-
-export function resolveSidebarConnectionStatus(props: {
-  offline: boolean;
-  phase?: ApplicationGatewaySnapshot["phase"];
-  restartPending?: boolean;
-  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
-}) {
-  if (props.restartPending) {
-    return "restarting";
-  }
-  switch (props.suspensionPhase) {
-    case "preparing":
-    case "draining":
-      return "suspending";
-    case "prepared":
-      return "suspended";
-    default:
-      if (props.phase === "connecting" || props.phase === "starting") {
-        return "connecting";
-      }
-      return props.offline ? "offline" : null;
-  }
-}
-
-export function renderSidebarConnectionStatus(props: {
-  kind: NonNullable<ReturnType<typeof resolveSidebarConnectionStatus>>;
-  queuedOutboxCount?: number;
-  title?: string;
-  onRetry: () => void;
-}) {
-  if (props.kind !== "offline") {
-    return html`<span
-      class=${`sidebar-footer-bar__status sidebar-footer-bar__status--${props.kind}`}
-      role="status"
-      aria-live="polite"
-      ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-        `connection.${props.kind}`,
-      )}</span
-    >`;
-  }
-  const offline = t("common.offline");
-  const count = props.queuedOutboxCount ?? 0;
-  const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
-  return html`<openclaw-tooltip .content=${props.title ?? ""}>
-    <button
-      type="button"
-      class="sidebar-footer-bar__status"
-      aria-live="polite"
-      aria-label=${`${offline} — ${t("connection.retryNow")}${queued ? ` — ${queued}` : ""}`}
-      @click=${props.onRetry}
-    >
-      <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
-        class="sidebar-footer-bar__status-detail"
-        >· ${t("connection.reconnecting")}</span
-      >${
-        queued ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>` : nothing
-      }
-    </button>
-  </openclaw-tooltip>`;
 }

@@ -1,6 +1,6 @@
 import { CodexCatalogField } from "./session-catalog-index-field.js";
 import { boundedCatalogString, MAX_CWD_LENGTH } from "./session-catalog-parsing.js";
-import type { CodexCatalogSource } from "./session-catalog-source.js";
+import { hasLiveCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
 
 export type CodexCatalogSettings = { cwd?: string; modelProvider?: string };
 type SourcedSettings = { settings: CodexCatalogSettings; sources: Set<CodexCatalogSource> };
@@ -48,27 +48,13 @@ export class CodexCatalogSettingsIndex {
 
   get(threadId: string): CodexCatalogSettings | undefined {
     const current = this.values.get(threadId);
-    if (current) {
-      for (const source of current.sources) {
-        if (!source.closed) {
-          return current.settings;
-        }
-      }
-    }
-    return undefined;
+    return current && hasLiveCodexCatalogSource(current.sources) ? current.settings : undefined;
   }
 
   hasLiveCwd(): boolean {
-    return this.values.some(({ settings, sources }) => {
-      if (settings.cwd) {
-        for (const source of sources) {
-          if (!source.closed) {
-            return true;
-          }
-        }
-      }
-      return false;
-    });
+    return this.values.some(
+      ({ settings, sources }) => Boolean(settings.cwd) && hasLiveCodexCatalogSource(sources),
+    );
   }
 
   delete(threadId: string): void {
@@ -80,12 +66,9 @@ export class CodexCatalogSettingsIndex {
     if (!current?.sources.delete(source)) {
       return;
     }
-    for (const witness of current.sources) {
-      if (!witness.closed) {
-        return;
-      }
+    if (!hasLiveCodexCatalogSource(current.sources)) {
+      this.values.delete(threadId);
     }
-    this.values.delete(threadId);
   }
 
   invalidate(source?: CodexCatalogSource): void {
@@ -95,12 +78,7 @@ export class CodexCatalogSettingsIndex {
     }
     this.values.deleteWhere((entry) => {
       entry.sources.delete(source);
-      for (const witness of entry.sources) {
-        if (!witness.closed) {
-          return false;
-        }
-      }
-      return true;
+      return !hasLiveCodexCatalogSource(entry.sources);
     });
   }
 }

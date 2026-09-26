@@ -15,6 +15,7 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -56,6 +57,9 @@ describe("worker deploy build plugin", () => {
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
     const fixtureLifetime = createFixtureLifetime();
+    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.map(
+      (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
+    );
     let preparedDist: string;
     let preparedArchive: string;
 
@@ -81,12 +85,14 @@ describe("worker deploy build plugin", () => {
       const activationSource = fs.realpathSync(
         path.resolve("src/plugin-sdk/facade-activation-check.runtime.ts"),
       );
+      // Mixed runtime/declaration graphs also contain worker paths, but are not archived.
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
-          Object.keys(candidate.entry).some((entry) => entry.startsWith("worker/")),
+          Object.keys(candidate.entry).length > 0 &&
+          Object.keys(candidate.entry).every((entry) => workerEntryNames.includes(entry)),
       )) {
         const { bundles } = await build({
           ...sibling,
@@ -118,10 +124,15 @@ export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js
 export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
+export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
+export { saveExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
+export { createEditTool } from "../agents/sessions/tools/edit.js";
+export { createWriteTool } from "../agents/sessions/tools/write.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";
 export { loadActivatedBundledPluginPublicSurfaceModuleSync, listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
@@ -139,6 +150,11 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         ],
       });
       try {
+        const builtEntries = vi
+          .mocked(build)
+          .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
+        expect(builtEntries.length).toBe(workerEntryNames.length);
+        expect(builtEntries.toSorted()).toEqual(workerEntryNames.toSorted());
         // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
         expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
           "worker/worker.mjs",
@@ -162,6 +178,70 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         }
       }
     });
+
+    it("commits exec authorization through the SQLite worker in a relocated archive", ({
+      signal,
+    }) =>
+      fixtureLifetime.run(async () => {
+        const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
+        const relocated = path.join(root, "bundles", "installed");
+        fs.mkdirSync(relocated, { recursive: true });
+        await tar.extract({ file: preparedArchive, cwd: relocated });
+        const result = await fixtureLifetime.track(
+          runNodeScript(
+            [
+              "--input-type=module",
+              "--eval",
+              `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const {
+  commitExecAuthorizationLocked,
+  saveExecApprovals,
+  readExecApprovalsSnapshot,
+  closeOpenClawStateDatabaseAsync,
+} = await import(pathToFileURL(entry).href);
+const match = { id: "portable-exec", pattern: process.execPath };
+const command = "portable exec authorization";
+saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } });
+try {
+  const assertCurrent = await commitExecAuthorizationLocked({
+    agentId: "main", matches: [match], command, resolvedPath: process.execPath,
+    authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
+  });
+  assertCurrent();
+  await closeOpenClawStateDatabaseAsync();
+  const stored = readExecApprovalsSnapshot().file.agents.main.allowlist[0];
+  assert.equal(stored.lastUsedCommand, command);
+  assert.equal(stored.lastResolvedPath, process.execPath);
+  assert.ok(stored.lastUsedAt > 0);
+} finally {
+  await closeOpenClawStateDatabaseAsync();
+}
+console.log("relocated exec authorization persisted");
+`,
+              path.join(relocated, "worker.mjs"),
+            ],
+            {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              WINDIR: process.env.WINDIR,
+              HOME: root,
+              USERPROFILE: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              TMPDIR: root,
+              TMP: root,
+              TEMP: root,
+            },
+            30_000,
+            { cwd: root, signal },
+          ),
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("relocated exec authorization persisted");
+      }));
 
     it("keeps activated plugin facades lazy and config-aware in a relocated archive", ({
       signal,
@@ -299,7 +379,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
         ).toEqual([]);
       }));
 
-    it("delivers resized computer observations and image operations from a relocated archive", async () => {
+    it("delivers image operations and file edits from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
       const relocated = path.join(root, "bundle");
       fs.mkdirSync(relocated);
@@ -319,13 +399,26 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 const [entry, imagePath] = process.argv.slice(1);
-for (const dependency of ["rastermill", "@silvia-odwyer/photon-node"]) {
+for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker } = await import(pathToFileURL(entry).href);
+const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
+const filePath = imagePath + ".txt";
+const written = await createWriteTool(process.cwd()).execute("portable-write", {
+  path: filePath, content: "const label = “hello”; // keep — unchanged\\n",
+});
+assert.equal(written.details.created, true);
+assert.match(written.details.patch, /\\+const label = “hello”/);
+const edited = await createEditTool(process.cwd()).execute("portable-edit", {
+  path: filePath,
+  edits: [{ oldText: 'const label = "hello";', newText: 'const label = "hi";' }],
+});
+assert.equal(edited.details.changed, true);
+assert.match(edited.details.diff, /\\+1 const label = "hi"; \\/\\/ keep — unchanged/);
+assert.equal(fs.readFileSync(filePath, "utf8"), 'const label = "hi"; // keep — unchanged\\n');
 for (let index = 0; index < 3; index++) {
   const projected = await projectComputerActResult({
     action: "get_window_state",
@@ -352,7 +445,7 @@ const metadata = await createImageProcessor().probe(png);
 assert.equal(metadata.width, 2);
 assert.equal(metadata.height, 1);
 assert.equal(metadata.format, "png");
-console.log("relocated computer observations and image operations passed");
+console.log("relocated computer observations, image operations, and file edits passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
@@ -377,7 +470,7 @@ console.log("relocated computer observations and image operations passed");
         },
       );
       expect(result.stdout).toContain(
-        "relocated computer observations and image operations passed",
+        "relocated computer observations, image operations, and file edits passed",
       );
     });
 

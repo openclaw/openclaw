@@ -44,7 +44,6 @@ export type GitHubAuthorizationState =
 export type AuthorizationOperation = {
   owner: RequestOwner;
   controller: AbortController;
-  requestId?: string;
   start?: ToolsGitHubAuthorizeStartResult;
   displayExpiresAtMs?: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -57,12 +56,9 @@ export type AuthorizationOperation = {
 
 export type GitHubIdentityHost = {
   requestUpdate: () => void;
+  authorizationSucceeded?: () => void;
   runExternalMutation?: RuntimeConfigCapability["runExternalMutation"];
 };
-
-export function configFingerprint(value: unknown): string {
-  return JSON.stringify(value ?? null);
-}
 
 export function readGitHubIdentityDraft(value: unknown): GitHubIdentityDraft {
   const github = isRecord(value) ? value : undefined;
@@ -88,12 +84,12 @@ export function githubAuthorizationMethod(
 }
 
 export function cancelAuthorizationRequest(operation: AuthorizationOperation): void {
-  if (!operation.requestId) {
+  if (!operation.start?.requestId) {
     return;
   }
   void operation.owner.client
     .request(githubAuthorizationMethod(operation.owner, "cancel"), {
-      requestId: operation.requestId,
+      requestId: operation.start.requestId,
     })
     .catch(() => undefined);
 }

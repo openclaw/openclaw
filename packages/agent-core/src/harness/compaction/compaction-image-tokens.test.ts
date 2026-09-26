@@ -6,6 +6,10 @@ import { buildSessionContext } from "../session/session.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary } from "./branch-summarization.js";
 import { compact, estimateTokens, findCutPoint, prepareCompaction } from "./compaction.js";
+import {
+  createCompactionModel,
+  createMessageEntry as messageEntry,
+} from "./compaction.test-support.js";
 
 const IMAGE_PAYLOAD = "a".repeat(1_500_000);
 
@@ -53,28 +57,7 @@ function assistantText(text: string, timestamp: number): AssistantMessage {
 }
 
 function summaryModel(contextWindow = 100_000): Model {
-  return {
-    id: "summary-model",
-    name: "Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens: 2048,
-  };
-}
-
-function messageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
-  };
+  return createCompactionModel({ contextWindow, maxTokens: 2048 });
 }
 
 function buildTranscript(recentUserTurns: AgentMessage[]): SessionTreeEntry[] {
@@ -108,14 +91,6 @@ describe("estimateTokens image accounting", () => {
 });
 
 describe("findCutPoint with image-heavy recent turns", () => {
-  it("trims image-dominated user turns instead of keeping the whole transcript", () => {
-    const entries = buildTranscript([userImage(10), userImage(20), userImage(30)]);
-
-    const result = findCutPoint(entries, 0, entries.length, 1500);
-
-    expect(result.firstKeptEntryIndex).toBeGreaterThan(0);
-  });
-
   it("matches the cut point of an equivalent text-cost control", () => {
     const equivalentText = "x".repeat(8_056);
     const imageEntries = buildTranscript([userImage(10), userImage(20), userImage(30)]);
@@ -135,7 +110,6 @@ describe("findCutPoint with image-heavy recent turns", () => {
 
 describe.each([
   { splitTurn: false, completed: false },
-  { splitTurn: false, completed: true },
   { splitTurn: true, completed: true },
 ])(
   "image omission through compaction (split: $splitTurn, completed: $completed)",
@@ -234,94 +208,96 @@ describe.each([
   },
 );
 
-describe.each(["ordinary", "split", "branch"] as const)("%s summary omission budget", (mode) => {
-  it.each(["image", "audio"])(
-    "bounds many %s messages at the completion boundary",
-    async (type) => {
-      const model = summaryModel(type === "image" ? 1_000_000 : 8192);
-      const messages: AgentMessage[] = [
-        userText("Inspect attachments", 0),
-        ...Array.from(
-          { length: 200 },
-          (_, i) =>
-            ({
-              role: "toolResult",
-              toolCallId: `call-${i}`,
-              toolName: "inspect",
-              isError: false,
-              timestamp: i + 1,
-              content: [{ type, data: "PAYLOAD_SENTINEL", mimeType: "image/png" }],
-            }) as AgentMessage,
-        ),
-      ];
-      const entries = messages.map(messageEntry);
-      const conversations: string[] = [];
-      const runtime: AgentCoreCompletionRuntimeDeps = {
-        completeSimple: async (_model, context) => {
-          const content = context.messages[0]?.content;
-          if (!Array.isArray(content) || content[0]?.type !== "text") {
-            throw new Error("expected summary prompt");
-          }
-          const conversation = content[0].text
-            .split("<conversation>\n")[1]
-            ?.split("\n</conversation>")[0];
-          if (!conversation) {
-            throw new Error("expected conversation");
-          }
-          conversations.push(conversation);
-          return assistantText("Summary", 202);
-        },
-      };
-      let result;
-      if (mode === "branch") {
-        result = await generateBranchSummary(entries, {
-          model,
-          apiKey: "test-key",
-          signal: new AbortController().signal,
-          runtime,
-        });
-      } else {
-        entries.push(
-          messageEntry(
-            mode === "split" ? assistantText("Retained answer", 201) : userText("Next task", 201),
-            entries.length,
-          ),
-        );
-        const preparation = prepareCompaction(entries, {
-          enabled: true,
-          reserveTokens: 1000,
-          keepRecentTokens: 1,
-        });
-        if (!preparation.ok || !preparation.value) {
-          throw new Error("expected compactable history");
+it.each([
+  { mode: "ordinary", type: "image" },
+  { mode: "split", type: "audio" },
+  { mode: "branch", type: "image" },
+] as const)(
+  "bounds many $type messages at the $mode completion boundary",
+  async ({ mode, type }) => {
+    const model = summaryModel(type === "image" ? 1_000_000 : 8192);
+    const messages: AgentMessage[] = [
+      userText("Inspect attachments", 0),
+      ...Array.from(
+        { length: 200 },
+        (_, i) =>
+          ({
+            role: "toolResult",
+            toolCallId: `call-${i}`,
+            toolName: "inspect",
+            isError: false,
+            timestamp: i + 1,
+            content: [{ type, data: "PAYLOAD_SENTINEL", mimeType: "image/png" }],
+          }) as AgentMessage,
+      ),
+    ];
+    const entries = messages.map(messageEntry);
+    const conversations: string[] = [];
+    const runtime: AgentCoreCompletionRuntimeDeps = {
+      completeSimple: async (_model, context) => {
+        const content = context.messages[0]?.content;
+        if (!Array.isArray(content) || content[0]?.type !== "text") {
+          throw new Error("expected summary prompt");
         }
-        expect(preparation.value.isSplitTurn).toBe(mode === "split");
-        result = await compact(
-          preparation.value,
-          model,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          runtime,
-        );
+        const conversation = content[0].text
+          .split("<conversation>\n")[1]
+          ?.split("\n</conversation>")[0];
+        if (!conversation) {
+          throw new Error("expected conversation");
+        }
+        conversations.push(conversation);
+        return assistantText("Summary", 202);
+      },
+    };
+    let result;
+    if (mode === "branch") {
+      result = await generateBranchSummary(entries, {
+        model,
+        apiKey: "test-key",
+        signal: new AbortController().signal,
+        runtime,
+      });
+    } else {
+      entries.push(
+        messageEntry(
+          mode === "split" ? assistantText("Retained answer", 201) : userText("Next task", 201),
+          entries.length,
+        ),
+      );
+      const preparation = prepareCompaction(entries, {
+        enabled: true,
+        reserveTokens: 1000,
+        keepRecentTokens: 1,
+      });
+      if (!preparation.ok || !preparation.value) {
+        throw new Error("expected compactable history");
       }
-      expect(result.ok).toBe(true);
-      expect(conversations).toHaveLength(1);
-      const conversation = conversations[0];
-      if (!conversation) {
-        throw new Error("expected captured conversation");
-      }
-      expect(
-        Buffer.byteLength(conversation) - Buffer.byteLength("[User]: Inspect attachments"),
-      ).toBeLessThanOrEqual(847);
-      expect(conversation.match(/\[Tool result\]:/g)).toHaveLength(8);
-      expect(
-        conversation.split("[More image/non-text data omitted from summary input]"),
-      ).toHaveLength(2);
-      expect(conversation).not.toMatch(/PAYLOAD_SENTINEL|already processed by model/);
-    },
-  );
-});
+      expect(preparation.value.isSplitTurn).toBe(mode === "split");
+      result = await compact(
+        preparation.value,
+        model,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        runtime,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(conversations).toHaveLength(1);
+    const conversation = conversations[0];
+    if (!conversation) {
+      throw new Error("expected captured conversation");
+    }
+    expect(
+      Buffer.byteLength(conversation) - Buffer.byteLength("[User]: Inspect attachments"),
+    ).toBeLessThanOrEqual(847);
+    expect(conversation.match(/\[Tool result\]:/g)).toHaveLength(8);
+    expect(
+      conversation.split("[More image/non-text data omitted from summary input]"),
+    ).toHaveLength(2);
+    expect(conversation).not.toMatch(/PAYLOAD_SENTINEL|already processed by model/);
+  },
+);

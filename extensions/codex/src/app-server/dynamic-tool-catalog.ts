@@ -48,6 +48,8 @@ export function createCodexDynamicToolSpecs(params: {
   entries: readonly ProjectedCodexDynamicTool<CodexToolDescriptor>[];
   loading: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
+  /** Direct loading still namespaces direct-only tools; SIWC requires plain function specs. */
+  functionToolsOnly?: boolean;
 }): CodexDynamicToolSpec[] {
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
@@ -63,14 +65,19 @@ export function createCodexDynamicToolSpecs(params: {
       ? params.entries
       : params.entries.toSorted((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
-    const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
+    const functionSpec: CodexDynamicToolFunctionSpec = {
+      type: "function",
+      name: entry.name,
+      description: entry.description,
+      inputSchema: entry.inputSchema,
+    };
     if (entry.name === "openclaw" && directToolNames.has(entry.name)) {
       // OpenClaw is ring-zero and its whole turn surface. Keep its canonical
       // root name even though generic direct-only tools use a model namespace.
       specs.push(functionSpec);
       continue;
     }
-    if (entry.tool.catalogMode === "direct-only") {
+    if (entry.tool.catalogMode === "direct-only" && !params.functionToolsOnly) {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }
@@ -97,17 +104,6 @@ export function createCodexDynamicToolSpecs(params: {
     });
   }
   return specs;
-}
-
-function createCodexDynamicToolFunctionSpec(params: {
-  entry: ProjectedCodexDynamicTool<CodexToolDescriptor>;
-}): CodexDynamicToolFunctionSpec {
-  return {
-    type: "function",
-    name: params.entry.name,
-    description: params.entry.description,
-    inputSchema: params.entry.inputSchema,
-  };
 }
 
 export function projectCodexDynamicTools<T extends CodexToolDescriptor>(

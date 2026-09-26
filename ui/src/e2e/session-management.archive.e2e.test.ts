@@ -149,12 +149,13 @@ suite.define(() => {
       await expect.poll(archivedRequests).toHaveLength(initialRequests + 1);
 
       await archivedRow.hover();
-      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Restore session" }));
+      const routeBeforeRestore = page.url();
+      await activateSelfRemovingControl(archivedRow.locator("[data-sidebar-session-archive]"));
       await waitForPatch(
         gateway,
         (params) => params.key === archived.key && params.archived === false,
       );
+      expect(page.url()).toBe(routeBeforeRestore);
 
       await gateway.resolveDeferred("sessions.list", sessionsListResponse([archived]));
 
@@ -366,8 +367,7 @@ suite.define(() => {
       await page.getByText("Research thread content").waitFor({ state: "visible" });
       await captureUiProof(suite, page, "archive-current-thread-before.png");
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
-      await activateSelfRemovingControl(archiveAction);
+      await activateSelfRemovingControl(row.locator("[data-sidebar-session-archive]"));
       await gateway.waitForRequest("sessions.patch");
 
       await row.waitFor({ state: "detached" });
@@ -622,7 +622,7 @@ suite.define(() => {
         session: { ...selectedWithoutDerivedTitle, archived: true, archivedAt, archivedBy },
       });
       await selectedRow.hover();
-      await selectedRow.getByRole("button", { name: "Open session menu" }).click();
+      await selectedRow.click({ button: "right" });
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",
@@ -634,8 +634,10 @@ suite.define(() => {
       );
       const archiveToast = page.locator("openclaw-toast-host .app-toast");
       await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      const archivedSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
+        updatedAt: archivedSession.updatedAt,
         archived: true,
         archivedAt,
         archivedBy,
@@ -708,8 +710,10 @@ suite.define(() => {
         gateway,
         (params) => params.key === selected.key && params.archived === false,
       );
+      const restoredSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
+        updatedAt: restoredSession.updatedAt,
         archived: false,
         archivedAt: null,
         archivedBy: null,
@@ -774,7 +778,7 @@ suite.define(() => {
       const archivedRow = rowFor(archived.key);
       await archivedRow.waitFor({ state: "visible", timeout: 10_000 });
       await archivedRow.hover();
-      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
+      await archivedRow.click({ button: "right" });
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",

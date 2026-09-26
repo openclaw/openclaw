@@ -2,7 +2,6 @@
 import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
-import type { DoctorOptions } from "../commands/doctor.types.js";
 import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -37,7 +36,6 @@ export type SystemAgentOperationResult = {
   nextInput?: string;
   /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
   returnToShell?: boolean;
-  followUp?: Extract<SystemAgentOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */
@@ -55,7 +53,7 @@ export type SystemAgentCommandDeps = {
     cliOptions: ConfigSetOptions;
     beforePersistentApply?: () => void;
   }) => Promise<void>;
-  runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
+  runConfigUnset?: typeof import("../cli/config-cli.js").runConfigUnset;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
@@ -92,6 +90,7 @@ const ARG_WORD = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
 // fixed order (workspace before model) so filler words never become values.
 const CONFIG_SET_PREFIX_RE = /^(?:config\s+set|set\s+config)\s+/i;
 const CONFIG_SET_REF_PREFIX_RE = /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+/i;
+const CONFIG_UNSET_PREFIX_RE = /^config\s+unset(?=\s|$)/i;
 const CONFIG_GET_PREFIX_RE = /^config\s+get(?=\s|$)/i;
 const CONFIG_SCHEMA_PREFIX_RE = /^config\s+schema(?=\s|$)/i;
 const CONFIG_SET_REF_ARGS_RE = new RegExp(
@@ -107,7 +106,7 @@ const MODEL_SETUP_RE = new RegExp(
   "i",
 );
 const CREATE_AGENT_RE = new RegExp(
-  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+name\s+(?<name>${ARG_WORD}))?(?:\s+role\s+(?<role>\S+))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
+  String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+name\s+(?<name>${ARG_WORD}))?(?:\s+role\s+(?<role>\S+))?(?:\s+purpose\s+(?<purpose>${ARG_WORD}))?(?:\s+workspace\s+(?<workspace>${ARG_WORD}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
 const CREATE_TEAM_RE = new RegExp(
@@ -264,6 +263,17 @@ function parseConfigSetRefCommand(input: string):
   return body.trim() ? { valid: false } : undefined;
 }
 
+/** Stable store entry name for a config key, so replacing a key reuses its entry. */
+export function secretStoreNameForConfigPath(path: string): string {
+  const name = parseConfigSetPath(path)
+    .join("_")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/gu, "_")
+    .replace(/^[^A-Z]+/u, "");
+  return (name || "OPENCLAW_SECRET").slice(0, 128);
+}
+
 /**
  * Parse one user command into OpenClaw's closed operation union. Anything
  * that does not match the anchored grammar exactly returns kind "none" so the
@@ -341,6 +351,13 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       path: configSet.path,
       value: configSet.value,
     };
+  }
+  const configUnset = parseConfigReadPath(trimmed, CONFIG_UNSET_PREFIX_RE, { allowEmpty: false });
+  if (configUnset?.valid && configUnset.path) {
+    return { kind: "config-unset", path: configUnset.path };
+  }
+  if (configUnset && !configUnset.valid) {
+    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
   }
   const configGet = parseConfigReadPath(trimmed, CONFIG_GET_PREFIX_RE, { allowEmpty: false });
   if (configGet?.valid && configGet.path) {
@@ -470,11 +487,13 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     }
     const workspace = trimShellishToken(createMatch.groups.workspace);
     const name = trimShellishToken(createMatch.groups.name);
+    const purpose = trimShellishToken(createMatch.groups.purpose);
     const model = createMatch.groups.model;
     return {
       kind: "create-agent",
       agentId: normalizeExplicitSystemAgentId(createMatch.groups.agent),
       ...(name ? { name } : {}),
+      ...(purpose ? { purpose } : {}),
       ...(role ? { role } : {}),
       ...(workspace ? { workspace } : {}),
       ...(model ? { model } : {}),
@@ -548,6 +567,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
   return (
     operation.kind === "set-default-model" ||
     operation.kind === "config-set" ||
+    operation.kind === "config-unset" ||
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
@@ -570,10 +590,14 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return operation.agentId
         ? `set agent ${operation.agentId}'s model to ${operation.model}`
         : `set agents.defaults.model.primary to ${operation.model}`;
+    case "config-unset":
+      return `remove config ${redactSystemAgentConfigPath(operation.path)}`;
     case "config-set":
       return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":
-      return `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`;
+      return operation.secret === undefined
+        ? `set config ${redactSystemAgentConfigPath(operation.path)} to ${operation.source} SecretRef <redacted>`
+        : `save the provided secret in the secret store and point config ${redactSystemAgentConfigPath(operation.path)} at it`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":
@@ -590,6 +614,7 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return [
         `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`,
         operation.name ? `name: ${JSON.stringify(operation.name)}` : undefined,
+        operation.purpose ? `purpose: ${JSON.stringify(operation.purpose)}` : undefined,
         operation.role
           ? `role: ${operation.role === "coordinator" ? "Chief of staff" : operation.role.charAt(0).toUpperCase() + operation.role.slice(1)}`
           : undefined,

@@ -11,6 +11,7 @@ import type {
   WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -154,6 +155,7 @@ async function mountAccounts(
     selfUser: { id: "profile-1", name: "Ada" },
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const context = {
     gateway: {
       get snapshot() {
@@ -162,6 +164,10 @@ async function mountAccounts(
       subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
         listeners.add(listener);
         return () => listeners.delete(listener);
+      },
+      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
       },
     },
   } as unknown as ApplicationContext;
@@ -198,6 +204,11 @@ async function mountAccounts(
         listener(snapshot);
       }
     },
+    emitEvent(event: GatewayEventFrame) {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
   };
 }
 
@@ -230,6 +241,47 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("refreshes accounts and their saved default when another client changes authentication", async () => {
+  const work = {
+    ...connectedAccount,
+    authProfileId: "openai:work",
+    label: "Ada · Work workspace",
+  };
+  const harness = await mountAccounts(
+    async () => {
+      throw new Error("Unexpected account mutation");
+    },
+    {
+      inventoryPages: [
+        { profileId: "profile-1", accounts: [connectedAccount], links: connectedResult.links },
+        {
+          profileId: "profile-1",
+          accounts: [{ ...connectedAccount, selected: false }, work],
+          links: [{ provider: work.provider, authProfileId: work.authProfileId, updatedAt: 2 }],
+        },
+      ],
+    },
+  );
+  const currentAccount = () =>
+    harness.accounts.querySelector(".profile-auth-link-unlink")?.getAttribute("aria-label");
+  expect(currentAccount()).toContain(connectedAccount.label);
+  harness.emitEvent({
+    type: "event",
+    event: "chat.metadata.changed",
+    payload: { authChanged: false },
+  });
+  await harness.accounts.updateComplete;
+  expect(harness.request).toHaveBeenCalledTimes(1);
+
+  harness.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+  await vi.waitFor(() => expect(currentAccount()).toContain(work.label));
+  expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(1);
+
+  harness.accounts.remove();
+  harness.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+  expect(harness.request).toHaveBeenCalledTimes(2);
 });
 
 it("lets a writer choose a retained account for new chats and clear the default without removing it", async () => {

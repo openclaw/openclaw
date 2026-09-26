@@ -1,11 +1,14 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -17,7 +20,7 @@ import {
   waitForChildExit,
   waitForChildLine,
   waitForIdentityDeath,
-  writeSupervisorOwnerScript,
+  spawnSupervisorOwner,
 } from "./node-worker-supervisor.fixture.test-support.js";
 import {
   TEST_WORKER_ENDPOINT,
@@ -28,9 +31,14 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import { inspectOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
-afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("node worker environment stop after failed initialization", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
@@ -46,20 +54,12 @@ describe("node worker environment stop after failed initialization", () => {
       const native = testWorkerLaunchInput(fixture.workspaceDir, "a-native-owner", "wait");
       native.descriptor.admission.environmentId = "native-environment";
       native.descriptor.admission.sessionId = "native-session";
-      const inputPath = path.join(root, "native-input.json");
-      fs.writeFileSync(inputPath, JSON.stringify(native));
-      const owner = spawn(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          writeSupervisorOwnerScript(root),
-          fixture.bundleRoot,
-          fixture.stateDir,
-          inputPath,
-        ],
-        { env: { ...process.env, ...fixture.env }, stdio: ["ignore", "pipe", "pipe"] },
-      );
+      const owner = spawnSupervisorOwner({
+        bundleRoot: fixture.bundleRoot,
+        env: fixture.env,
+        input: native,
+        root,
+      });
       let anchor: NodeWorkerProcessIdentity | undefined;
       let stopping: Promise<unknown> | undefined;
       let bodyFailure: { error: unknown } | undefined;
@@ -71,9 +71,9 @@ describe("node worker environment stop after failed initialization", () => {
         owner.kill("SIGKILL");
         await waitForChildExit(owner);
 
-        const store = new NodeWorkerLaunchStore({ env: fixture.env });
+        const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env: fixture.env }));
         const live = testWorkerLaunchInput(fixture.workspaceDir, "m-live-pending");
-        store.claim(
+        await store.claim(
           { ...testNodeWorkerLaunchIdentity(live), gatewayNamespace: live.gatewayNamespace },
           requireNodeWorkerProcessIdentity(process.pid),
           3,
@@ -85,8 +85,8 @@ describe("node worker environment stop after failed initialization", () => {
           ...testNodeWorkerLaunchIdentity(blocked),
           gatewayNamespace: blocked.gatewayNamespace,
         };
-        store.claim(claim, staleSupervisor, 3);
-        store.markRunning({
+        await store.claim(claim, staleSupervisor, 3);
+        await store.markRunning({
           ...claim,
           supervisor: staleSupervisor,
           worker: { pid: 2_147_483_646, startTime: 1 },
@@ -97,8 +97,8 @@ describe("node worker environment stop after failed initialization", () => {
             containerId: container.id,
           },
         });
-        const preserved = [store.get(live.launchId), store.get(blocked.launchId)];
-        expect(store.listNonterminal().map((entry) => entry.launchId)).toEqual([
+        const preserved = [await store.get(live.launchId), await store.get(blocked.launchId)];
+        expect((await store.listNonterminal()).map((entry) => entry.launchId)).toEqual([
           native.launchId,
           live.launchId,
           blocked.launchId,
@@ -108,7 +108,7 @@ describe("node worker environment stop after failed initialization", () => {
         const failedInitialization = /injected container removal failure/u;
         await expect(fixture.supervisor.initialize()).rejects.toThrow(failedInitialization);
         expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
-        expect(store.get(native.launchId)).toMatchObject({
+        expect(await store.get(native.launchId)).toMatchObject({
           state: "running",
           workerLineageSettled: false,
         });
@@ -130,9 +130,11 @@ describe("node worker environment stop after failed initialization", () => {
           message: expect.stringMatching(failedInitialization),
         });
         expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
-        const cancelled = store.get(native.launchId);
+        const cancelled = await store.get(native.launchId);
         expect(cancelled).toMatchObject({ state: "cancelled", workerLineageSettled: true });
-        expect([store.get(live.launchId), store.get(blocked.launchId)]).toEqual(preserved);
+        expect([await store.get(live.launchId), await store.get(blocked.launchId)]).toEqual(
+          preserved,
+        );
         expect(fixture.exists(container.id)).toBe(true);
         await expect(fixture.supervisor.status(native.launchId)).rejects.toThrow(
           failedInitialization,
@@ -146,16 +148,16 @@ describe("node worker environment stop after failed initialization", () => {
         for (const capacity of capacities) {
           expect(capacity).toEqual({ total: 3, available: 0 });
         }
-        expect(fixture.supervisor.hasActiveWork()).toBe(true);
+        expect(await fixture.supervisor.hasActiveWork()).toBe(true);
 
         fs.unlinkSync(failureMarker);
         await fixture.supervisor.initialize();
         expect(capacities.at(-1)).toEqual({ total: 3, available: 2 });
-        expect(store.get(native.launchId)).toEqual(cancelled);
-        expect(store.get(live.launchId)).toEqual(preserved[0]);
-        expect(store.get(blocked.launchId)?.state).toBe("interrupted");
+        expect(await store.get(native.launchId)).toEqual(cancelled);
+        expect(await store.get(live.launchId)).toEqual(preserved[0]);
+        expect((await store.get(blocked.launchId))?.state).toBe("interrupted");
         expect(fixture.exists(container.id)).toBe(false);
-        expect(store.nonterminalCount()).toBe(1);
+        expect(await store.nonterminalCount()).toBe(1);
         expect(await fixture.supervisor.status(native.launchId)).toMatchObject({
           state: "cancelled",
         });

@@ -1,14 +1,12 @@
-/**
- * Browser CLI debugging commands for highlights, errors, requests, and traces.
- */
 import type { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
 function resolveDebugQuery(params: { targetId?: unknown; clear?: unknown; filter?: unknown }) {
   return {
@@ -18,7 +16,6 @@ function resolveDebugQuery(params: { targetId?: unknown; clear?: unknown; filter
   };
 }
 
-/** Registers Browser debugging and trace commands. */
 export function registerBrowserDebugCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

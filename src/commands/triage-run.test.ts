@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { readRestartSentinelReadOnly, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import {
+  acknowledgeAbandonedUpdateRun,
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
@@ -21,7 +23,6 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
 }));
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
-  agentExecCommand: vi.fn(),
   collectDoctorFindings: vi.fn(),
   runUpdateRepairLoop: vi.fn(),
   runUtf8CommandWithTimeout: vi.fn(),
@@ -29,7 +30,6 @@ const mocks = vi.hoisted(() => ({
   prepareUpdateRepairInference: vi.fn(),
   runUpdateRepairTurn: vi.fn(),
 }));
-vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
 vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
@@ -102,43 +102,309 @@ describe("triage --run", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
-    "keeps plain Doctor triage successful with uncorrelated history: %s",
-    async (history) => {
-      const saved = history
-        ? await writeRestartSentinel({
-            kind: "update",
+  it("keeps plain Doctor triage successful without update history", async () => {
+    const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
+      "../infra/update-repair-agent.js",
+    );
+    mocks.runUpdateRepairLoop.mockImplementation(real.runUpdateRepairLoop);
+    const runtime = createTriageRuntime();
+    await withTriageTerminal(true, () => triageCommand(runtime, { run: true, noExport: true }));
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Embedded repair already resolved: Doctor lint reports no errors.",
+    );
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps an uncorrelated update failure unresolved despite clean Doctor lint", async () => {
+    const saved = await writeRestartSentinel({
+      kind: "update",
+      status: "error",
+      ts: Date.UTC(2026, 8, 8),
+      stats: { mode: "npm", reason: "global-install-failed" },
+    });
+    const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
+      "../infra/update-repair-agent.js",
+    );
+    mocks.runUpdateRepairLoop.mockImplementation(real.runUpdateRepairLoop);
+    const runtime = createTriageRuntime();
+    await expect(
+      withTriageTerminal(true, () => triageCommand(runtime, { run: true, noExport: true })),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Embedded repair unrepaired: .*Cannot establish the update target\./),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw update repair"));
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
+    expect(await readRestartSentinelReadOnly()).toEqual(saved);
+  });
+
+  it.each([
+    "failed",
+    "failed with migration",
+    "succeeded with migration",
+    "preview",
+    "101 previews",
+  ])("keeps update recovery unresolved without a restart sentinel: %s", async (outcome) => {
+    const pendingMigration = outcome.includes("migration");
+    const targetVersion = await readPackageVersion(path.resolve(import.meta.dirname, "../.."));
+    if (!targetVersion) {
+      throw new Error("Fixture installation version missing");
+    }
+    const run = createUpdateRun({
+      trigger: "cli",
+      target: { kind: "package", version: targetVersion },
+    });
+    recordUpdateRunStep(run.runId, {
+      step: "finalize:doctor",
+      status: "failed",
+      exitCode: 1,
+      detail: "Doctor could not enter maintenance.",
+    });
+    finishUpdateRun(run.runId, { status: "failed", reason: "finalize:doctor" });
+    if (pendingMigration) {
+      recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: "codex",
+            reason: "The plugin has not reported completion of its retained state migration.",
+            command: "openclaw doctor --fix",
+            requiresStateMigration: true,
+          },
+        ],
+      });
+    }
+    if (outcome === "succeeded with migration") {
+      const completed = createUpdateRun({
+        trigger: "cli",
+        target: { kind: "package", version: targetVersion },
+      });
+      finishUpdateRun(completed.runId, {
+        status: "succeeded",
+        after: { version: targetVersion },
+      });
+    }
+    if (outcome === "preview" || outcome === "101 previews") {
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1);
+      for (let index = 0; index < (outcome === "preview" ? 1 : 101); index += 1) {
+        const preview = createUpdateRun({ trigger: "cli", preview: true });
+        finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
+      }
+    }
+    const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
+      "../infra/update-repair-agent.js",
+    );
+    mocks.runUpdateRepairLoop.mockImplementation(real.runUpdateRepairLoop);
+    const runtime = createTriageRuntime();
+    await expect(
+      withTriageTerminal(true, () => triageCommand(runtime, { run: true, noExport: true })),
+    ).rejects.toMatchObject({ code: 1 });
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("Embedded repair unrepaired:");
+    expect(output).toContain("openclaw update repair");
+    expect(output).not.toContain("already resolved");
+    if (pendingMigration) {
+      expect(output).toContain('Plugin "codex" data/settings upgrade is unfinished');
+    }
+    expect(getUpdateRun(run.runId)?.status).toBe("failed");
+    expect(await readRestartSentinelReadOnly()).toBeNull();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
+  });
+
+  it("reports unavailable update history instead of a healthy Doctor verdict", async () => {
+    const ledger = await import("../infra/update-run-reader.js");
+    vi.spyOn(ledger, "readUpdateRunResolutionHistory").mockImplementationOnce(() => {
+      throw new Error("Ledger snapshot unavailable");
+    });
+    const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
+      "../infra/update-repair-agent.js",
+    );
+    mocks.runUpdateRepairLoop.mockImplementation(real.runUpdateRepairLoop);
+    const runtime = createTriageRuntime();
+    await expect(
+      withTriageTerminal(true, () => triageCommand(runtime, { run: true, noExport: true })),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Embedded repair unrepaired: .*Update history is unavailable/),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw update repair"));
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "preview",
+    "acknowledged abandonment",
+    "upgrade",
+    "upgrade with generic failure",
+    "upgrade from git",
+    "explicit upgrade",
+    "rollback",
+    "rollback without restoration",
+    "rollback with mismatched restoration",
+    "explicit rollback",
+  ])("preserves recorded resolution behind a newer %s", async (newer) => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const version = await readPackageVersion(path.resolve(import.meta.dirname, "../.."));
+    if (!version) {
+      throw new Error("Fixture installation version missing");
+    }
+    const upgrade = newer.includes("upgrade");
+    const rollback = newer.includes("rollback");
+    const target = {
+      kind: newer === "upgrade from git" ? ("git" as const) : ("package" as const),
+      version: upgrade ? "2026.9.1" : version,
+    };
+    const failed = createUpdateRun({
+      trigger: "cli",
+      target,
+      before: { version: "2026.9.1" },
+    });
+    finishUpdateRun(failed.runId, {
+      status: "failed",
+      reason: newer === "upgrade with generic failure" ? "update-failed" : "finalize:doctor",
+    });
+    const completed = createUpdateRun({ trigger: "cli", target });
+    finishUpdateRun(completed.runId, { status: "succeeded", after: { version: target.version } });
+    const extra = createUpdateRun({
+      trigger: "cli",
+      preview: newer === "preview",
+      ...(upgrade ? { target: { kind: "package", version } } : {}),
+      ...(rollback
+        ? {
+            target: { kind: "package", version: "2099.1.0" },
+            before: {
+              version: newer === "rollback with mismatched restoration" ? "2026.9.1" : version,
+            },
+          }
+        : {}),
+    });
+    if (rollback && newer !== "rollback without restoration") {
+      recordUpdateRunStep(extra.runId, { step: "package rollback", status: "completed" });
+    }
+    finishUpdateRun(extra.runId, {
+      status: rollback
+        ? "rolled-back"
+        : upgrade
+          ? "succeeded"
+          : newer === "preview"
+            ? "skipped"
+            : "failed",
+      ...(upgrade || rollback
+        ? { after: { version } }
+        : { reason: newer === "preview" ? "dry-run" : "abandoned" }),
+    });
+    if (newer === "acknowledged abandonment") {
+      acknowledgeAbandonedUpdateRun(extra.runId);
+    }
+    const packages = await import("../infra/update-global.js");
+    const inventory = await import("../infra/package-dist-inventory.js");
+    const probe = await import("../cli/daemon-cli/restart-health-probe.js");
+    const verification = await import("../cli/update-cli/update-command-verification.js");
+    vi.spyOn(packages, "collectInstalledGlobalPackageErrors").mockResolvedValue([]);
+    vi.spyOn(inventory, "collectPackageDistContentInventoryErrors").mockResolvedValue([]);
+    vi.spyOn(probe, "resolveGatewayRestartProbeContext").mockResolvedValue({
+      config: {},
+      auth: undefined,
+    });
+    const verified = vi
+      .spyOn(verification, "verifyPreviousGatewayForUpdate")
+      .mockResolvedValue(true);
+    const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
+      "../infra/update-repair-agent.js",
+    );
+    mocks.runUpdateRepairLoop.mockImplementation(real.runUpdateRepairLoop);
+    const runtime = createTriageRuntime();
+    let updateResult: string | undefined;
+    if (newer.startsWith("explicit")) {
+      updateResult = path.join(stateDir, "explicit-failure.json");
+      await fs.writeFile(
+        updateResult,
+        JSON.stringify({
+          result: {
+            runId: failed.runId,
             status: "error",
-            ts: Date.UTC(2026, 8, 8),
-            stats: { mode: "npm", reason: "global-install-failed" },
-          })
-        : null;
+            mode: "npm",
+            reason: "finalize:doctor",
+            steps: [],
+          },
+        }),
+      );
+    }
+    const command = withTriageTerminal(true, () =>
+      triageCommand(runtime, { run: true, noExport: true, updateResult }),
+    );
+    if (updateResult || newer.includes("restoration")) {
+      await expect(command).rejects.toMatchObject({ code: 1 });
+      expect(verified).not.toHaveBeenCalled();
+      expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("already resolved");
+      return;
+    }
+    await command;
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Embedded repair already resolved: ${rollback ? "Rollback" : "Update"} to ${version}`,
+      ),
+    );
+    expect(verified).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ expectedVersion: version }),
+    );
+    expect(getUpdateRun(failed.runId)?.status).toBe("failed");
+  });
+
+  it.each([
+    { notification: false, doctorErrors: false },
+    { notification: true, doctorErrors: false },
+    { notification: true, doctorErrors: true },
+  ])(
+    "honors abandonment without hiding current Doctor errors (notification: $notification, errors: $doctorErrors)",
+    async ({ notification, doctorErrors }) => {
+      const run = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
+      acknowledgeAbandonedUpdateRun(run.runId);
+      if (notification) {
+        await writeRestartSentinel({
+          kind: "update",
+          status: "error",
+          ts: Date.now(),
+          stats: { runId: run.runId, reason: "abandoned" },
+        });
+      }
       const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
         "../infra/update-repair-agent.js",
       );
       mocks.runUpdateRepairLoop.mockImplementation(real.runUpdateRepairLoop);
+      if (doctorErrors) {
+        mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+          code: 1,
+          termination: "exit",
+          stdout: JSON.stringify({
+            ok: false,
+            findings: [{ severity: "error", message: "Current configuration is invalid." }],
+          }),
+        });
+      }
       const runtime = createTriageRuntime();
-      await withTriageTerminal(true, () => triageCommand(runtime, { run: true, noExport: true }));
+      const command = withTriageTerminal(true, () =>
+        triageCommand(runtime, { run: true, noExport: true }),
+      );
+      if (doctorErrors) {
+        await expect(command).rejects.toMatchObject({ code: 1 });
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain("Current configuration is invalid.");
+        expect(output).not.toContain("already resolved");
+        return;
+      }
+      await command;
       expect(runtime.log).toHaveBeenCalledWith(
-        "Embedded repair already resolved: Doctor lint reports no errors.",
+        expect.stringContaining("Embedded repair already resolved:"),
       );
       expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
-      if (history) {
-        expect(runtime.log).toHaveBeenCalledWith(
-          "A saved update failure from 2026-09-08T00:00:00.000Z could not be correlated; run `openclaw update status --json`.",
-        );
-        expect(await readRestartSentinelReadOnly()).toEqual(saved);
-        expect(mocks.runUpdateRepairLoop).toHaveBeenCalledWith(
-          expect.objectContaining({
-            context: expect.objectContaining({ error: "Operator requested installation triage" }),
-          }),
-        );
-      }
+      expect(getUpdateRun(run.runId)?.status).toBe("failed");
     },
   );
 
   it.each(["missing run", "missing target", "recorded target"])(
-    "repairs an attributed post-update Doctor failure only with recorded identity: %s",
+    "requires updater completion for an attributed Doctor failure: %s",
     async (identity) => {
       const targetVersion = await readPackageVersion(path.resolve(import.meta.dirname, "../.."));
       if (!targetVersion) {
@@ -172,14 +438,6 @@ describe("triage --run", () => {
       });
       const failurePath = path.join(stateDir, "doctor-failure.json");
       await fs.writeFile(failurePath, saved);
-      mocks.runUtf8CommandWithTimeout.mockResolvedValueOnce({
-        code: 1,
-        termination: "exit",
-        stdout: JSON.stringify({
-          ok: false,
-          findings: [{ severity: "error", message: "Invalid configuration" }],
-        }),
-      });
       const real = await vi.importActual<typeof import("../infra/update-repair-agent.js")>(
         "../infra/update-repair-agent.js",
       );
@@ -188,23 +446,17 @@ describe("triage --run", () => {
       const command = withTriageTerminal(true, () =>
         triageCommand(runtime, { run: true, noExport: true, updateResult: failurePath }),
       );
-      if (run && identity === "recorded target") {
-        await command;
-        const result = await mocks.runUpdateRepairLoop.mock.results[0]?.value;
-        expect(result).toMatchObject({ status: "repaired", finalValidation: { ok: true } });
-        expect(result.attempts).toHaveLength(1);
-        expect(mocks.runUpdateRepairTurn).toHaveBeenCalledOnce();
-        expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledTimes(2);
-        expect(getUpdateRun(run.runId)?.status).toBe("failed");
-      } else {
-        await expect(command).rejects.toMatchObject({ code: 1 });
-        const result = await mocks.runUpdateRepairLoop.mock.results[0]?.value;
-        expect(result).toMatchObject({ status: "unrepaired", finalValidation: { ok: false } });
-        expect(runtime.log).toHaveBeenCalledWith(
-          "Embedded repair unrepaired: Cannot establish the update target. Next step: run `openclaw update status --json`, then retry `openclaw update`.",
-        );
-        expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
-      }
+      await expect(command).rejects.toMatchObject({ code: 1 });
+      const result = await mocks.runUpdateRepairLoop.mock.results[0]?.value;
+      expect(result).toMatchObject({ status: "unrepaired", finalValidation: { ok: false } });
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          identity === "recorded target"
+            ? "The updater has not recorded a completed resolution"
+            : "Cannot establish the update target.",
+        ),
+      );
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(await fs.readFile(failurePath, "utf8")).toBe(saved);
     },
   );
@@ -294,7 +546,6 @@ describe("triage --run", () => {
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
     mocks.confirm.mockResolvedValue(false);
-    mocks.agentExecCommand.mockResolvedValue({ exitCode: 0 });
     const runtime = createTriageRuntime();
     await withTriageTerminal(true, () =>
       triageCommand(
@@ -308,7 +559,8 @@ describe("triage --run", () => {
       ),
     );
     expect(mocks.confirm).toHaveBeenCalledOnce();
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(mocks.prepareUpdateRepairInference).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.flat().join("\n")).toContain(
       "the embedded OpenClaw agent using your configured model",
     );
@@ -540,8 +792,6 @@ describe("triage --run", () => {
   );
 
   it.each([
-    { status: "improved", reason: "turn-budget", code: 1 },
-    { status: "unrepaired", reason: "Validation regressed after repair.", code: 1 },
     { status: "aborted", reason: "cancelled", code: 1 },
     { status: "unrepaired", reason: "per-turn-budget", code: 2 },
     { status: "improved", reason: "wall-clock-budget", code: 2 },

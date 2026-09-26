@@ -15,7 +15,7 @@ import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   readPackageManagerProbeValue,
 } from "./update-npm-prefix.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function resolveCanonicalPath(filePath: string): Promise<string> {
   return path.resolve(await fs.realpath(filePath).catch(() => filePath));
@@ -50,7 +50,7 @@ export async function runPnpmPreflightProbe(params: {
     : {
         result: null,
         failedStep: {
-          name: params.name ?? "pnpm isolated install preflight",
+          name: params.name ?? "pnpm-isolated-install-preflight",
           command: argv.join(" "),
           cwd: probeCwd ?? process.cwd(),
           durationMs: Date.now() - startedAt,
@@ -91,7 +91,7 @@ export async function validatePnpmIsolatedUpdate(params: {
     return {
       globalBinDir: null,
       failedStep: {
-        name: "pnpm isolated install preflight",
+        name: "pnpm-isolated-install-preflight",
         command: `inspect ${params.installTarget.globalRoot ?? "pnpm install"}`,
         cwd: params.installTarget.globalRoot ?? process.cwd(),
         durationMs: 0,
@@ -114,7 +114,7 @@ export async function validatePnpmIsolatedUpdate(params: {
     return {
       globalBinDir: null,
       failedStep: {
-        name: "pnpm isolated install preflight",
+        name: "pnpm-isolated-install-preflight",
         command: `inspect ${params.installTarget.globalRoot ?? "pnpm install"}`,
         cwd: params.installTarget.globalRoot ?? process.cwd(),
         durationMs: 0,
@@ -143,7 +143,7 @@ export async function validatePnpmIsolatedUpdate(params: {
     return {
       globalBinDir: null,
       failedStep: {
-        name: "pnpm isolated install preflight",
+        name: "pnpm-isolated-install-preflight",
         command: `${params.installTarget.command} root -g`,
         cwd: expectedGlobalRoot ?? process.cwd(),
         durationMs: 0,
@@ -162,7 +162,7 @@ export async function validatePnpmIsolatedUpdate(params: {
     return {
       globalBinDir: null,
       failedStep: binProbe.failedStep ?? {
-        name: "pnpm isolated install preflight",
+        name: "pnpm-isolated-install-preflight",
         command: `${params.installTarget.command} bin -g`,
         cwd: expectedGlobalRoot,
         durationMs: 0,
@@ -225,6 +225,7 @@ async function permissionFailure(
         { check: "package-install", code: UPDATE_GLOBAL_PERMISSION_REASON, message },
         env,
       ),
+      ...(step.failureFacts ?? []).slice(0, 4),
     ],
   };
 }
@@ -248,7 +249,7 @@ export async function checkGlobalPackageUpdatePermissions(
       if (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM")) {
         return await permissionFailure(
           {
-            name: "global install permissions",
+            name: "package-permissions",
             command: "inspect npm global directories",
             cwd: directory,
             durationMs: 0,

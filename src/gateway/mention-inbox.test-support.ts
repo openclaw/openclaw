@@ -7,11 +7,14 @@ import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail, setDisplayName } from "../state/user-profiles.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import type { MentionCommittedInput, MentionInbox } from "./mention-inbox.types.js";
 import { mentionHandlers } from "./server-methods/mentions.js";
-import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type {
   GatewayClient,
@@ -22,7 +25,7 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
-const handlers = { ...mentionHandlers, ...usersMentionableHandlers, ...sessionMutationHandlers };
+const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
 type InboxFixtureOptions = { notifications?: boolean; beforeInbox?: () => void };
 
 export async function withMentionInbox(
@@ -36,12 +39,13 @@ export async function withMentionInbox(
       await run(fixture);
     } finally {
       fixture.dispose();
-      vi.useRealTimers();
     }
   });
 }
 
 async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const alice = ensureProfileForEmail("alice@mentions.example.test");
   const bob = ensureProfileForEmail("bob@mentions.example.test");
   const carol = ensureProfileForEmail("carol@mentions.example.test");
@@ -70,6 +74,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   const inboxes = new Set<MentionInbox>();
   const openInbox = (gatewayInstanceId = "mention-gateway") => {
     const inbox = createMentionInbox({
+      scheduler,
       gatewayInstanceId,
       getRuntimeConfig: () => cfg,
       getClients: () => clients,
@@ -90,7 +95,12 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     onResponse?: GatewayRequestHandlerOptions["respond"],
   ) {
     let response: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
-    const handler = handlers[method];
+    // Mention publication tests depend on dispatch staying in the current stack.
+    // Only involvement tests need the broader session mutation runtime.
+    const handler =
+      method === "sessions.setInvolvement"
+        ? (await import("./server-methods/sessions-mutations.js")).sessionMutationHandlers[method]
+        : handlers[method];
     if (!handler) {
       throw new Error(`Missing test method ${method}`);
     }
@@ -111,6 +121,8 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     return response;
   }
   return {
+    clock,
+    scheduler,
     alice,
     bob,
     carol,

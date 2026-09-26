@@ -8,6 +8,7 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { deletePersonalGitHubSessionReceipts } from "../../state/github-personal-publication-lifecycle.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -41,6 +42,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
+import { publishCommittedSessionEntryRemoval } from "./session-accessor.sqlite-identity.js";
 import { prepareSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import {
   collectSessionStateIdsForEntry,
@@ -54,6 +56,7 @@ import {
   createHistoricalGenerationReclamationPlan,
   createLifecycleArtifactReclamationPlan,
   createSessionEntryReclamationPlan,
+  expectedEntryMismatchResult,
   prepareHistoricalGenerationDeletions,
   readValidatedSessionDeletionTarget,
   runExclusiveSqliteSessionReclamation,
@@ -241,7 +244,7 @@ export async function resetSessionEntryLifecycle(
             ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
             ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
           };
-          runOpenClawAgentWriteTransaction((transactionDb) => {
+          const databaseIdentity = runOpenClawAgentWriteTransaction((transactionDb) => {
             params.commitGuard?.();
             assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
             if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
@@ -263,10 +266,12 @@ export async function resetSessionEntryLifecycle(
             recordCommit(transactionDb);
             // Reset only advances the live entry and route. Historical rows stay searchable;
             // disk-budget cleanup owns durable extraction before reclaiming them.
+            return readOpenClawAgentDatabaseIdentity(transactionDb).identity;
           }, toDatabaseOptions(resolved));
           if (current) {
             emitSessionIdentityMutation({
               agentId: resolved.agentId,
+              databaseIdentity,
               kind: "reset",
               previous: {
                 ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
@@ -280,6 +285,7 @@ export async function resetSessionEntryLifecycle(
           } else {
             emitSessionIdentityMutation({
               agentId: resolved.agentId,
+              databaseIdentity,
               kind: "create",
               previous: { sessionKeys: [] },
               current: {
@@ -574,6 +580,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
 
       // Archive materialization is the expensive phase. It must run between short
       // writer-lane sections so unrelated writes to this store can keep progressing.
+      let committedDatabaseIdentity: string | symbol | undefined;
       const result = await runExclusiveSqliteSessionReclamation(async () => {
         const materializedPlans = await materializeSessionStateDeletePlans(prepared.entryPlans);
         const diagnostics: SqliteSessionReclamationDiagnostics = {};
@@ -605,7 +612,13 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           diagnostics,
           assertCommitAllowed: assertDeletionCurrent,
           forceInProcess: hasPreparedNativeSessionDeletion(),
-          onInProcessCommit: recordCommit,
+          onInProcessCommit: (database) => {
+            committedDatabaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
+            recordCommit(database);
+          },
+          onWorkerResult: (_result, databaseIdentity) => {
+            committedDatabaseIdentity = databaseIdentity;
+          },
           plan: reclamationPlan,
         });
         if (reclaimed.kind !== reclamationPlan.kind) {
@@ -617,17 +630,16 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       });
       if (result.deleted) {
         markCommitted();
+        if (committedDatabaseIdentity === undefined) {
+          throw new Error("Committed session deletion omitted its database identity");
+        }
         // The deletion is committed; observers must invalidate even if receipt cleanup fails.
-        emitSessionIdentityMutation({
-          agentId: resolved.agentId,
-          kind: "delete",
-          previous: {
-            ...(prepared.current.entry.sessionId
-              ? { sessionId: prepared.current.entry.sessionId }
-              : {}),
-            sessionKeys: prepared.targetSnapshot.map((row) => row.sessionKey),
-          },
-        });
+        publishCommittedSessionEntryRemoval(
+          resolved.agentId,
+          committedDatabaseIdentity,
+          prepared.current.entry.sessionId,
+          prepared.targetSnapshot.map((row) => row.sessionKey),
+        );
         deletePersonalGitHubSessionReceipts({
           agentId: resolved.agentId,
           env: resolved.env,
@@ -650,12 +662,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     },
     { additionalIdentities: prepared.historicalGenerationIds },
   );
-}
-
-function expectedEntryMismatchResult(
-  archivedTranscripts: SessionLifecycleArchivedTranscript[],
-): DeleteSessionEntryLifecycleResult {
-  return { archivedTranscripts, deleted: false, expectedEntryMismatch: true };
 }
 
 /** Deletes one persisted session entry using SQLite session rows. */

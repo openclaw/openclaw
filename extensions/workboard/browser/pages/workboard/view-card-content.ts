@@ -87,6 +87,23 @@ export function renderCardPriority(card: WorkboardCard) {
       </span>`;
 }
 
+const pendingLabelMeasurements = new Map<HTMLElement, () => (() => () => void) | undefined>();
+let labelMeasurementFrame: number | undefined;
+
+function flushLabelMeasurements() {
+  labelMeasurementFrame = undefined;
+  // Prepare all chips, then read every card before hiding chips on any card.
+  const measurements = [...pendingLabelMeasurements.values()].flatMap((prepare) => {
+    const measure = prepare();
+    return measure ? [measure] : [];
+  });
+  const updates = measurements.map((measure) => measure());
+  pendingLabelMeasurements.clear();
+  for (const update of updates) {
+    update();
+  }
+}
+
 function labelOverflowRef(labels: readonly string[]) {
   let dispose = () => {};
   return (element: Element | undefined) => {
@@ -94,58 +111,73 @@ function labelOverflowRef(labels: readonly string[]) {
     if (!(element instanceof HTMLElement)) {
       return;
     }
+    let measuredWidth = -1;
     const update = () => {
-      const chips = [...element.querySelectorAll<HTMLElement>(".workboard-card__label")];
-      const overflow = element.querySelector<HTMLElement>(".workboard-card__label-overflow");
-      if (!overflow) {
-        return;
-      }
-      for (const chip of chips) {
-        chip.hidden = false;
-      }
-      overflow.hidden = false;
-      overflow.textContent = `+${labels.length}`;
-      const gap = Number.parseFloat(getComputedStyle(element).columnGap) || 0;
-      const widths = chips.map((chip) => chip.getBoundingClientRect().width);
-      const available = element.clientWidth;
-      const total =
-        widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, chips.length - 1);
-      let visible = chips.length;
-      if (total > available) {
-        let used = overflow.getBoundingClientRect().width;
-        visible = 0;
-        for (const width of widths) {
-          if (used + gap + width > available) {
-            break;
-          }
-          used += gap + width;
-          visible++;
+      pendingLabelMeasurements.set(element, () => {
+        const chips = [...element.querySelectorAll<HTMLElement>(".workboard-card__label")];
+        const overflow = element.querySelector<HTMLElement>(".workboard-card__label-overflow");
+        if (!overflow) {
+          return undefined;
         }
-      }
-      chips.forEach((chip, index) => {
-        chip.hidden = index >= visible;
+        for (const chip of chips) {
+          chip.hidden = false;
+        }
+        overflow.hidden = false;
+        overflow.textContent = `+${labels.length}`;
+        return () => {
+          const available = element.clientWidth;
+          measuredWidth = available;
+          const gap = Number.parseFloat(getComputedStyle(element).columnGap) || 0;
+          const widths = chips.map((chip) => chip.getBoundingClientRect().width);
+          const total =
+            widths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, chips.length - 1);
+          let visible = chips.length;
+          if (total > available) {
+            let used = overflow.getBoundingClientRect().width;
+            visible = 0;
+            for (const width of widths) {
+              if (used + gap + width > available) {
+                break;
+              }
+              used += gap + width;
+              visible++;
+            }
+          }
+          return () => {
+            chips.forEach((chip, index) => {
+              chip.hidden = index >= visible;
+            });
+            overflow.hidden = visible === chips.length;
+            overflow.textContent = `+${chips.length - visible}`;
+            overflow.title = labels.slice(visible).join(", ");
+            overflow.setAttribute(
+              "aria-label",
+              t("workboard.cardMoreLabels", {
+                count: String(chips.length - visible),
+                labels: labels.slice(visible).join(", "),
+              }),
+            );
+          };
+        };
       });
-      overflow.hidden = visible === chips.length;
-      overflow.textContent = `+${chips.length - visible}`;
-      overflow.title = labels.slice(visible).join(", ");
-      overflow.setAttribute(
-        "aria-label",
-        t("workboard.cardMoreLabels", {
-          count: String(chips.length - visible),
-          labels: labels.slice(visible).join(", "),
-        }),
-      );
+      labelMeasurementFrame ??= requestAnimationFrame(flushLabelMeasurements);
     };
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
-    const frame = requestAnimationFrame(() => {
-      update();
-      observer?.observe(element);
-      for (const child of element.children) {
-        observer?.observe(child);
-      }
-    });
+    const observer =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver((entries) => {
+            if (entries.some((entry) => entry.contentRect.width !== measuredWidth)) {
+              update();
+            }
+          })
+        : null;
+    update();
+    observer?.observe(element);
     dispose = () => {
-      cancelAnimationFrame(frame);
+      pendingLabelMeasurements.delete(element);
+      if (pendingLabelMeasurements.size === 0 && labelMeasurementFrame !== undefined) {
+        cancelAnimationFrame(labelMeasurementFrame);
+        labelMeasurementFrame = undefined;
+      }
       observer?.disconnect();
     };
   };

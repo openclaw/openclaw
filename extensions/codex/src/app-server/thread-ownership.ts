@@ -1,3 +1,5 @@
+import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -8,8 +10,8 @@ import {
   isCodexAppServerLiveThreadClaimed,
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -18,6 +20,43 @@ import type {
 } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership-queue.js";
+
+/** Queued cancellation settles the caller without letting successors overtake its lane. */
+export async function withCodexAppServerThreadMutationHold<T>(
+  threadId: string,
+  run: (hold: (until: Promise<unknown>) => void, start: () => void) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    signal?.throwIfAborted();
+    const { promise, resolve, reject } = createDeferred<T>();
+    const abort = () =>
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
+    signal?.addEventListener("abort", abort, { once: true });
+    const start = () => signal?.removeEventListener("abort", abort);
+    const queued = withCodexAppServerThreadMutation(threadId, async () => {
+      let heldUntil: Promise<unknown> | undefined;
+      try {
+        signal?.throwIfAborted();
+        resolve(
+          await run((until) => {
+            heldUntil ??= until;
+          }, start),
+        );
+      } catch (error) {
+        reject(error);
+      }
+      await heldUntil;
+    });
+    onAcquired({
+      release: async () => {
+        await Promise.allSettled([queued]);
+      },
+    });
+    void queued.finally(start).catch(reject);
+    return promise;
+  });
+}
 
 export {
   withCodexAppServerThreadMutation,
@@ -113,10 +152,10 @@ export async function rollbackCodexAppServerBindingSubscription(
 /** Releases only the physical client and native thread recorded by the displaced binding owner. */
 export async function releaseCodexAppServerBindingSubscription(
   binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId">,
-  options: { allowUntracked?: boolean; assertCurrent?: () => void } = {},
+  options: { allowUntracked?: boolean; assertCurrent?: () => void; retainedClientId?: string } = {},
 ): Promise<void> {
   options.assertCurrent?.();
-  const clientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+  const clientLease = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
   if (!clientLease) {
     return;
   }
@@ -153,7 +192,11 @@ export async function releaseCodexAppServerBindingSubscription(
       );
     }
   } finally {
-    clientLease.release();
+    // A same-client caller releases its outer lease only after this cleanup returns.
+    await clientLease.release(
+      binding.clientId !== options.retainedClientId &&
+        !isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId),
+    );
   }
 }
 
@@ -164,8 +207,10 @@ export async function retireCodexConversationThreadBinding(params: {
   expectedThreadId?: string;
   expectedStartId?: string;
   allowUntracked?: boolean;
+  assertCurrent?: () => void;
   afterClear?: () => Promise<void>;
 }): Promise<boolean> {
+  const assertCurrent = params.assertCurrent;
   const expected = params.bindingStore.read(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
     return false;
@@ -182,28 +227,33 @@ export async function retireCodexConversationThreadBinding(params: {
       }
       // Keep the old row authoritative through unsubscribe; Codex has one
       // subscription per physical client, so clearing first races a new owner.
+      // Admission happens under both owner locks; release and public detach must settle together.
+      assertCurrent?.();
       await releaseCodexAppServerBindingSubscription(current, {
         allowUntracked: params.allowUntracked,
+        assertCurrent,
       });
-      const cleared = await params.bindingStore.mutate(params.identity, {
-        kind: "clear",
-        threadId: current.threadId,
-      });
+      const cleared = await params.bindingStore.mutate(
+        params.identity,
+        { kind: "clear", threadId: current.threadId },
+        assertCurrent,
+      );
       if (!cleared || !params.afterClear) {
         return cleared;
       }
       try {
+        assertCurrent?.();
         await params.afterClear();
         return true;
       } catch (error) {
         try {
           // Public binding storage commits separately. Restore its exact native
           // owner on failure without ever overwriting a replacement generation.
-          const restored = await params.bindingStore.mutate(params.identity, {
-            kind: "set",
-            binding: current,
-            if: { kind: "absent" },
-          });
+          const restored = await params.bindingStore.mutate(
+            params.identity,
+            { kind: "set", binding: current, if: { kind: "absent" } },
+            assertCurrent,
+          );
           if (!restored) {
             throw new Error("the previous Codex binding generation could not be restored", {
               cause: error,

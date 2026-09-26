@@ -1,21 +1,17 @@
+import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import type {
-  PluginsReloadParams,
-  PluginsReloadResult,
-} from "../../../../packages/gateway-protocol/src/schema/plugins.js";
+import type { PluginsSetEnabledParams } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   inspectPlugin,
   readPluginCapabilityConsentError,
 } from "../../lib/plugins/capability-consent-error.ts";
 import {
-  installPlugin,
   runPluginConfigMutation,
   setPluginEnabled,
   type PluginInstallRequest,
@@ -23,14 +19,13 @@ import {
   type PluginMutationResult,
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import { installPlugin } from "../../lib/plugins/install.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
-import {
-  readPluginInstallPolicyWarning,
-  type PluginInstallPolicyWarningDetails,
-} from "./install-policy-warning.ts";
-import { confirmPluginInstall } from "./plugin-lifecycle-confirmation.ts";
+import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
+import type { PluginInstallProgress } from "./install-progress.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
+import type { PluginMutationAction } from "./plugins-page-model.ts";
 
 type PluginMutationSuccess<Result> = (
   result: Result,
@@ -41,20 +36,10 @@ type PluginMutationSuccess<Result> = (
 ) => Promise<void>;
 
 type PluginMutationOptions = {
+  action: PluginMutationAction;
   canDispatch?: () => boolean;
   confirm?: () => Promise<boolean>;
   preserveMessageWhilePending?: boolean;
-};
-
-export type PluginMutationObserver = {
-  reviewConfirmed?: boolean;
-  onCommitted?: (result: PluginMutationResult, refreshError: string | null) => void | Promise<void>;
-  onReloaded?: () => void | Promise<void>;
-  onFailure?: (error: string, savedPluginId?: string) => void;
-  onInstallPolicyWarning?: (
-    request: PluginInstallRequest,
-    details: PluginInstallPolicyWarningDetails,
-  ) => void;
 };
 
 type PluginsConsentControllerHost = {
@@ -62,9 +47,8 @@ type PluginsConsentControllerHost = {
   getContext: () => ApplicationContext;
   getResult: () => PluginListResult | null;
   canMutate: () => boolean;
-  canReload: () => boolean;
   isBusy: (rowKey: string) => boolean;
-  setBusy: (rowKey: string, busy: boolean) => void;
+  setBusy: (rowKey: string, action: PluginMutationAction | null) => void;
   setMessage: (rowKey: string, message: PluginRowMessage | null) => void;
   getMessages: () => Readonly<Record<string, PluginRowMessage>>;
   clearPageNotice: () => void;
@@ -85,46 +69,43 @@ export function pluginMutationWarnings(
   return warnings.length ? { kind: "warning", text: warnings.join("\n") } : null;
 }
 
-function committedMutationMessage(
-  action: "installed" | "enabled" | "disabled" | "reloaded",
-  name: string,
-  result: Pick<PluginMutationResult, "warnings" | "runtime">,
-  refreshError: string | null,
-): PluginRowMessage {
-  return {
-    kind: "success",
-    text: [
-      t(`pluginsPage.${action}Success`, {
-        name,
-        ...(result.runtime ? { generation: String(result.runtime.generation) } : {}),
-      }),
-      pluginMutationWarnings(result, refreshError)?.text,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  };
-}
-
 export class PluginsConsentController {
   consent: PluginConsentState | null = null;
   inspection: PluginsInspectResult | null = null;
   inspectionLoading = false;
   inspectionError: string | null = null;
 
+  readonly installProgress = new Map<string, PluginInstallProgress>();
+
   private mutationToken = 0;
   private readonly mutationTokens = new Map<string, number>();
-  private readonly mutationObservers = new Map<string, PluginMutationObserver>();
-  // Server reviews continue one confirmed install only while its Gateway epoch survives.
+  // A policy warning continues the requested install only while its Gateway epoch survives.
   // Reconnect reset drops the scope before a surviving row warning can be acknowledged.
-  private readonly confirmedInstallScopes = new Map<string, GatewayConnectionScope>();
+  private readonly installPolicyScopes = new Map<string, GatewayConnectionScope>();
 
   constructor(private readonly host: PluginsConsentControllerHost) {}
+
+  getActiveInstall(rowKey: string): PluginInstallProgress | undefined {
+    const direct = this.installProgress.get(rowKey);
+    if (direct && direct.finishedAt === undefined) {
+      return direct;
+    }
+    // Inventory can publish the installed identity before the install RPC settles.
+    // Reuse its catalog relation so presentation and mutation admission keep one owner.
+    const plugin = this.host
+      .getResult()
+      ?.plugins.find((entry) => pluginRowKey(entry.id) === rowKey);
+    const progress = plugin?.catalogId
+      ? this.installProgress.get(`install:${plugin.catalogId}`)
+      : undefined;
+    return progress?.finishedAt === undefined ? progress : undefined;
+  }
 
   reset(): void {
     this.close();
     this.mutationTokens.clear();
-    this.mutationObservers.clear();
-    this.confirmedInstallScopes.clear();
+    this.installProgress.clear();
+    this.installPolicyScopes.clear();
   }
 
   reconcileInstallMessages(result: PluginListResult | null): Record<string, PluginRowMessage> {
@@ -136,15 +117,18 @@ export class PluginsConsentController {
         continue;
       }
       const installed = result?.plugins.some((plugin) => plugin.id === id && plugin.installed);
-      // Once inventory knows the saved install, its canonical row owns the error.
-      // An observed later removal also retires the receipt, allowing a fresh install.
+      // Inventory takes ownership of a saved install and its later removal. Retire only
+      // finished attempts; an active install still owns progress until its final response.
       if (
-        (installed && key !== pluginRowKey(id)) ||
-        (result &&
-          !installed &&
-          previous?.plugins.some((plugin) => plugin.id === id && plugin.installed))
+        installed ||
+        (result && previous?.plugins.some((plugin) => plugin.id === id && plugin.installed))
       ) {
-        delete messages[key];
+        if (this.installProgress.get(key)?.finishedAt !== undefined) {
+          this.installProgress.delete(key);
+        }
+        if (!installed || key !== pluginRowKey(id)) {
+          delete messages[key];
+        }
       }
     }
     return messages;
@@ -154,7 +138,7 @@ export class PluginsConsentController {
     rowKey: string,
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
     onSuccess: PluginMutationSuccess<Result>,
-    options: PluginMutationOptions = {},
+    options: PluginMutationOptions,
     onError: (
       error: unknown,
       scope: GatewayConnectionScope,
@@ -164,7 +148,8 @@ export class PluginsConsentController {
     },
   ): Promise<void> {
     const scope = this.host.gateway.capture();
-    const canDispatch = options.canDispatch ?? this.host.canMutate;
+    const canDispatch = () =>
+      (options.canDispatch ?? this.host.canMutate)() && !this.getActiveInstall(rowKey);
     if (!scope || !canDispatch() || this.host.isBusy(rowKey)) {
       return;
     }
@@ -184,7 +169,7 @@ export class PluginsConsentController {
     const isCurrent = () =>
       this.host.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
     const isLatest = () => isCurrent() && this.mutationToken === mutationToken;
-    this.host.setBusy(rowKey, true);
+    this.host.setBusy(rowKey, options.action);
     if (!options.preserveMessageWhilePending) {
       this.host.setMessage(rowKey, null);
     }
@@ -205,7 +190,7 @@ export class PluginsConsentController {
     } finally {
       if (this.mutationTokens.get(rowKey) === mutationToken) {
         this.mutationTokens.delete(rowKey);
-        this.host.setBusy(rowKey, false);
+        this.host.setBusy(rowKey, null);
       }
     }
   }
@@ -245,11 +230,6 @@ export class PluginsConsentController {
     this.host.requestUpdate();
   }
 
-  cancelMutationObserver(key: string): void {
-    this.mutationObservers.delete(key);
-    this.confirmedInstallScopes.delete(key);
-  }
-
   async inspect(): Promise<void> {
     const consent = this.consent;
     const scope = this.host.gateway.capture();
@@ -283,26 +263,12 @@ export class PluginsConsentController {
       return;
     }
     this.close();
-    if (intent.kind === "install") {
-      void this.install(
-        {
-          ...intent.request,
-          acknowledgeCapabilities: { reviewToken },
-        },
-        intent.installIdentity,
-      );
-    } else {
-      void this.mutateInstalledPlugin(intent.pluginId, intent.kind, intent.rowKey, {
-        acknowledgeCapabilities: { reviewToken },
-      });
-    }
+    void this.mutateInstalledPlugin(intent.pluginId, intent.kind, intent.rowKey, {
+      acknowledgeCapabilities: { reviewToken },
+    });
   }
 
-  async install(
-    request: PluginInstallRequest,
-    installIdentity: string,
-    observer?: PluginMutationObserver,
-  ): Promise<void> {
+  async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
     const installed = this.host
       .getResult()
       ?.plugins.find(
@@ -318,59 +284,106 @@ export class PluginsConsentController {
     const saved =
       messages[installIdentity] ?? (installed ? messages[pluginRowKey(installed.id)] : undefined);
     if (saved?.savedInstall) {
-      observer?.onFailure?.(saved.text, saved.savedInstall);
       return;
     }
-    if (observer) {
-      this.mutationObservers.set(installIdentity, observer);
+    const confirmedScope = this.installPolicyScopes.get(installIdentity);
+    this.installPolicyScopes.delete(installIdentity);
+    if (
+      request.acknowledgeInstallPolicyWarning &&
+      (!confirmedScope || !this.host.gateway.isCurrent(confirmedScope))
+    ) {
+      this.host.setMessage(installIdentity, {
+        kind: "error",
+        text: t("pluginsPage.installDestinationChanged"),
+      });
+      return;
     }
-    const installObserver = this.mutationObservers.get(installIdentity);
-    const confirmedScope = this.confirmedInstallScopes.get(installIdentity);
-    this.confirmedInstallScopes.delete(installIdentity);
-    const isConfirmedContinuation =
-      (request.acknowledgeInstallPolicyWarning === true ||
-        request.acknowledgeCapabilities !== undefined) &&
-      confirmedScope &&
-      this.host.gateway.isCurrent(confirmedScope);
-    // The server stages and inspects the requested artifact before asking for consent.
-    // Catalog/search metadata cannot authorize that artifact's capabilities.
+    // The Gateway owns artifact acceptance and validation within this install request.
     await this.runMutation(
       installIdentity,
-      (client) => installPlugin(client, request),
-      async (result, refreshError, client, isCurrent) => {
+      async (client) => {
+        const scope = this.host.gateway.capture();
+        let progress: PluginInstallProgress = { startedAt: Date.now(), activities: [] };
+        this.installProgress.set(installIdentity, progress);
+        this.host.requestUpdate();
+        const current = () =>
+          scope &&
+          this.host.gateway.isCurrent(scope) &&
+          this.installProgress.get(installIdentity) === progress;
+        const result = await installPlugin(client, request, (activity) => {
+          if (!current()) {
+            return;
+          }
+          const index = progress.activities.findIndex(
+            (row) => row.activityId === activity.activityId,
+          );
+          progress = {
+            ...progress,
+            activities:
+              index < 0
+                ? [...progress.activities, activity]
+                : progress.activities.map((row, at) => (at === index ? activity : row)),
+          };
+          this.installProgress.set(installIdentity, progress);
+          this.host.requestUpdate();
+        });
+        if (current()) {
+          // The final RPC result settles installation before optional config/catalog refreshes.
+          this.installProgress.delete(installIdentity);
+          this.host.applyMutationResult(result);
+        }
+        return result;
+      },
+      async (result, refreshError, client) => {
         const installedPluginKey = pluginRowKey(result.plugin.id);
-        this.host.applyMutationResult(result);
         if (installedPluginKey !== installIdentity) {
           this.host.setMessage(installIdentity, null);
         }
-        this.host.setMessage(
-          installedPluginKey,
-          committedMutationMessage("installed", result.plugin.name, result, refreshError),
-        );
+        this.host.setMessage(installedPluginKey, pluginMutationWarnings(result, refreshError));
         await this.host.refreshCatalogAfterMutation(client);
-        if (isCurrent()) {
-          const currentObserver = this.mutationObservers.get(installIdentity);
-          this.mutationObservers.delete(installIdentity);
-          await currentObserver?.onCommitted?.(result, refreshError);
-        }
       },
       {
-        confirm:
-          isConfirmedContinuation || installObserver?.reviewConfirmed
-            ? undefined
-            : () => confirmPluginInstall(request),
+        action: "install",
         preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
       },
       async (error, scope, isCurrent) => {
         const details =
           error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
         const persistence = asOptionalRecord(details?.persistence);
-        if (
+        const policyWarning = readPluginInstallPolicyWarning(error);
+        const canRetry = isGatewayProtocolResponseError(error) && !persistence && !policyWarning;
+        const savedInstall =
           persistence?.operation === "install" &&
           typeof persistence.pluginId === "string" &&
           persistence.pluginId.trim()
-        ) {
-          const pluginId = persistence.pluginId;
+            ? persistence.pluginId
+            : undefined;
+        const failureState = savedInstall
+          ? "saved"
+          : details?.pluginInstallRejected === true
+            ? "rejected"
+            : canRetry
+              ? "retry"
+              : "unknown";
+        const failure = {
+          title: t(`pluginsPage.installProgress.${failureState}.title`),
+          recovery: t(`pluginsPage.installProgress.${failureState}.recovery`),
+          detail: formatUiError(error),
+        };
+        const progress = this.installProgress.get(installIdentity);
+        if (progress) {
+          // Only a correlated final rejection proves an unsaved attempt can restart.
+          // Transport loss and saved installs retain their recovery state instead.
+          this.installProgress.set(installIdentity, {
+            ...progress,
+            finishedAt: Date.now(),
+            canRetry,
+            ...(!policyWarning || savedInstall ? { failure } : {}),
+          });
+          this.host.requestUpdate();
+        }
+        if (savedInstall) {
+          const pluginId = savedInstall;
           const key = pluginRowKey(pluginId);
           const runtime = asOptionalRecord(details?.runtime);
           const phase = asOptionalRecord(details?.runtimeAttempt)?.phase ?? runtime?.phase;
@@ -402,41 +415,21 @@ export class PluginsConsentController {
             scope.client,
             isCurrent,
           );
-          if (isCurrent()) {
-            const savedInstallObserver = this.mutationObservers.get(installIdentity);
-            this.mutationObservers.delete(installIdentity);
-            savedInstallObserver?.onFailure?.(message.text, pluginId);
-          }
           return;
         }
-        const consentDetails = readPluginCapabilityConsentError(error);
-        if (consentDetails) {
-          this.confirmedInstallScopes.set(installIdentity, scope);
-          this.open(
-            { kind: "install", request, installIdentity },
-            consentDetails.pluginId,
-            consentDetails,
-          );
-          return;
-        }
-        const policyWarning = readPluginInstallPolicyWarning(error);
         if (policyWarning) {
-          this.confirmedInstallScopes.set(installIdentity, scope);
+          this.installPolicyScopes.set(installIdentity, scope);
           this.host.setMessage(installIdentity, {
             kind: "warning",
             text: policyWarning.reason,
             installPolicyWarning: { details: policyWarning, request },
           });
-          this.mutationObservers
-            .get(installIdentity)
-            ?.onInstallPolicyWarning?.(request, policyWarning);
           return;
         }
-        const message = formatUiError(error);
-        this.host.setMessage(installIdentity, { kind: "error", text: message });
-        const currentObserver = this.mutationObservers.get(installIdentity);
-        this.mutationObservers.delete(installIdentity);
-        currentObserver?.onFailure?.(message);
+        this.host.setMessage(installIdentity, {
+          kind: "error",
+          text: `${failure.recovery}\n${failure.detail}`,
+        });
       },
     );
   }
@@ -469,68 +462,19 @@ export class PluginsConsentController {
 
   async mutateInstalledPlugin(
     pluginId: string,
-    action: "enable" | "disable" | "reload",
+    action: "enable" | "disable",
     rowKey = pluginRowKey(pluginId),
-    options: Pick<PluginsReloadParams, "acknowledgeCapabilities"> = {},
-    observer?: PluginMutationObserver,
+    options: Pick<PluginsSetEnabledParams, "acknowledgeCapabilities"> = {},
   ): Promise<void> {
-    const key = action === "reload" ? pluginRowKey(pluginId) : rowKey;
-    if (observer) {
-      this.mutationObservers.set(key, observer);
-    }
-    const name =
-      this.host.getResult()?.plugins.find((entry) => entry.id === pluginId)?.name ?? pluginId;
-    let onSettled: (() => void | Promise<void>) | undefined;
-    await this.runMutation<PluginMutationResult | PluginsReloadResult>(
-      key,
-      (client) => {
-        if (action !== "reload") {
-          return setPluginEnabled(client, pluginId, action === "enable", options);
-        }
-        if (
-          isGatewayMethodAdvertised(this.host.getContext().gateway.snapshot, "plugins.reload") !==
-          true
-        ) {
-          throw new Error(t("pluginsPage.reloadUnavailable"));
-        }
-        if (rowKey !== key) {
-          this.host.setMessage(rowKey, null);
-        }
-        return client.request<PluginsReloadResult>("plugins.reload", {
-          plugins: [{ pluginId }],
-          ...options,
-        });
-      },
-      async (result, refreshError, client, isCurrent) => {
-        if ("plugin" in result) {
-          this.host.applyMutationResult(result);
-        }
-        this.host.setMessage(
-          key,
-          committedMutationMessage(
-            action === "reload" ? "reloaded" : action === "enable" ? "enabled" : "disabled",
-            "plugin" in result ? result.plugin.name : name,
-            result,
-            refreshError,
-          ),
-        );
+    await this.runMutation(
+      rowKey,
+      (client) => setPluginEnabled(client, pluginId, action === "enable", options),
+      async (result, refreshError, client) => {
+        this.host.applyMutationResult(result);
+        this.host.setMessage(rowKey, pluginMutationWarnings(result, refreshError));
         await this.host.refreshCatalogAfterMutation(client);
-        if (isCurrent()) {
-          const currentObserver = this.mutationObservers.get(key);
-          this.mutationObservers.delete(key);
-          if ("plugin" in result) {
-            onSettled = () => currentObserver?.onCommitted?.(result, refreshError);
-          } else {
-            onSettled = currentObserver?.onReloaded;
-          }
-        }
       },
-      {
-        // Pure reload changes runtime only; accepting capabilities still persists consent.
-        canDispatch:
-          action === "reload" && !options.acknowledgeCapabilities ? this.host.canReload : undefined,
-        preserveMessageWhilePending: action === "reload",
-      },
+      { action },
       async (error, scope, isCurrent) => {
         const details =
           error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
@@ -546,7 +490,7 @@ export class PluginsConsentController {
           return;
         }
         const phase = asOptionalRecord(details?.runtimeAttempt)?.phase ?? runtime?.phase;
-        const savedInstall = this.host.getMessages()[key]?.savedInstall;
+        const savedInstall = this.host.getMessages()[rowKey]?.savedInstall;
         const message: PluginRowMessage = {
           kind: "error",
           ...(savedInstall ? { savedInstall } : {}),
@@ -561,18 +505,11 @@ export class PluginsConsentController {
         };
         if (runtime?.committed === true) {
           // A published generation survives this failure even when its event was missed.
-          await this.reconcileCommittedFailure([key], message, scope.client, isCurrent);
+          await this.reconcileCommittedFailure([rowKey], message, scope.client, isCurrent);
         } else {
-          this.host.setMessage(key, message);
-        }
-        if (isCurrent()) {
-          const currentObserver = this.mutationObservers.get(key);
-          this.mutationObservers.delete(key);
-          currentObserver?.onFailure?.(message.text, savedInstall);
+          this.host.setMessage(rowKey, message);
         }
       },
     );
-    // A follow-up enable may use this same row; release mutation ownership first.
-    await onSettled?.();
   }
 }

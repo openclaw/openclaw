@@ -5,6 +5,7 @@ import {
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
@@ -91,10 +92,8 @@ export function createInternalAgentTurnFacade(
       dispatchOptions.assertAdmissionCurrent?.();
       let acceptance: GatewayMethodDispatchResponse | undefined;
       let final: GatewayMethodDispatchResponse | undefined;
-      let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
-      let rejectAcceptance: ((error: Error) => void) | undefined;
-      let resolveFinal: ((response: GatewayMethodDispatchResponse) => void) | undefined;
-      let rejectFinal: ((error: Error) => void) | undefined;
+      const acceptanceResult = createDeferredCore<GatewayMethodDispatchResponse>();
+      let finalResult: Deferred<GatewayMethodDispatchResponse> | undefined;
       let postAcceptanceError: Error | undefined;
       // Acceptance publishes the abort owner before this callback runs. Retain that exact
       // entry so a late deadline cannot cancel a same-run-id successor.
@@ -156,18 +155,6 @@ export function createInternalAgentTurnFacade(
           stopReason: pendingCancelReason,
         });
       };
-      const acceptancePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-        resolveAcceptance = resolve;
-        rejectAcceptance = reject;
-      });
-      const createFinalPromise = () =>
-        new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-          resolveFinal = resolve;
-          rejectFinal = reject;
-          if (final) {
-            resolve(final);
-          }
-        });
       const io: AgentTurnIo = {
         emitStartOwner: publishStartOwner,
         emitAcceptance: (frame, meta) => {
@@ -178,7 +165,7 @@ export function createInternalAgentTurnFacade(
               error: frame[2],
               ...(meta ? { meta } : {}),
             };
-            resolveAcceptance?.(acceptance);
+            acceptanceResult.resolve(acceptance);
             const acceptedRunId =
               typeof meta?.runId === "string" && meta.runId.trim() ? meta.runId.trim() : undefined;
             const acceptedEntry = acceptedRunId
@@ -210,7 +197,7 @@ export function createInternalAgentTurnFacade(
               error: frame[2],
               ...(meta ? { meta } : {}),
             };
-            resolveFinal?.(final);
+            finalResult?.resolve(final);
           }
         },
         ...(dispatchOptions.onExecutionStarted
@@ -262,6 +249,7 @@ export function createInternalAgentTurnFacade(
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
                 privateCompletion: dispatchOptions.privateCompletion,
+                settleWakeReplay: dispatchOptions.settleWakeReplay,
               });
             },
             {
@@ -278,7 +266,7 @@ export function createInternalAgentTurnFacade(
       void operation.then(
         () => {
           if (!acceptance) {
-            rejectAcceptance?.(
+            acceptanceResult.reject(
               new Error(`Gateway method "${method}" completed without a response.`),
             );
           }
@@ -287,14 +275,14 @@ export function createInternalAgentTurnFacade(
           const dispatchError = error instanceof Error ? error : new Error(String(error));
           if (acceptance) {
             postAcceptanceError = dispatchError;
-            rejectFinal?.(dispatchError);
+            finalResult?.reject(dispatchError);
             return;
           }
-          rejectAcceptance?.(dispatchError);
+          acceptanceResult.reject(dispatchError);
         },
       );
       const response = (async () => {
-        const first = acceptance ?? (await acceptancePromise);
+        const first = acceptance ?? (await acceptanceResult.promise);
         if (
           dispatchOptions.expectFinal !== true ||
           (first.payload as { status?: unknown } | undefined)?.status !== "accepted"
@@ -305,7 +293,7 @@ export function createInternalAgentTurnFacade(
         if (postAcceptanceError) {
           throw postAcceptanceError;
         }
-        return final ?? (await createFinalPromise());
+        return final ?? (await (finalResult = createDeferredCore()).promise);
       })();
       return await waitForGatewayDispatch(
         method,

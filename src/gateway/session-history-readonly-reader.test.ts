@@ -246,7 +246,14 @@ it.each(["missing", "successor", "retained"] as const)(
 it("keeps canonical key validation on each admitted reader handle", async () => {
   await withHistory(async ({ target, database }) => {
     const reader = createReadonlySessionHistoryReader(target);
-    await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+    const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await firstScope.run(target.database, () =>
+        reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
+      );
+    } finally {
+      firstScope.close();
+    }
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) SELECT ?, current_session_id, entry_json, updated_at FROM session_nodes WHERE session_key = ?",
@@ -261,7 +268,7 @@ it("keeps canonical key validation on each admitted reader handle", async () => 
   });
 });
 
-it("observes a committed main-key policy change before a later read", async () => {
+it("revalidates unrelated lineage after a committed main-key policy change", async () => {
   await withHistory(async ({ target, database }) => {
     const scope = {
       agentId: "main",
@@ -272,6 +279,9 @@ it("observes a committed main-key policy change before a later read", async () =
     const reader = createReadonlySessionHistoryReader(target);
     await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
     setCanonicalSqliteSessionMainKey(database, "work");
+    database.db
+      .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+      .run("agent:main:unrecorded-parent", scope.sessionKey);
     await expect(
       reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
     ).rejects.toThrow("openclaw doctor --fix");

@@ -7,14 +7,17 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as activitySummary from "../session-activity-summary-state.js";
 import { beginSessionPermissionChange } from "../session-permission-change.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
+import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import * as rowMaterialization from "../session-row-projection-materialize.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { listProjectedSessions } from "../session-utils-list.js";
@@ -27,7 +30,7 @@ import { readSessionRowFacts } from "./session-placement-read-projection.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("refreshes current placement facts through one store admission per resident row", async () => {
+it("prepares current placement facts off the host thread and retries failed refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const identity = {
       agentId: "main",
@@ -36,7 +39,7 @@ it("refreshes current placement facts through one store admission per resident r
     };
     replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
     const placements = createWorkerSessionPlacementStore();
-    placements.startDispatch(identity);
+    await placements.startDispatch(identity);
     const options = {
       cfg: {
         agents: {
@@ -50,14 +53,31 @@ it("refreshes current placement facts through one store admission per resident r
     const projection = await createSessionRowProjection(options);
     const refresh = async () => {
       const reads = vi.spyOn(stateDatabase, "openOpenClawStateDatabase");
+      let placementReads = 0;
+      const statements = (["get", "all", "iterate"] as const).map((method) => {
+        const execute = StatementSync.prototype[method];
+        return vi.spyOn(StatementSync.prototype, method).mockImplementation(function (
+          this: StatementSync,
+          ...args: unknown[]
+        ) {
+          if (/\bfrom\s+"?worker_session_placements\b/i.test(this.sourceSQL)) {
+            placementReads++;
+          }
+          return Reflect.apply(execute, this, args);
+        });
+      });
       try {
         sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
         await projection.ensureMaterialized();
         const result = projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey });
-        expect(reads).toHaveBeenCalledTimes(1);
+        expect(reads).not.toHaveBeenCalled();
+        expect(placementReads).toBe(0);
         return result.row?.placement;
       } finally {
         reads.mockRestore();
+        for (const statement of statements) {
+          statement.mockRestore();
+        }
       }
     };
     try {
@@ -66,10 +86,8 @@ it("refreshes current placement facts through one store admission per resident r
       placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" });
       expect(await refresh()).toMatchObject({ state: "failed" });
       const refused = vi
-        .spyOn(stateDatabase, "openOpenClawStateDatabase")
-        .mockImplementation(() => {
-          throw new Error("Placement store admission refused");
-        });
+        .spyOn(placements, "readProjection")
+        .mockRejectedValue(new Error("Placement store admission refused"));
       try {
         sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
         await expect(projection.ensureMaterialized()).rejects.toThrow(
@@ -79,6 +97,34 @@ it("refreshes current placement facts through one store admission per resident r
         refused.mockRestore();
       }
       expect(await refresh()).toMatchObject({ state: "failed" });
+      const captured = createDeferredCore();
+      const releaseRead = createDeferredCore();
+      const readProjection = placements.readProjection.bind(placements);
+      const delayed = vi.spyOn(placements, "readProjection").mockImplementationOnce(async (ids) => {
+        const snapshot = await readProjection(ids);
+        captured.resolve();
+        await releaseRead.promise;
+        return snapshot;
+      });
+      try {
+        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
+        const refreshed = projection.ensureMaterialized();
+        await captured.promise;
+        placements.fail({
+          sessionId: identity.sessionId,
+          recoveryError: "Changed during preparation",
+        });
+        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
+        releaseRead.resolve();
+        await refreshed;
+        expect(
+          projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey }).row
+            ?.placement,
+        ).toMatchObject({ recoveryError: "Changed during preparation" });
+      } finally {
+        releaseRead.resolve();
+        delayed.mockRestore();
+      }
     } finally {
       projection.dispose();
     }
@@ -95,7 +141,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
     replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
-    const environmentStore = createWorkerEnvironmentStore({ database });
+    const environmentStore = await createWorkerEnvironmentStore({ database });
     seedAttachedPlacementEnvironment(database, {
       environmentId: "row-environment",
       sessionId: identity.sessionId,
@@ -104,7 +150,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       profileId: "desktop",
       nodeDeviceId: "row-device",
     });
-    let placement = placements.startDispatch(identity);
+    let placement = await placements.startDispatch(identity);
     for (const step of [
       { to: "provisioning", patch: { environmentId: "row-environment" } },
       { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -155,7 +201,9 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         hasCurrentDeviceRunner: () => runnerAvailable,
       }),
     };
-    let placementRevision = 0;
+    const preparedPlacements = createSessionRowPlacementProjection(placements, () => undefined);
+    preparedPlacements.register(identity.sessionId);
+    await preparedPlacements.prepare();
     const facts = readSessionRowFacts({
       cfg: {},
       target: {
@@ -168,12 +216,9 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       },
       entry: loadSessionEntryReadOnly(identity)!,
       context,
-      placementFactsReader: placements,
-      placementRevision: () => placementRevision,
+      placementFactsReader: preparedPlacements,
     });
-    const reads = (["all", "get", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
+    const reads = observeMainThreadReads();
     const finishPermissionChange = beginSessionPermissionChange(identity.sessionId);
     try {
       const first = facts.present();
@@ -195,11 +240,9 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       expect(first.placement).toMatchObject({ diskSpace: { availableBytes: 6_000 } });
       finishPermissionChange();
       expect(facts.present().permissionModePending).toBe(false);
-      for (const read of reads) {
-        expect(read).not.toHaveBeenCalled();
-      }
+      reads.expectIdle();
 
-      const placementReads = vi.spyOn(placements, "getProjectionFacts");
+      const placementReads = vi.spyOn(placements, "readProjection");
       const rowReads = vi.spyOn(agentDatabaseReadOnly, "withOpenClawAgentDatabaseReadOnly");
       const summaryReads = vi.spyOn(activitySummary, "projectSessionActivitySummary");
       machine = { cpu: 8, memoryGb: 32 };
@@ -209,8 +252,9 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         ownerEpoch: 7,
         nodeDeviceId: "replacement-device",
       });
-      placementRevision += 1;
       expect(placementReads).not.toHaveBeenCalled();
+      preparedPlacements.invalidate();
+      await preparedPlacements.prepare();
       expect(facts.present().placement).toMatchObject({
         state: "active",
         machine: { cpu: 8, memoryGb: 32 },
@@ -226,7 +270,8 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         },
         target: { kind: "gateway" },
       });
-      placementRevision += 1;
+      preparedPlacements.invalidate();
+      await preparedPlacements.prepare();
       expect(facts.present()).toMatchObject({
         placement: { state: "draining" },
         placementMove: { target: { kind: "gateway" } },
@@ -242,7 +287,8 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         expectedGeneration: reconciling.generation,
         recoveryError: "Worker stopped",
       });
-      placementRevision += 1;
+      preparedPlacements.invalidate();
+      await preparedPlacements.prepare();
       expect(facts.present().placement).toMatchObject({
         state: "failed",
         recoveryAction: "stop-first",
@@ -286,7 +332,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
             ["draining", "destroying"],
             ["destroying", "destroyed"],
           ] as const) {
-            environmentStore.transition({ environmentId: "row-environment", from, to });
+            await environmentStore.transition({ environmentId: "row-environment", from, to });
           }
 
           expect((await list())?.placement).toMatchObject({
@@ -301,26 +347,22 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         projection.dispose();
         release();
       }
-      placementRevision += 1;
+      preparedPlacements.invalidate();
+      await preparedPlacements.prepare();
       expect(facts.present().placement).toMatchObject({
         state: "failed",
         recoveryAction: "restart",
       });
       expect(rowReads).not.toHaveBeenCalled();
       expect(summaryReads).not.toHaveBeenCalled();
-      for (const read of reads) {
-        read.mockClear();
-      }
+      reads.clear();
       facts.present();
       facts.present();
-      for (const read of reads) {
-        expect(read).not.toHaveBeenCalled();
-      }
+      reads.expectIdle();
     } finally {
+      preparedPlacements.dispose();
       finishPermissionChange();
-      for (const read of reads) {
-        read.mockRestore();
-      }
+      reads.restore();
     }
   });
 });
@@ -374,9 +416,7 @@ it("prepares board membership and recap freshness from the physical target and r
         entry: { sessionId: "other-row", updatedAt: 1 },
       }).hasBoard,
     ).toBe(false);
-    const reads = (["all", "get", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
+    const reads = observeMainThreadReads();
     try {
       expect(facts.present().activitySummary).toEqual({
         text: "Prepared recap.",
@@ -388,13 +428,9 @@ it("prepares board membership and recap freshness from the physical target and r
         updatedAt: 1,
         state: "current",
       });
-      for (const read of reads) {
-        expect(read).not.toHaveBeenCalled();
-      }
+      reads.expectIdle();
     } finally {
-      for (const read of reads) {
-        read.mockRestore();
-      }
+      reads.restore();
     }
     await persistSessionTranscriptTurn(scope, {
       messages: [

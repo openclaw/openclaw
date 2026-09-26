@@ -1,5 +1,5 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { pluginSlugCandidate, sameRouteLocation, type RouteId } from "../../app-route-paths.ts";
+import { pluginSlugCandidate, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
@@ -18,7 +18,7 @@ export function isDefaultChatLanding(
 }
 
 export async function startModelSetupFirstRunRedirectAfterLocation(params: {
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   enabled: boolean;
   history: Pick<RouterHistory, "location" | "replace">;
   initialLocationReady: Promise<RouteLocation>;
@@ -53,9 +53,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
       params.onInitialDecision?.();
     }
   };
-  const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
-    snapshot,
-  ) => {
+  const handleSnapshot: Parameters<ApplicationContext["gateway"]["subscribe"]>[0] = (snapshot) => {
     if (initialDecisionSettled) {
       return;
     }

@@ -1,14 +1,18 @@
 import { createServer, type Server } from "node:http";
+import type { ChannelProgressDraftCompositorSnapshot } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordMessageActions } from "../channel-actions.js";
 import { RequestClient } from "../internal/rest.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
+import * as runtime from "../send.js";
 import { sendPollDiscord, sendStickerDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordAction } from "./runtime.js";
-import * as runtime from "./runtime.messaging.runtime.js";
 
-vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.messaging.runtime.js")>();
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
   return {
     ...actual,
     editMessageDiscord: vi.fn(actual.editMessageDiscord),
@@ -16,11 +20,18 @@ vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
     fetchChannelInfoDiscord: vi.fn(actual.fetchChannelInfoDiscord),
     fetchGuildInfoDiscord: vi.fn(actual.fetchGuildInfoDiscord),
     sendMessageDiscord: vi.fn(actual.sendMessageDiscord),
-    sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage),
     sendStickerDiscord: vi.fn(actual.sendStickerDiscord),
     createThreadDiscord: vi.fn(actual.createThreadDiscord),
   };
 });
+
+vi.mock("../send.components.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.components.js")>();
+  return { ...actual, sendDiscordComponentMessage: vi.fn(actual.sendDiscordComponentMessage) };
+});
+
+const originalComponents =
+  await vi.importActual<typeof import("../send.components.js")>("../send.components.js");
 
 const channelId = "123456789012345678";
 const messageId = "223456789012345678";
@@ -31,9 +42,7 @@ const attachment = { id: "423456789012345678", filename: "example.txt", size: 4 
 const cfg: OpenClawConfig = {
   channels: { discord: { token, groupPolicy: "open" } },
 };
-const original = await vi.importActual<typeof import("./runtime.messaging.runtime.js")>(
-  "./runtime.messaging.runtime.js",
-);
+const original = await vi.importActual<typeof import("../send.js")>("../send.js");
 const originalFetch = globalThis.fetch;
 let server: Server;
 let rest: RequestClient;
@@ -69,7 +78,7 @@ beforeAll(async () => {
             : {
                 id: channelId,
                 type: parentChannelType,
-                guild_id: guildId,
+                ...(parentChannelType === 1 ? {} : { guild_id: guildId }),
                 name: "synthetic-channel",
               }
           : { id: messageId, channel_id: channelId, ...current, ...body };
@@ -130,8 +139,8 @@ beforeAll(async () => {
   vi.mocked(runtime.sendMessageDiscord).mockImplementation((to, content, opts) =>
     original.sendMessageDiscord(to, content, { ...opts, rest }),
   );
-  vi.mocked(runtime.sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
-    original.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
+  vi.mocked(sendDiscordComponentMessage).mockImplementation((to, spec, opts) =>
+    originalComponents.sendDiscordComponentMessage(to, spec, { ...opts, rest }),
   );
   vi.mocked(runtime.sendStickerDiscord).mockImplementation((to, ids, opts) =>
     original.sendStickerDiscord(to, ids, { ...opts, rest }),
@@ -160,7 +169,7 @@ afterAll(async () => {
     runtime.fetchChannelInfoDiscord,
     runtime.fetchGuildInfoDiscord,
     runtime.sendMessageDiscord,
-    runtime.sendDiscordComponentMessage,
+    sendDiscordComponentMessage,
     runtime.sendStickerDiscord,
     runtime.createThreadDiscord,
   ]) {
@@ -177,6 +186,164 @@ afterAll(async () => {
 });
 
 const writes = () => requests.filter((request) => request.method !== "GET");
+
+describe("Discord retained progress edits", () => {
+  it("edits the same checklist with account-scoped rendering and inert mentions", async () => {
+    const snapshot: ChannelProgressDraftCompositorSnapshot = {
+      label: "Working",
+      statusHeadline: "Waiting @everyone for child verification",
+      statusHeadlineFormat: "plain",
+      lines: ["Child verifier: checks passed"],
+      plan: [
+        { step: "Inspect source and configuration", status: "completed" },
+        { step: "Verify the child result", status: "in_progress" },
+      ],
+    };
+    const accountCfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          token,
+          groupPolicy: "disabled",
+          streaming: { progress: { maxLines: 1, maxLineChars: 8 } },
+          accounts: {
+            worker: {
+              groupPolicy: "open",
+              streaming: {
+                mode: "progress",
+                progress: { toolProgress: true, maxLines: 3, maxLineChars: 120 },
+              },
+            },
+          },
+        },
+      },
+    };
+    await discordMessageActions.handleAction?.({
+      channel: "discord",
+      action: "edit",
+      cfg: accountCfg,
+      accountId: "worker",
+      params: {
+        to: `channel:${threadId}`,
+        messageId,
+        message: "Generic fallback must not replace the retained card.",
+      },
+      progressSnapshot: snapshot,
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(writes()).toEqual([
+      {
+        method: "PATCH",
+        path: `/v10/channels/${threadId}/messages/${messageId}`,
+        body: {
+          content: expect.stringContaining("Inspect source and configuration"),
+          allowed_mentions: { parse: [] },
+        },
+      },
+    ]);
+    expect(current.content).toContain("Child verifier: checks passed");
+    expect(current.content).toContain("Verify the child result");
+    expect(current.content).not.toContain("Generic fallback");
+    expect(current.attachments).toEqual([attachment]);
+  });
+
+  it("bounds a retained edit to one configured Discord message", async () => {
+    await discordMessageActions.handleAction?.({
+      channel: "discord",
+      action: "edit",
+      cfg: {
+        channels: {
+          discord: {
+            token,
+            groupPolicy: "open",
+            textChunkLimit: 100,
+            streaming: { progress: { maxLineChars: 1000 } },
+          },
+        },
+      },
+      params: { to: `channel:${channelId}`, messageId, message: "Generic fallback" },
+      progressSnapshot: { lines: ["Child verifier: " + "result ".repeat(500)] },
+      conversationReadOrigin: "direct-operator",
+    });
+
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]).toMatchObject({
+      method: "PATCH",
+      path: `/v10/channels/${channelId}/messages/${messageId}`,
+      body: { allowed_mentions: { parse: [] } },
+    });
+    expect(current.content).toContain("Child verifier:");
+    expect(current.content.length).toBeLessThanOrEqual(100);
+  });
+
+  it.each([true, false])(
+    "uses the current DM channel only for its captured user target (matching: %s)",
+    async (matching) => {
+      parentChannelType = 1;
+      const editing = discordMessageActions.handleAction?.({
+        channel: "discord",
+        action: "edit",
+        cfg,
+        accountId: "default",
+        requesterAccountId: "default",
+        params: { to: "user:523456789012345678", messageId, message: "Generic fallback" },
+        progressSnapshot: { lines: [], plan: [{ step: "Verify", status: "in_progress" }] },
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: channelId,
+          currentMessagingTarget: `user:${matching ? "523456789012345678" : "523456789012345679"}`,
+          currentChatType: "direct",
+        },
+      });
+      if (!matching) {
+        await expect(editing).rejects.toThrow();
+        expect(writes()).toEqual([]);
+        return;
+      }
+      await editing;
+
+      expect(writes()).toEqual([
+        {
+          method: "PATCH",
+          path: `/v10/channels/${channelId}/messages/${messageId}`,
+          body: { content: "▸ Verify", allowed_mentions: { parse: [] } },
+        },
+      ]);
+    },
+  );
+
+  it("fences a retained edit when its owner retires during target policy lookup", async () => {
+    const started = createDeferred<void>();
+    const resume = createDeferred<void>();
+    vi.mocked(runtime.fetchChannelInfoDiscord).mockImplementationOnce(async (id, options) => {
+      const channel = await original.fetchChannelInfoDiscord(id, { ...options, rest });
+      started.resolve();
+      await resume.promise;
+      return channel;
+    });
+    let authorized = true;
+    const editing = discordMessageActions.handleAction?.({
+      channel: "discord",
+      action: "edit",
+      cfg,
+      params: { to: `channel:${channelId}`, messageId, message: "Generic fallback" },
+      progressSnapshot: { lines: [], plan: [{ step: "Verify", status: "in_progress" }] },
+      conversationReadOrigin: "direct-operator",
+      assertDirectAdapterHandoff: () => {
+        if (!authorized) {
+          throw new Error("Progress owner retired");
+        }
+      },
+    });
+    await started.promise;
+    authorized = false;
+    resume.resolve();
+
+    await expect(editing).rejects.toThrow("Progress owner retired");
+    expect(writes()).toEqual([]);
+    expect(current.content).toBe("Initial caption");
+  });
+});
 
 describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (entry) => {
   const send = (content: unknown, extra: Record<string, unknown> = {}) =>

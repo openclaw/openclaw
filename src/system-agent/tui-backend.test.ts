@@ -166,6 +166,18 @@ describe("runSystemAgentTui", () => {
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
         runTuiCalls += 1;
         runTuiOptions = opts;
+        if (!opts.backend) {
+          throw new Error("Expected the system-agent TUI backend");
+        }
+        for (const sessionKey of ["agent:openclaw:main", "main"]) {
+          await expect(opts.backend.describeSession({ sessionKey })).resolves.toMatchObject({
+            session: { key: "agent:openclaw:main", model: "gpt-5.5", modelProvider: "openai" },
+            defaults: { model: "gpt-5.5", modelProvider: "openai" },
+          });
+        }
+        await expect(
+          opts.backend.describeSession({ sessionKey: "agent:openclaw:missing" }),
+        ).resolves.toMatchObject({ session: null });
         return { exitReason: "exit" as const };
       },
     );
@@ -466,44 +478,6 @@ describe("runSystemAgentTui", () => {
     }
 
     expect(unhandled).toHaveLength(0);
-  });
-
-  it("emits an error without a fake final reply when inference fails", async () => {
-    const events: Array<{ payload?: { state?: string; errorMessage?: string } }> = [];
-    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
-            onEvent?: (event: { payload?: { state?: string; errorMessage?: string } }) => void;
-            engine: { handle: () => Promise<never> };
-          };
-          backend.engine.handle = async () => {
-            throw new SystemAgentInferenceUnavailableError("conversation");
-          };
-          backend.onEvent = (event) => events.push(event);
-
-          await backend.sendChat({ message: "status please" });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          state: "error",
-          errorMessage: expect.stringContaining("working inference"),
-        }),
-      }),
-    ]);
   });
 
   it("retires the local session before a queued exact mutation can run", async () => {

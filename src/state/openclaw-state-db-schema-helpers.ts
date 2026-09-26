@@ -1,6 +1,7 @@
 // Provides shared SQLite schema probes and additive column migration helpers.
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 
 export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
   return tableHasColumns(db, tableName, [columnName]);
@@ -28,6 +29,10 @@ export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): str
 }
 
 export function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return schema.tables.has(tableName);
+  }
   const row = executeWithCachedStatement(
     db,
     "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?",

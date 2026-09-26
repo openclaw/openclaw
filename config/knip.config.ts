@@ -6,6 +6,7 @@ import path from "node:path";
 import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
+import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -20,10 +21,13 @@ const repositoryScriptEntries = [
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   "scripts/render-proof-video.mts!",
+  "scripts/ci-shard-timings-refresh.mts!",
+  // tsdown builds this private macOS app worker protocol entry by path.
+  "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
-  // mobile-release-authority invokes this helper from composite-action YAML.
-  ".github/actions/mobile-release-authority/authority.mjs!",
+  // The compiler below exposes this workflow's inline and generated-config imports.
+  ".github/workflows/plugin-prerelease.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -34,11 +38,15 @@ const repositoryScriptEntries = [
   "scripts/build-discord-activity-sdk.mts!",
   // package-mac-app.sh launches the architecture scheduler by path.
   "scripts/build-mac-swift.mts!",
+  // CI passes this native test launcher through the Apple command log wrapper.
+  "scripts/test-macos-native.mts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/check-plugin-sdk-exports.mts!",
+  // Declaration preparation and boundary checks launch this compiler worker by path.
+  "scripts/compile-extension-boundary.mts!",
   // openclaw-performance.yml invokes the paired benchmark CLI by path.
   "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
@@ -69,6 +77,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/codex-on-demand/doctor-checks.mjs!",
   "scripts/e2e/lib/config-reload/assert-log.mjs!",
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
+  "scripts/e2e/lib/container-image-upgrade/assert-launch.mjs!",
+  "scripts/e2e/lib/container-image-upgrade/fixture.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
   "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs!",
   "scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs!",
@@ -111,22 +121,32 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
   "scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs!",
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
   "scripts/upgrade-survivor-diagnostics.mjs!",
+  // run.sh invokes this CLI and preloads it into updater/Doctor children.
+  "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
+  // The compiler below exposes the runner's inline Node imports.
+  "scripts/e2e/lib/upgrade-survivor/run.sh!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs!",
+  // The first-hop shell executes the packaged admission entry probe by path.
+  "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -138,10 +158,13 @@ const repositoryScriptEntries = [
   "scripts/ios-screenshot-evidence.mjs!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
+  // Android Fastlane invokes this planner and its pre-upload validation by path.
+  "scripts/android-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  // The frozen compatibility shell invokes this CLI and imports it from inline bundle resolution.
+  // The frozen compatibility shell invokes the source CLI and imports trusted tooling.
   "scripts/lib/frozen-target-source.mjs!",
+  "scripts/lib/frozen-target-compat.sh!",
   // CI loads the native Vitest reporter through its CLI path.
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
@@ -172,11 +195,17 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
+  // review.sh invokes the corrected-candidate review validator by path.
+  "scripts/pr-lib/correction-review.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
   // merge.sh executes legacy capture qualification as a standalone Node CLI.
   "scripts/pr-lib/merge-legacy-refusal.mjs!",
+  // merge.sh and merge-outcome.sh execute refusal qualification by path.
+  "scripts/pr-lib/merge-pre-dispatch-refusal.mjs!",
+  // merge-outcome.sh launches the REST adapter as a standalone Node CLI.
+  "scripts/pr-lib/merge-rest.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   // worktree.sh invokes this journal-state validator by path before native replay.
   "scripts/pr-lib/review-transition-state.mjs!",
@@ -187,14 +216,21 @@ const repositoryScriptEntries = [
   "scripts/print-live-docker-plugin-selection.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
+  // Docker/release workflows launch the warning relay from copied harness roots.
+  "scripts/relay-build-limit-warnings.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
+  // lint-swift.sh launches the SwiftLint policy wrapper by absolute path.
+  "scripts/run-swiftlint.mts",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
   // The isolated Vitest adapter executes this entry by path inside its container.
   "scripts/lib/vitest-isolated-entry.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
+  // Security Review stages these entrypoints from isolated checkout attempts.
+  "scripts/github/security-review-event.mjs!",
+  "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
@@ -232,6 +268,64 @@ function listScriptShimEntries(dir = "scripts"): string[] {
   });
 }
 
+function compileFrvWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve(".github/workflows/plugin-prerelease.yml")) {
+    return "";
+  }
+  const names = new Set(
+    [
+      ...source.matchAll(
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\()["']\.\/\.frv-tooling\/scripts\/frv-test-exclusions\.mjs["']/gu,
+      ),
+    ].flatMap((match) => match[1]?.split(",").map((name) => name.trim()) ?? []),
+  );
+  // The run CLI writes a Vitest config importing its own URL. Model that emitted
+  // import only while the workflow invokes the generator, and derive its names
+  // from the real template so removing a consumer restores the unused finding.
+  if (/\.frv-tooling\/scripts\/frv-test-exclusions\.mjs["']?,?\s+["']?run["']?/u.test(source)) {
+    const generator = fs.readFileSync("scripts/frv-test-exclusions.mjs", "utf8");
+    for (const match of generator.matchAll(
+      /`import\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};`/gu,
+    )) {
+      for (const name of match[1]?.split(",") ?? []) {
+        names.add(name.trim());
+      }
+    }
+  }
+  return names.size
+    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
+    : "";
+}
+
+function compileShellConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("scripts/lib/frozen-target-compat.sh")) {
+    // These URLs resolve beside this shell file; keep the export edges tied to its actual imports.
+    return [
+      ...source.matchAll(
+        /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(new URL\("(\.\/[^"\r\n]+\.mjs)", pathToFileURL\(trustedHelper\)\)\)/gu,
+      ),
+    ]
+      .map(([, names, specifier]) => `import {${names}} from ${JSON.stringify(specifier)};`)
+      .join("\n");
+  }
+  if (path.resolve(filePath) !== path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh")) {
+    return "";
+  }
+  const imports = source.match(
+    /^[ \t]*import\s*\{[^}]+\}\s*from\s*["']\.\/scripts\/[^"'\r\n]+["'];?/gmu,
+  );
+  return (imports ?? [])
+    .map((declaration) =>
+      declaration.replace(/["'](\.\/scripts\/[^"']+)["']/u, (_match, specifier: string) => {
+        const relative = path
+          .relative(path.dirname(filePath), path.resolve(specifier))
+          .replaceAll("\\", "/");
+        return JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`);
+      }),
+    )
+    .join("\n");
+}
+
 const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
@@ -249,14 +343,18 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
-  "openclaw.mjs!",
+  "{openclaw,docker-entrypoint}.mjs!",
+  // update-command-node-runtime-resolution loads this package-root module by absolute URL.
+  "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
+  "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
@@ -281,12 +379,16 @@ const rootEntries = [
   "scripts/bench-sqlite-reliability.ts!",
   "scripts/bench-cron-session-reaper.ts!",
   "scripts/bench-codex-catalog-pages.ts!",
+  "scripts/bench-redaction-hot-paths.ts!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Documented core-only Decision Labs foundation entry. No automatic consumers
+  // ship with the gate; remove this root when the first consumer imports it.
+  "src/agents/decision-assistance.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
@@ -295,6 +397,8 @@ const rootEntries = [
   "src/tasks/task-registry-control.runtime.ts!",
   // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
   "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
+  // Command attempts consume this namespace through runtime-loaders.ts's Promise.all preload.
+  "src/agents/command/attempt-execution.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
@@ -327,8 +431,6 @@ const rootEntries = [
   "src/commands/doctor/shared/deprecation-compat.ts!",
   // Compiled as the package-boundary failure canary by the extension checker.
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
-  // Mintlify executes every JavaScript file in the docs content directory on each page.
-  "docs/nav-tabs-underline.js!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
@@ -410,6 +512,10 @@ const rootBundledPluginRuntimeDependencies = [
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
+  // Root bundles the browser plugin's patched MCP server for npm installations.
+  "chrome-devtools-mcp",
+  // Browser and Teams import Express; bundled Browser chunks resolve it from root.
+  "express",
   "grammy",
   "linkedom",
   "minimatch",
@@ -443,6 +549,20 @@ const rootToolingAndWorkspaceDependencies = [
   // Root declaration builds compile terminal-core source and resolve this package from root.
   "string-width",
 ] as const;
+
+function workspacePackage(packageDir: string, extraEntries: readonly string[] = []) {
+  const workspace = path.join("packages", packageDir);
+  return {
+    // Package exports, not shell arguments, own these public source entrypoints.
+    entry: [
+      ...Object.values(buildPackageDistEntriesFromExports(packageDir)).map(
+        (source) => path.relative(workspace, source).replaceAll("\\", "/") + "!",
+      ),
+      ...extraEntries,
+    ],
+    project: ["src/**/*.ts!"],
+  } as const;
+}
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
@@ -510,6 +630,7 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
+  compilers: { yml: compileFrvWorkflowConsumers, sh: compileShellConsumers },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.
@@ -539,6 +660,9 @@ const config = {
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
+    // Focused outbox tests seed and recover rows through these kernels; production
+    // reaches them only through the agent database worker's command dispatcher.
+    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
@@ -591,7 +715,7 @@ const config = {
         ...rootBundledPluginRuntimeDependencies,
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
-      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "xcrun"],
+      ignoreBinaries: ["mint", "ngrok", "open", "openclaw", "sleep", "swiftlint", "xcrun"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
@@ -648,10 +772,7 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
-    "packages/sdk": {
-      entry: ["src/index.ts!"],
-      project: ["src/**/*.ts!"],
-    },
+    "packages/sdk": workspacePackage("sdk"),
     "packages/agent-core": {
       entry: [
         "src/index.ts!",
@@ -668,132 +789,21 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
-    "packages/gateway-client": {
-      // Mirror package.json exports; these subpaths are published surfaces.
-      entry: ["src/index.ts!", "src/readiness.ts!", "src/timeouts.ts!"],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/gateway-protocol": {
-      // Mirror package.json exports; these subpaths are published surfaces.
-      entry: [
-        "src/index.ts!",
-        "src/client-info.ts!",
-        "src/connect-error-details.ts!",
-        "src/frame-guards.ts!",
-        "src/schema.ts!",
-        "src/startup-unavailable.ts!",
-        "src/version.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/model-catalog-core": {
-      // Mirror the published export map so package-owned runtime dependencies
-      // are traced from the TypeScript sources instead of the JS fallback.
-      entry: [
-        "src/index.ts!",
-        "src/configured-model-refs.ts!",
-        "src/model-catalog-normalize.ts!",
-        "src/model-catalog-refs.ts!",
-        "src/model-catalog-types.ts!",
-        "src/provider-id.ts!",
-        "src/provider-model-id-normalization.ts!",
-        "src/provider-model-id-normalize.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/normalization-core": {
-      // Mirror package.json exports; root and UI builds consume these source subpaths directly.
-      entry: [
-        "src/index.ts!",
-        "src/agent-id.ts!",
-        "src/boolean-coercion.ts!",
-        "src/browser-error-runtime.ts!",
-        "src/error-coercion.ts!",
-        "src/expect.ts!",
-        "src/json-coercion.ts!",
-        "src/number-coercion.ts!",
-        "src/phone-presentation.ts!",
-        "src/record-coerce.ts!",
-        "src/result.ts!",
-        "src/string-coerce.ts!",
-        "src/string-normalization.ts!",
-        "src/utf16-slice.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/net-policy": {
-      entry: ["src/index.ts!", "src/ip.ts!"],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/markdown-core": {
-      entry: [
-        "src/index.ts!",
-        "src/code-spans.ts!",
-        "src/fences.ts!",
-        "src/frontmatter.ts!",
-        "src/ir.ts!",
-        "src/render.ts!",
-        "src/render-aware-chunking.ts!",
-        "src/tables.ts!",
-        "src/types.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/media-core": {
-      entry: [
-        "src/index.ts!",
-        "src/attachment-classify.ts!",
-        "src/base64.ts!",
-        "src/constants.ts!",
-        "src/content-length.ts!",
-        "src/file-name.ts!",
-        "src/inbound-path-policy.ts!",
-        "src/inline-image-data-url.ts!",
-        "src/media-source-url.ts!",
-        "src/mime.ts!",
-        "src/read-byte-stream-with-limit.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/acp-core": {
-      entry: [
-        "src/index.ts!",
-        "src/meta.ts!",
-        "src/session.ts!",
-        "src/session-interaction-mode.ts!",
-        "src/session-lineage-meta.ts!",
-        "src/types.ts!",
-        "src/runtime/error-text.ts!",
-        "src/runtime/errors.ts!",
-        "src/runtime/session-identifiers.ts!",
-        "src/runtime/session-identity.ts!",
-        "src/runtime/types.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/terminal-core": {
-      entry: [
-        "src/index.ts!",
-        "src/ansi.ts!",
-        "src/decorative-emoji.ts!",
-        "src/health-style.ts!",
-        "src/links.ts!",
-        "src/note.ts!",
-        "src/osc-progress.ts!",
-        "src/palette.ts!",
-        "src/progress-line.ts!",
-        "src/prompt-select-styled.ts!",
-        "src/prompt-select-styled-params.ts!",
-        "src/prompt-style.ts!",
-        "src/restore.ts!",
-        "src/safe-text.ts!",
-        "src/stream-writer.ts!",
-        "src/table.ts!",
-        "src/terminal-link.ts!",
-        "src/theme.ts!",
-      ],
-      project: ["src/**/*.ts!"],
-    },
+    "packages/gateway-client": workspacePackage("gateway-client"),
+    "packages/gateway-protocol": workspacePackage("gateway-protocol"),
+    "packages/model-catalog-core": workspacePackage("model-catalog-core"),
+    "packages/normalization-core": workspacePackage("normalization-core", [
+      // extensions/qa-lab/web/vite.config.ts aliases error-runtime to this private browser implementation.
+      "src/browser-error-runtime.ts!",
+    ]),
+    "packages/net-policy": workspacePackage("net-policy"),
+    "packages/markdown-core": workspacePackage("markdown-core"),
+    "packages/media-core": workspacePackage("media-core"),
+    "packages/acp-core": workspacePackage("acp-core"),
+    "packages/terminal-core": workspacePackage("terminal-core"),
+    "packages/retry": workspacePackage("retry"),
+    "packages/media-generation-core": workspacePackage("media-generation-core"),
+    "packages/media-understanding-common": workspacePackage("media-understanding-common"),
     "packages/memory-host-sdk": {
       entry: ["src/*.ts!", "src/host/embeddings.types.ts!"],
       project: ["src/**/*.ts!"],
@@ -829,6 +839,8 @@ const config = {
       "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
       "scripts/copy-chrome-extension.mjs!",
+      // The opt-in browser benchmark is documented and invoked directly by path.
+      "scripts/bench-lightweight.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
@@ -882,8 +894,9 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace([
-      // The subprocess boundary tests spawn this fixture by computed URL.
+      // The subprocess boundary tests spawn these fixtures by computed URL.
       "src/memory/fixtures/manager-search-knn-child.fixture.mjs!",
+      "src/memory/fixtures/manager-search-knn-parent.test-support.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
       ...bundledPluginWorkspace(),
@@ -939,6 +952,8 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: bundledPluginWorkspace([
+      // The private QA Gateway package profile builds this entry by path.
+      "gateway-entry.ts!",
       // Core loads the CLI facade by basename; QA Lab also owns a nested Vite app.
       "cli.ts!",
       "web/index.html!",

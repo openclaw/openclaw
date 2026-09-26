@@ -66,7 +66,6 @@ describe("incomplete-turn recovery policy", () => {
         shouldTreatEmptyAssistantReplyAsSilent({
           ...state,
           allowEmptyAssistantReplyAsSilent: true,
-          onlyExplicitSilentReply: true,
           terminalReplyExpectation,
         }),
       ).toBe(false);
@@ -76,7 +75,6 @@ describe("incomplete-turn recovery policy", () => {
   );
 
   it.each([
-    { name: "empty terminal stop", text: "", stopReason: "stop" },
     { name: "visible terminal stop", text: "The final answer.", stopReason: "stop" },
     { name: "failed terminal sentinel", text: "NO_REPLY", stopReason: "error" },
     { name: "aborted terminal sentinel", text: "NO_REPLY", stopReason: "aborted" },
@@ -87,8 +85,7 @@ describe("incomplete-turn recovery policy", () => {
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: true,
-        onlyExplicitSilentReply: true,
-        terminalReplyExpectation: "required",
+        terminalReplyExpectation: "optional",
         payloadCount: 0,
         aborted: false,
         timedOut: false,
@@ -108,62 +105,15 @@ describe("incomplete-turn recovery policy", () => {
     }
   });
 
-  it.each(
-    [
-      {
-        name: "a completed reaction",
-        aborted: false,
-        timedOut: false,
-        yielded: false,
-        error: false,
-        silent: true,
-      },
-      {
-        name: "a failed reaction",
-        aborted: false,
-        timedOut: false,
-        yielded: false,
-        error: true,
-        silent: false,
-      },
-      {
-        name: "an aborted turn",
-        aborted: true,
-        timedOut: false,
-        yielded: false,
-        error: false,
-        silent: false,
-      },
-      {
-        name: "a timed-out turn",
-        aborted: false,
-        timedOut: true,
-        yielded: false,
-        error: false,
-        silent: false,
-      },
-      {
-        name: "pending work",
-        aborted: false,
-        timedOut: false,
-        yielded: true,
-        error: false,
-        silent: false,
-      },
-    ].flatMap(({ name, aborted, timedOut, yielded, error, silent }) =>
-      [true, false, undefined].map((allowEmptyAssistantReplyAsSilent) => ({
-        name,
-        aborted,
-        timedOut,
-        yielded,
-        error,
-        silent,
-        allowEmptyAssistantReplyAsSilent,
-      })),
-    ),
-  )(
-    "classifies explicit silence after $name (allow empty: $allowEmptyAssistantReplyAsSilent)",
-    ({ aborted, timedOut, yielded, error, silent, allowEmptyAssistantReplyAsSilent }) => {
+  it.each([
+    { name: "a completed reaction", aborted: false, timedOut: false, yielded: false, error: false },
+    { name: "a failed reaction", aborted: false, timedOut: false, yielded: false, error: true },
+    { name: "an aborted turn", aborted: true, timedOut: false, yielded: false, error: false },
+    { name: "a timed-out turn", aborted: false, timedOut: true, yielded: false, error: false },
+    { name: "pending work", aborted: false, timedOut: false, yielded: true, error: false },
+  ])(
+    "classifies optional NO_REPLY after $name without replay",
+    ({ aborted, timedOut, yielded, error }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: ["NO_REPLY"],
@@ -175,19 +125,18 @@ describe("incomplete-turn recovery policy", () => {
         ...(yielded ? { yieldDetected: true } : {}),
         ...(error ? { lastToolError: { toolName: "message", error: "reaction failed" } } : {}),
       });
-      // A user-triggered turn can intentionally end with only a reaction. Do not
-      // conflate permission to stay silent with permission to replay that effect.
+      // Optional replies can tolerate completed effects, but never replay them
+      // or take completion ownership from failed, cancelled, or pending work.
       expect(
         shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent,
-          terminalReplyExpectation: "required",
-          onlyExplicitSilentReply: true,
+          allowEmptyAssistantReplyAsSilent: false,
+          terminalReplyExpectation: "optional",
           payloadCount: 0,
           aborted,
           timedOut,
           attempt,
         }),
-      ).toBe(silent);
+      ).toBe(!aborted && !timedOut && !yielded && !error);
       expect(
         resolveEmptyResponseRetryInstruction({
           payloadCount: 0,

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 // Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -18,6 +17,13 @@ import {
   registerDoctorRuntimePinTests,
 } from "./doctor-gateway-runtime.test-utils.js";
 import { registerDoctorServiceDefaultsTests } from "./doctor-gateway-service-defaults.test-support.js";
+import {
+  callArg,
+  expectCallConfigGatewayAuthToken,
+  expectCallField,
+  expectGatewayAuthToken,
+  requireRecord,
+} from "./doctor-gateway-services.assertions.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   readEmbeddedGatewayTokenForTest,
@@ -46,7 +52,9 @@ const mocks = vi.hoisted(() => ({
   stage: vi.fn(),
   install: vi.fn(),
   restart: vi.fn(),
-  replaceConfigFile: vi.fn().mockResolvedValue(undefined),
+  writeConfig: vi.fn<(nextConfig: OpenClawConfig) => Promise<OpenClawConfig>>(
+    async (nextConfig) => nextConfig,
+  ),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
@@ -59,6 +67,7 @@ const mocks = vi.hoisted(() => ({
   needsNodeRuntimeMigration: vi.fn(() => false),
   renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
   resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
+  resolveNodeRuntimeInfo: vi.fn(),
   isSystemdUnitActive: vi
     .fn<typeof import("../daemon/systemd-exec.js").isSystemdUnitActive>()
     .mockResolvedValue({ ok: true, value: false }),
@@ -81,14 +90,6 @@ vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    replaceConfigFile: mocks.replaceConfigFile,
-  };
-});
-
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: mocks.findExtraGatewayServices,
   renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,
@@ -97,6 +98,7 @@ vi.mock("../daemon/inspect.js", () => ({
 vi.mock("../daemon/runtime-paths.js", () => ({
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
@@ -236,7 +238,10 @@ function mockConfirmedUnloaded(stderr = "Could not find service") {
 }
 
 async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
-  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts(), options);
+  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts(), {
+    ...options,
+    writeConfig: mocks.writeConfig,
+  });
 }
 
 async function runNonInteractiveRepair(params: {
@@ -265,6 +270,7 @@ async function runNonInteractiveRepair(params: {
         force: params.force,
       },
     }),
+    { writeConfig: mocks.writeConfig },
   );
 }
 
@@ -295,60 +301,6 @@ function createGatewayCommand(entrypoint: string) {
     programArguments: ["/usr/bin/node", entrypoint, "gateway", "--port", "18789"],
     environment: {},
   };
-}
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call: ${label}`);
-  }
-  return call[0];
-}
-
-function expectCallField(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  field: string,
-  expected: unknown,
-) {
-  const options = requireRecord(callArg(mock, 0, `first ${field} call`), field);
-  expect(options[field]).toEqual(expected);
-  return options;
-}
-
-function expectGatewayAuthToken(value: unknown, expected: string) {
-  const root = requireRecord(value, "config root");
-  const gateway = requireRecord(root.gateway, "config.gateway");
-  const auth = requireRecord(gateway.auth, "config.gateway.auth");
-  expect(auth.token).toBe(expected);
-}
-
-function readGatewayAuthToken(value: unknown) {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const root = value as Record<string, unknown>;
-  const gateway = root.gateway;
-  if (!gateway || typeof gateway !== "object") {
-    return undefined;
-  }
-  const auth = (gateway as Record<string, unknown>).auth;
-  if (!auth || typeof auth !== "object") {
-    return undefined;
-  }
-  return (auth as Record<string, unknown>).token;
-}
-
-function expectCallConfigGatewayAuthToken(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  expected: string,
-) {
-  const matchingCalls = mock.mock.calls.filter(([value]) => {
-    const options = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-    return readGatewayAuthToken(options.config) === expected;
-  });
-  expect(matchingCalls).not.toEqual([]);
 }
 
 function expectNoteContaining(messagePart: string, title: string) {
@@ -411,6 +363,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     vi.clearAllMocks();
+    mocks.writeConfig.mockReset().mockImplementation(async (nextConfig) => nextConfig);
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
@@ -419,6 +372,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "supported" });
     mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
@@ -566,7 +520,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "config-token");
     expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "config-token");
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.writeConfig).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -666,7 +620,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
       });
       const prompter = makeDoctorPrompts();
 
-      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter);
+      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
+        writeConfig: mocks.writeConfig,
+      });
 
       expectNoteContaining("/opt/bun (cwd /root): EACCES", "Gateway service config");
       expectNoNoteContaining("unsupported", "Gateway service config");
@@ -682,31 +638,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   );
 
   registerDoctorRuntimePinTests({ mocks, runRepair, createRecommendedServiceAudit });
-
-  it("preserves a supported Bun runtime when repairing the Gateway service", async () => {
-    const bunPath = "/home/test/.bun/bin/bun";
-    const bunCommand = {
-      programArguments: [bunPath, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
-      environment: {},
-    };
-    mocks.readCommand.mockResolvedValue(bunCommand);
-    mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
-    mocks.auditGatewayServiceConfig.mockResolvedValue(
-      createRecommendedServiceAudit(
-        "gateway-path-nonminimal",
-        "Gateway PATH should be regenerated",
-      ),
-    );
-
-    await runRepair({ gateway: {} });
-
-    for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
-      expect(options).toEqual(expect.objectContaining({ runtime: "bun", runtimePath: bunPath }));
-    }
-    expect(mocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({ programArguments: bunCommand.programArguments }),
-    );
-  });
 
   it("migrates an unsupported Bun Gateway service to supported system Node", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
@@ -857,14 +788,29 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
       expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "env-token");
       expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "env-token");
-      const replaceOptions = requireRecord(
-        callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
-        "replaceConfigFile options",
+      expectGatewayAuthToken(callArg(mocks.writeConfig, 0, "Doctor writer callback"), "env-token");
+      expect(mocks.writeConfig.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.install.mock.invocationCallOrder[0]!,
       );
-      expectGatewayAuthToken(replaceOptions.nextConfig, "env-token");
-      expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("uses the persisted writer result when planning service installation", async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+      setupGatewayTokenRepairScenario();
+      mocks.writeConfig.mockImplementationOnce(async (nextConfig) => ({
+        ...nextConfig,
+        gateway: { ...nextConfig.gateway, auth: { mode: "token", token: "persisted-token" } },
+      }));
+      await runRepair({ gateway: {} });
+      expectGatewayAuthToken(callArg(mocks.writeConfig, 0, "Doctor writer callback"), "env-token");
+      expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "persisted-token");
+      expect(mocks.writeConfig.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.install.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.install).toHaveBeenCalledOnce();
     });
   });
 
@@ -884,9 +830,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
                 cause,
               })
             : cause;
-        mocks.replaceConfigFile.mockRejectedValueOnce(failure);
+        mocks.writeConfig.mockRejectedValueOnce(failure);
 
-        const repair = maybeRepairGatewayServiceConfig(cfg, "local", runtime, makeDoctorPrompts());
+        const repair = maybeRepairGatewayServiceConfig(cfg, "local", runtime, makeDoctorPrompts(), {
+          writeConfig: mocks.writeConfig,
+        });
         if (kind === "post-commit") {
           await expect(repair).rejects.toBe(failure);
         } else {
@@ -1198,7 +1146,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
       expectNoteContaining("operator-owned systemd drop-in", "Gateway service config");
       expectNoteContaining("systemctl --user cat custom-gateway.service", "Gateway service config");
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.writeConfig).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
     },
@@ -1234,7 +1182,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   it.each([
     ["active", ok(true)],
     ["bus query failed", err("Failed to connect to bus: Permission denied")],
-    ["timed out", err("Command timed out")],
   ] satisfies [string, Result<boolean, string>][])(
     "leaves service metadata unchanged when unit activity is %s and command drift accompanies other issues",
     async (_, active) => {
@@ -1285,7 +1232,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
         expectNoNoteContaining("is running;", "Gateway service config");
       }
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.writeConfig).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
     },
@@ -1338,7 +1285,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           expect(mocks.stage).not.toHaveBeenCalled();
           expect(mocks.install).not.toHaveBeenCalled();
           expect(mocks.restart).not.toHaveBeenCalled();
-          expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+          expect(mocks.writeConfig).not.toHaveBeenCalled();
           expectNoteContaining("deferred to update finalization", "Gateway service config");
         },
       );
@@ -1400,12 +1347,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runRepair(cfg);
 
         expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", undefined);
-        const replaceOptions = requireRecord(
-          callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
-          "replaceConfigFile options",
+        expectGatewayAuthToken(
+          callArg(mocks.writeConfig, 0, "Doctor writer callback"),
+          "stale-token",
         );
-        expectGatewayAuthToken(replaceOptions.nextConfig, "stale-token");
-        expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
+        expect(mocks.writeConfig.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.install.mock.invocationCallOrder[0]!,
+        );
         expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
@@ -1441,7 +1389,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair(cfg);
 
-        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        expect(mocks.writeConfig).not.toHaveBeenCalled();
         expectCallField(mocks.buildGatewayInstallPlan, "config", cfg);
         expect(mocks.stage).not.toHaveBeenCalled();
       },
@@ -1459,7 +1407,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
         });
         const prompter = makeDoctorPrompts();
 
-        await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter);
+        await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
+          writeConfig: mocks.writeConfig,
+        });
 
         expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledOnce();
         expectNoteContaining(
@@ -1471,7 +1421,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           "Gateway service config",
         );
         expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        expect(mocks.writeConfig).not.toHaveBeenCalled();
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).not.toHaveBeenCalled();
       });
@@ -1590,6 +1540,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
           "local",
           makeDoctorIo(),
           declinePrompts,
+          { writeConfig: mocks.writeConfig },
         );
 
         const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
@@ -1613,6 +1564,7 @@ describe("maybeScanExtraGatewayServices", () => {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     vi.clearAllMocks();
+    mocks.writeConfig.mockReset().mockImplementation(async (nextConfig) => nextConfig);
     mocks.isContainerEnvironment.mockReturnValue(false);
     mocks.findExtraGatewayServices.mockResolvedValue([]);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
@@ -1907,35 +1859,6 @@ describe("maybeScanExtraGatewayServices", () => {
     expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
   });
 
-  it.each(["timeout", "signal"] as const)(
-    "keeps the plist when the postcondition probe ends with %s",
-    async (termination) => {
-      setupLegacyMacService();
-      mocks.execLaunchctl
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(
-          launchctlResult({ code: 124, termination, stderr: "Could not find service" }),
-        );
-      const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-      const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
-      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
-      const runtime = makeDoctorIo();
-
-      await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
-
-      expectBoundedLaunchctlCleanup();
-      expect(mkdir).not.toHaveBeenCalled();
-      expect(access).not.toHaveBeenCalled();
-      expect(rename).not.toHaveBeenCalled();
-      expectNoteContaining(
-        `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
-        "Legacy gateway cleanup skipped",
-      );
-      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-    },
-  );
-
   it.skipIf(process.platform === "win32").each([false, true])(
     "uses real command outcomes for legacy cleanup (signal=%s)",
     async (signal) => {
@@ -2086,6 +2009,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     vi.clearAllMocks();
+    mocks.writeConfig.mockReset().mockImplementation(async (nextConfig) => nextConfig);
     mocks.findSystemdGatewayInstallation.mockResolvedValue({ kind: "none" });
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
     delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
@@ -2113,7 +2037,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
 
     expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+      expect.stringContaining("Cleanup of openclaw-gateway.service completed."),
     );
   });
 

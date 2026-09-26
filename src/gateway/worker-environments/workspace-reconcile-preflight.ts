@@ -3,13 +3,14 @@ import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   hasPathAncestor,
   manifestNodes,
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
-import { MAX_RECONCILIATION_ENTRIES, type WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyDerivedWorkspaceEntries,
@@ -35,7 +36,7 @@ async function localWorkspaceDescendantPaths(
     for await (const entry of await fs.opendir(localPath(root, directory))) {
       names.push(entry.name);
       enumeratedEntries += 1;
-      if (enumeratedEntries > MAX_RECONCILIATION_ENTRIES) {
+      if (enumeratedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
         throw new Error("Gateway workspace manifest has too many entries");
       }
     }

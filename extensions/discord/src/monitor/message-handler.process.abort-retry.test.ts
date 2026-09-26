@@ -1,4 +1,5 @@
 // Discord message processing coverage split by cohesive behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
@@ -24,19 +25,10 @@ registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage deliver-lambda abort logging", () => {
   it("emits logVerbose with formatDiscordReplySkip when deliver fires on a pre-aborted signal", async () => {
-    // Capture logVerbose calls via the ESM namespace binding. We rely on the
-    // same vi.spyOn pattern used in native-command.model-picker.test.ts so the
-    // production module keeps its real logVerbose import while the test still
-    // sees every invocation that the deliver lambda surfaces.
     const verboseSpy = vi.mocked(logVerbose).mockImplementation(() => {});
 
     const abortController = new AbortController();
-    // Drive the dispatcher so deliver actually runs: abort the signal inside
-    // the dispatch mock and then queue a single block reply via the captured
-    // dispatcher. The mocked createReplyDispatcherWithTyping (see line ~229)
-    // routes sendBlockReply straight into the deliver lambda, where the very
-    // first gate is `if (abortSignal?.aborted) return;` — the line
-    // the PR added the logVerbose call to.
+    // Abort after dispatch starts so the delivery boundary observes the cancelled turn.
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       abortController.abort();
       await params?.dispatcher.sendBlockReply({ text: "post-abort block payload" });
@@ -55,9 +47,6 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    // The base test harness routes through guild g1 / channel c1 (see
-    // createBaseDiscordMessageContext) so the deliver lambda receives the
-    // matching deliver target and session key from ctxPayload.SessionKey.
     const dispatchedSessionKey = getLastDispatchCtx()?.SessionKey;
     expect(dispatchedSessionKey).toBeTypeOf("string");
     const expectedLog = formatDiscordReplySkip({
@@ -68,10 +57,69 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
     });
     const verboseCalls = verboseSpy.mock.calls.map((call) => call[0]);
     expect(verboseCalls).toContain(expectedLog);
-    // Restore so other tests sharing this worker (isolate=false) keep the
-    // real logVerbose binding.
     verboseSpy.mockRestore();
   });
+});
+
+describe("processDiscordMessage thread binding activity failure", () => {
+  it.each(["current", "aborted", "policy changed"] as const)(
+    "continues only with the original inbound authority: %s",
+    async (authority) => {
+      const touchEntered = createDeferred<void>();
+      const releaseTouch = createDeferred<void>();
+      const abortController = new AbortController();
+      let policyCurrent = true;
+      const errorLog = vi.fn();
+      const activityError = new Error("Discord thread binding changed during persistence");
+      const ctx = await createAutomaticSourceDeliveryContext({
+        abortSignal: abortController.signal,
+        isPolicyCurrent: () => policyCurrent,
+        runtime: { log: vi.fn(), error: errorLog },
+        cfg: { messages: { statusReactions: { enabled: false } } },
+        discordConfig: { streaming: { mode: "off" } },
+      });
+      ctx.threadBinding = {
+        bindingId: "discord:default:c1",
+        targetSessionKey: ctx.route.sessionKey,
+        targetKind: "subagent",
+        conversation: { channel: "discord", accountId: "default", conversationId: "c1" },
+        status: "active",
+        boundAt: 100,
+      };
+      const touchThread = vi.fn(async () => {
+        touchEntered.resolve();
+        await releaseTouch.promise;
+        throw activityError;
+      });
+      ctx.threadBindings.touchThread = touchThread;
+      dispatchInboundMessage.mockImplementation(async (params?: DispatchInboundParams) => {
+        await params?.dispatcher.sendFinalReply({ text: "Still received your message." });
+        return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+      });
+
+      const processing = runProcessDiscordMessage(ctx);
+      await touchEntered.promise;
+      if (authority === "aborted") {
+        abortController.abort();
+      } else if (authority === "policy changed") {
+        policyCurrent = false;
+      }
+      releaseTouch.resolve();
+      await expect(processing).resolves.toBeUndefined();
+
+      expect(touchThread).toHaveBeenCalledExactlyOnceWith({ threadId: "c1" });
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(activityError.message),
+      );
+      const expectedDispatches = authority === "current" ? 1 : 0;
+      expect(recordInboundSession).toHaveBeenCalledTimes(expectedDispatches);
+      expect(dispatchInboundMessage).toHaveBeenCalledTimes(expectedDispatches);
+      expect(deliverDiscordReply).toHaveBeenCalledTimes(expectedDispatches);
+      if (authority === "current") {
+        expectFreshFinalText("Still received your message.");
+      }
+    },
+  );
 });
 
 describe("processDiscordMessage reply session init conflict retry", () => {

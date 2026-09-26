@@ -7,7 +7,9 @@ import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/sessio
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   appendSqliteTrajectoryRuntimeEvents,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,10 +29,11 @@ const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
+  // Join worker cleanup before removing its databases. Agent lease release can reopen
+  // shared state, so drain agent resources first and shared state second.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   await tempDirs.cleanup();
 });
@@ -655,19 +658,6 @@ describe("runtime parity", () => {
     expect(cell.runtimeErrorClass).toBe("timeout");
   });
 
-  it("keeps planned mock calls diagnostic instead of promoting them to runtime calls", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
-    });
-
-    expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toHaveLength(1);
-    expect(cell.providerPlanToolCalls?.[0]).toMatchObject({
-      tool: "read_file",
-      errorClass: "tool-result-missing",
-    });
-  });
-
   it("records resolved mock calls as provider-plan evidence", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [
@@ -725,6 +715,13 @@ describe("runtime parity", () => {
   it("does not classify planned-only provider evidence as a runtime failure", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
+    });
+
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toHaveLength(1);
+    expect(cell.providerPlanToolCalls?.[0]).toMatchObject({
+      tool: "read_file",
+      errorClass: "tool-result-missing",
     });
 
     const result = await runRuntimeParityScenario({

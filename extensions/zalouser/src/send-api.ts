@@ -9,42 +9,10 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchMediaWithZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
+import { sliceTextStyles } from "./text-styles-ranges.js";
 import type { ZaloSendOptions, ZaloSendResult } from "./types.js";
 import type { API } from "./zca-client.js";
-import { TextStyle, ThreadType } from "./zca-constants.js";
-
-function clampTextStyles(
-  text: string,
-  styles?: ZaloSendOptions["textStyles"],
-): ZaloSendOptions["textStyles"] {
-  if (!styles || styles.length === 0) {
-    return undefined;
-  }
-  const maxLength = text.length;
-  const clamped = styles
-    .map((style) => {
-      const start = Math.max(0, Math.min(style.start, maxLength));
-      const end = Math.min(style.start + style.len, maxLength);
-      if (end <= start) {
-        return null;
-      }
-      if (style.st === TextStyle.Indent) {
-        return {
-          start,
-          len: end - start,
-          st: style.st,
-          indentSize: style.indentSize,
-        };
-      }
-      return {
-        start,
-        len: end - start,
-        st: style.st,
-      };
-    })
-    .filter((style): style is NonNullable<typeof style> => style !== null);
-  return clamped.length > 0 ? clamped : undefined;
-}
+import { ThreadType } from "./zca-constants.js";
 
 function extractSendMessageId(result: Awaited<ReturnType<API["sendMessage"]>>): string | undefined {
   if (!result || typeof result !== "object") {
@@ -126,16 +94,6 @@ function resolveUploadedVoiceAsset(
   return undefined;
 }
 
-function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }): string {
-  // zca-js uses uploadAttachment(...).fileUrl directly for sendVoice.
-  // Appending filename can produce URLs that play only in the local session.
-  return asset.fileUrl.trim();
-}
-
-function truncatePayloadText(text: string): string {
-  return truncateUtf16Safe(text, 2000);
-}
-
 export async function sendZaloTextWithApi(
   api: API,
   trimmedThreadId: string,
@@ -160,8 +118,8 @@ export async function sendZaloTextWithApi(
         contentType: media.contentType,
         kind: media.kind,
       });
-      const payloadText = truncatePayloadText(text || options.caption || "");
-      const textStyles = clampTextStyles(payloadText, options.textStyles);
+      const payloadText = truncateUtf16Safe(text || options.caption || "", 2000);
+      const textStyles = sliceTextStyles(options.textStyles, 0, payloadText.length);
 
       if (media.kind === "audio") {
         if (payloadText) {
@@ -202,7 +160,8 @@ export async function sendZaloTextWithApi(
         if (!voiceAsset) {
           throw new Error("Failed to resolve uploaded audio URL for voice message");
         }
-        const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
+        // zca-js expects the uploaded URL itself, without an appended filename.
+        const voiceUrl = voiceAsset.fileUrl.trim();
         const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
         const voiceMessageId = extractSendMessageId(response);
         return {
@@ -245,8 +204,8 @@ export async function sendZaloTextWithApi(
       };
     }
 
-    const payloadText = truncatePayloadText(text);
-    const textStyles = clampTextStyles(payloadText, options.textStyles);
+    const payloadText = truncateUtf16Safe(text, 2000);
+    const textStyles = sliceTextStyles(options.textStyles, 0, payloadText.length);
     const response = await api.sendMessage(
       textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
       trimmedThreadId,

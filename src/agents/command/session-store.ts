@@ -15,8 +15,9 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
+import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
@@ -24,9 +25,6 @@ import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/
 import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
-
-const getUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
-const getContextModule = createLazyPromise(() => import("../context.js"));
 
 export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -37,6 +35,7 @@ export function normalizeSessionTokenCount(value: number | undefined): number | 
 
 /** Applies run result metadata and usage to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
   sessionId: string;
@@ -94,7 +93,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : ((await getContextModule()).resolveContextTokensForModel({
+      : (resolveContextTokensForModel({
           cfg,
           provider: providerUsed,
           model: modelUsed,
@@ -128,32 +127,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokensSource,
         }),
   };
-  if (preserveRuntimeModel) {
-    // Keep the pre-existing runtime model and context window so a turn-local
-    // model does not bleed into the session's perceived selection.
-    if (entry.model) {
-      // Prior runtime model exists: preserve its contextTokens. When missing,
-      // leave contextTokens unset rather than falling back to the heartbeat
-      // run's context window; status derives it from the preserved model.
-      next.contextTokens = entry.contextTokens;
-      if (entry.modelProvider) {
-        setSessionRuntimeModel(next, {
-          provider: entry.modelProvider,
-          model: entry.model,
-        });
-      } else {
-        // Retain the model-only entry without borrowing the heartbeat provider
-        // to avoid invalid cross-provider pairs (e.g. ollama/claude-opus-4-6).
-        next.model = entry.model;
-      }
-    }
-    // When there is no prior runtime model, do nothing: a heartbeat turn
-    // should not establish initial model state on an empty session.
-  } else {
+  if (!preserveRuntimeModel) {
     setSessionRuntimeModel(next, {
       provider: providerUsed,
       model: modelUsed,
     });
+  } else if (entry.model && entry.modelProvider) {
+    // The entry spread retains partial model state and context; normalize only a complete pair.
+    setSessionRuntimeModel(next, { provider: entry.modelProvider, model: entry.model });
   }
   if (!preserveUserFacingRunState) {
     if (!preserveRuntimeModel) {
@@ -170,7 +151,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const hasUsage = hasNonzeroUsage(usage);
   if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
-    const { estimateAggregateUsageCost } = await getUsageFormatModule();
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateAggregateUsageCost({
         usage,
@@ -217,6 +197,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
@@ -225,9 +206,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          (context.existingEntry.sessionId !== expectedSession.sessionId ||
-            context.existingEntry.lifecycleRevision !== expectedSession.lifecycleRevision ||
-            context.existingEntry.activeWriterRunId !== expectedSession.activeWriterRunId))
+          !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
       ) {
         // Successor acceptance owns identity changes. Finalizers may update only
         // their exact still-current row and cannot recreate a deleted owner.
@@ -256,6 +235,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 }
 
 type CliSessionForkStoreParams = {
+  agentId: string;
   provider: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -266,7 +246,7 @@ type CliSessionForkStoreParams = {
 
 function isSameSessionLifecycleOwner(
   current: InternalSessionEntry,
-  expected: InternalSessionEntry,
+  expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
 ): boolean {
   return (
     current.sessionId === expected.sessionId &&
@@ -286,7 +266,7 @@ async function patchCliSessionForkBinding(
   }
   let committed: SessionEntry | undefined;
   await patchSessionEntryCore(
-    { storePath, sessionKey },
+    { agentId: params.agentId, storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
       // A binding id can survive session rollover. Fork authority belongs to the exact lifecycle.
@@ -356,6 +336,7 @@ export async function persistCliSessionForkSuccessorInStore(
 
 /** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
+  agentId: string;
   compactionKind: NonNullable<EmbeddedAgentCompactResult["compactionKind"]>;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
@@ -394,16 +375,12 @@ export async function recordCliCompactionInStore(params: {
   let committedEntry: SessionEntry | undefined;
   await patchSessionEntryCore(
     {
+      agentId: params.agentId,
       storePath,
       sessionKey,
     },
     (currentEntry, context) => {
-      if (
-        !context.existingEntry ||
-        currentEntry.sessionId !== expectedSession.sessionId ||
-        currentEntry.lifecycleRevision !== expectedSession.lifecycleRevision ||
-        currentEntry.activeWriterRunId !== expectedSession.activeWriterRunId
-      ) {
+      if (!context.existingEntry || !isSameSessionLifecycleOwner(currentEntry, expectedSession)) {
         return null;
       }
       return {
