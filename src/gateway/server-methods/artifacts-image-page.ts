@@ -7,6 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.sqlite-active-events.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { ArtifactSessionResolutionError } from "./artifacts-session-resolution.js";
@@ -84,12 +85,7 @@ export async function readArtifactImagePage(params: {
       binding: params.binding,
       expiresAt: now + CURSOR_TTL_MS,
     });
-    while (state.size > 128) {
-      const oldest = state.keys().next().value;
-      if (oldest) {
-        state.delete(oldest);
-      }
-    }
+    pruneMapToMaxSize(state, 128);
   }
   return {
     artifacts: page.artifacts,

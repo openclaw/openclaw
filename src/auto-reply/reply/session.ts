@@ -156,11 +156,7 @@ import {
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
-import {
-  stripThreadFromSessionRoute,
-  stripThreadIdFromDeliveryContext,
-  stripThreadIdFromOrigin,
-} from "./session-route-reset.js";
+import { stripThreadFromSessionRoute, stripThreadId } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
 
@@ -915,10 +911,8 @@ async function initSessionStateAttemptLocked(
   const delivery = isSystemEvent
     ? normalizeSessionDeliveryState({
         route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
-        context: isThread
-          ? baseDeliveryContext
-          : stripThreadIdFromDeliveryContext(baseDeliveryContext),
-        origin: isThread ? baseDeliveryOrigin : stripThreadIdFromOrigin(baseDeliveryOrigin),
+        context: isThread ? baseDeliveryContext : stripThreadId(baseDeliveryContext),
+        origin: isThread ? baseDeliveryOrigin : stripThreadId(baseDeliveryOrigin),
       })
     : normalizeSessionDeliveryState({
         context: {
@@ -982,8 +976,8 @@ async function initSessionStateAttemptLocked(
       ...sessionEntry,
       delivery: normalizeSessionDeliveryState({
         route: stripThreadFromSessionRoute(sessionDeliveryRoute(sessionEntry)),
-        context: stripThreadIdFromDeliveryContext(deliveryContextFromSession(sessionEntry)),
-        origin: stripThreadIdFromOrigin(sessionDeliveryOrigin(sessionEntry)),
+        context: stripThreadId(deliveryContextFromSession(sessionEntry)),
+        origin: stripThreadId(sessionDeliveryOrigin(sessionEntry)),
       }),
     };
   }

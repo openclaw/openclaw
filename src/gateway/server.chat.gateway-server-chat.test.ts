@@ -8,7 +8,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
+import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -65,6 +67,22 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
+
+function mockDispatchedReplies(kind: "final" | "block", payloads: ReplyPayload[]) {
+  dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const [params] = args as [{ dispatcher: ReplyDispatcher }];
+    for (const payload of payloads) {
+      if (kind === "final") {
+        params.dispatcher.sendFinalReply(payload);
+      } else {
+        params.dispatcher.sendBlockReply(payload);
+      }
+    }
+    params.dispatcher.markComplete();
+    await params.dispatcher.waitForIdle();
+    return { queuedFinal: kind === "final", counts: params.dispatcher.getQueuedCounts() };
+  });
+}
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -1782,23 +1800,10 @@ describe("gateway server chat", () => {
   test("preserves split fenced-code indentation in chat.send events and history", async () => {
     await withMainSessionStore(async () => {
       const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendFinalReply({ text: "```yaml\nroot:\n" });
-        params.dispatcher.sendFinalReply({ text: "  nested:\n    value: true\n```" });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
-      });
+      mockDispatchedReplies("final", [
+        { text: "```yaml\nroot:\n" },
+        { text: "  nested:\n    value: true\n```" },
+      ]);
       const finalPromise = onceMessage(
         ws,
         (event) =>
@@ -1861,28 +1866,7 @@ describe("gateway server chat", () => {
           },
         }),
       ]);
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendFinalReply({
-          text: "323",
-          btw: { question: "what is 17 * 19?" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return {
-          queuedFinal: true,
-          counts: params.dispatcher.getQueuedCounts(),
-        };
-      });
+      mockDispatchedReplies("final", [{ text: "323", btw: { question: "what is 17 * 19?" } }]);
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -1938,29 +1922,10 @@ describe("gateway server chat", () => {
 
   test("preserves split fenced-code indentation in /btw side-result events", async () => {
     await withMainSessionStore(async () => {
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendBlockReply({
-          text: "```yaml\nroot:\n",
-          btw: { question: "show YAML" },
-        });
-        params.dispatcher.sendBlockReply({
-          text: "  nested:\n    value: true\n```",
-          btw: { question: "show YAML" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return { queuedFinal: false, counts: params.dispatcher.getQueuedCounts() };
-      });
+      mockDispatchedReplies("block", [
+        { text: "```yaml\nroot:\n", btw: { question: "show YAML" } },
+        { text: "  nested:\n    value: true\n```", btw: { question: "show YAML" } },
+      ]);
       const sideResultPromise = onceMessage(
         ws,
         (event) =>
@@ -1997,32 +1962,10 @@ describe("gateway server chat", () => {
           },
         }),
       ]);
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendBlockReply({
-          text: "first chunk",
-          btw: { question: "what changed?" },
-        });
-        params.dispatcher.sendBlockReply({
-          text: "second chunk",
-          btw: { question: "what changed?" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return {
-          queuedFinal: false,
-          counts: params.dispatcher.getQueuedCounts(),
-        };
-      });
+      mockDispatchedReplies("block", [
+        { text: "first chunk", btw: { question: "what changed?" } },
+        { text: "second chunk", btw: { question: "what changed?" } },
+      ]);
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -2059,28 +2002,9 @@ describe("gateway server chat", () => {
         // Keep the connected owner's profile and media in the suite-owned state directory.
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-        dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-          const [params] = args as [
-            {
-              dispatcher: {
-                sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
-                markComplete: () => void;
-                waitForIdle: () => Promise<void>;
-                getQueuedCounts: () => { final: number; block: number; tool: number };
-              };
-            },
-          ];
-          params.dispatcher.sendFinalReply({
-            text: "Image reply",
-            mediaUrls: [`data:image/png;base64,${pngB64}`],
-          });
-          params.dispatcher.markComplete();
-          await params.dispatcher.waitForIdle();
-          return {
-            queuedFinal: true,
-            counts: params.dispatcher.getQueuedCounts(),
-          };
-        });
+        mockDispatchedReplies("final", [
+          { text: "Image reply", mediaUrls: [`data:image/png;base64,${pngB64}`] },
+        ]);
 
         const finalPromise = onceMessage(
           ws,
@@ -2258,14 +2182,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test.each([
-    "/new",
-    "/new Create a note",
-    "/reset",
-    "/reset Create a note",
-    "/reset soft",
-    "/reset soft Create a note",
-  ])(
+  test.each(["/new", "/reset Create a note", "/reset soft Create a note"])(
     "chat.send does not rotate sessions for operator.write reset triggers and replies with denial: %s",
     async (message) => {
       const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");

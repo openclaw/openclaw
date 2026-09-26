@@ -204,7 +204,7 @@ for (const entry of Object.values(manifest.exports)) {
 assert.equal(fs.readFileSync(path.join(root, "dist/keep.txt"), "utf8"), "root output");
 assert.equal(fs.readFileSync(path.join(root, "packages/gateway-protocol/dist/keep.txt"), "utf8"), "sibling output");
 fs.writeFileSync("src/index.ts", 'export const invalid: number = "selected";');
-await assert.rejects(buildWorkspacePackage("gateway-client"), /Native declaration emit failed/);
+await assert.rejects(buildWorkspacePackage("gateway-client"), /TS2322/);
 assert.equal(process.cwd(), packageDir);
 console.log("standalone package boundary verified");
 `,
@@ -457,7 +457,7 @@ try {
   const before = fs.readFileSync(declaration, "utf8");
   assert.match(before, /data: string/);
   fs.writeFileSync(path.join(root, entry), 'export const rejected: number = "invalid";\\n');
-  await assert.rejects(build(options), /Native declaration emit failed/);
+  await assert.rejects(build(options), /TS2322/);
   assert.equal(fs.readFileSync(declaration, "utf8"), before, "failed checking replaced declarations");
 } finally {
   fs.rmSync(stage, { recursive: true, force: true });
@@ -466,7 +466,6 @@ console.log("inherited ambient roots retained; unrelated roots excluded; selecte
 `,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toContain("TS2322");
       expect(result.stdout).toContain(
         "inherited ambient roots retained; unrelated roots excluded; selected errors rejected",
       );
@@ -511,15 +510,14 @@ export default [
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
+import { Program } from "typescript/unstable/async";
 import { build } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 const root = process.cwd();
 const output = path.join(root, "packages/output-producer/dist");
 const alias = ${JSON.stringify(alias)};
 assert.equal(fs.existsSync(output), false, "the producer must start cold");
-const originalSpawn = childProcess.spawn;
+const originalEmit = Program.prototype.emitToString;
 let current;
 const begin = () => {
   const started = Promise.withResolvers();
@@ -529,27 +527,18 @@ const begin = () => {
   globalThis.finishProducer = written.resolve;
   return current;
 };
-childProcess.spawn = function (command, args, options) {
-  const child = originalSpawn(command, args, options);
-  const project = Array.isArray(args) ? args.indexOf("-p") : -1;
-  if (project >= 0 && JSON.parse(fs.readFileSync(args[project + 1], "utf8")).files?.includes(path.join(root, "src/consumer.ts"))) {
+Program.prototype.emitToString = async function (...args) {
+  const output = await originalEmit.apply(this, args);
+  if ((await this.getSourceFileNames()).includes(path.join(root, "src/consumer.ts"))) {
     const phase = current;
     phase.compilers++;
     phase.started.resolve();
-    const emit = child.emit;
-    // Delay only completion delivery, preserving the real native compilation.
+    // Delay only result delivery, preserving the real native compilation.
     // The sibling writes between the consumer's before and after snapshots.
-    child.emit = function (event, ...values) {
-      if (event === "close") {
-        phase.written.promise.then(() => emit.call(this, event, ...values));
-        return true;
-      }
-      return emit.call(this, event, ...values);
-    };
+    await phase.written.promise;
   }
-  return child;
+  return output;
 };
-syncBuiltinESMExports();
 try {
   const first = begin();
   const { bundles } = await build({ config: "tsdown.sibling.config.mts", clean: false, logLevel: "silent" });
@@ -573,8 +562,7 @@ try {
   assert.equal(second.compilers, 1);
 } finally {
   current?.written.resolve();
-  childProcess.spawn = originalSpawn;
-  syncBuiltinESMExports();
+  Program.prototype.emitToString = originalEmit;
 }
 console.log("cold sibling ownership and fresh build isolation verified");
 `,
@@ -756,7 +744,7 @@ console.log("workspace/AI native compilation settled after success and failure")
     "uses local explicit references and seals real inputs for $name",
     ({ groups, run }, { command }) =>
       command.lifetime.run(async () => {
-        const { root, write, localInput } = containedFixture(command, groups);
+        const { root, write, ancestorInput, localInput } = nestedFixture(command, groups);
         const unconsumedInput = path.join(root, "test/unrelated.test.ts");
         write(
           "tsdown.config.ts",
@@ -803,6 +791,13 @@ for (const config of configs) {
           return;
         }
         const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
+        fs.writeFileSync(ancestorInput, coreText("changed-ancestor"));
+        const ancestorChanged = await run(command, root);
+        expect(ancestorChanged.status, ancestorChanged.stdout + ancestorChanged.stderr).toBe(0);
+        expect(ancestorChanged.stdout + ancestorChanged.stderr).not.toContain(
+          "[tsdown-build] invocation",
+        );
+        expect(treeHashes(path.join(root, "dist"))).toEqual(published);
         write(".artifacts/replace-input", "unconsumed");
         const unconsumedChanged = await run(command, root, { OPENCLAW_BUILD_CACHE: "0" });
         expect(unconsumedChanged.status, unconsumedChanged.stdout + unconsumedChanged.stderr).toBe(
@@ -913,8 +908,14 @@ for (const config of configs) {
       const before = treeHashes(path.join(root, "dist"));
       const failed = await runWriter(command, root);
       expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-      expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
-      expect(failed.stdout + failed.stderr).toContain(rejectedPath);
+      if (["ancestor module", "ancestor package alias"].includes(kind)) {
+        expect(failed.stdout + failed.stderr).toContain("TS2307");
+      } else if (kind.includes("reference") || kind === "ancestor ambient types") {
+        expect(failed.stdout + failed.stderr).toContain("TS6053");
+      } else {
+        expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
+        expect(failed.stdout + failed.stderr).toContain(rejectedPath);
+      }
       expect(treeHashes(path.join(root, "dist"))).toEqual(before);
       expectStagingClean(root);
     }),

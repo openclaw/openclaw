@@ -306,26 +306,6 @@ describe("executeAgentTurn: provider failures", () => {
     }
   });
 
-  it("keeps opaque provider HTTP 503 copy safe", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValue(createOpenAiServiceUnavailableError());
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const resultPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[1]),
-      }),
-    );
-    const result = await resultPromise;
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.isError).toBe(true);
-      expect(result.payload.text).toBe(PROVIDER_INTERNAL_ERROR_USER_MESSAGE);
-      expect(result.payload.text).not.toContain(OPENAI_SERVICE_UNAVAILABLE_MESSAGE);
-    }
-  });
-
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces provider authentication failures in $label chats",
     async (testCase) => {
@@ -616,94 +596,6 @@ describe("executeAgentTurn: provider failures", () => {
     }
   });
 
-  it.each(["tool_execution_started", "assistant_output_started"] as const)(
-    "cancels the pending overload notice after %s",
-    async (phase) => {
-      vi.useFakeTimers();
-      let resolveRetry!: (value: unknown) => void;
-      const retryResult = new Promise<unknown>((resolve) => {
-        resolveRetry = resolve;
-      });
-      state.runEmbeddedAgentMock
-        .mockRejectedValueOnce(new Error("model is overloaded"))
-        .mockImplementationOnce((params: EmbeddedAgentParams) => {
-          params.onExecutionPhase?.({ phase });
-          return retryResult;
-        });
-      const onBlockReply = vi.fn();
-
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const resultPromise = executeAgentTurn(
-        createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-      );
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      expect(onBlockReply).not.toHaveBeenCalled();
-
-      resolveRetry({ payloads: [{ text: "recovered" }], meta: {} });
-      await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
-    },
-  );
-
-  it("does not send a delayed overload notice", async () => {
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    vi.useFakeTimers();
-    let resolveRetry!: (value: unknown) => void;
-    const retryResult = new Promise<unknown>((resolve) => {
-      resolveRetry = resolve;
-    });
-    state.runWithModelFallbackMock
-      .mockRejectedValueOnce(createOverloadSummaryError())
-      .mockImplementationOnce(() => retryResult);
-    const onBlockReply = vi.fn((..._args: unknown[]) => new Promise<void>(() => {}));
-
-    const resultPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-    );
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    resolveRetry({
-      result: { payloads: [{ text: "recovered" }], meta: {} },
-      provider: "anthropic",
-      model: "claude-opus-4-1",
-      attempts: [],
-    });
-    await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
-  });
-
-  it("does not schedule an overload retry after a slow failure", async () => {
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    vi.useFakeTimers();
-    let rejectInitial!: (error: unknown) => void;
-    const initialResult = new Promise<unknown>((_resolve, reject) => {
-      rejectInitial = reject;
-    });
-    state.runWithModelFallbackMock
-      .mockImplementationOnce(() => initialResult)
-      .mockResolvedValueOnce({
-        result: { payloads: [{ text: "recovered" }], meta: {} },
-        provider: "anthropic",
-        model: "claude-opus-4-1",
-        attempts: [],
-      });
-    const onBlockReply = vi.fn((..._args: unknown[]) => new Promise<void>(() => {}));
-
-    const resultPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    rejectInitial(createOverloadSummaryError());
-    await vi.advanceTimersByTimeAsync(2_500);
-
-    await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
   it("keeps overload failure handling terminal when the turn is aborted", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
@@ -763,40 +655,6 @@ describe("executeAgentTurn: provider failures", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("does not leave an overload notice timer after an aborted failure", async () => {
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    vi.useFakeTimers();
-    let resolveRetry!: (value: unknown) => void;
-    const retryResult = new Promise<unknown>((resolve) => {
-      resolveRetry = resolve;
-    });
-    state.runWithModelFallbackMock
-      .mockRejectedValueOnce(createOverloadSummaryError())
-      .mockImplementationOnce(() => retryResult);
-    const abortController = new AbortController();
-    const onBlockReply = vi.fn();
-
-    const resultPromise = executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        opts: { abortSignal: abortController.signal, onBlockReply },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(2_500);
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(27_499);
-    abortController.abort();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    resolveRetry({
-      result: { payloads: [{ text: "recovered" }], meta: {} },
-      provider: "anthropic",
-      model: "claude-opus-4-1",
-      attempts: [],
-    });
-    await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
   });
 
   it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {

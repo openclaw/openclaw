@@ -225,9 +225,15 @@ export function renderChatPaneComposerControls(params: {
     },
   );
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);
-  const thinkingSession = thinkingLevelOverride
-    ? { ...selectedSession, thinkingLevel: thinkingLevelOverride }
-    : selectedSession;
+  const settingsPreview = state.sessions.settingsPreview(sessionKey, agentScope.agentId);
+  const settingsSession =
+    thinkingLevelOverride || settingsPreview
+      ? {
+          ...selectedSession,
+          ...(thinkingLevelOverride ? { thinkingLevel: thinkingLevelOverride } : {}),
+          ...settingsPreview,
+        }
+      : selectedSession;
   return {
     composerControls: html`
       <div class="chat-composer-model-control">
@@ -271,7 +277,11 @@ export function renderChatPaneComposerControls(params: {
           modelCatalog: state.chatModelCatalog,
           modelCatalogState,
           modelOverrides: state.sessions.state.modelOverrides,
-          thinkingSession,
+          thinkingSession: settingsSession,
+          fastModeTarget: settingsSession,
+          contextWindowTarget: settingsPreview
+            ? { ...(selectedSession ?? state.sessionsResult?.defaults), ...settingsPreview }
+            : undefined,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
           modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
           modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
