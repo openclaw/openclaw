@@ -120,8 +120,11 @@ export function toAcceptedThreadScopedParams(
   return Object.keys(scoped).length > 0 ? scoped : undefined;
 }
 
+// A retry that finds the message already gone confirms the deletion, while the
+// other refusals mean the provider declined to delete it.
+const MESSAGE_DELETE_ABSENT_RE = /message to delete not found/i;
 const MESSAGE_DELETE_NOOP_RE =
-  /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
+  /message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 export const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
@@ -351,6 +354,11 @@ export function normalizeMessageId(raw: string | number): number {
     }
   }
   throw new Error("Message id is required for Telegram actions");
+}
+
+/** The provider confirms the message is already absent, so the desired state holds. */
+export function isTelegramMessageDeleteAbsentError(err: unknown): boolean {
+  return MESSAGE_DELETE_ABSENT_RE.test(formatErrorMessage(err));
 }
 
 export function isTelegramMessageDeleteNoopError(err: unknown): boolean {

@@ -115,6 +115,23 @@ describe("Telegram registered action authority and input contracts", () => {
     });
   });
 
+  it("projects a provider-confirmed absent delete as deleted", async () => {
+    const params = { chatId: "-1001:topic:77", messageId: 456 };
+    rejections.push("Bad Request: message to delete not found");
+    const absent = await invoke("delete", params, trusted);
+    expect(absent.details).toMatchObject({ ok: true, deleted: true });
+  });
+
+  it("treats a lost delete response as deleted once the retry confirms absence", async () => {
+    const params = { chatId: "-1001:topic:77", messageId: 456 };
+    // First attempt: the provider applies the delete but the response is lost.
+    // Retry: the provider confirms the message is already gone.
+    rejections.push({ resetConnection: true }, "Bad Request: message to delete not found");
+    const settled = await invoke("delete", params, trusted);
+    expect(settled.details).toMatchObject({ ok: true, deleted: true });
+    expect(requests.filter(({ method }) => method === "deleteMessage")).toHaveLength(2);
+  });
+
   it.each(["77", "1"])(
     "binds a topicless reaction to trusted topic %s without borrowing another chat",
     async (thread) => {

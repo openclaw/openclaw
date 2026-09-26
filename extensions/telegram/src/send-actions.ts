@@ -6,6 +6,7 @@ import { buildTypingThreadParams } from "./bot/helpers.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import {
   createTelegramRequestWithDiag,
+  isTelegramMessageDeleteAbsentError,
   isTelegramMessageDeleteNoopError,
   resolveAndPersistChatId,
   withTelegramApiContext,
@@ -169,9 +170,18 @@ export async function deleteMessageTelegram(
       });
       try {
         await request(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
-          shouldLog: (err) => !isTelegramMessageDeleteNoopError(err),
+          shouldLog: (err) =>
+            !isTelegramMessageDeleteAbsentError(err) && !isTelegramMessageDeleteNoopError(err),
         });
       } catch (err: unknown) {
+        if (isTelegramMessageDeleteAbsentError(err)) {
+          // A retried delete that finds the message already gone confirms the
+          // desired state; reporting a definite failure contradicts provider state.
+          logVerbose(
+            `[telegram] Delete confirmed absent for message ${messageId} in chat ${chatId}`,
+          );
+          return { ok: true };
+        }
         if (!isTelegramMessageDeleteNoopError(err)) {
           throw err;
         }
