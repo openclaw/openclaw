@@ -1,4 +1,3 @@
-// Lmstudio provider module implements model/runtime integration.
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
@@ -104,10 +103,7 @@ function resolveEmbeddingPreloadContextLength(params: {
   const configuredModel = normalizeLmstudioConfiguredCatalogEntries(params.models).find(
     (entry) => normalizeLmstudioModel(entry.id) === params.model,
   );
-  if (configuredModel?.contextTokens !== undefined) {
-    return configuredModel.contextTokens;
-  }
-  return configuredModel?.contextWindow;
+  return configuredModel?.contextTokens ?? configuredModel?.contextWindow;
 }
 
 function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreateOptions) {
@@ -189,12 +185,7 @@ export async function createLmstudioEmbeddingProvider(
   // Ignore it during fallback activation to avoid inheriting another provider's
   // endpoint/headers/credentials when LM Studio activates as a fallback.
   const baseUrlSource = !isFallbackActivation ? remoteBaseUrl : undefined;
-  const configuredBaseUrl =
-    baseUrlSource && baseUrlSource.length > 0
-      ? baseUrlSource
-      : providerBaseUrl && providerBaseUrl.length > 0
-        ? providerBaseUrl
-        : undefined;
+  const configuredBaseUrl = baseUrlSource || providerBaseUrl || undefined;
   const baseUrl = resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl);
   const providerOwnedBaseUrl = resolveLmstudioEmbeddingBaseUrl(providerBaseUrl);
   const providerOwnsDestination =

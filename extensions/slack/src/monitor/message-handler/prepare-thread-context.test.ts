@@ -222,18 +222,6 @@ describe("resolveSlackThreadContextData", () => {
       retained: false,
     },
     {
-      title: "filters them from fresh outbound-only channel threads",
-      isGroupDm: false,
-      sessionState: "fresh" as const,
-      retained: false,
-    },
-    {
-      title: "filters them from stale outbound-only channel threads",
-      isGroupDm: false,
-      sessionState: "stale" as const,
-      retained: false,
-    },
-    {
       title: "retains them for missing MPIM threads",
       isGroupDm: true,
       sessionState: "missing" as const,
@@ -243,12 +231,6 @@ describe("resolveSlackThreadContextData", () => {
       title: "retains them for fresh outbound-only MPIM threads",
       isGroupDm: true,
       sessionState: "fresh" as const,
-      retained: true,
-    },
-    {
-      title: "retains them for stale outbound-only MPIM threads",
-      isGroupDm: true,
-      sessionState: "stale" as const,
       retained: true,
     },
     {

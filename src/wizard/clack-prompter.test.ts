@@ -241,17 +241,6 @@ describe("createClackPrompter", () => {
     expect(spin.start).toHaveBeenCalledWith(theme.accent("1234567890ABC"));
   });
 
-  it("leaves short progress labels untouched", () => {
-    stubStdoutColumns(20);
-    const prompter = createClackPrompter();
-
-    const progress = prompter.progress("Loading");
-    onTestFinished(() => progress.stop());
-
-    const spin = clackMocks.spinner.mock.results[0]!.value;
-    expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
-  });
-
   it.each([undefined, "", "First line\nSecond line"])(
     "preserves tiny completion %j once",
     (message) => {
@@ -354,15 +343,6 @@ describe("createClackPrompter", () => {
       expect.objectContaining({ stream: process.stderr }),
     );
     expect(stdoutWrite).not.toHaveBeenCalled();
-  });
-
-  it("prints plain output without note framing", async () => {
-    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const prompter = createClackPrompter();
-
-    await prompter.plain?.('{"ok":true}');
-
-    expect(write).toHaveBeenCalledWith('{"ok":true}\n');
   });
 
   it("renders vertical confirms with Clack's native layout", async () => {

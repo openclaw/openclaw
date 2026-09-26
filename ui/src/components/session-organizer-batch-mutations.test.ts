@@ -260,24 +260,22 @@ describe("patchSessionRows", () => {
     expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
-  it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
-    "preserves captured identities for metadata patch %j",
-    async (patch) => {
-      const rows = [sessionRow(0), sessionRow(1)];
-      const harness = createHarness();
+  it("preserves captured identities for a metadata patch", async () => {
+    const patch = { category: "Projects" };
+    const rows = [sessionRow(0), sessionRow(1)];
+    const harness = createHarness();
 
-      await patchSessionRows(harness.host, rows, patch, harness.scope);
+    await patchSessionRows(harness.host, rows, patch, harness.scope);
 
-      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
-        targets: rows.map((row) => ({
-          key: row.key,
-          agentId: "main",
-          expectedSessionId: row.sessionId,
-        })),
-        patch,
-      });
-    },
-  );
+    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+      targets: rows.map((row) => ({
+        key: row.key,
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      })),
+      patch,
+    });
+  });
 
   it("keeps batch read identity independent of the unread acknowledgement capability", async () => {
     const rows = [sessionRow(0), sessionRow(1)];

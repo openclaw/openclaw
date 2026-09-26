@@ -360,25 +360,6 @@ describe("MCP HTTP fetch helpers", () => {
     ]);
   });
 
-  it.each([undefined, "64", "1048577"])(
-    "drops body-less foreign OAuth text without trusting Content-Length %s",
-    async (contentLength) => {
-      const text = useBodylessForeignResponse({
-        text: '{"error_description":"unbounded"}',
-        contentLength,
-      });
-
-      const response = await fetchOAuthRegistrationError();
-
-      expect(response).toBeInstanceOf(Response);
-      expect(response.status).toBe(400);
-      expect(response.body).toBeNull();
-      expect(text).not.toHaveBeenCalled();
-      const error = await parseErrorResponse(response);
-      expect(error.message).toContain("HTTP 400");
-    },
-  );
-
   it("never materializes a body-less foreign response with a lying safe length", async () => {
     const text = useBodylessForeignResponse({
       text: "x".repeat(1024 * 1024 + 1),
@@ -391,6 +372,8 @@ describe("MCP HTTP fetch helpers", () => {
     expect(response.status).toBe(400);
     expect(response.body).toBeNull();
     expect(text).not.toHaveBeenCalled();
+    const error = await parseErrorResponse(response);
+    expect(error.message).toContain("HTTP 400");
   });
 
   it.each(["headers", "body"] as const)(

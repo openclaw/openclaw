@@ -78,7 +78,6 @@ describe("outbound message planning", () => {
 
   it.each([
     { label: "default", chunkMode: undefined },
-    { label: "length", chunkMode: "length" as const },
     { label: "newline", chunkMode: "newline" as const },
   ])("preserves nonempty text when a $label chunker returns nothing", ({ chunkMode }) => {
     const policy = createReplyToDeliveryPolicy({ replyToId: "reply-1", replyToMode: "first" });

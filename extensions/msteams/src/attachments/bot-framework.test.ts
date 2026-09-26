@@ -27,9 +27,15 @@ type DownloadSingleAttachmentParams = Omit<
   "attachmentIds"
 > & { attachmentId: string };
 
-async function downloadMSTeamsBotFrameworkAttachment(params: DownloadSingleAttachmentParams) {
-  const { attachmentId, ...rest } = params;
+async function downloadMSTeamsBotFrameworkAttachment(
+  params: Partial<DownloadSingleAttachmentParams>,
+) {
+  const { attachmentId = "att-1", ...rest } = params;
   const result = await downloadMSTeamsBotFrameworkAttachments({
+    serviceUrl: "https://smba.trafficmanager.net/amer",
+    tokenProvider: buildTokenProvider(),
+    maxBytes: 10_000_000,
+    resolveFn: resolvePublicHost,
     ...rest,
     attachmentIds: [attachmentId],
   });
@@ -149,10 +155,6 @@ describe("isBotFrameworkPersonalChatId", () => {
     expect(isBotFrameworkPersonalChatId("19:abc@thread.tacv2")).toBe(false);
   });
 
-  it("returns false for synthetic DM Graph IDs", () => {
-    expect(isBotFrameworkPersonalChatId("19:aad-user-id_bot-app-id@unq.gbl.spaces")).toBe(false);
-  });
-
   it("returns false for null/undefined/empty", () => {
     expect(isBotFrameworkPersonalChatId(null)).toBe(false);
     expect(isBotFrameworkPersonalChatId(undefined)).toBe(false);
@@ -189,12 +191,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
       serviceUrl: "https://smba.trafficmanager.net/amer/",
-      attachmentId: "att-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
       fetchFn,
       fetchFnSupportsDispatcher: true,
-      resolveFn: resolvePublicHost,
     });
 
     expect(media?.path).toBe(runtime.savePath);
@@ -228,12 +226,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
       serviceUrl: "https://smba.trafficmanager.net/amer/",
-      attachmentId: "att-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
       fetchFn,
       fetchFnSupportsDispatcher: true,
-      resolveFn: resolvePublicHost,
       logger: { warn },
     });
 
@@ -245,28 +239,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     );
   });
 
-  it("returns undefined when attachment info fetch fails", async () => {
-    const fetchFn = createMockFetch([
-      {
-        match: /\/v3\/attachments\//,
-        response: new Response("unauthorized", { status: 401 }),
-      },
-    ]);
-
-    const media = await downloadMSTeamsBotFrameworkAttachment({
-      serviceUrl: "https://smba.trafficmanager.net/amer",
-      attachmentId: "att-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
-      fetchFn,
-      fetchFnSupportsDispatcher: true,
-      resolveFn: resolvePublicHost,
-    });
-
-    expectUnavailableMedia(media, "att-1");
-    expect(runtime.saveCalls).toHaveLength(0);
-  });
-
   it("does not send Bot Framework service tokens to non-auth-allowlisted media hosts", async () => {
     const seenAuth: Array<string | null> = [];
     const fetchFn: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -276,12 +248,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
       serviceUrl: "https://attacker.trafficmanager.net",
-      attachmentId: "att-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
       fetchFn,
       fetchFnSupportsDispatcher: true,
-      resolveFn: resolvePublicHost,
     });
 
     expectUnavailableMedia(media, "att-1");
@@ -313,13 +281,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     }) as typeof fetch;
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
-      serviceUrl: "https://smba.trafficmanager.net/amer",
-      attachmentId: "att-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
       fetchFn,
       fetchFnSupportsDispatcher: true,
-      resolveFn: resolvePublicHost,
     });
 
     expect(media?.path).toBe(runtime.savePath);
@@ -340,12 +303,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     ]);
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
-      serviceUrl: "https://smba.trafficmanager.net/amer",
       attachmentId: "big-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
       fetchFn,
-      resolveFn: resolvePublicHost,
     });
 
     expectUnavailableMedia(media, "big-1");
@@ -362,12 +321,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     ]);
 
     const media = await downloadMSTeamsBotFrameworkAttachment({
-      serviceUrl: "https://smba.trafficmanager.net/amer",
       attachmentId: "empty-1",
-      tokenProvider: buildTokenProvider(),
-      maxBytes: 10_000_000,
       fetchFn,
-      resolveFn: resolvePublicHost,
     });
 
     expectUnavailableMedia(media, "empty-1");
@@ -376,10 +331,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
   it("returns undefined without a tokenProvider", async () => {
     const fetchFn = vi.fn();
     const media = await downloadMSTeamsBotFrameworkAttachment({
-      serviceUrl: "https://smba.trafficmanager.net/amer",
-      attachmentId: "att-1",
       tokenProvider: undefined,
-      maxBytes: 10_000_000,
       fetchFn: fetchFn as unknown as typeof fetch,
     });
     expect(media).toBeUndefined();
@@ -411,13 +363,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       }) as typeof fetch;
 
       const media = await downloadMSTeamsBotFrameworkAttachment({
-        serviceUrl: "https://smba.trafficmanager.net/amer",
-        attachmentId: "att-1",
-        tokenProvider: buildTokenProvider(),
-        maxBytes: 10_000_000,
         fetchFn,
         fetchFnSupportsDispatcher: true,
-        resolveFn: resolvePublicHost,
       });
 
       expect(media?.path).toBe(runtime.savePath);
@@ -446,13 +393,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       }) as typeof fetch;
 
       const media = await downloadMSTeamsBotFrameworkAttachment({
-        serviceUrl: "https://smba.trafficmanager.net/amer",
-        attachmentId: "att-1",
-        tokenProvider: buildTokenProvider(),
-        maxBytes: 10_000_000,
         fetchFn,
         fetchFnSupportsDispatcher: true,
-        resolveFn: resolvePublicHost,
         logger,
       });
 
@@ -484,13 +426,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       }) as typeof fetch;
 
       const media = await downloadMSTeamsBotFrameworkAttachment({
-        serviceUrl: "https://smba.trafficmanager.net/amer",
-        attachmentId: "att-1",
-        tokenProvider: buildTokenProvider(),
-        maxBytes: 10_000_000,
         fetchFn,
         fetchFnSupportsDispatcher: true,
-        resolveFn: resolvePublicHost,
         logger,
       });
 
@@ -499,33 +436,6 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentView fetch failed",
         { error: "fetch failed" },
-      ]);
-    });
-
-    it("logs a warning on non-ok attachmentInfo response", async () => {
-      const warn = vi.fn();
-      const fetchFn = createMockFetch([
-        {
-          match: /\/v3\/attachments\/att-1$/,
-          response: new Response("server error", { status: 500 }),
-        },
-      ]);
-
-      const media = await downloadMSTeamsBotFrameworkAttachment({
-        serviceUrl: "https://smba.trafficmanager.net/amer",
-        attachmentId: "att-1",
-        tokenProvider: buildTokenProvider(),
-        maxBytes: 10_000_000,
-        fetchFn,
-        resolveFn: resolvePublicHost,
-        logger: { warn },
-      });
-
-      expectUnavailableMedia(media, "att-1");
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
-        "msteams botFramework attachmentInfo non-ok",
-        { status: 500 },
       ]);
     });
 
@@ -583,13 +493,9 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       try {
         const media = await downloadMSTeamsBotFrameworkAttachment({
-          serviceUrl: "https://smba.trafficmanager.net/amer",
-          attachmentId: "att-1",
-          tokenProvider: buildTokenProvider(),
           maxBytes: 10,
           fetchFn,
           fetchFnSupportsDispatcher: true,
-          resolveFn: resolvePublicHost,
           logger: { warn },
         });
 
@@ -640,13 +546,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       try {
         const warn = vi.fn();
         const media = await downloadMSTeamsBotFrameworkAttachment({
-          serviceUrl: "https://smba.trafficmanager.net/amer",
-          attachmentId: "att-1",
-          tokenProvider: buildTokenProvider(),
-          maxBytes: 10_000_000,
           fetchFn,
           fetchFnSupportsDispatcher: true,
-          resolveFn: resolvePublicHost,
           logger: { warn },
         });
 

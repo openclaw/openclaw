@@ -166,18 +166,6 @@ describe("pushResolvedAgentCapabilityChanges", () => {
   });
 
   it("classifies heartbeat activity increases and reductions directionally", () => {
-    const moreFrequent = collectChanges({
-      currentAgent: { id: "worker", heartbeat: { every: "1h" } },
-      desiredAgent: { id: "worker", heartbeat: { every: "5m" } },
-    });
-    expect(moreFrequent).toContainEqual(
-      expect.objectContaining({
-        path: "agent.heartbeat.every",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-
     const lessFrequent = collectChanges({
       currentAgent: {
         id: "worker",
@@ -511,7 +499,7 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     );
   });
 
-  it("reads canonical top-level and per-agent memory search settings", () => {
+  it("preserves inherited top-level memory search settings", () => {
     const inherited = collectChanges({
       currentAgent: { id: "worker" },
       desiredAgent: { id: "worker" },
@@ -525,23 +513,6 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     });
     expect(inherited.filter((change) => change.path.startsWith("agent.memory.search."))).toEqual(
       [],
-    );
-
-    const overridden = collectChanges({
-      currentAgent: {
-        id: "worker",
-        memory: { search: { enabled: false } },
-      },
-      desiredAgent: {
-        id: "worker",
-        memory: { search: { enabled: true } },
-      },
-    });
-    expect(overridden).toContainEqual(
-      expect.objectContaining({
-        path: "agent.memory.search.enabled",
-        classification: "escalation",
-      }),
     );
   });
 

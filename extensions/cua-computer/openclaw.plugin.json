@@ -1,6 +1,6 @@
 {
   "id": "cua-computer",
-  "categories": ["infrastructure"],
+  "categories": ["computer-use"],
   "activation": {
     "onStartup": true
   },

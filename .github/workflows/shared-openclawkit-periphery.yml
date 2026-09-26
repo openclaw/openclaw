@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/lib/swift-toolchain.sh
-          select_xcode_toolchain 27.0
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -189,7 +189,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/lib/swift-toolchain.sh
-          select_xcode_toolchain 27.0
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

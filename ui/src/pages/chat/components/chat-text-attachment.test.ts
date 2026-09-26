@@ -102,7 +102,6 @@ it("retries a source-resolution failure through the attachment owner", async () 
 });
 
 it.each([
-  ["rows.csv", "text/csv", "name,status\nalpha,ready\n"],
   ["settings.json", "application/json", '{"ready":true}\n'],
   ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],

@@ -65,15 +65,7 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
     });
   });
 
-  it("decodes a shared tool-call arguments object exactly once, keyed by object identity, across its partial, message, and result()", async () => {
-    const { baseStreamFn } = buildSharedArgumentsAssistant();
-
-    const finalMessage = await drive(baseStreamFn);
-
-    expect(finalMessage.content[0]?.arguments.content).toBe("&amp;");
-  });
-
-  it("decodes the same arguments object once even when it flows through two independent wrapper invocations (the guard spans wrapper instances, not a single stream)", async () => {
+  it("decodes shared arguments once across partials, results, and wrapper invocations", async () => {
     const { assistant, baseStreamFn } = buildSharedArgumentsAssistant();
     const secondStreamFn = (() => ({
       async *[Symbol.asyncIterator]() {

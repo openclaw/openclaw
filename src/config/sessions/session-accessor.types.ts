@@ -816,8 +816,8 @@ export type SessionEntryCreateWithTranscriptContext = {
   existingEntry?: SessionEntry;
   /** Exact normalized target from the same snapshot, distinct from an alias-resolved entry. */
   targetEntry?: SessionEntry;
-  /** Detached sibling-label facts; excludes the exact normalized target only. */
-  isLabelInUse: (label: string) => boolean;
+  /** Requested label's detached occupancy; excludes the exact normalized target only. */
+  labelInUse: boolean;
 };
 
 export type SessionEntryCreateWithTranscriptResult<TError = string> =
@@ -826,7 +826,7 @@ export type SessionEntryCreateWithTranscriptResult<TError = string> =
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
-  | { ok: true; entry: SessionEntry }
+  | { ok: true; entry: SessionEntry; transcriptEvents?: readonly TranscriptEvent[] }
   | { ok: false; error: TError };
 
 /** Original physical writer custody; captured facts are not a new admission. */
@@ -844,6 +844,8 @@ export type SessionEntryCreationPhase =
   | "publication";
 
 export type SessionEntryCreateWithTranscriptOptions = {
+  /** Explicit label claim, checked again inside the final write transaction. */
+  label?: string;
   onPhase?: (phase: SessionEntryCreationPhase) => void;
   /** Bind retained target facts to this creator's own placeholder publication. */
   bindCreation?: (operation: SessionEntryCreationOperation) => void;

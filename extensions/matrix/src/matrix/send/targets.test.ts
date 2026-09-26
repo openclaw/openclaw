@@ -47,28 +47,6 @@ beforeEach(() => {
 });
 
 describe("resolveMatrixRoomId", () => {
-  it("uses m.direct when available", async () => {
-    const userId = "@user:example.org";
-    const client = makeMappedDirectClient({ userId, roomId: "!room:example.org" });
-
-    const roomId = await resolveMatrixRoomId(client, userId);
-
-    expect(roomId).toBe("!room:example.org");
-    expect(client["getJoinedRooms"]).toHaveBeenCalledTimes(1);
-    expect(client["setAccountData"]).not.toHaveBeenCalled();
-  });
-
-  it("falls back to joined rooms and persists m.direct", async () => {
-    const userId = "@fallback:example.org";
-    const roomId = "!room:example.org";
-    const client = makeFallbackDirectClient({ userId, roomIds: [roomId] });
-
-    const resolved = await resolveMatrixRoomId(client, userId);
-
-    expect(resolved).toBe(roomId);
-    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
-  });
-
   it.each(["@fallback:example.org", "user:@fallback:example.org"])(
     "preserves send mapping repair after cached read resolution of %s",
     async (target) => {
@@ -199,6 +177,8 @@ describe("resolveMatrixRoomId", () => {
 
     expect(resolved).toBe(roomId);
     expect(client["resolveRoom"]).not.toHaveBeenCalled();
+    expect(client["getJoinedRooms"]).toHaveBeenCalledTimes(1);
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
   it("scopes direct-room cache per Matrix client", async () => {

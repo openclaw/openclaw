@@ -1,4 +1,3 @@
-// Matrix tests cover reply context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixEventContextResolver } from "./event-context.js";
 import {
@@ -64,25 +63,6 @@ describe("matrix reply context", () => {
         createBundledReplacementEvent("$original", { content: {}, redacted: true }),
       ),
     ).toBeUndefined();
-  });
-
-  it("truncates long reply bodies", async () => {
-    const longBody = "x".repeat(600);
-    const result = await resolveReplyBody({
-      event_id: "$original",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: longBody,
-      },
-    } as MatrixRawEvent);
-    if (result === undefined) {
-      throw new Error("expected truncated reply context");
-    }
-    expect(result.length).toBeLessThanOrEqual(500);
-    expect(result.endsWith("...")).toBe(true);
   });
 
   it("truncates on a code-point boundary without orphaning a surrogate half", async () => {
@@ -170,26 +150,6 @@ describe("matrix reply context", () => {
 
     expect(getEvent).toHaveBeenCalledTimes(1);
     expect(getMemberDisplayName).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns empty context when event fetch fails", async () => {
-    const getEvent = vi.fn().mockRejectedValueOnce(new Error("not found"));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$missing",
-    });
-
-    expect(result).toStrictEqual({});
   });
 
   it("returns empty context for redacted events", async () => {

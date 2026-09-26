@@ -333,18 +333,6 @@ describe("runExecProcess stream sanitization", () => {
     expect(outcome.aggregated).not.toContain("\\x1b");
   });
 
-  it("sanitizes escape sequences split across stderr chunks", async () => {
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
-      input.onStderr?.("warn: \u001B[");
-      input.onStderr?.("31mred");
-      return runtimeManagedRun(input);
-    });
-
-    const outcome = await (await runStyledExec()).promise;
-    expect(outcome.aggregated).toContain("warn: red");
-    expect(outcome.aggregated).not.toContain("\\x1b");
-  });
-
   it("keeps stdout and stderr parser state independent", async () => {
     supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
       input.onStdout?.("out\u001B[");

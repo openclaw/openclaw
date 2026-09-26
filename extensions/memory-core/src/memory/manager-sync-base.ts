@@ -425,11 +425,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
         extraPaths: this.settings.extraPaths,
-        multimodal: {
-          enabled: this.settings.multimodal.enabled,
-          modalities: this.settings.multimodal.modalities,
-          maxFileBytes: this.settings.multimodal.maxFileBytes,
-        },
+        multimodal: this.settings.multimodal,
       }),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,

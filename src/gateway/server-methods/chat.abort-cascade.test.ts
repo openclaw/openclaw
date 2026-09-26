@@ -1,5 +1,5 @@
 /** Real handler and registry proof for session-wide descendant cancellation ownership. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -12,6 +12,7 @@ import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/s
 import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -43,7 +44,24 @@ vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (imp
 }));
 
 describe("descendant cascade ownership", () => {
+  let rootWork: MockInstance<
+    typeof gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission
+  >;
+
+  beforeEach(() => {
+    rootWork = vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission");
+  });
   afterEach(async () => {
+    await vi.dynamicImportSettled();
+    // Join real detached finalization before checking for leaked registry roots.
+    let settled = 0;
+    while (settled < rootWork.mock.results.length) {
+      const pending = rootWork.mock.results.slice(settled);
+      settled += pending.length;
+      await Promise.allSettled(
+        pending.flatMap((result) => (result.type === "return" ? [result.value] : [])),
+      );
+    }
     await settleSubagentRegistryPersistenceWork();
     resetSubagentRegistryForTests({ persist: false });
     swarmSchedulerTesting.reset();

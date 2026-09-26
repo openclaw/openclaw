@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
+import { applyGroupGating } from "./monitor/group-gating.js";
+import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine } from "./monitor/message-line.js";
 
@@ -798,25 +799,6 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[Replying to +1999 id:q1]");
     expect(line).toContain("original");
     expect(line).toContain("[/Replying]");
-  });
-
-  it("keeps outbound WhatsApp responsePrefix out of inbound messages", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({
-        admission: {
-          conversation: {
-            id: "+1555",
-          },
-        },
-        body: "ping",
-        to: "+2666",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("ping");
-    expect(line).not.toContain("{provider}");
-    expect(line).not.toContain("{model}");
   });
 
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {

@@ -1,10 +1,40 @@
 // Discord tests cover access plugin behavior.
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 
-const baseCfg = { commands: { useAccessGroups: true } } as OpenClawConfig;
+const ownerChannel = { users: ["discord:u-owner"] };
+const expectedChannel = {
+  allowed: true,
+  requireMention: undefined,
+  ignoreOtherMentions: undefined,
+  skills: undefined,
+  enabled: undefined,
+  users: ownerChannel.users,
+  roles: undefined,
+  systemPrompt: undefined,
+  includeThreadStarter: undefined,
+  autoThread: undefined,
+  autoThreadName: undefined,
+  autoArchiveDuration: undefined,
+  matchKey: "c1",
+  matchSource: "direct",
+};
+
+function authorize(overrides: Partial<Parameters<typeof authorizeDiscordVoiceIngress>[0]> = {}) {
+  return authorizeDiscordVoiceIngress({
+    cfg: {},
+    discordConfig: { guilds: { g1: { channels: { c1: ownerChannel } } } },
+    groupPolicy: "allowlist",
+    guildId: "g1",
+    channelId: "c1",
+    channelSlug: "",
+    memberRoleIds: [],
+    sender: { id: "u-owner", name: "owner" },
+    ...overrides,
+  });
+}
 
 describe("authorizeDiscordVoiceIngress", () => {
   it("applies published guild policy over retained voice startup settings", async () => {
@@ -43,201 +73,41 @@ describe("authorizeDiscordVoiceIngress", () => {
   });
 
   it("blocks speakers outside the configured channel user allowlist", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
-      discordConfig: {
-        guilds: {
-          g1: {
-            channels: {
-              c1: {
-                users: ["discord:u-owner"],
-              },
-            },
-          },
-        },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      channelId: "c1",
-      channelSlug: "",
-      memberRoleIds: [],
-      sender: {
-        id: "u-guest",
-        name: "guest",
-      },
-    });
-
-    expect(access).toEqual({
+    expect(await authorize({ sender: { id: "u-guest", name: "guest" } })).toEqual({
       ok: false,
       message: "You are not authorized to use this command.",
     });
   });
 
-  it("allows speakers that match the configured channel user allowlist", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
-      discordConfig: {
-        guilds: {
-          g1: {
-            channels: {
-              c1: {
-                users: ["discord:u-owner"],
-              },
-            },
-          },
+  it.each([
+    { name: "direct guild and channel", guildKey: "g1", channelKey: "c1", guildName: undefined },
+    { name: "slug-keyed guild", guildKey: "guild-one", channelKey: "*", guildName: "Guild One" },
+    { name: "wildcard guild", guildKey: "*", channelKey: "*", guildName: undefined },
+  ])(
+    "allows matching speakers through $name configs",
+    async ({ guildKey, channelKey, guildName }) => {
+      const access = await authorize({
+        discordConfig: { guilds: { [guildKey]: { channels: { [channelKey]: ownerChannel } } } },
+        guildName,
+      });
+      expect(access).toEqual({
+        ok: true,
+        channelConfig: {
+          ...expectedChannel,
+          matchKey: channelKey,
+          matchSource: channelKey === "*" ? "wildcard" : "direct",
         },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      channelId: "c1",
-      channelSlug: "",
-      memberRoleIds: [],
-      sender: {
-        id: "u-owner",
-        name: "owner",
-      },
-    });
-
-    expect(access).toEqual({
-      ok: true,
-      channelConfig: {
-        allowed: true,
-        requireMention: undefined,
-        ignoreOtherMentions: undefined,
-        skills: undefined,
-        enabled: undefined,
-        users: ["discord:u-owner"],
-        roles: undefined,
-        systemPrompt: undefined,
-        includeThreadStarter: undefined,
-        autoThread: undefined,
-        autoThreadName: undefined,
-        autoArchiveDuration: undefined,
-        matchKey: "c1",
-        matchSource: "direct",
-      },
-    });
-  });
-
-  it("allows slug-keyed guild configs when manager context only has guild name", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
-      discordConfig: {
-        guilds: {
-          "guild-one": {
-            channels: {
-              "*": {
-                users: ["discord:u-owner"],
-              },
-            },
-          },
-        },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      guildName: "Guild One",
-      channelId: "c1",
-      channelSlug: "",
-      memberRoleIds: [],
-      sender: {
-        id: "u-owner",
-        name: "owner",
-      },
-    });
-
-    expect(access).toEqual({
-      ok: true,
-      channelConfig: {
-        allowed: true,
-        requireMention: undefined,
-        ignoreOtherMentions: undefined,
-        skills: undefined,
-        enabled: undefined,
-        users: ["discord:u-owner"],
-        roles: undefined,
-        systemPrompt: undefined,
-        includeThreadStarter: undefined,
-        autoThread: undefined,
-        autoThreadName: undefined,
-        autoArchiveDuration: undefined,
-        matchKey: "*",
-        matchSource: "wildcard",
-      },
-    });
-  });
-
-  it("allows wildcard guild configs when only the guild id is available", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
-      discordConfig: {
-        guilds: {
-          "*": {
-            channels: {
-              "*": {
-                users: ["discord:u-owner"],
-              },
-            },
-          },
-        },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      channelId: "c1",
-      channelSlug: "",
-      memberRoleIds: [],
-      sender: {
-        id: "u-owner",
-        name: "owner",
-      },
-    });
-
-    expect(access).toEqual({
-      ok: true,
-      channelConfig: {
-        allowed: true,
-        requireMention: undefined,
-        ignoreOtherMentions: undefined,
-        skills: undefined,
-        enabled: undefined,
-        users: ["discord:u-owner"],
-        roles: undefined,
-        systemPrompt: undefined,
-        includeThreadStarter: undefined,
-        autoThread: undefined,
-        autoThreadName: undefined,
-        autoArchiveDuration: undefined,
-        matchKey: "*",
-        matchSource: "wildcard",
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("blocks commands when channel id is unavailable for an allowlisted channel", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
+    const access = await authorize({
       discordConfig: {
-        guilds: {
-          g1: {
-            users: ["discord:u-owner"],
-            channels: {
-              c1: {
-                users: ["discord:u-owner"],
-              },
-            },
-          },
-        },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      channelId: "",
-      channelSlug: "",
-      memberRoleIds: [],
-      sender: {
-        id: "u-owner",
-        name: "owner",
+        guilds: { g1: { users: ownerChannel.users, channels: { c1: ownerChannel } } },
       },
+      channelId: "",
     });
-
     expect(access).toEqual({
       ok: false,
       message: "This channel is not allowlisted for voice commands.",
@@ -245,31 +115,13 @@ describe("authorizeDiscordVoiceIngress", () => {
   });
 
   it("ignores dangerous name matching for voice ingress", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
+    const access = await authorize({
       discordConfig: {
         dangerouslyAllowNameMatching: true,
-        guilds: {
-          g1: {
-            channels: {
-              c1: {
-                users: ["owner"],
-              },
-            },
-          },
-        },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      channelId: "c1",
-      channelSlug: "",
-      memberRoleIds: [],
-      sender: {
-        id: "u-guest",
-        name: "owner",
+        guilds: { g1: { channels: { c1: { users: ["owner"] } } } },
       },
+      sender: { id: "u-guest", name: "owner" },
     });
-
     expect(access).toEqual({
       ok: false,
       message: "You are not authorized to use this command.",
@@ -277,48 +129,14 @@ describe("authorizeDiscordVoiceIngress", () => {
   });
 
   it("uses resolved account command allowFrom over merged Discord config", async () => {
-    const access = await authorizeDiscordVoiceIngress({
-      cfg: baseCfg,
-      discordConfig: {
-        allowFrom: ["discord:u-root"],
-        guilds: {
-          g1: {
-            channels: {
-              c1: {},
-            },
-          },
-        },
-      } as DiscordAccountConfig,
-      groupPolicy: "allowlist",
-      guildId: "g1",
-      channelId: "c1",
-      channelSlug: "",
-      memberRoleIds: [],
+    const access = await authorize({
+      discordConfig: { allowFrom: ["discord:u-root"], guilds: { g1: { channels: { c1: {} } } } },
       admissionAllowFrom: ["discord:u-account"],
-      sender: {
-        id: "u-account",
-        name: "owner",
-      },
+      sender: { id: "u-account", name: "owner" },
     });
-
     expect(access).toEqual({
       ok: true,
-      channelConfig: {
-        allowed: true,
-        requireMention: undefined,
-        ignoreOtherMentions: undefined,
-        skills: undefined,
-        enabled: undefined,
-        users: undefined,
-        roles: undefined,
-        systemPrompt: undefined,
-        includeThreadStarter: undefined,
-        autoThread: undefined,
-        autoThreadName: undefined,
-        autoArchiveDuration: undefined,
-        matchKey: "c1",
-        matchSource: "direct",
-      },
+      channelConfig: { ...expectedChannel, users: undefined },
     });
   });
 });

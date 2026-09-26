@@ -1,9 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import type {
-  TranscriptTurnAdmission,
-  TranscriptTurnBoundary,
-} from "../../config/sessions/transcript-entry-anchor.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -24,11 +20,9 @@ import {
   executeContextEngineTurnOutboxCommand,
   type ContextEngineTurnOutboxStore,
   type ContextEngineTurnOutboxWorkerOperations,
-  type ContextEngineTurnRuntimeContext,
 } from "./context-engine-turn-outbox.js";
 
 type OutboxCommand = SqliteWorkerCommand<ContextEngineTurnOutboxWorkerOperations>;
-type OutboxOwner = { engineId: string; ownerPluginId?: string };
 
 /**
  * Runs one outbox command in the agent database worker. The host thread only
@@ -91,7 +85,7 @@ async function runContextEngineTurnOutboxCommand(
                 },
               );
             try {
-              return await worker.run((scope) => scope.execute(command), assertCurrent);
+              return await worker.execute(command, assertCurrent);
             } finally {
               await worker.close();
             }
@@ -108,33 +102,20 @@ async function runContextEngineTurnOutboxCommand(
 /** The durable context-engine turn outbox of one agent database, executed in its worker. */
 export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
   Readonly<{
-    prepareRun(
-      input: OutboxOwner & {
-        admission?: TranscriptTurnAdmission;
-        isHeartbeat: boolean;
-        sessionId: string;
-      },
-    ): Promise<ContextEngineTurnOutboxWorkerOperations["prepareRun"]["output"]>;
-    enqueueIntent(
-      input: OutboxOwner & { admission: TranscriptTurnAdmission; isHeartbeat: boolean },
-    ): Promise<void>;
-    acceptIntent(
-      input: OutboxOwner & {
-        boundary: TranscriptTurnBoundary;
-        isHeartbeat: boolean;
-        runtimeContext?: ContextEngineTurnRuntimeContext;
-      },
-    ): Promise<void>;
-    publishClosedTurn(
-      input: OutboxOwner & {
-        boundary: TranscriptTurnBoundary;
-        isHeartbeat: boolean;
-        maxBytes: number;
-        maxEvents: number;
-        runtimeContext?: ContextEngineTurnRuntimeContext;
-      },
-    ): Promise<ContextEngineTurnOutboxWorkerOperations["publishClosedTurn"]["output"]>;
-    discardIntent(input: OutboxOwner & { admission: TranscriptTurnAdmission }): Promise<void>;
+    [
+      Type in
+        | "prepareRun"
+        | "enqueueIntent"
+        | "acceptIntent"
+        | "publishClosedTurn"
+        | "discardIntent"
+    ]: (
+      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
+    ) => Promise<
+      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
+        ? void
+        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
+    >;
   }>;
 
 export function openContextEngineTurnOutboxWorkerStore(target: {
@@ -159,15 +140,9 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
       await run({ type: "recordFailure", input: { advancementKey, message, attemptedAt } });
     },
     hasPending: (input) => run({ type: "hasPending", input }),
-    enqueueIntent: async (input) => {
-      await run({ type: "enqueueIntent", input });
-    },
-    acceptIntent: async (input) => {
-      await run({ type: "acceptIntent", input });
-    },
+    enqueueIntent: (input) => run({ type: "enqueueIntent", input }),
+    acceptIntent: (input) => run({ type: "acceptIntent", input }),
     publishClosedTurn: (input) => run({ type: "publishClosedTurn", input }),
-    discardIntent: async (input) => {
-      await run({ type: "discardIntent", input });
-    },
+    discardIntent: (input) => run({ type: "discardIntent", input }),
   };
 }

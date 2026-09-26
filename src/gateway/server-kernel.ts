@@ -154,7 +154,7 @@ async function createGatewayKernelWithSdkHost(
   // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
   const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();
-  const pluginMetadata = retainGatewayPluginMetadata(async () => {
+  const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {
     cancelPreparedModelRuntimeRefresh();
   });
   let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;

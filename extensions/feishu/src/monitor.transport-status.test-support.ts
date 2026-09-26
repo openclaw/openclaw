@@ -3,6 +3,7 @@
 // See PROPOSAL.md for the incident background.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getGatewayPort } from "./monitor.webhook.test-helpers.js";
 
 type StatusPatch = {
   connected?: boolean;
@@ -224,7 +225,8 @@ describe("monitorWebhook status publishing", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes connected on listen success", async () => {
+  it("publishes connected after Gateway route registration", async () => {
+    await getGatewayPort();
     const recorder = createRecordingSink();
     const { monitorWebhook } = await loadTransportModule();
 
@@ -237,9 +239,7 @@ describe("monitorWebhook status publishing", () => {
       verificationToken: "vt",
       config: {
         connectionMode: "webhook" as const,
-        webhookPort: 0,
         webhookPath: "/feishu/events",
-        webhookHost: "127.0.0.1",
       },
     } as never;
 
@@ -251,11 +251,6 @@ describe("monitorWebhook status publishing", () => {
       abortSignal: abortController.signal,
       eventDispatcher: { register: () => undefined, invoke: vi.fn() } as never,
       statusSink: recorder.sink,
-    });
-
-    // Give the server time to listen.
-    await new Promise<void>((resolve) => {
-      setTimeout(() => resolve(), 50);
     });
 
     const connected = recorder.calls.find((c) => c.connected === true);

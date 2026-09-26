@@ -1,14 +1,33 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
+import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import type { GatewayServer } from "./server-public.js";
+
+const schedulerClock = vi.hoisted(() => ({
+  current: undefined as GatewaySchedulerClock | undefined,
+}));
+
+vi.mock("../infra/gateway-scheduler.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-scheduler.js")>();
+  return {
+    ...actual,
+    GatewayScheduler: class extends actual.GatewayScheduler {
+      constructor(options: ConstructorParameters<typeof actual.GatewayScheduler>[0] = {}) {
+        super({ ...options, clock: schedulerClock.current ?? options.clock });
+      }
+    },
+  };
+});
 
 describe("Gateway post-ready startup work", () => {
   it.each(["settles", "closes"] as const)(
     "holds post-ready maintenance until deferred startup %s",
     async (outcome) => {
+      const clock = createGatewaySchedulerClock();
+      schedulerClock.current = clock.clock;
       const port = await getFreePort();
       const state = await createOpenClawTestState({
         label: `gateway-post-ready-${outcome}`,
@@ -34,6 +53,7 @@ describe("Gateway post-ready startup work", () => {
       let realStartup: Promise<void> | undefined;
       let postReadyWork: Promise<void> | undefined;
       let closeOutcome: Promise<void> | undefined;
+      let beforeReadyWake: void | Promise<void> = undefined;
       const earlyModule = await import("./server-startup-early.js");
       const startEarlyRuntime = earlyModule.startGatewayEarlyRuntime;
       const earlyFactory = vi
@@ -78,7 +98,7 @@ describe("Gateway post-ready startup work", () => {
         });
         await realStartup;
         // Let both production grace periods elapse while published startup is pending.
-        await delay(600);
+        beforeReadyWake = clock.advanceBy(600);
         expect(startMaintenance).not.toHaveBeenCalled();
         expect(resumed).not.toHaveBeenCalled();
 
@@ -86,25 +106,20 @@ describe("Gateway post-ready startup work", () => {
           closeOutcome = server.close();
           await postReadyWork;
           expect(resumed).toHaveBeenCalledExactlyOnceWith(true);
-          // Real process cleanup needs native timers; observe only startup's timer publication.
-          vi.useFakeTimers({
-            toFake: ["setTimeout", "clearTimeout"],
-            shouldClearNativeTimers: true,
-          });
-          try {
-            startup.resolve();
-            await server.startupSettled;
-            expect(vi.getTimerCount()).toBe(0);
-          } finally {
-            vi.useRealTimers();
-          }
+          startup.resolve();
+          await server.startupSettled;
+          expect(clock.armedAtMs).toBeNull();
           await closeOutcome;
+          await beforeReadyWake;
           expect(startMaintenance).not.toHaveBeenCalled();
         } else {
           startup.resolve();
           await server.startupSettled;
-          await delay(600);
+          await clock.advanceBy(499);
+          expect(resumed).not.toHaveBeenCalled();
+          await clock.advanceBy(1);
           await postReadyWork;
+          await beforeReadyWake;
           expect(resumed).toHaveBeenCalledExactlyOnceWith(false);
           expect(startMaintenance).toHaveBeenCalledOnce();
         }
@@ -114,9 +129,10 @@ describe("Gateway post-ready startup work", () => {
           await closeOutcome;
           await server?.close();
           await postReadyWork;
+          await beforeReadyWake;
           await state.cleanup();
         } finally {
-          vi.useRealTimers();
+          schedulerClock.current = undefined;
           startupFactory.mockRestore();
           earlyFactory.mockRestore();
           vi.restoreAllMocks();

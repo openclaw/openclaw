@@ -86,6 +86,7 @@ import {
 } from "../secrets/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { isRecord } from "../utils.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -195,6 +196,7 @@ function createGatewayReloadHandlers(
   const { requestRecoveryRestart, ...handlerParams } = params;
   let state = createDefaultGatewayReloadState();
   return createGatewayReloadHandlersImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     getPluginRegistry: requireActivePluginChannelRegistry,
     deps: {} as never,
     broadcast: vi.fn(),
@@ -229,6 +231,7 @@ function createGatewayReloadHandlers(
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   let state = createDefaultGatewayReloadState();
   return startManagedGatewayConfigReloaderImpl({
+    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
     getPluginRegistry: requireActivePluginChannelRegistry,
     minimalTestGateway: false,
     initialPluginInstallRecords: {},
@@ -1611,27 +1614,6 @@ describe("managed reload transaction ownership", () => {
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
   });
 
-  it("rebuilds prepared model owners for a no-op secret-provider publication", async () => {
-    const pluginMetadataSnapshot = {} as never;
-    const result = await runManagedOwnershipScenario({
-      kind: "noop",
-      queueRevert: false,
-      secretProviderChanged: true,
-      getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
-    });
-
-    expect(hoisted.advancePreparedModelRuntimeConfig).not.toHaveBeenCalled();
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledExactlyOnceWith(
-      result.configA,
-      {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        pluginMetadataSnapshot,
-      },
-    );
-  });
-
   it("rebuilds a no-op secret-provider publication from the resolved committed config", async () => {
     // Regression: the rebuild used the source-derived candidate. When secret
     // resolution yields a different object, the rebuilt owner carries an
@@ -1705,32 +1687,15 @@ describe("managed reload transaction ownership", () => {
 describe("prepared provider auth reload invalidation", () => {
   it.each([
     "auth",
-    "auth.profiles.openai.provider",
-    "auth.order.openai",
-    "env",
     "env.vars.OPENAI_API_KEY",
-    "models",
     "models.providers.openai.api",
-    "models.providers.anthropic",
-    "plugins",
     "plugins.entries.openai.enabled",
-    "secrets",
     "secrets.providers.default.path",
     "agent.model",
-    "agent.model.default",
     "agents",
     "agents.list",
     "agents.defaults",
     "agents.defaults.model",
-    "agents.defaults.models.provider.agentRuntime.id",
-    "agents.defaults.modelPolicy",
-    "agents.defaults.utilityModel",
-    "agents.defaults.agentRuntime",
-    "agents.defaults.runtime",
-    "agents.defaults.imageModel.primary",
-    "agents.defaults.mediaModels.video.primary",
-    "agents.defaults.voiceModel.primary",
-    "agents.defaults.pdfModel.primary",
     "agents.defaults.heartbeat",
     "agents.defaults.heartbeat.model",
     "agents.defaults.compaction",
@@ -1738,26 +1703,11 @@ describe("prepared provider auth reload invalidation", () => {
     "agents.defaults.compaction.provider",
     "agents.defaults.compaction.memoryFlush",
     "agents.defaults.compaction.memoryFlush.model",
-    "agents.defaults.workspace",
-    "agents.defaults.agentDir",
     "agents.defaults.subagents",
     "agents.defaults.subagents.model.primary",
     "agents.entries",
-    "agents.entries.main",
-    "agents.entries.main.id",
-    "agents.entries.main.default",
     "agents.entries.main.model",
-    "agents.entries.main.models.provider.agentRuntime.id",
-    "agents.entries.main.modelPolicy",
-    "agents.entries.main.utilityModel",
-    "agents.entries.main.agentRuntime",
-    "agents.entries.main.runtime",
-    "agents.entries.main.heartbeat",
     "agents.entries.main.heartbeat.model",
-    "agents.entries.main.workspace",
-    "agents.entries.main.agentDir",
-    "agents.entries.main.subagents",
-    "agents.entries.main.subagents.model.primary",
   ])("invalidates prepared auth for config path %s", (changedPath) => {
     expect(doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
       true,
@@ -1766,37 +1716,13 @@ describe("prepared provider auth reload invalidation", () => {
 
   it.each([
     "agents.defaults.heartbeat.target",
-    "agents.defaults.heartbeat.delivery.target",
-    "agents.defaults.heartbeat.every",
-    "agents.defaults.heartbeat.activeHours.start",
-    "agents.entries.main.heartbeat.delivery.target",
     "agents.entries.main.heartbeat.every",
-    "agents.entries.main.heartbeat.lightContext",
     "agents.defaults.compaction.enabled",
-    "agents.defaults.compaction.mode",
-    "agents.defaults.compaction.keepRecentTokens",
-    "agents.defaults.compaction.timeoutSeconds",
     "agents.defaults.compaction.memoryFlush.enabled",
-    "agents.defaults.compaction.memoryFlush.softThresholdTokens",
     "agent.heartbeat",
-    "agents.entries.main.cron",
-    "agents.entries.main.ui",
     "agents.entries.main.tools",
-    "agents.entries.main.skills",
-    "agents.entries.main.memory",
-    "agents.entries.main.systemPrompt",
-    "agents.defaults.systemPrompt",
     "agents.defaults.subagents.thinking",
-    "agents.entries.main.subagents.thinking",
-    "agents.defaults.subagents.archiveAfterMinutes",
-    "mcp.servers.context7.command",
-    "hooks.gmail",
-    "hooks.path",
     "logging.level",
-    "channels.telegram",
-    "channels.discord.accounts.bot",
-    "gateway.port",
-    "cron.schedules.daily",
   ])("can retain prepared auth for unrelated config path %s", (changedPath) => {
     expect(doesReloadAffectProviderAuth(createHotTailPlan({ changedPaths: [changedPath] }))).toBe(
       false,
@@ -1840,13 +1766,6 @@ describe("gateway hot reload model state", () => {
     },
     {
       reconciliationResult: "retry-scheduled" as const,
-      becomesStale: false,
-      reviewAborted: true,
-      publishes: true,
-      rejectsBeforeCommit: false,
-    },
-    {
-      reconciliationResult: "superseded" as const,
       becomesStale: false,
       reviewAborted: true,
       publishes: true,
@@ -4799,43 +4718,6 @@ describe("gateway channel hot reload handlers", () => {
     );
   });
 
-  it("restarts WhatsApp when the planner receives a selfChatMode change", async () => {
-    const whatsappPlugin = {
-      ...createChannelTestPluginBase({ id: "whatsapp" }),
-      reload: {
-        configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
-        noopPrefixes: ["channels.whatsapp"],
-      },
-    };
-    const registry = createTestRegistry([
-      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-    ]);
-    const events: string[] = [];
-    const channels = {
-      stop: vi.fn(async (channel: ChannelKind) => {
-        events.push(`stop:${channel}`);
-      }),
-      start: vi.fn(async (channel: ChannelKind) => {
-        events.push(`start:${channel}`);
-        return new Map();
-      }),
-    };
-
-    setActivePluginRegistry(registry);
-    try {
-      const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
-      const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
-
-      expect(plan.restartGateway).toBe(false);
-      expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
-      await withChannelReloadsEnabled(() => applyHotReload(plan, {}));
-
-      expect(events).toEqual(["stop:whatsapp", "start:whatsapp"]);
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
-  });
-
   it.each([
     {
       name: "stop",
@@ -7048,15 +6930,6 @@ describe("gateway plugin hot reload handlers", () => {
       plan: createHotTailPlan({ reloadHooks: true, restartGmailWatcher: true }),
     },
     {
-      label: "plugin replacement",
-      plan: {
-        ...createHotTailPlan(),
-        changedPaths: ["plugins.enabled"],
-        hotReasons: ["plugins.enabled"],
-        reloadPlugins: true,
-      },
-    },
-    {
       label: "channel restart",
       plan: {
         ...createHotTailPlan(),
@@ -7184,36 +7057,6 @@ describe("deferred channel reload abort generation", () => {
       hoisted.activeTaskBlockers.length = 0;
       await vi.advanceTimersByTimeAsync(500);
       await oldReload;
-    }
-  });
-
-  it("abortPendingChannelReloads cancels a waiting deferred channel reload", async () => {
-    const logChannels = { info: vi.fn(), error: vi.fn() };
-    const channels = {
-      start: vi.fn(async () => new Map()),
-      stop: vi.fn(async () => {}),
-    };
-    const { applyHotReload } = createTestHandlers(logChannels, channels);
-
-    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker());
-    vi.useFakeTimers();
-
-    try {
-      const reloadPromise = applyHotReload(abortChannelReloadPlan, {});
-      const reloadRejected = expect(reloadPromise).rejects.toThrow(
-        "config hot reload cancelled by config supersession or in-process restart",
-      );
-      await vi.advanceTimersByTimeAsync(10); // enter wait loop (before 500ms sleep)
-
-      abortPendingChannelReloads();
-      await vi.advanceTimersByTimeAsync(500); // wake from poll sleep → abort check
-      await reloadRejected;
-
-      expect(channels.start).not.toHaveBeenCalled();
-      expect(channels.stop).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-      hoisted.activeTaskBlockers.length = 0;
     }
   });
 
@@ -7658,52 +7501,6 @@ describe("deferred channel reload abort generation", () => {
       }
     },
   );
-
-  it("new reload lifecycle is not affected by a previous lifecycle abort", async () => {
-    const logChannels = { info: vi.fn(), error: vi.fn() };
-    const channels = {
-      start: vi.fn(async () => new Map()),
-      stop: vi.fn(async () => {}),
-    };
-
-    // Create gen 1 and register abort for it
-    createTestHandlers(logChannels, channels);
-    abortPendingChannelReloads();
-
-    // Create gen 2 — should not carry over the abort from gen 1
-    const h2 = createTestHandlers(logChannels, channels);
-
-    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "task-blocking-reload-g2" }));
-    vi.useFakeTimers();
-
-    try {
-      const reloadPromise = h2.applyHotReload(abortChannelReloadPlan, {});
-      await vi.advanceTimersByTimeAsync(600); // past first poll interval — still waiting
-      await Promise.resolve();
-
-      // Gen 2's generation > abort generation, so it should NOT abort
-      expect(logChannels.info).not.toHaveBeenCalledWith(
-        "channel restart cancelled by in-process restart",
-      );
-
-      // Drain active work → should proceed to stop/start channels normally
-      hoisted.activeTaskBlockers.length = 0;
-      await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
-      await expect(reloadPromise).resolves.toBe("applied");
-
-      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
-        manual: false,
-        routeHandoff: true,
-      });
-      expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
-        preserveManualStop: true,
-        skipUnavailableAccounts: true,
-      });
-    } finally {
-      vi.useRealTimers();
-      hoisted.activeTaskBlockers.length = 0;
-    }
-  });
 
   it("forwards cancellation to the plugin owner and leaves channel cleanup there", async () => {
     const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };

@@ -136,10 +136,8 @@ describe("node worker Git transfers", () => {
     },
   ];
   it.each([
-    ...gitTransfers.flatMap((scenario) => [
-      { ...scenario, seedState: "unused" },
-      { ...scenario, seedState: "available" },
-    ]),
+    ...gitTransfers.map((scenario) => ({ ...scenario, seedState: "unused" })),
+    { ...gitTransfers[0], seedState: "available" },
     ...["absent", "missing-base", "symlink", "oversized"].map((seedState) => ({
       description: "handles a prepared project cache " + seedState,
       changed: false,

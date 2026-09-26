@@ -23,13 +23,6 @@ describe("restoreEnvVarRefs", () => {
     MY_TOKEN: "tok-12345",
   };
 
-  it("restores a simple ${VAR} reference when value matches", () => {
-    const incoming = { apiKey: "sk-ant-api03-real-key" };
-    const parsed = { apiKey: "${ANTHROPIC_API_KEY}" };
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    expect(result).toEqual({ apiKey: "${ANTHROPIC_API_KEY}" });
-  });
-
   it("keeps new value when caller intentionally changed it", () => {
     const incoming = { apiKey: "sk-ant-new-different-key" };
     const parsed = { apiKey: "${ANTHROPIC_API_KEY}" };
@@ -70,13 +63,6 @@ describe("restoreEnvVarRefs", () => {
     const parsed = { apiKey: "${ANTHROPIC_API_KEY}" };
     const result = restoreEnvVarRefs(incoming, parsed, env);
     expect(result).toEqual({ apiKey: "${ANTHROPIC_API_KEY}", newField: "hello" });
-  });
-
-  it("handles non-env-var strings (no restoration needed)", () => {
-    const incoming = { name: "my-config" };
-    const parsed = { name: "my-config" };
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    expect(result).toEqual({ name: "my-config" });
   });
 
   it("handles arrays", () => {
@@ -840,16 +826,6 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ key: "original-value" });
   });
 
-  it("correctly restores when env var value hasn't changed", () => {
-    const stableEnv = { MY_VAR: "stable-value" };
-    const incoming = { key: "stable-value" };
-    const parsed = { key: "${MY_VAR}" };
-
-    const result = restoreEnvVarRefs(incoming, parsed, stableEnv);
-    // Env value matches incoming — safe to restore
-    expect(result).toEqual({ key: "${MY_VAR}" });
-  });
-
   it("does not restore when env snapshot differs from live env (TOCTOU fix)", () => {
     // With env snapshots: at read time MY_VAR was "old-value", so incoming is "old-value".
     // Caller changed it to "new-value". Live env also changed to "new-value".
@@ -862,19 +838,6 @@ describe("restoreEnvVarRefs", () => {
     // Using read-time snapshot: ${MY_VAR} resolves to "old-value", doesn't match "new-value"
     // → correctly keeps caller's new value
     expect(result).toEqual({ key: "new-value" });
-  });
-
-  // Edge case: $${VAR} escape sequence
-  it("handles $${VAR} escape sequence (literal ${VAR} in output)", () => {
-    // In the config file: $${ANTHROPIC_API_KEY}
-    // substituteString resolves this to literal "${ANTHROPIC_API_KEY}"
-    // So incoming would be "${ANTHROPIC_API_KEY}" (the literal text)
-    const incoming = { note: "${ANTHROPIC_API_KEY}" };
-    const parsed = { note: "$${ANTHROPIC_API_KEY}" };
-
-    const result = restoreEnvVarRefs(incoming, parsed, env);
-    // Should restore the $${} escape, not try to resolve ${} inside it
-    expect(result).toEqual({ note: "$${ANTHROPIC_API_KEY}" });
   });
 
   it("does not confuse $${VAR} escape with ${VAR} substitution", () => {

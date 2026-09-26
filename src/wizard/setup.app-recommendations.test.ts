@@ -16,9 +16,17 @@ import type { WizardPrompter } from "./prompts.js";
 import { setupAppRecommendations as setupAppRecommendationsWithOutcome } from "./setup.app-recommendations.js";
 
 async function setupAppRecommendations(
-  params: Parameters<typeof setupAppRecommendationsWithOutcome>[0],
+  params: Partial<Parameters<typeof setupAppRecommendationsWithOutcome>[0]>,
 ): Promise<OpenClawConfig> {
-  const outcome = await setupAppRecommendationsWithOutcome(params);
+  const outcome = await setupAppRecommendationsWithOutcome({
+    config: {},
+    prompter: createPrompter(),
+    runtime,
+    workspaceDir: "/tmp/workspace",
+    modelRouteVerified: true,
+    platform: "darwin",
+    ...params,
+  });
   await outcome.commitResult();
   return outcome.config;
 }
@@ -200,10 +208,6 @@ describe("setupAppRecommendations", () => {
     const store = storeDeps();
     await setupAppRecommendations({
       config,
-      prompter: createPrompter(),
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
       platform,
       deps: { recommend, ...store },
     });
@@ -219,12 +223,7 @@ describe("setupAppRecommendations", () => {
     const legacyMatch = recommendationResult().matches[1]!;
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend,
         writeOffer,
@@ -269,12 +268,8 @@ describe("setupAppRecommendations", () => {
 
     await refreshOnboardRecommendationsCommand({}, runtime, { clear });
     await setupAppRecommendations({
-      config: {},
       prompter,
       runtime: { ...runtime, log },
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend,
         readStored: async () => stored,
@@ -303,12 +298,8 @@ describe("setupAppRecommendations", () => {
     delete prompter.plain;
 
     await setupAppRecommendations({
-      config: {},
       prompter,
       runtime: { ...runtime, log },
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend,
         ...storeDeps(),
@@ -340,12 +331,8 @@ describe("setupAppRecommendations", () => {
     }));
 
     await setupAppRecommendations({
-      config: {},
       prompter,
       runtime: { ...runtime, log },
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         ...store,
         recommend,
@@ -389,12 +376,6 @@ describe("setupAppRecommendations", () => {
     const clearPendingStored = vi.fn(async () => true);
 
     await setupAppRecommendations({
-      config: {},
-      prompter: createPrompter(),
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend,
         readStored: async () => ({
@@ -422,12 +403,7 @@ describe("setupAppRecommendations", () => {
     const prompter = createPrompter();
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend,
         writeOffer,
@@ -453,12 +429,7 @@ describe("setupAppRecommendations", () => {
     vi.mocked(prompter.progress).mockReturnValue(progress);
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
           onPhase?.({
@@ -489,12 +460,7 @@ describe("setupAppRecommendations", () => {
     vi.mocked(prompter.progress).mockReturnValue(progress);
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: {
         recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
           onPhase?.({ kind: "candidates", appCount: 1, sampleLabels: ["Chat"] });
@@ -509,33 +475,10 @@ describe("setupAppRecommendations", () => {
     );
   });
 
-  it("never preselects third-party ClawHub skills even when model-recommended", async () => {
-    const result = recommendationResult();
-    result.matches[1] = {
-      ...result.matches[1]!,
-      tier: "recommended",
-    };
-    const prompter = createPrompter();
-    const store = storeDeps();
-    await setupAppRecommendations({
-      config: {},
-      prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
-      deps: {
-        recommend: vi.fn(async () => result),
-        ...store,
-      },
-    });
-    expect(prompter.multiselect).toHaveBeenCalledWith(
-      expect.objectContaining({ initialValues: ["recommendation:0"] }),
-    );
-  });
-
   it("preselects recommended matches and installs selected plugin and skill", async () => {
     const config: OpenClawConfig = {};
+    const recommendations = recommendationResult();
+    recommendations.matches[1]!.tier = "recommended";
     const prompter = createPrompter(["recommendation:0", "recommendation:1"]);
     const store = storeDeps();
     const ensurePlugin = vi.fn(async () => ({
@@ -560,7 +503,7 @@ describe("setupAppRecommendations", () => {
       platform: "darwin",
       deps: {
         ...store,
-        recommend: async () => recommendationResult(),
+        recommend: async () => recommendations,
         ensurePlugin,
         installSkill,
         resolveOfficialEntry: (pluginId) => ({
@@ -581,16 +524,16 @@ describe("setupAppRecommendations", () => {
     );
     expect(store.writeOffer).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ answered: false, matches: recommendationResult().matches }),
+      expect.objectContaining({ answered: false, matches: recommendations.matches }),
     );
     expect(store.writeOffer).toHaveBeenCalledOnce();
     expect(store.writeOffer.mock.invocationCallOrder[0]).toBeLessThan(
       ensurePlugin.mock.invocationCallOrder[0]!,
     );
     expect(store.updatePendingStored).toHaveBeenCalledWith({
-      matches: [recommendationResult().matches[0]],
+      matches: [recommendations.matches[0]],
       expected: expect.objectContaining({
-        matches: recommendationResult().matches,
+        matches: recommendations.matches,
         updatedAt: 1,
       }),
     });
@@ -602,7 +545,7 @@ describe("setupAppRecommendations", () => {
     expect(store.acknowledgeStored).toHaveBeenCalledWith({
       expected: expect.objectContaining({
         inventoryHash: "hash",
-        matches: [recommendationResult().matches[0]],
+        matches: [recommendations.matches[0]],
         updatedAt: 2,
       }),
     });
@@ -626,19 +569,10 @@ describe("setupAppRecommendations", () => {
     vi.mocked(prompter.multiselect)
       .mockResolvedValueOnce(["recommendation:1"])
       .mockResolvedValueOnce(["recommendation:0"]);
-    const deps = {
-      recommend,
-      installSkill,
-      ...store,
-    };
+    const deps = { recommend, installSkill, ...store };
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps,
     });
 
@@ -648,12 +582,7 @@ describe("setupAppRecommendations", () => {
     });
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps,
     });
 
@@ -707,10 +636,6 @@ describe("setupAppRecommendations", () => {
       setupAppRecommendations({
         config,
         prompter: createPrompter(["__skip__", "recommendation:0"]),
-        runtime,
-        workspaceDir: "/tmp/workspace",
-        modelRouteVerified: true,
-        platform: "darwin",
         deps: {
           ...store,
           recommend: async () => recommendationResult(),
@@ -730,12 +655,7 @@ describe("setupAppRecommendations", () => {
     const store = storeDeps();
 
     await setupAppRecommendations({
-      config: {},
       prompter: createPrompter([]),
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: { recommend: async () => recommendationResult(), ...store },
     });
 
@@ -748,12 +668,7 @@ describe("setupAppRecommendations", () => {
     const prompter = createPrompter();
 
     await setupAppRecommendations({
-      config: {},
       prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
       deps: { recommend: async () => recommendationResult(), ...store },
     });
 

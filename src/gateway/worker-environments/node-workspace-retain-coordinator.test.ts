@@ -35,6 +35,10 @@ const node = {
   commands: [],
 } as const;
 
+function receipt(bundleHash: string, openclawVersion = "2026.8.9") {
+  return { bundleHash, openclawVersion, protocolFeatures: [], installKind: "bundle" };
+}
+
 function environment(overrides: Record<string, unknown> = {}) {
   return {
     environmentId: "environment-1",
@@ -215,12 +219,7 @@ describe("node workspace retain coordinator", () => {
       },
       environments: [
         environment({
-          bootstrapReceipt: {
-            bundleHash: "b".repeat(64),
-            openclawVersion: "2026.8.9",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt("b".repeat(64)),
         }),
       ],
     });
@@ -244,12 +243,7 @@ describe("node workspace retain coordinator", () => {
       },
       environments: [
         environment({
-          bootstrapReceipt: {
-            bundleHash,
-            openclawVersion: "2026.8.9",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(bundleHash),
         }),
       ],
       results: [
@@ -275,15 +269,10 @@ describe("node workspace retain coordinator", () => {
 
   it("accepts status only from the final pass for the exact requested hash", async () => {
     const bundleHash = "b".repeat(64);
-    const { coordinator, acceptBundleStatus } = createHarness({
+    const { coordinator, invoke, acceptBundleStatus } = createHarness({
       environments: [
         environment({
-          bootstrapReceipt: {
-            bundleHash,
-            openclawVersion: "2026.8.9",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(bundleHash),
         }),
       ],
       results: [
@@ -304,6 +293,8 @@ describe("node workspace retain coordinator", () => {
 
     await coordinator.start();
 
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]?.[0].params).toEqual(invoke.mock.calls[0]?.[0].params);
     expect(acceptBundleStatus).toHaveBeenCalledTimes(1);
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
       bundleHash,
@@ -322,12 +313,7 @@ describe("node workspace retain coordinator", () => {
       },
       environments: [
         environment({
-          bootstrapReceipt: {
-            bundleHash: currentHash,
-            openclawVersion: "2026.8.9",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(currentHash),
         }),
       ],
       invokeError: "maintenance unavailable",
@@ -344,12 +330,7 @@ describe("node workspace retain coordinator", () => {
     const bundleHash = "b".repeat(64);
     const environments = [
       environment({
-        bootstrapReceipt: {
-          bundleHash,
-          openclawVersion: "2026.8.9",
-          protocolFeatures: [],
-          installKind: "bundle",
-        },
+        bootstrapReceipt: receipt(bundleHash),
       }),
     ];
     const { coordinator, acceptBundleStatus } = createHarness({
@@ -378,12 +359,7 @@ describe("node workspace retain coordinator", () => {
           environment({
             environmentId: "environment-new",
             createdAtMs: 3,
-            bootstrapReceipt: {
-              bundleHash: "c".repeat(64),
-              openclawVersion: "2026.8.10",
-              protocolFeatures: [],
-              installKind: "bundle",
-            },
+            bootstrapReceipt: receipt("c".repeat(64), "2026.8.10"),
           }),
         );
       },
@@ -401,12 +377,7 @@ describe("node workspace retain coordinator", () => {
     const { coordinator, acceptBundleStatus } = createHarness({
       environments: [
         environment({
-          bootstrapReceipt: {
-            bundleHash,
-            openclawVersion: "2026.8.9",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(bundleHash),
         }),
       ],
       results: [
@@ -470,12 +441,7 @@ describe("node workspace retain coordinator", () => {
         environment({
           environmentId: `environment-${index}`,
           attachedSessionIds: [],
-          bootstrapReceipt: {
-            bundleHash: index.toString(16).padStart(64, "0"),
-            openclawVersion: "2026.8.1",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(index.toString(16).padStart(64, "0"), "2026.8.1"),
         }),
     );
     const { coordinator, invoke, warn } = createHarness({ environments, placements: [] });
@@ -504,12 +470,7 @@ describe("node workspace retain coordinator", () => {
           environmentId: `environment-${"e".repeat(environmentPadding)}-${suffix}`,
           attachedSessionIds: attached ? [`session-${"s".repeat(sessionPadding)}-${suffix}`] : [],
           createdAtMs: index === NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES - 1 ? 10 : 1,
-          bootstrapReceipt: {
-            bundleHash: index.toString(16).padStart(64, "0"),
-            openclawVersion: "2026.8.9",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(index.toString(16).padStart(64, "0")),
         });
       },
     );
@@ -554,12 +515,7 @@ describe("node workspace retain coordinator", () => {
         return environment({
           environmentId: `environment-${"e".repeat(220)}-${suffix}`,
           attachedSessionIds: attached ? [`session-${"s".repeat(224)}-${suffix}`] : [],
-          bootstrapReceipt: {
-            bundleHash: index.toString(16).padStart(64, "0"),
-            openclawVersion: "2026.8.1",
-            protocolFeatures: [],
-            installKind: "bundle",
-          },
+          bootstrapReceipt: receipt(index.toString(16).padStart(64, "0"), "2026.8.1"),
         });
       },
     );
@@ -640,49 +596,6 @@ describe("node workspace retain coordinator", () => {
     },
   );
 
-  it("acknowledges the node bundle generation on the next same-connection snapshot", async () => {
-    const { coordinator, invoke } = createHarness({
-      results: [
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleGeneration: 7,
-        },
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleGeneration: 7,
-        },
-      ],
-    });
-
-    await coordinator.start();
-    await coordinator.schedule("node-1");
-
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("acknowledgedBundleGeneration");
-    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
-      acknowledgedBundleGeneration: 7,
-    });
-    await coordinator.stop();
-  });
-
-  it("continues bounded node cleanup with the same snapshot sequence", async () => {
-    const { coordinator, invoke } = createHarness({
-      results: [
-        { applied: true, deleted: 256, hasMore: true },
-        { applied: true, deleted: 1, hasMore: false },
-      ],
-    });
-
-    await coordinator.start();
-
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke.mock.calls[1]?.[0].params).toEqual(invoke.mock.calls[0]?.[0].params);
-    await coordinator.stop();
-  });
-
   it("retains the immutable repository base after its accepted manifest advances and the node reconnects", async () => {
     const baseManifest = `sha256:${"1".repeat(64)}`;
     const firstManifest = `sha256:${"2".repeat(64)}`;
@@ -738,6 +651,7 @@ describe("node workspace retain coordinator", () => {
     };
     const { coordinator, invoke } = createHarness(input);
     await coordinator.start();
+    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("acknowledgedBundleGeneration");
     await coordinator.schedule();
     expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
       acknowledgedBundleGeneration: 1,

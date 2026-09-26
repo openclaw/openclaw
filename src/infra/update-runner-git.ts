@@ -397,7 +397,8 @@ export async function updateGitCheckout(params: {
         devTarget,
         refreshedRemotes: fetched.refreshedRemotes,
         beforeSha,
-        beforeBuiltCommit,
+        beforeRuntimeVerified: recovery.serviceRestartSafe,
+        sourceRuntimePrepared: opts.sourceRuntimePrepared,
         beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,
         timeoutMs,
@@ -468,6 +469,12 @@ export async function updateGitCheckout(params: {
       inspectAndPrepare,
     );
     if (preflight.status !== "ok") {
+      if (preflight.status === "skipped" && preflight.reason === "already-current") {
+        return {
+          ...buildError(preflight.reason, preflight.status),
+          sourceRuntimePrepared: opts.sourceRuntimePrepared,
+        };
+      }
       return mutationPrepared
         ? await rollbackError(preflight.reason)
         : buildError(preflight.reason, preflight.status);
@@ -656,6 +663,7 @@ export async function updateGitCheckout(params: {
       root: gitRoot,
       before,
       gitRuntime,
+      sourceRuntimePrepared: true,
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),

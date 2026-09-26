@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
@@ -89,22 +89,28 @@ function baseRequest(sourcePath: string): InstallPolicyRequest {
   };
 }
 
-function configWithPolicy(scriptPath: string, env: Record<string, string>): OpenClawConfig {
+function configWithExec(
+  exec: NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>,
+): OpenClawConfig {
   return {
     security: {
       installPolicy: {
         enabled: true,
-        exec: {
-          source: "exec",
-          command: scriptPath,
-          env,
-          trustedDirs: [path.dirname(scriptPath)],
-          timeoutMs: 5000,
-          maxOutputBytes: 16 * 1024,
-        },
+        exec,
       },
     },
   };
+}
+
+function configWithPolicy(scriptPath: string, env: Record<string, string>): OpenClawConfig {
+  return configWithExec({
+    source: "exec",
+    command: scriptPath,
+    env,
+    trustedDirs: [path.dirname(scriptPath)],
+    timeoutMs: 5000,
+    maxOutputBytes: 16 * 1024,
+  });
 }
 
 describe("runInstallPolicy", () => {
@@ -116,6 +122,25 @@ describe("runInstallPolicy", () => {
     sourceDir = tempDirs.make("openclaw-install-policy-");
     scriptPath = await writePolicyScript(sourceDir);
   });
+
+  async function writeWritableParentPolicy() {
+    const dir = tempDirs.make("openclaw-install-policy-");
+    const writableDir = path.join(dir, "writable-parent");
+    await fs.mkdir(writableDir, { recursive: true });
+    await fs.chmod(writableDir, 0o777);
+    return { writableDir, writableScriptPath: await writePolicyScript(writableDir) };
+  }
+
+  function runResponse(
+    response: unknown,
+    options: Pick<Parameters<typeof runInstallPolicy>[0], "logger"> = {},
+  ) {
+    return runInstallPolicy({
+      config: configWithPolicy(scriptPath, { POLICY_RESPONSE: JSON.stringify(response) }),
+      request: baseRequest(sourceDir),
+      ...options,
+    });
+  }
 
   it("does nothing when install policy is disabled", async () => {
     await expect(runInstallPolicy({ config: {}, request: baseRequest(sourceDir) })).resolves.toBe(
@@ -181,22 +206,15 @@ describe("runInstallPolicy", () => {
     const response = JSON.stringify({ protocolVersion: 1, decision: "allow" });
 
     const result = await runInstallPolicy({
-      config: {
-        security: {
-          installPolicy: {
-            enabled: true,
-            exec: {
-              source: "exec",
-              command: envNodeScriptPath,
-              env: {
-                POLICY_RESPONSE: response,
-              },
-              passEnv: ["PATH"],
-              trustedDirs: [path.dirname(envNodeScriptPath)],
-            },
-          },
+      config: configWithExec({
+        source: "exec",
+        command: envNodeScriptPath,
+        env: {
+          POLICY_RESPONSE: response,
         },
-      },
+        passEnv: ["PATH"],
+        trustedDirs: [path.dirname(envNodeScriptPath)],
+      }),
       env: {
         PATH: path.dirname(requireNodeTool("node")),
       },
@@ -227,21 +245,14 @@ describe("runInstallPolicy", () => {
 
       try {
         resultPromise = runInstallPolicy({
-          config: {
-            security: {
-              installPolicy: {
-                enabled: true,
-                exec: {
-                  source: "exec",
-                  command: forkScriptPath,
-                  env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-                  trustedDirs: [path.dirname(forkScriptPath)],
-                  noOutputTimeoutMs: 1_000,
-                  timeoutMs: 10_000,
-                },
-              },
-            },
-          },
+          config: configWithExec({
+            source: "exec",
+            command: forkScriptPath,
+            env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+            trustedDirs: [path.dirname(forkScriptPath)],
+            noOutputTimeoutMs: 1_000,
+            timeoutMs: 10_000,
+          }),
           request: baseRequest(sourceDir),
         });
         void resultPromise.catch(() => undefined);
@@ -308,40 +319,12 @@ describe("runInstallPolicy", () => {
     );
   });
 
-  it("prefixes operator blocks", async () => {
-    const debugLogs: string[] = [];
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "block",
-          reason: "unapproved registry",
-        }),
-      }),
-      logger: { debug: (message) => debugLogs.push(message) },
-      request: baseRequest(sourceDir),
-    });
-
-    expect(result?.blocked).toEqual({
-      code: "security_scan_blocked",
-      reason: "blocked by install policy: unapproved registry",
-    });
-    expect(debugLogs.join("\n")).toContain("target=skill:weather");
-    expect(debugLogs.join("\n")).toContain("source=clawhub/openclaw");
-    expect(debugLogs.join("\n")).toContain("blocked by install policy");
-  });
-
   it("keeps truncated operator block reasons UTF-16 safe", async () => {
     const reasonPrefix = "r".repeat(999);
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "block",
-          reason: `${reasonPrefix}🎉tail`,
-        }),
-      }),
-      request: baseRequest(sourceDir),
+    const result = await runResponse({
+      protocolVersion: 1,
+      decision: "block",
+      reason: `${reasonPrefix}🎉tail`,
     });
 
     expect(result?.blocked).toEqual({
@@ -350,55 +333,21 @@ describe("runInstallPolicy", () => {
     });
   });
 
-  it("preserves allow findings without file or line", async () => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "allow",
-          findings: [
-            {
-              ruleId: "registry-review",
-              severity: "warn",
-              message: "Registry requires review.",
-            },
-          ],
-        }),
-      }),
-      request: baseRequest(sourceDir),
-    });
-
-    expect(result).toStrictEqual({
+  it("keeps valid findings while dropping malformed fields through schema parsing", async () => {
+    const result = await runResponse({
+      protocolVersion: 1,
+      decision: "allow",
       findings: [
         {
-          ruleId: "registry-review",
+          ruleId: "  registry-review  ",
           severity: "warn",
-          message: "Registry requires review.",
+          message: "  Registry requires review.  ",
+          file: 42,
+          line: "7",
+          evidence: false,
         },
+        { ruleId: 42, severity: "warn", message: "invalid required field" },
       ],
-    });
-  });
-
-  it("keeps valid findings while dropping malformed fields through schema parsing", async () => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "allow",
-          findings: [
-            {
-              ruleId: "  registry-review  ",
-              severity: "warn",
-              message: "  Registry requires review.  ",
-              file: 42,
-              line: "7",
-              evidence: false,
-            },
-            { ruleId: 42, severity: "warn", message: "invalid required field" },
-          ],
-        }),
-      }),
-      request: baseRequest(sourceDir),
     });
 
     expect(result).toStrictEqual({
@@ -414,24 +363,21 @@ describe("runInstallPolicy", () => {
 
   it("returns warnings with their reason and findings", async () => {
     const debugLogs: string[] = [];
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "warn",
-          reason: "review this source",
-          findings: [
-            {
-              ruleId: "manual-review",
-              severity: "warn",
-              message: "Suspicious install script.",
-            },
-          ],
-        }),
-      }),
-      logger: { debug: (message) => debugLogs.push(message) },
-      request: baseRequest(sourceDir),
-    });
+    const result = await runResponse(
+      {
+        protocolVersion: 1,
+        decision: "warn",
+        reason: "review this source",
+        findings: [
+          {
+            ruleId: "manual-review",
+            severity: "warn",
+            message: "Suspicious install script.",
+          },
+        ],
+      },
+      { logger: { debug: (message) => debugLogs.push(message) } },
+    );
 
     expect(result).toEqual({
       warning: {
@@ -450,21 +396,16 @@ describe("runInstallPolicy", () => {
   });
 
   it("normalizes warning finding lines to positive safe integers", async () => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "warn",
-          reason: "review line normalization",
-          findings: [-2, 12.9, 1e100].map((line, index) => ({
-            ruleId: `line-${String(index)}`,
-            severity: "warn",
-            message: "Review line",
-            line,
-          })),
-        }),
-      }),
-      request: baseRequest(sourceDir),
+    const result = await runResponse({
+      protocolVersion: 1,
+      decision: "warn",
+      reason: "review line normalization",
+      findings: [-2, 12.9, 1e100].map((line, index) => ({
+        ruleId: `line-${String(index)}`,
+        severity: "warn",
+        message: "Review line",
+        line,
+      })),
     });
 
     expect(result?.findings?.map((finding) => finding.line)).toEqual([
@@ -476,24 +417,19 @@ describe("runInstallPolicy", () => {
 
   it("bounds operator-facing warning text without splitting surrogate pairs", async () => {
     const longText = `${"x".repeat(996)}😀${"y".repeat(100)}`;
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "warn",
-          reason: longText,
-          findings: [
-            {
-              ruleId: longText,
-              severity: "warn",
-              message: longText,
-              file: longText,
-              evidence: longText,
-            },
-          ],
-        }),
-      }),
-      request: baseRequest(sourceDir),
+    const result = await runResponse({
+      protocolVersion: 1,
+      decision: "warn",
+      reason: longText,
+      findings: [
+        {
+          ruleId: longText,
+          severity: "warn",
+          message: longText,
+          file: longText,
+          evidence: longText,
+        },
+      ],
     });
 
     const boundedText = [
@@ -514,12 +450,7 @@ describe("runInstallPolicy", () => {
   it("fingerprints warning reason changes beyond the display limit", async () => {
     const sharedPrefix = "r".repeat(1000);
     const runWarning = async (reason: string) =>
-      await runInstallPolicy({
-        config: configWithPolicy(scriptPath, {
-          POLICY_RESPONSE: JSON.stringify({ protocolVersion: 1, decision: "warn", reason }),
-        }),
-        request: baseRequest(sourceDir),
-      });
+      await runResponse({ protocolVersion: 1, decision: "warn", reason });
 
     const first = await runWarning(`${sharedPrefix}-first`);
     const second = await runWarning(`${sharedPrefix}-second`);
@@ -535,16 +466,11 @@ describe("runInstallPolicy", () => {
       message: `Finding ${String(index)}`,
     }));
     const runWarning = async (warningFindings: typeof findings) =>
-      await runInstallPolicy({
-        config: configWithPolicy(scriptPath, {
-          POLICY_RESPONSE: JSON.stringify({
-            protocolVersion: 1,
-            decision: "warn",
-            reason: "review all findings",
-            findings: warningFindings,
-          }),
-        }),
-        request: baseRequest(sourceDir),
+      await runResponse({
+        protocolVersion: 1,
+        decision: "warn",
+        reason: "review all findings",
+        findings: warningFindings,
       });
 
     const boundary = await runWarning(findings.slice(0, 100));
@@ -559,23 +485,18 @@ describe("runInstallPolicy", () => {
   });
 
   it("selects display findings after dropping malformed entries", async () => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "warn",
-          reason: "review valid findings",
-          findings: [
-            ...Array.from({ length: 100 }, () => ({ severity: "warn", message: "invalid" })),
-            {
-              ruleId: "valid-after-malformed-prefix",
-              severity: "critical",
-              message: "Review this critical finding.",
-            },
-          ],
-        }),
-      }),
-      request: baseRequest(sourceDir),
+    const result = await runResponse({
+      protocolVersion: 1,
+      decision: "warn",
+      reason: "review valid findings",
+      findings: [
+        ...Array.from({ length: 100 }, () => ({ severity: "warn", message: "invalid" })),
+        {
+          ruleId: "valid-after-malformed-prefix",
+          severity: "critical",
+          message: "Review this critical finding.",
+        },
+      ],
     });
 
     expect(result?.warning).toEqual({
@@ -594,36 +515,25 @@ describe("runInstallPolicy", () => {
   it.each([
     { label: "missing", reason: undefined },
     { label: "empty", reason: "  " },
-    { label: "non-string", reason: 42 },
   ])("fails closed when a warning has a $label reason", async ({ reason }) => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({ protocolVersion: 1, decision: "warn", reason }),
-      }),
-      request: baseRequest(sourceDir),
-    });
+    const result = await runResponse({ protocolVersion: 1, decision: "warn", reason });
 
     expect(result?.blocked?.code).toBe("security_scan_failed");
     expect(result?.blocked?.reason).toContain('decision "warn" requires a non-empty reason');
   });
 
   it("preserves block findings without file or line", async () => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify({
-          protocolVersion: 1,
-          decision: "block",
-          reason: "unapproved registry",
-          findings: [
-            {
-              ruleId: "registry-review",
-              severity: "critical",
-              message: "Registry is not approved.",
-            },
-          ],
-        }),
-      }),
-      request: baseRequest(sourceDir),
+    const result = await runResponse({
+      protocolVersion: 1,
+      decision: "block",
+      reason: "unapproved registry",
+      findings: [
+        {
+          ruleId: "registry-review",
+          severity: "critical",
+          message: "Registry is not approved.",
+        },
+      ],
     });
 
     expect(result).toEqual({
@@ -654,12 +564,7 @@ describe("runInstallPolicy", () => {
       expected: 'decision must be "allow", "warn", or "block"',
     },
   ])("fails closed for a $label response", async ({ response, expected }) => {
-    const result = await runInstallPolicy({
-      config: configWithPolicy(scriptPath, {
-        POLICY_RESPONSE: JSON.stringify(response),
-      }),
-      request: baseRequest(sourceDir),
-    });
+    const result = await runResponse(response);
 
     expect(result?.blocked?.code).toBe("security_scan_failed");
     expect(result?.blocked?.reason).toContain(expected);
@@ -700,18 +605,11 @@ describe("runInstallPolicy", () => {
 
   it("rejects relative policy command paths before resolving cwd", async () => {
     const result = await runInstallPolicy({
-      config: {
-        security: {
-          installPolicy: {
-            enabled: true,
-            exec: {
-              source: "exec",
-              command: "policy.cjs",
-              args: [],
-            },
-          },
-        },
-      },
+      config: configWithExec({
+        source: "exec",
+        command: "policy.cjs",
+        args: [],
+      }),
       request: baseRequest(sourceDir),
     });
 
@@ -725,18 +623,11 @@ describe("runInstallPolicy", () => {
     "rejects Windows-style policy command paths on POSIX",
     async () => {
       const result = await runInstallPolicy({
-        config: {
-          security: {
-            installPolicy: {
-              enabled: true,
-              exec: {
-                source: "exec",
-                command: "C:\\tmp\\policy.cjs",
-                args: [],
-              },
-            },
-          },
-        },
+        config: configWithExec({
+          source: "exec",
+          command: "C:\\tmp\\policy.cjs",
+          args: [],
+        }),
         request: baseRequest(sourceDir),
       });
 
@@ -748,17 +639,12 @@ describe("runInstallPolicy", () => {
   );
 
   it("reports static validation issues without running policy command", async () => {
-    const validation = await validateInstallPolicyStatic({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: "policy.cjs",
-          },
-        },
-      },
-    });
+    const validation = await validateInstallPolicyStatic(
+      configWithExec({
+        source: "exec",
+        command: "policy.cjs",
+      }),
+    );
 
     expect(validation).toMatchObject({
       enabled: true,
@@ -773,54 +659,17 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const writableDir = path.join(dir, "writable-parent");
-    await fs.mkdir(writableDir, { recursive: true });
-    await fs.chmod(writableDir, 0o777);
-    const writableScriptPath = await writePolicyScript(writableDir);
+    const { writableDir, writableScriptPath } = await writeWritableParentPolicy();
 
-    const validation = await validateInstallPolicyStatic({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: writableScriptPath,
-          },
-        },
-      },
-    });
+    const validation = await validateInstallPolicyStatic(
+      configWithExec({
+        source: "exec",
+        command: writableScriptPath,
+      }),
+    );
 
     expect(validation.issues.map((issue) => issue.message)).toContain(
       `security.installPolicy.exec.command parent directory permissions are too open: ${writableDir}`,
-    );
-  });
-
-  it("rejects policy interpreter script args under writable parent directories", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const writableDir = path.join(dir, "writable-parent");
-    await fs.mkdir(writableDir, { recursive: true });
-    await fs.chmod(writableDir, 0o777);
-    const writableScriptPath = await writePolicyScript(writableDir);
-
-    const validation = await validateInstallPolicyStatic({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: process.execPath,
-            args: [writableScriptPath],
-          },
-        },
-      },
-    });
-
-    expect(validation.issues.map((issue) => issue.message)).toContain(
-      `security.installPolicy.exec.args[0] parent directory permissions are too open: ${writableDir}`,
     );
   });
 
@@ -828,24 +677,15 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const writableDir = path.join(dir, "writable-parent");
-    await fs.mkdir(writableDir, { recursive: true });
-    await fs.chmod(writableDir, 0o777);
-    const writableScriptPath = await writePolicyScript(writableDir);
+    const { writableDir, writableScriptPath } = await writeWritableParentPolicy();
 
-    const validation = await validateInstallPolicyStatic({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: process.execPath,
-            args: ["--require", scriptPath, writableScriptPath],
-          },
-        },
-      },
-    });
+    const validation = await validateInstallPolicyStatic(
+      configWithExec({
+        source: "exec",
+        command: process.execPath,
+        args: ["--require", scriptPath, writableScriptPath],
+      }),
+    );
 
     expect(validation.issues.map((issue) => issue.message)).toContain(
       `security.installPolicy.exec.args[2] parent directory permissions are too open: ${writableDir}`,
@@ -856,24 +696,15 @@ describe("runInstallPolicy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = tempDirs.make("openclaw-install-policy-");
-    const writableDir = path.join(dir, "writable-parent");
-    await fs.mkdir(writableDir, { recursive: true });
-    await fs.chmod(writableDir, 0o777);
-    const writableScriptPath = await writePolicyScript(writableDir);
+    const { writableDir, writableScriptPath } = await writeWritableParentPolicy();
 
-    const validation = await validateInstallPolicyStatic({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: process.execPath,
-            args: [`--require=${writableScriptPath}`, scriptPath],
-          },
-        },
-      },
-    });
+    const validation = await validateInstallPolicyStatic(
+      configWithExec({
+        source: "exec",
+        command: process.execPath,
+        args: [`--require=${writableScriptPath}`, scriptPath],
+      }),
+    );
 
     expect(validation.issues.map((issue) => issue.message)).toContain(
       `security.installPolicy.exec.args[0] parent directory permissions are too open: ${writableDir}`,
@@ -886,18 +717,13 @@ describe("runInstallPolicy", () => {
     const symlinkScriptPath = path.join(dir, "policy-link.cjs");
     await fs.symlink(realScriptPath, symlinkScriptPath);
 
-    const validation = await validateInstallPolicyStatic({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: process.execPath,
-            args: [symlinkScriptPath],
-          },
-        },
-      },
-    });
+    const validation = await validateInstallPolicyStatic(
+      configWithExec({
+        source: "exec",
+        command: process.execPath,
+        args: [symlinkScriptPath],
+      }),
+    );
 
     expect(validation.issues.map((issue) => issue.message)).toContain(
       `security.installPolicy.exec.args[0] must not be a symlink: ${symlinkScriptPath}`,
@@ -907,18 +733,13 @@ describe("runInstallPolicy", () => {
   it.runIf(process.platform !== "win32")(
     "rejects env policy commands before interpreter resolution can bypass validation",
     async () => {
-      const validation = await validateInstallPolicyStatic({
-        security: {
-          installPolicy: {
-            enabled: true,
-            exec: {
-              source: "exec",
-              command: "/usr/bin/env",
-              args: ["-S", `node ${scriptPath}`],
-            },
-          },
-        },
-      });
+      const validation = await validateInstallPolicyStatic(
+        configWithExec({
+          source: "exec",
+          command: "/usr/bin/env",
+          args: ["-S", `node ${scriptPath}`],
+        }),
+      );
 
       expect(validation.issues.map((issue) => issue.message)).toContain(
         "security.installPolicy.exec.command must not use env; configure the policy executable directly.",

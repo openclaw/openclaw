@@ -563,8 +563,8 @@ export async function buildStatusReplyParts(
     resolvedFastMode ??
     resolveFastModeState({
       cfg,
-      provider,
-      model,
+      provider: selectedLookupProvider,
+      model: selectedLookupModel,
       agentId: statusAgentId,
       sessionEntry,
     }).mode;

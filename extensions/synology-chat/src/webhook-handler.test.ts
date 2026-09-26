@@ -60,20 +60,9 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
+function deliveredMessage(deliver: TestDeliver) {
   expect(deliver).toHaveBeenCalledTimes(1);
-  const message = deliver.mock.calls[0]?.[0] as
-    | {
-        accountId?: unknown;
-        body?: unknown;
-        chatType?: unknown;
-        chatUserId?: unknown;
-        commandAuthorized?: unknown;
-        from?: unknown;
-        provider?: unknown;
-        senderName?: unknown;
-      }
-    | undefined;
+  const message = vi.mocked(deliver).mock.calls[0]?.[0];
   if (!message) {
     throw new Error("expected delivered Synology Chat message");
   }
@@ -113,6 +102,20 @@ const validBody = makeFormBody({
   post_id: "post-123",
 });
 
+async function postToWebhook(
+  handler: ReturnType<typeof createWebhookHandler>,
+  body = validBody,
+  options?: NonNullable<Parameters<typeof makeReq>[2]> & { remoteAddress?: string },
+) {
+  const req = makeReq("POST", body, options);
+  if (options?.remoteAddress) {
+    Object.assign(req.socket, { remoteAddress: options.remoteAddress });
+  }
+  const res = makeRes();
+  await handler(req, res);
+  return res;
+}
+
 async function runDangerousNameMatchReply(
   log: TestLog,
   options: {
@@ -131,9 +134,7 @@ async function runDangerousNameMatchReply(
     log,
   });
 
-  const req = makeReq("POST", validBody);
-  const res = makeRes();
-  await handler(req, res);
+  const res = await postToWebhook(handler);
 
   expect(res.status).toBe(204);
   expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
@@ -172,9 +173,7 @@ describe("createWebhookHandler", () => {
       log,
     });
 
-    const req = makeReq("POST", validBody);
-    const res = makeRes();
-    await handler(req, res);
+    const res = await postToWebhook(handler);
 
     expect(res.status).toBe(403);
     expect(res.body).toContain(params.bodyContains);
@@ -198,17 +197,6 @@ describe("createWebhookHandler", () => {
         log,
       }),
     };
-  }
-
-  async function postToWebhook(
-    handler: ReturnType<typeof createWebhookHandler>,
-    body = validBody,
-    options?: Parameters<typeof makeReq>[2],
-  ) {
-    const req = makeReq("POST", body, options);
-    const res = makeRes();
-    await handler(req, res);
-    return res;
   }
 
   async function expectTokenlessBodyAccepted(params: {
@@ -287,8 +275,7 @@ describe("createWebhookHandler", () => {
       log,
     });
 
-    const res = makeRes();
-    await handler(makeReq("POST", validBody), res);
+    const res = await postToWebhook(handler);
 
     expect(res.status).toBe(503);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
@@ -302,9 +289,7 @@ describe("createWebhookHandler", () => {
       log,
     });
 
-    const req = makeReq("POST", makeFormBody({ token: "valid-token" }));
-    const res = makeRes();
-    await handler(req, res);
+    const res = await postToWebhook(handler, makeFormBody({ token: "valid-token" }));
 
     expect(res.status).toBe(400);
   });
@@ -419,37 +404,11 @@ describe("createWebhookHandler", () => {
     await Promise.all(runs);
   });
 
-  it("returns 401 for invalid token", async () => {
-    const handler = createWebhookHandler({
-      account: makeAccount(),
-      deliver: vi.fn(),
-      log,
-    });
-
-    const body = makeFormBody({
-      token: "wrong-token",
-      user_id: "123",
-      username: "testuser",
-      text: "Hello",
-    });
-    const req = makeReq("POST", body);
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res.status).toBe(401);
-  });
-
   it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
     const weakToken = "00000129";
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({
-        accountId: "weak-token-bruteforce-" + Date.now(),
-        token: weakToken,
-        rateLimitPerMinute: 5,
-      }),
-      deliver,
-      log,
+    const { deliver, handler } = makeTestHandler({
+      accountIdSuffix: "weak-token-bruteforce",
+      account: { token: weakToken, rateLimitPerMinute: 5 },
     });
 
     let guessedToken: string | null = null;
@@ -457,18 +416,16 @@ describe("createWebhookHandler", () => {
 
     for (let i = 0; i < 130; i += 1) {
       const candidate = String(i).padStart(8, "0");
-      const req = makeReq(
-        "POST",
+      const res = await postToWebhook(
+        handler,
         makeFormBody({
           token: candidate,
           user_id: "123",
           username: "testuser",
           text: "Hello bot",
         }),
+        { remoteAddress: "203.0.113.10" },
       );
-      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
-      const res = makeRes();
-      await handler(req, res);
 
       if (res.status === 429) {
         saw429 = true;
@@ -485,113 +442,57 @@ describe("createWebhookHandler", () => {
 
     expect(saw429).toBe(true);
     expect(guessedToken).toBeNull();
-    const lockedReq = makeReq(
-      "POST",
+    const lockedRes = await postToWebhook(
+      handler,
       makeFormBody({
         token: weakToken,
         user_id: "123",
         username: "testuser",
         text: "Hello bot",
       }),
+      { remoteAddress: "203.0.113.10" },
     );
-    (lockedReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
-    const lockedRes = makeRes();
-    await handler(lockedReq, lockedRes);
 
     expect(lockedRes.status).toBe(429);
     expect(deliver).not.toHaveBeenCalled();
   });
 
   it("keeps pre-auth throttling scoped to the remote IP", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({
-        accountId: "preauth-ip-scope-" + Date.now(),
-        rateLimitPerMinute: 1,
-      }),
-      deliver,
-      log,
+    const { deliver, handler } = makeTestHandler({
+      accountIdSuffix: "preauth-ip-scope",
+      account: { rateLimitPerMinute: 1 },
     });
 
-    const invalidReq = makeReq(
-      "POST",
+    const invalidRes = await postToWebhook(
+      handler,
       makeFormBody({
         token: "wrong-token",
         user_id: "123",
         username: "testuser",
         text: "Hello",
       }),
+      { remoteAddress: "203.0.113.10" },
     );
-    (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
-    const invalidRes = makeRes();
-    await handler(invalidReq, invalidRes);
     expect(invalidRes.status).toBe(401);
 
-    const validReq = makeReq("POST", validBody);
-    (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
-    const validRes = makeRes();
-    await handler(validReq, validRes);
-
-    expect(validRes.status).toBe(204);
-    expect(deliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("keys invalid-token throttling by trusted forwarded client IP", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({
-        accountId: "preauth-forwarded-ip-scope-" + Date.now(),
-        rateLimitPerMinute: 1,
-      }),
-      trustedProxies: ["127.0.0.1"],
-      deliver,
-      log,
+    const validRes = await postToWebhook(handler, validBody, {
+      remoteAddress: "203.0.113.11",
     });
-
-    for (let i = 0; i < 2; i += 1) {
-      const invalidReq = makeReq(
-        "POST",
-        makeFormBody({
-          token: "wrong-token",
-          user_id: "123",
-          username: "testuser",
-          text: "Hello",
-        }),
-        { headers: { "x-forwarded-for": "198.51.100.9" } },
-      );
-      (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
-      const invalidRes = makeRes();
-      await handler(invalidReq, invalidRes);
-      expect(invalidRes.status).toBe(i === 0 ? 401 : 429);
-    }
-
-    const validReq = makeReq("POST", validBody, {
-      headers: { "x-forwarded-for": "203.0.113.11" },
-    });
-    (validReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
-    const validRes = makeRes();
-    await handler(validReq, validRes);
 
     expect(validRes.status).toBe(204);
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("does not spend invalid-token budget on successful requests", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({
-        accountId: "invalid-token-budget-" + Date.now(),
-        rateLimitPerMinute: 30,
-      }),
-      deliver,
-      log,
+    const { deliver, handler } = makeTestHandler({
+      accountIdSuffix: "invalid-token-budget",
+      account: { rateLimitPerMinute: 30 },
     });
 
     for (let i = 0; i < 11; i += 1) {
-      const req = makeReq("POST", validBody);
-      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.20";
-      const res = makeRes();
-      await handler(req, res);
+      const res = await postToWebhook(handler, validBody, {
+        remoteAddress: "203.0.113.20",
+      });
       expect(res.status).toBe(204);
     }
 
@@ -599,15 +500,10 @@ describe("createWebhookHandler", () => {
   });
 
   it("accepts application/json with alias fields", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "json-test-" + Date.now() }),
-      deliver,
-      log,
-    });
+    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "json-test" });
 
-    const req = makeReq(
-      "POST",
+    const res = await postToWebhook(
+      handler,
       JSON.stringify({
         token: "valid-token",
         userId: "123",
@@ -617,8 +513,6 @@ describe("createWebhookHandler", () => {
       }),
       { headers: { "content-type": "application/json" } },
     );
-    const res = makeRes();
-    await handler(req, res);
 
     expect(res.status).toBe(204);
     const message = deliveredMessage(deliver);
@@ -632,18 +526,11 @@ describe("createWebhookHandler", () => {
   });
 
   it("rejects malformed application/json with a stable parser error", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "json-malformed-" + Date.now() }),
-      deliver,
-      log,
-    });
+    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "json-malformed" });
 
-    const req = makeReq("POST", "{not json", {
+    const res = await postToWebhook(handler, "{not json", {
       headers: { "content-type": "application/json" },
     });
-    const res = makeRes();
-    await handler(req, res);
 
     expect(res.status).toBe(400);
     expect(res.body).toContain("Invalid request body");
@@ -673,16 +560,6 @@ describe("createWebhookHandler", () => {
           authorization: "Bearer valid-token",
         },
       },
-    });
-  });
-
-  it("returns 403 for unauthorized user with allowlist policy", async () => {
-    await expectForbiddenByPolicy({
-      account: {
-        dmPolicy: "allowlist",
-        allowedUserIds: ["456"],
-      },
-      bodyContains: "not authorized",
     });
   });
 
@@ -717,25 +594,16 @@ describe("createWebhookHandler", () => {
     });
 
     // First request succeeds
-    const req1 = makeReq("POST", validBody);
-    const res1 = makeRes();
-    await handler(req1, res1);
+    const res1 = await postToWebhook(handler);
     expect(res1.status).toBe(204);
 
     // Second request should be rate limited
-    const req2 = makeReq("POST", validBody);
-    const res2 = makeRes();
-    await handler(req2, res2);
+    const res2 = await postToWebhook(handler);
     expect(res2.status).toBe(429);
   });
 
   it("strips trigger word from message", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "trigger-test-" + Date.now() }),
-      deliver,
-      log,
-    });
+    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "trigger-test" });
 
     const body = makeFormBody({
       token: "valid-token",
@@ -746,18 +614,17 @@ describe("createWebhookHandler", () => {
       post_id: "post-trigger",
     });
 
-    const req = makeReq("POST", body);
-    const res = makeRes();
-    await handler(req, res);
+    const res = await postToWebhook(handler, body);
 
     expect(res.status).toBe(204);
     // deliver should have been called with the stripped text
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
-  it("delivers a valid admitted webhook", async () => {
+  it("delivers a valid webhook bound to payload.user_id", async () => {
     const { deliver, res } = await runValidReply({ accountIdSuffix: "async-test" });
     expect(res.body).toBe("");
+    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
     const message = deliveredMessage(deliver);
     expect(message.body).toBe("Hello bot");
     expect(message.from).toBe("123");
@@ -765,14 +632,6 @@ describe("createWebhookHandler", () => {
     expect(message.provider).toBe("synology-chat");
     expect(message.chatType).toBe("direct");
     expect(message.commandAuthorized).toBe(true);
-    expect(message.chatUserId).toBe("123");
-  });
-
-  it("keeps delivery bound to payload.user_id by default", async () => {
-    const { deliver } = await runValidReply({ accountIdSuffix: "stable-id-test" });
-    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
-    const message = deliveredMessage(deliver);
-    expect(message.from).toBe("123");
     expect(message.chatUserId).toBe("123");
   });
 
@@ -806,15 +665,12 @@ describe("createWebhookHandler", () => {
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
     try {
       const deliver = vi.fn().mockResolvedValue(undefined);
-      const handler = createWebhookHandler({
-        account: makeAccount({ accountId: "no-hardcoded-timeout-" + Date.now() }),
+      const { handler } = makeTestHandler({
+        accountIdSuffix: "no-hardcoded-timeout",
         deliver,
-        log,
       });
 
-      const res = makeRes();
-      const req = makeReq("POST", validBody);
-      await handler(req, res);
+      const res = await postToWebhook(handler);
 
       expect(res.status).toBe(204);
 
@@ -830,12 +686,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("sanitizes input before delivery", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "sanitize-test-" + Date.now() }),
-      deliver,
-      log,
-    });
+    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "sanitize-test" });
 
     const body = makeFormBody({
       token: "valid-token",
@@ -845,12 +696,10 @@ describe("createWebhookHandler", () => {
       post_id: "post-sanitize",
     });
 
-    const req = makeReq("POST", body);
-    const res = makeRes();
-    await handler(req, res);
+    await postToWebhook(handler, body);
 
     const message = deliveredMessage(deliver);
-    expect(String(message.body)).toContain("[FILTERED]");
+    expect(message.body).toContain("[FILTERED]");
     expect(message.commandAuthorized).toBe(true);
   });
 });

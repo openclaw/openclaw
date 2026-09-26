@@ -1,0 +1,94 @@
+title: A live model edits the owner's workspace skill directly when asked
+
+scenario:
+  id: skill-owner-direct-edit-live
+  surface: skills
+  coverage:
+    primary:
+      - plugins.activation-skills
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify a live model changes a user-owned workspace skill in place when its owner asks in chat, instead of refusing or only filing a Workshop proposal.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [qa-channel:alice]
+  successCriteria:
+    - The owner asks in plain words to change a workspace skill they own.
+    - The skill file now carries the requested marker and no longer carries the old one.
+    - The agent confirms the change in chat, naming the new marker.
+  docsRefs:
+    - docs/tools/skill-workshop/how-it-works.md
+  codeRefs:
+    - src/agents/skill-workshop-prompt.ts
+    - src/agents/tools/skill-workshop-tool-description.ts
+  execution:
+    kind: flow
+    summary: Seed a workspace skill, ask a live model to change it, and read the skill file afterward.
+    config:
+      requiredProviderMode: live-frontier
+      conversationId: qa-skill-owner-direct-edit
+      skillName: qa-owner-greeting
+      skillBody: |-
+        ---
+        name: qa-owner-greeting
+        description: Greets the owner with a fixed marker
+        ---
+        When the user asks for the owner greeting, reply with exactly: OWNER-GREETING-V1
+      prompt: "Please change my qa-owner-greeting skill so it replies OWNER-GREETING-V2 instead of OWNER-GREETING-V1. Tell me when it's done."
+      oldMarker: OWNER-GREETING-V1
+      newMarker: OWNER-GREETING-V2
+
+flow:
+  steps:
+    - name: edits the owner's skill in place
+      actions:
+        - assert:
+            expr: "env.providerMode === 'live-frontier'"
+            message: this scenario needs a live model to choose its own tools
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: writeWorkspaceSkill
+          saveAs: skillPath
+          args:
+            - env:
+                ref: env
+              name:
+                expr: config.skillName
+              body:
+                expr: config.skillBody
+        - call: reset
+        - set: conversation
+          value:
+            id:
+              expr: config.conversationId
+            kind: direct
+        - sendInbound:
+            conversation:
+              ref: conversation
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForCondition
+          saveAs: editedSkill
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(skillPath, 'utf8').then((text) => text.includes(config.newMarker) && !text.includes(config.oldMarker) ? text : undefined).catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 500
+        # Replies stream as edits of one message; read its settled text.
+        - call: waitForCondition
+          saveAs: reply
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.find((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversation.id && String(message.text ?? '').includes(config.newMarker))"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 500
+      detailsExpr: "JSON.stringify({ skillPath: path.basename(path.dirname(skillPath)), editedSkill, reply: reply.text }, null, 2)"

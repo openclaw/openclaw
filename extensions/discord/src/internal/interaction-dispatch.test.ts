@@ -15,6 +15,30 @@ import {
   createInternalTestClient,
 } from "./test-builders.test-support.js";
 
+function createThrowingCommandClient(
+  run: (interaction: CommandInteraction) => unknown,
+  defer = true,
+) {
+  return createInternalTestClient([
+    new (class extends Command {
+      override name = "boom";
+      override description = "Throwing command";
+      override defer = defer;
+      run = run;
+    })(),
+  ]);
+}
+
+function dispatchTestCommand(client: ReturnType<typeof createInternalTestClient>) {
+  return client.handleInteraction(
+    createInternalInteractionPayload({
+      id: "interaction1",
+      token: "token1",
+      data: { id: "command1", name: "boom", type: 1 },
+    }),
+  );
+}
+
 describe("dispatchInteraction", () => {
   it("passes command ephemeral defaults into deferred responses", async () => {
     const run = vi.fn(async (interaction: CommandInteraction) => {
@@ -59,26 +83,14 @@ describe("dispatchInteraction", () => {
     const run = vi.fn(async () => {
       throw new Error("prepared model catalog owner config was replaced during the read");
     });
-    class ThrowingDeferredCommand extends Command {
-      override name = "boom";
-      override description = "Throwing command";
-      override defer = true;
-      run = run;
-    }
-    const client = createInternalTestClient([new ThrowingDeferredCommand()]);
+    const client = createThrowingCommandClient(run);
     const post = vi.fn(async () => undefined);
     const patch = vi.fn(async () => undefined);
     attachRestMock(client, { post, patch });
 
-    await expect(
-      client.handleInteraction(
-        createInternalInteractionPayload({
-          id: "interaction1",
-          token: "token1",
-          data: { id: "command1", name: "boom", type: 1 },
-        }),
-      ),
-    ).rejects.toThrow("prepared model catalog owner config was replaced");
+    await expect(dispatchTestCommand(client)).rejects.toThrow(
+      "prepared model catalog owner config was replaced",
+    );
 
     expect(run).toHaveBeenCalledTimes(1);
     // The deferred response must be resolved with a visible message rather than
@@ -110,26 +122,12 @@ describe("dispatchInteraction", () => {
     const run = vi.fn(async () => {
       throw new Error("@everyone broke the catalog at /Users/someone/.openclaw");
     });
-    class MentionThrowingCommand extends Command {
-      override name = "boom";
-      override description = "Throws a mention";
-      override defer = true;
-      run = run;
-    }
-    const client = createInternalTestClient([new MentionThrowingCommand()]);
+    const client = createThrowingCommandClient(run);
     const post = vi.fn(async () => undefined);
     const patch = vi.fn(async () => undefined);
     attachRestMock(client, { post, patch });
 
-    await expect(
-      client.handleInteraction(
-        createInternalInteractionPayload({
-          id: "interaction1",
-          token: "token1",
-          data: { id: "command1", name: "boom", type: 1 },
-        }),
-      ),
-    ).rejects.toThrow("@everyone broke the catalog");
+    await expect(dispatchTestCommand(client)).rejects.toThrow("@everyone broke the catalog");
 
     for (const leak of ["@everyone", "/Users/someone/.openclaw"]) {
       expect(patch).not.toHaveBeenCalledWith(
@@ -155,28 +153,14 @@ describe("dispatchInteraction", () => {
       await interaction.reply("partial result");
       throw new Error("failed after replying");
     });
-    class RepliesThenThrowsCommand extends Command {
-      override name = "boom";
-      override description = "Replies then throws";
-      override defer = true;
-      run = run;
-    }
-    const client = createInternalTestClient([new RepliesThenThrowsCommand()]);
+    const client = createThrowingCommandClient(run);
     // Typed parameters so mock.calls is indexable: the absence assertions below
     // read the request path, which a zero-arity vi.fn() cannot express.
     const post = vi.fn(async (_path: string, _data?: unknown, _query?: unknown) => undefined);
     const patch = vi.fn(async () => undefined);
     attachRestMock(client, { post, patch });
 
-    await expect(
-      client.handleInteraction(
-        createInternalInteractionPayload({
-          id: "interaction1",
-          token: "token1",
-          data: { id: "command1", name: "boom", type: 1 },
-        }),
-      ),
-    ).rejects.toThrow("failed after replying");
+    await expect(dispatchTestCommand(client)).rejects.toThrow("failed after replying");
 
     // Exactly the handler's own two requests: the deferred callback and the
     // edit carrying its reply. Counting them is what makes this an absence
@@ -237,26 +221,12 @@ describe("dispatchInteraction", () => {
     const run = vi.fn(async () => {
       throw new Error("exploded before deferring");
     });
-    class ImmediateThrowCommand extends Command {
-      override name = "boom";
-      override description = "Throws immediately";
-      override defer = false;
-      run = run;
-    }
-    const client = createInternalTestClient([new ImmediateThrowCommand()]);
+    const client = createThrowingCommandClient(run, false);
     const post = vi.fn(async () => undefined);
     const patch = vi.fn(async () => undefined);
     attachRestMock(client, { post, patch });
 
-    await expect(
-      client.handleInteraction(
-        createInternalInteractionPayload({
-          id: "interaction1",
-          token: "token1",
-          data: { id: "command1", name: "boom", type: 1 },
-        }),
-      ),
-    ).rejects.toThrow("exploded before deferring");
+    await expect(dispatchTestCommand(client)).rejects.toThrow("exploded before deferring");
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(post).not.toHaveBeenCalled();
@@ -271,26 +241,12 @@ describe("dispatchInteraction", () => {
       await interaction.followUp("progress");
       throw new Error("failed after follow-up");
     });
-    class FollowUpThenThrowsCommand extends Command {
-      override name = "boom";
-      override description = "Follows up then throws";
-      override defer = true;
-      run = run;
-    }
-    const client = createInternalTestClient([new FollowUpThenThrowsCommand()]);
+    const client = createThrowingCommandClient(run);
     const post = vi.fn(async () => undefined);
     const patch = vi.fn(async () => undefined);
     attachRestMock(client, { post, patch });
 
-    await expect(
-      client.handleInteraction(
-        createInternalInteractionPayload({
-          id: "interaction1",
-          token: "token1",
-          data: { id: "command1", name: "boom", type: 1 },
-        }),
-      ),
-    ).rejects.toThrow("failed after follow-up");
+    await expect(dispatchTestCommand(client)).rejects.toThrow("failed after follow-up");
 
     expect(patch).not.toHaveBeenCalled();
   });
@@ -318,22 +274,10 @@ describe("dispatchInteraction", () => {
       void interaction.followUp("progress").catch(() => undefined);
       return Promise.reject(new Error("failed with a follow-up in flight"));
     });
-    class RacingFollowUpCommand extends Command {
-      override name = "boom";
-      override description = "Throws with a follow-up in flight";
-      override defer = true;
-      run = run as unknown as Command["run"];
-    }
-    const client = createInternalTestClient([new RacingFollowUpCommand()]);
+    const client = createThrowingCommandClient(run);
     attachRestMock(client, { post, patch });
 
-    const handled = client.handleInteraction(
-      createInternalInteractionPayload({
-        id: "interaction1",
-        token: "token1",
-        data: { id: "command1", name: "boom", type: 1 },
-      }),
-    );
+    const handled = dispatchTestCommand(client);
     await vi.waitFor(() => expect(releaseFollowUp).toBeDefined());
     releaseFollowUp?.();
 

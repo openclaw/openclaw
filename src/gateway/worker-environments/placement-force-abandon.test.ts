@@ -17,7 +17,7 @@ import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
-function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
+async function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
   const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   const { environmentId } = createDispatchEnvironmentFixtures();
   seedAttachedPlacementEnvironment(database, {
@@ -25,7 +25,7 @@ function createActiveAbandonmentFixture(database: OpenClawStateDatabase) {
     sessionId: REQUEST.sessionId,
     ownerEpoch: 2,
   });
-  const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+  const active = await seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
   if (active.state !== "active") {
     throw new Error("active placement fixture was not active");
   }
@@ -47,7 +47,7 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("drains nested operations before recording result loss and releasing the claim", async () => {
-    const { store, environmentId } = createActiveAbandonmentFixture(database);
+    const { store, environmentId } = await createActiveAbandonmentFixture(database);
     const claim = await store.claimTurn({
       ...REQUEST,
       claimId: "forced-claim",
@@ -99,7 +99,7 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     store.startDrain({
       sessionId: active.sessionId,
       environmentId,
@@ -132,7 +132,7 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("deletes a stale journal without replaying it into the current workspace", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -179,7 +179,7 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("retains a current journal when its best-effort rollback fails", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -221,7 +221,7 @@ describe("forced worker environment abandonment", () => {
   });
 
   it("retains a current journal when loading it fails", async () => {
-    const { store, environmentId, active } = createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,

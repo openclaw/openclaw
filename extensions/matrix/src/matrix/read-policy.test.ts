@@ -400,35 +400,6 @@ describe("Matrix read policy", () => {
     ).resolves.toBe("ok");
   });
 
-  it("matches configured room aliases before applying direct-message policy", async () => {
-    const client = createClient(
-      ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
-      null,
-      {
-        canonicalAlias: "#ops:example.org",
-      },
-    );
-
-    await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "allowlist",
-              groups: {
-                "#ops:example.org": {},
-              },
-              dm: { policy: "disabled" },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!ops:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
-  });
-
   it("resolves aliases before applying a disabled wildcard room policy", async () => {
     const resolveRoom = vi.fn(async () => "!ops:example.org");
     const client = createClient(

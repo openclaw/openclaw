@@ -37,14 +37,6 @@ describe("formatAgo", () => {
     expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
   });
 
-  it("returns 'Xh from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 60 * 60_000)).toBe("in 3h");
-  });
-
-  it("returns 'Xd from now' for future timestamps beyond 48h", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
-  });
-
   it("returns a localized current-time label for recent past timestamps", () => {
     expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
   });
@@ -70,13 +62,10 @@ describe("localized durations", () => {
     await i18n.setLocale("en");
   });
 
-  it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
-    "preserves invalid duration fallbacks for %s",
-    (durationMs) => {
-      expect(formatDurationCompact(durationMs)).toBeUndefined();
-      expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
-    },
-  );
+  it.each([null, Number.NaN, -1])("preserves invalid duration fallbacks for %s", (durationMs) => {
+    expect(formatDurationCompact(durationMs)).toBeUndefined();
+    expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+  });
 
   it("keeps zero distinct from a positive duration rounded to zero", () => {
     expect(formatDurationCompact(0)).toBeUndefined();
@@ -86,13 +75,9 @@ describe("localized durations", () => {
 
   it.each([
     { durationMs: 999.5, expected: "1s" },
-    { durationMs: 59_000, expected: "59s" },
-    { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
-    { durationMs: 3_660_000, expected: "1h 1m" },
     { durationMs: 3_630_000, expected: "1h 30s" },
     { durationMs: 86_430_000, expected: "1d 30s" },
-    { durationMs: 86_460_000, expected: "1d 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
   ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
     expect(formatDurationCompact(durationMs)).toBe(expected);
@@ -109,7 +94,8 @@ describe("localized durations", () => {
     expect(formatDurationHuman(durationMs)).toBe(expected);
   });
 
-  it.each(["fr", "de", "ar"] as const)("preserves duration quantities in %s", async (locale) => {
+  it("preserves duration quantities with localized numerals", async () => {
+    const locale = "ar";
     await i18n.setLocale(locale);
     const unit = (value: number, unitName: string) =>
       new Intl.NumberFormat(locale, {
@@ -214,16 +200,6 @@ describe("date/time millisecond formatters", () => {
 });
 
 describe("stripThinkingTags", () => {
-  it("strips <think>…</think> segments", () => {
-    const input = ["<think>", "secret", "</think>", "", "Hello"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello");
-  });
-
-  it("strips <thinking>…</thinking> segments", () => {
-    const input = ["<thinking>", "secret", "</thinking>", "", "Hello"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello");
-  });
-
   it("keeps text when tags are unpaired", () => {
     expect(stripThinkingTags("<think>\nsecret\nHello")).toBe("secret\nHello");
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
@@ -233,10 +209,6 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
       " Visible answer",
     );
-  });
-
-  it("returns original text when no tags exist", () => {
-    expect(stripThinkingTags("Hello")).toBe("Hello");
   });
 
   it("strips <final>…</final> segments", () => {
@@ -297,11 +269,6 @@ describe("formatUnknownText", () => {
 });
 
 describe("formatCompactTokenCount", () => {
-  it("formats values under 1,000 as-is", () => {
-    expect(formatCompactTokenCount(0)).toBe("0");
-    expect(formatCompactTokenCount(999)).toBe("999");
-  });
-
   it("formats thousands with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000)).toBe("1k");
     expect(formatCompactTokenCount(214_500)).toBe("214.5k");

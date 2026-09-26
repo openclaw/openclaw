@@ -23,6 +23,7 @@ import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-mode
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
@@ -83,6 +84,7 @@ function createPluginReloadHandler(
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return createGatewayReloadHandlers({
+    scheduler: createTestGatewayScheduler(),
     deps: {} as never,
     broadcast: vi.fn(),
     getState: () => reloadState,

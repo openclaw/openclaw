@@ -44,8 +44,12 @@ import { loadCronJobsStore } from "./store.js";
 
 installHeartbeatRunnerTestRuntime();
 beforeAll(async () => {
-  // Load the real dispatch graph before this real-time scheduler fixture starts its watchdog.
-  await import("../auto-reply/dispatch.js");
+  // Dispatch lazily loads fast-abort handling even with an injected reply resolver.
+  // Load both graphs before this real-time scheduler fixture starts its watchdog.
+  await Promise.all([
+    import("../auto-reply/dispatch.js"),
+    import("../auto-reply/reply/abort.runtime.js"),
+  ]);
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

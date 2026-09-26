@@ -163,42 +163,21 @@ async function removeContainers(
 
   // Remove normal sandboxes first, then browser containers; reporting keeps one
   // aggregate fail count so callers can exit non-zero on partial cleanup.
-  for (const container of filtered.containers) {
-    const result = await removeContainer(container.containerName, removeSandboxContainer, runtime);
-    if (result.success) {
-      successCount++;
-    } else {
-      failCount++;
-    }
-  }
-
-  for (const browser of filtered.browsers) {
-    const result = await removeContainer(
-      browser.containerName,
-      removeSandboxBrowserContainer,
-      runtime,
-    );
-    if (result.success) {
-      successCount++;
-    } else {
-      failCount++;
+  for (const [containers, remove] of [
+    [filtered.containers, removeSandboxContainer],
+    [filtered.browsers, removeSandboxBrowserContainer],
+  ] as const) {
+    for (const { containerName } of containers) {
+      try {
+        await remove(containerName);
+        runtime.log(`✓ Removed ${containerName}`);
+        successCount++;
+      } catch (err) {
+        runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
+        failCount++;
+      }
     }
   }
 
   return { successCount, failCount };
-}
-
-async function removeContainer(
-  containerName: string,
-  removeFn: (name: string) => Promise<void>,
-  runtime: RuntimeEnv,
-): Promise<{ success: boolean }> {
-  try {
-    await removeFn(containerName);
-    runtime.log(`✓ Removed ${containerName}`);
-    return { success: true };
-  } catch (err) {
-    runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
-    return { success: false };
-  }
 }

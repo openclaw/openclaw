@@ -142,9 +142,11 @@ export function createTestCronReconciliation(complete: () => Promise<void> = asy
 }
 
 export function createPostReadyMaintenanceScheduleParams(
-  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> = {},
+  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> &
+    Pick<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0], "scheduler">,
 ): Parameters<typeof scheduleGatewayPostReadyMaintenance>[0] {
   return {
+    signal: new AbortController().signal,
     delayMs: 1,
     isClosing: () => false,
     startMaintenance: vi.fn(async () => null),

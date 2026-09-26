@@ -699,10 +699,6 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
   };
 }
 
-function normalizeOptionalAccountId(value?: string | null): string | undefined {
-  return value?.trim() || undefined;
-}
-
 /** Create a fallback suppressor that avoids duplicate approval prompts after native delivery. */
 export function createNativeApprovalForwardingFallbackSuppressor<
   TTarget extends NativeApprovalTarget,
@@ -722,15 +718,15 @@ export function createNativeApprovalForwardingFallbackSuppressor<
       return false;
     }
     const accountId =
-      normalizeOptionalAccountId(
+      normalizeOptionalString(
         params.resolveAccountId?.({
           forwardingTarget,
           target: input.target,
           request: input.request,
         }),
       ) ??
-      normalizeOptionalAccountId(forwardingTarget.accountId) ??
-      normalizeOptionalAccountId(input.request.request.turnSourceAccountId);
+      normalizeOptionalString(forwardingTarget.accountId) ??
+      normalizeOptionalString(input.request.request.turnSourceAccountId);
     const approvalKind =
       params.resolveApprovalKind?.({
         approvalKind: input.approvalKind,
@@ -763,9 +759,6 @@ export function createNativeApprovalForwardingFallbackSuppressor<
         approvalKind,
         request: input.request,
       }) ?? forwardingTarget;
-    if (!forwardingTargetForMatch) {
-      return false;
-    }
     const originTarget = params.resolveOriginTarget({
       cfg: input.cfg,
       accountId,
