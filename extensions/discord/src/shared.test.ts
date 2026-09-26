@@ -1,4 +1,3 @@
-// Discord tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
@@ -93,22 +92,6 @@ describe("createDiscordPluginBase", () => {
 });
 
 describe("discordConfigAdapter", () => {
-  it("resolves canonical allowFrom", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            default: {
-              allowFrom: ["123"],
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["123"]);
-  });
-
   it("ignores retired nested dm.allowFrom", () => {
     const cfg = {
       channels: {

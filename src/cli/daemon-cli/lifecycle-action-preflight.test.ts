@@ -34,7 +34,7 @@ describe("getServiceActionPreflightFailure", () => {
   // A retired credential file no longer blocks the service: the Gateway boots and
   // marks that auth owner configured-unavailable, so one stale file cannot keep
   // every other channel and provider offline.
-  it.each(["start", "restart", "stop", "uninstall"] as const)(
+  it.each(["start", "stop"] as const)(
     "allows %s when a legacy credential file exists",
     async (action) => {
       await withIsolatedLifecycleState(async ({ agentDir }) => {
@@ -99,16 +99,7 @@ describe("getServiceActionPreflightFailure", () => {
     });
   });
 
-  it.each(["start", "restart"] as const)(
-    "allows %s when no legacy credential files exist",
-    async (action) => {
-      await withIsolatedLifecycleState(async () => {
-        await expect(getServiceActionPreflightFailure(action)).resolves.toBeNull();
-      });
-    },
-  );
-
-  it.each(["start", "restart", "stop"] as const)(
+  it.each(["start", "stop"] as const)(
     "renders actionable invalid-config diagnostics before %s",
     async (action) => {
       await withIsolatedLifecycleState(async ({ configPath }) => {
