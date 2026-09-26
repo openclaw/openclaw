@@ -1,0 +1,142 @@
+name: Hetzner dedicated CPU pilot
+on:
+  pull_request:
+    types: [opened]
+permissions:
+  contents: read
+# Three independent samples per cell; report pushes and reruns buy no more jobs.
+env:
+  CI: "true"
+  NODE_OPTIONS: --max-old-space-size=8192
+  OPENCLAW_CI_TEST_RUNTIME_POLICY: node
+  OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+  OPENCLAW_VITEST_MAX_WORKERS: "8"
+  OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0"
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+jobs:
+  bench:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      github.head_ref == 'ci-burden/hz1-hetzner-bench' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'steipete' &&
+      github.actor == 'steipete' &&
+      github.run_attempt == 1
+    name: hz1 / ${{ matrix.provider.name }} / ${{ matrix.workload }} / sample-${{ matrix.sample }}
+    runs-on: ${{ matrix.provider.label }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        sample: [1, 2, 3]
+        workload: [compact-large-1, compact-large-14, cron, gateway-core]
+        provider:
+          - { name: hetzner-ccx, label: openclaw-hetzner-ccx }
+          - { name: blacksmith-32, label: blacksmith-32vcpu-ubuntu-2404 }
+    env:
+      BENCH_WORKLOAD: ${{ matrix.workload }}
+      BENCH_PROVIDER: ${{ matrix.provider.name }}
+      BENCH_SAMPLE: ${{ matrix.sample }}
+      BENCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - name: Machine facts and single-core probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import os from 'node:os';
+          import { readFileSync } from 'node:fs';
+          console.log('BENCH_FACTS '+JSON.stringify({node:process.version,cpus:os.availableParallelism(),hostCpus:os.cpus().length,ram:os.totalmem(),model:os.cpus()[0].model,provider:process.env.BENCH_PROVIDER,sample:process.env.BENCH_SAMPLE,workload:process.env.BENCH_WORKLOAD,head:process.env.BENCH_HEAD_SHA}));
+          console.log('BENCH_AFFINITY '+readFileSync('/proc/self/status','utf8').split('\n').find(line=>line.startsWith('Cpus_allowed_list:')));
+          function loop() {
+            let sum=0;
+            for(let i=0;i<300_000_000;i++) sum+=i%7;
+            if(sum!==899_999_997) throw Error('Loop checksum mismatch');
+            return sum;
+          }
+          loop();
+          const before=process.resourceUsage();
+          const started=process.hrtime.bigint();
+          const checksum=loop();
+          const seconds=Number(process.hrtime.bigint()-started)/1e9;
+          const after=process.resourceUsage();
+          console.log('BENCH_SINGLE_CORE '+JSON.stringify({iterations:300_000_000,warmupIterations:300_000_000,checksum,seconds,userCpuSeconds:(after.userCPUTime-before.userCPUTime)/1e6,systemCpuSeconds:(after.systemCPUTime-before.systemCPUTime)/1e6}));
+          JS
+          lscpu
+          cat /proc/cmdline
+          cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo "CPU quota counter unavailable"
+          lsblk -o NAME,MODEL,SIZE,MOUNTPOINTS
+          findmnt -T "$GITHUB_WORKSPACE"
+          findmnt -T /tmp
+          if [[ "$BENCH_PROVIDER" == hetzner-ccx ]]; then
+            grep -qw 'mitigations=off' /proc/cmdline
+          fi
+      - name: Prepare isolated cold caches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache="$GITHUB_WORKSPACE/.cache/hz1-$GITHUB_RUN_ID-$BENCH_PROVIDER-$BENCH_WORKLOAD-$BENCH_SAMPLE"
+          test ! -e "$cache"
+          mkdir -p "$cache/pnpm" "$cache/corepack" "$cache/bin"
+          {
+            echo "PNPM_CONFIG_STORE_DIR=$cache/pnpm"
+            echo "PNPM_CONFIG_CACHE_DIR=$cache/pnpm/cache"
+            echo "COREPACK_HOME=$cache/corepack"
+            echo "PNPM_HOME=$cache/bin"
+            echo "XDG_CACHE_HOME=$cache/xdg"
+            echo "NODE_COMPILE_CACHE=$cache/node-compile"
+            echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache/vitest"
+          } >> "$GITHUB_ENV"
+          echo "BENCH_CACHE cold=true path=$cache"
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.19.0
+          cache-mode: off
+      - name: Install dependencies
+        run: python3 scripts/ci-provider-bench-phase.py install pnpm install --frozen-lockfile --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true --prefer-offline
+      - name: Select preserved workload
+        id: workload
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const fixture=JSON.parse(readFileSync('scripts/fixtures/provider-bench-hz1-workloads.json','utf8'));
+          const workload=fixture.workloads[process.env.BENCH_WORKLOAD];
+          const encoded=JSON.stringify(workload.groups);
+          const digest=createHash('sha256').update(encoded).digest('hex');
+          if(digest!==workload.groupsSha256) throw Error('Preserved workload digest mismatch');
+          for(const config of new Set(workload.groups.flatMap(group=>group.configs))) {
+            const test=(await import('./'+config)).default.test;
+            console.log('BENCH_CONFIG '+JSON.stringify({config,workers:test.maxWorkers,fileParallelism:test.fileParallelism}));
+            if(['cron','gateway-core'].includes(process.env.BENCH_WORKLOAD) && (test.maxWorkers!==8 || test.fileParallelism===false)) throw Error('Worker ceiling not effective');
+          }
+          appendFileSync(process.env.GITHUB_ENV,`OPENCLAW_NODE_TEST_GROUPS_JSON=${encoded}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`pretest-build-mode=${workload.pretestBuildMode||''}\n`);
+          console.log('BENCH_GROUP '+JSON.stringify({sourceRunId:fixture.sourceRunId,sourceHeadSha:fixture.sourceHeadSha,sourceJobId:workload.sourceJobId,digest,groups:workload.groups}));
+          JS
+      - name: Build Node test runtime
+        if: steps.workload.outputs.pretest-build-mode != ''
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "0"
+          VITEST: "1"
+        run: python3 scripts/ci-provider-bench-phase.py build pnpm build qaRuntime
+      - name: Test workload
+        run: python3 scripts/ci-provider-bench-phase.py test node --import tsx scripts/ci-run-node-test-shard.mts
+      - name: Final resources
+        if: always()
+        run: |
+          df -h / /tmp
+          free -b
+          cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo "Memory peak counter unavailable"
