@@ -8,14 +8,22 @@ import type {
 } from "./config-schema.js";
 
 export type NextcloudTalkRoomConfig = NonNullable<z.input<typeof NextcloudTalkRoomSchema>>;
+type LegacyNextcloudTalkWebhookConfig = {
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.host. */
+  webhookHost?: string;
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
+  webhookPort?: number;
+};
 type NextcloudTalkAccountSchemaInput = z.input<typeof NextcloudTalkAccountSchemaBase>;
-export type NextcloudTalkAccountConfig = Omit<NextcloudTalkAccountSchemaInput, "rooms"> & {
-  rooms?: Record<string, NextcloudTalkRoomConfig>;
-};
-type NextcloudTalkConfig = Omit<z.input<typeof NextcloudTalkConfigSchema>, "accounts" | "rooms"> & {
-  accounts?: Record<string, NextcloudTalkAccountConfig>;
-  rooms?: Record<string, NextcloudTalkRoomConfig>;
-};
+export type NextcloudTalkAccountConfig = Omit<NextcloudTalkAccountSchemaInput, "rooms"> &
+  LegacyNextcloudTalkWebhookConfig & {
+    rooms?: Record<string, NextcloudTalkRoomConfig>;
+  };
+type NextcloudTalkConfig = Omit<z.input<typeof NextcloudTalkConfigSchema>, "accounts" | "rooms"> &
+  LegacyNextcloudTalkWebhookConfig & {
+    accounts?: Record<string, NextcloudTalkAccountConfig>;
+    rooms?: Record<string, NextcloudTalkRoomConfig>;
+  };
 
 export type CoreConfig = {
   channels?: NonNullable<OpenClawConfig["channels"]> & {

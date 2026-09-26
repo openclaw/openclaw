@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
+import type { CoreConfig } from "./types.js";
 
 function talkConfig(entry: Record<string, unknown>): OpenClawConfig {
   return { channels: { "nextcloud-talk": entry } } as never;
@@ -57,15 +58,18 @@ describe("nextcloud-talk normalizeCompatibilityConfig streaming aliases", () => 
 
 describe("Nextcloud Talk webhook port migration", () => {
   it("preserves explicit listeners and host-only settings with the historical port", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: talkConfig({
-        webhookHost: "127.0.0.1",
-        accounts: {
-          existing: { webhookPort: 8788 },
-          fresh: { baseUrl: "https://cloud.example.com" },
+    const cfg: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          webhookHost: "127.0.0.1",
+          accounts: {
+            existing: { webhookPort: 8788 },
+            fresh: { baseUrl: "https://cloud.example.com" },
+          },
         },
-      }),
-    });
+      },
+    };
+    const result = normalizeCompatibilityConfig({ cfg });
     expect(result.config.channels?.["nextcloud-talk"]).toEqual({
       legacyWebhook: { port: 8788, host: "127.0.0.1" },
       accounts: {
