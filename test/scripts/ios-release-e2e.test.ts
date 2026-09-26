@@ -18,12 +18,14 @@ import {
   type TrialDependencies,
 } from "../../scripts/ios-release-e2e.js";
 import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-native.js";
+import { GatewayTransportError } from "../../src/gateway/transport-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
   gateway: vi.fn(),
+  rpc: vi.fn(),
 }));
 vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mjs")>()),
@@ -32,6 +34,7 @@ vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) =>
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
 }));
+vi.mock("../../src/gateway/call.js", () => ({ callGateway: nativeMocks.rpc }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -40,6 +43,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   nativeMocks.command.mockReset();
   nativeMocks.gateway.mockReset();
+  nativeMocks.rpc.mockReset();
 });
 
 function result(
@@ -527,6 +531,7 @@ describe("native command adapter", () => {
     "build-unjoined",
     "build-exit",
     "setup-code-timeout",
+    "setup-code-rpc-timeout",
     "test-unjoined",
     "test-exit",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
@@ -540,19 +545,29 @@ describe("native command adapter", () => {
       }),
     );
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
-    const instances: { cli: ReturnType<typeof vi.fn>; cleanup: ReturnType<typeof vi.fn> }[] = [];
+    const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
+    nativeMocks.rpc.mockImplementation(async () => {
+      if (scenario === "setup-code-timeout") {
+        throw new Error("private fixture command failed", {
+          cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
+        });
+      }
+      if (scenario === "setup-code-rpc-timeout") {
+        throw new GatewayTransportError({
+          kind: "timeout",
+          message: "private RPC timeout",
+          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+          timeoutMs: 30_000,
+        });
+      }
+      return { setupCode: `synthetic-code-${instances.length}` };
+    });
     nativeMocks.gateway.mockImplementation(async () => {
       const index = instances.length + 1;
       const instance = {
         url: `ws://127.0.0.1:${20000 + index}`,
-        cli: vi.fn(async () => {
-          if (scenario === "setup-code-timeout") {
-            throw new Error("private fixture command failed", {
-              cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
-            });
-          }
-          return { code: 0, signal: null, stdout: `synthetic-code-${index}` };
-        }),
+        gatewayToken: `synthetic-token-${index}`,
+        configPath: `/private/fixture-${index}/config.json`,
         startGateway: vi.fn(async () => {}),
         cleanup: vi.fn(async () => {
           if (scenario === "cleanup-failure") {
@@ -765,14 +780,19 @@ describe("native command adapter", () => {
     });
     try {
       const report = await runTrials("stock", native.dependencies);
-      if (scenario === "setup-code-timeout") {
+      if (scenario === "setup-code-timeout" || scenario === "setup-code-rpc-timeout") {
         expect(report.complete).toBe(true);
         for (const trial of report.trials) {
           expect(trial).toMatchObject({
             status: "failed",
             errors: ["test-timeout"],
             diagnostics: [
-              { operation: "setup-code", code: "timeout", errorCode: "ETIMEDOUT", context: [] },
+              {
+                operation: "setup-code",
+                code: "timeout",
+                ...(scenario === "setup-code-timeout" ? { errorCode: "ETIMEDOUT" } : {}),
+                context: [],
+              },
             ],
           });
         }
@@ -809,12 +829,19 @@ describe("native command adapter", () => {
       expect(created).toBe(2);
       expect(joinedMocks).toBe(2);
       for (const [index, instance] of instances.entries()) {
-        expect(instance.cli).toHaveBeenCalledWith([
-          "qr",
-          "--url",
-          `ws://127.0.0.1:${20001 + index}`,
-          "--setup-code-only",
-        ]);
+        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(index + 1, {
+          config: {},
+          configPath: `/private/fixture-${index + 1}/config.json`,
+          url: `ws://127.0.0.1:${20001 + index}`,
+          token: `synthetic-token-${index + 1}`,
+          ignoreEnvUrlOverride: true,
+          deviceIdentity: null,
+          sharedStateMode: "read-only",
+          method: "device.pair.setupCode",
+          params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
+          timeoutMs: 30_000,
+          signal: native.dependencies.signal,
+        });
         expect(instance.cleanup).toHaveBeenCalledOnce();
       }
       const commands = nativeMocks.command.mock.calls.map(([options]) => options);

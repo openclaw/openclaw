@@ -2,6 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/schema/devices.js";
+import { isGatewayTransportError } from "../../src/gateway/transport-error.js";
 import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
@@ -186,6 +188,7 @@ export async function createNativeDependencies(options: {
     options.proof.nativeBuildMs = performance.now() - nativeStarted;
     const { createOpenClawTestInstance } =
       await import("../../test/helpers/openclaw-test-instance.js");
+    const { callGateway } = await import("../../src/gateway/call.js");
     return {
       cleanup,
       dependencies: {
@@ -341,17 +344,34 @@ export async function createNativeDependencies(options: {
               if (!instance || !udid) {
                 throw new Error("trial-not-prepared");
               }
-              let qr: Awaited<ReturnType<OpenClawTestInstance["cli"]>>;
+              let setupCode: string;
               try {
-                qr = await instance.cli(["qr", "--url", instance.url, "--setup-code-only"]);
+                // The ready Gateway owns credential issuance; avoid another CLI startup beside the simulator.
+                const setup = await callGateway<DevicePairSetupCodeResult>({
+                  config: {},
+                  configPath: instance.configPath,
+                  url: instance.url,
+                  token: instance.gatewayToken,
+                  ignoreEnvUrlOverride: true,
+                  deviceIdentity: null,
+                  sharedStateMode: "read-only",
+                  method: "device.pair.setupCode",
+                  params: { publicUrl: instance.url, includeQr: false },
+                  timeoutMs: 30_000,
+                  signal: options.signal,
+                });
+                setupCode = setup.setupCode;
               } catch (error) {
+                if (isGatewayTransportError(error) && error.kind === "timeout") {
+                  throw new OperationError("setup-code", "timeout");
+                }
                 if (hasUnjoinedWork(error)) {
                   preserveResources();
                 }
                 throw operationError("setup-code", error);
               }
-              if (qr.code !== 0 || qr.signal || !qr.stdout.trim()) {
-                throw new OperationError("setup-code", "failed", qr.code ?? undefined);
+              if (!setupCode.trim()) {
+                throw new OperationError("setup-code", "failed");
               }
               const resultBundle = path.join(root, `trial-${index}.xcresult`);
               await command(
@@ -366,7 +386,7 @@ export async function createNativeDependencies(options: {
                   `-only-testing:${test}`,
                   "test-without-building",
                 ],
-                { env: testRunnerEnv(qr.stdout.trim()), timeoutMs: 600_000 },
+                { env: testRunnerEnv(setupCode.trim()), timeoutMs: 600_000 },
               );
               if (mockFailed) {
                 throw new OperationError("fixture-server", "failed");
