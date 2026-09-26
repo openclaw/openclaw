@@ -22,6 +22,7 @@ import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 const attachmentMode = process.argv.includes("--attachments");
 const narrationMode = process.argv.includes("--narration");
+const narrationPendingToolMode = process.argv.includes("--narration-pending-tool");
 const attachmentMessage = attachmentMode
   ? JSON.parse(
       readFileSync(
@@ -61,6 +62,8 @@ let narrationRunId;
 let narrationStartedAt;
 let narrationUser;
 let narrationTool;
+let narrationPreparedTool;
+let narrationToolResultEvent;
 let narrationFinal;
 let narrationEvents = [];
 let narrationConnections = 0;
@@ -204,6 +207,16 @@ function narrationHistory() {
   };
 }
 
+function publishNarrationTool() {
+  narrationTool = narrationPreparedTool;
+  publishNarration("session.message", {
+    sessionKey: narrationSessionKey,
+    agentId: narrationAgentId,
+    messageId: "layout-read-message",
+    message: narrationTool,
+  });
+}
+
 function handleNarrationControl(req, res) {
   if (!narrationMode || !req.url?.startsWith("/narration")) return false;
   const action = req.url.slice("/narration/".length);
@@ -216,7 +229,7 @@ function handleNarrationControl(req, res) {
     notifyNarrationWaiters();
   } else if (
     req.method === "POST" &&
-    /^capture\/(before|after)-(active|reconnected|completed|expanded|collapsed)$/.test(action)
+    /^capture\/(before|after)-(active|tool-persisted|tool-expanded|reconnected|completed|expanded|collapsed)$/.test(action)
   ) {
     const name = action.slice("capture/".length);
     if (name.endsWith("-active")) narrationActiveConnection = narrationConnections;
@@ -236,6 +249,12 @@ function handleNarrationControl(req, res) {
       ts: timestamp + seq,
       data,
     });
+    narrationToolResultEvent = event(narrationPendingToolMode ? 6 : 3, "tool", {
+      phase: "result",
+      name: "read",
+      toolCallId: "layout-read",
+      result: { content: [{ type: "text", text: "Layout checked." }] },
+    });
     narrationEvents = [
       event(1, "item", {
         kind: "preamble",
@@ -249,12 +268,7 @@ function handleNarrationControl(req, res) {
         toolCallId: "layout-read",
         args: { path: "Layout.swift" },
       }),
-      event(3, "tool", {
-        phase: "result",
-        name: "read",
-        toolCallId: "layout-read",
-        result: { content: [{ type: "text", text: "Layout checked." }] },
-      }),
+      ...(narrationPendingToolMode ? [] : [narrationToolResultEvent]),
       event(4, "item", {
         kind: "preamble",
         phase: "end",
@@ -262,7 +276,7 @@ function handleNarrationControl(req, res) {
         progressText: narrationText.second,
       }),
     ];
-    narrationTool = {
+    narrationPreparedTool = {
       role: "assistant",
       timestamp: timestamp + 2,
       stopReason: "toolUse",
@@ -274,16 +288,21 @@ function handleNarrationControl(req, res) {
     };
     narrationPhase = "active";
     for (const payload of narrationEvents) publishNarration("agent", payload);
-    publishNarration("session.message", {
-      sessionKey: narrationSessionKey,
-      agentId: narrationAgentId,
-      messageId: "layout-read-message",
-      message: narrationTool,
-    });
+    if (!narrationPendingToolMode) publishNarrationTool();
     publishNarration(
       "agent",
       event(5, "assistant", { itemId: "layout-answer", text: narrationText.current }),
     );
+    res.end(JSON.stringify(narrationState()));
+  } else if (
+    req.method === "POST" && action === "persist-tool" && narrationPendingToolMode &&
+    narrationPhase === "active" && narrationTool === undefined
+  ) {
+    // Keep the saved tool absent from history until the live-only capture ends.
+    // The later result has a new sequence; the tool retains its original start time.
+    narrationEvents.push(narrationToolResultEvent);
+    publishNarration("agent", narrationToolResultEvent);
+    publishNarrationTool();
     res.end(JSON.stringify(narrationState()));
   } else if (req.method === "POST" && action === "complete" && narrationPhase === "active") {
     narrationPhase = "completed";

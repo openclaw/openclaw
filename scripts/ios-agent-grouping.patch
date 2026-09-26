@@ -1,0 +1,804 @@
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift
+index 63788dcdd87..9aa4f16055e 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatCompletedWork.swift
+@@ -158,7 +158,7 @@ extension OpenClawChatMessage {
+         self.provenance?.kind == "inter_session" && self.provenance?.sourceTool == "sessions_send"
+     }
+ 
+-    fileprivate var workRunID: String? {
++    var workRunID: String? {
+         if let transcriptRunID, !transcriptRunID.isEmpty { return transcriptRunID }
+         if let key = self.idempotencyKey, key.hasSuffix(":user") { return String(key.dropLast(5)) }
+         let fallbackRunID = self.streamFallback?.runId?.trimmingCharacters(in: .whitespacesAndNewlines)
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift
+index 9e56e917d1b..9437581e795 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift
+@@ -287,7 +287,9 @@ private struct ChatBubbleShape: InsettableShape {
+ 
+ @MainActor
+ struct ChatMessageBubble: View {
++    @Environment(\.openClawAssistantRunContent) private var isRunContent
+     let message: OpenClawChatMessage
++    var liveToolCalls: [OpenClawChatPendingToolCall] = []
+     var sourcePreviews: [ChatSourcePreview] = []
+     var sourceContextRevision = UUID()
+     var sourceFaviconsEnabled = false
+@@ -323,7 +325,7 @@ struct ChatMessageBubble: View {
+                 .padding(.horizontal, 2)
+         } else {
+             HStack(alignment: .top, spacing: 8) {
+-                if self.showsAssistantAvatar {
++                if self.showsAssistantAvatar, !self.isRunContent {
+                     ChatAgentAvatar(
+                         text: self.assistantAvatarText,
+                         name: self.assistantName,
+@@ -346,6 +348,7 @@ struct ChatMessageBubble: View {
+     private var messageBody: some View {
+         ChatMessageBody(
+             message: self.message,
++            liveToolCalls: self.liveToolCalls,
+             sourcePreviews: self.sourcePreviews,
+             sourceContextRevision: self.sourceContextRevision,
+             sourceFaviconsEnabled: self.sourceFaviconsEnabled,
+@@ -401,11 +404,13 @@ enum ChatUserMessageDisclosurePolicy {
+ 
+ @MainActor
+ private struct ChatMessageBody: View {
++    @Environment(\.openClawAssistantRunContent) private var isRunContent
+     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
+     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+     @Environment(\.colorScheme) private var colorScheme
+     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+     let message: OpenClawChatMessage
++    var liveToolCalls: [OpenClawChatPendingToolCall] = []
+     var sourcePreviews: [ChatSourcePreview] = []
+     var sourceContextRevision = UUID()
+     var sourceFaviconsEnabled = false
+@@ -598,7 +603,7 @@ private struct ChatMessageBody: View {
+     private var usesBubble: Bool {
+         // Keep the guarded base condition; iOS additionally opts assistant
+         // messages into bubbles via the clean-chrome environment flag.
+-        self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
++        self.isUser || (!self.isRunContent && (self.style == .onboarding || !self.isClean || self.assistantBubblesInClean))
+     }
+ 
+     private var shouldRenderBubble: Bool {
+@@ -628,12 +633,9 @@ private struct ChatMessageBody: View {
+                 activityPrepared: self.message.activity != nil)]
+         }
+         guard self.message.role.lowercased() == "assistant" else { return [] }
+-        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults).map { item in
+-            var prepared = item
+-            prepared.activity = self.message.activity?.first { $0.toolCallId == item.id }
+-            prepared.activityPrepared = self.message.activity != nil
+-            return prepared
+-        }
++        return ChatToolActivity.items(
++            calls: self.toolCalls, results: self.inlineToolResults,
++            activity: self.message.activity, liveTools: self.liveToolCalls)
+     }
+ 
+     private var linkPreviewURL: URL? {
+@@ -879,6 +881,7 @@ private struct AttachmentRow: View {
+ 
+ @MainActor
+ struct ChatTypingIndicatorBubble: View {
++    @Environment(\.openClawAssistantRunContent) private var isRunContent
+     let style: OpenClawChatView.Style
+     let assistantName: String?
+     let assistantAvatarText: String?
+@@ -890,7 +893,7 @@ struct ChatTypingIndicatorBubble: View {
+ 
+     var body: some View {
+         HStack(alignment: .center, spacing: 8) {
+-            if self.showsAssistantAvatar {
++            if self.showsAssistantAvatar, !self.isRunContent {
+                 ChatAgentAvatar(
+                     text: self.assistantAvatarText,
+                     name: self.assistantName,
+@@ -1063,13 +1066,14 @@ extension EnvironmentValues {
+ // swiftformat:enable environmentEntry
+ 
+ private struct AssistantBubbleContainerStyle: ViewModifier {
++    @Environment(\.openClawAssistantRunContent) private var isRunContent
+     let isClean: Bool
+     let cornerRadius: CGFloat
+ 
+     @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
+ 
+     func body(content: Content) -> some View {
+-        if self.isClean, !self.bubblesInClean {
++        if self.isRunContent || (self.isClean && !self.bubblesInClean) {
+             content
+         } else {
+             content
+@@ -1086,7 +1090,7 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
+ }
+ 
+ extension View {
+-    fileprivate func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
++    func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
+         self.modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
+             .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+             .focusable(false)
+@@ -1095,6 +1099,7 @@ extension View {
+ 
+ @MainActor
+ struct ChatStreamingAssistantBubble: View {
++    @Environment(\.openClawAssistantRunContent) private var isRunContent
+     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+     @Environment(\.colorScheme) private var colorScheme
+     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+@@ -1109,7 +1114,7 @@ struct ChatStreamingAssistantBubble: View {
+ 
+     var body: some View {
+         HStack(alignment: .top, spacing: 8) {
+-            if self.showsAssistantAvatar {
++            if self.showsAssistantAvatar, !self.isRunContent {
+                 ChatAgentAvatar(
+                     text: self.assistantAvatarText,
+                     name: self.assistantName,
+@@ -1144,19 +1149,7 @@ struct ChatPendingToolsBubble: View {
+     }
+ 
+     private var items: [ChatToolActivityItem] {
+-        self.toolCalls.map { call in
+-            ChatToolActivityItem(
+-                id: call.id,
+-                name: call.name,
+-                arguments: call.args,
+-                details: nil,
+-                resultText: nil,
+-                state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+-                    call.activity?.status == "completed" ? .finished :
+-                    call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
+-                liveDiffStat: call.diffStat,
+-                activity: call.activity)
+-        }
++        self.toolCalls.map(ChatToolActivityItem.init(live:))
+     }
+ }
+ 
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift
+index 98fc7d0c271..5a8c87bf23b 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift
+@@ -1057,6 +1057,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
+     let diffStat: ChatToolDiffStat?
+     var activity: OpenClawAgentActivityItem?
+     var isComplete: Bool = false
++    var runID: String? = nil
+ }
+ 
+ public struct OpenClawGatewayHealthOK: Codable, Sendable {
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
+index 5626bcd27b6..3251ca53d30 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift
+@@ -55,6 +55,22 @@ struct ChatToolActivityItem: Identifiable, Equatable {
+     }
+ }
+ 
++extension ChatToolActivityItem {
++    init(live call: OpenClawChatPendingToolCall) {
++        self.init(
++            id: call.id,
++            name: call.name,
++            arguments: call.args,
++            details: nil,
++            resultText: nil,
++            state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
++                call.activity?.status == "completed" ? .finished :
++                call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
++            liveDiffStat: call.diffStat,
++            activity: call.activity)
++    }
++}
++
+ enum ChatToolActivity {
+     static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
+         if let flag { return flag }
+@@ -77,35 +93,48 @@ enum ChatToolActivity {
+ 
+     static func items(
+         calls: [OpenClawChatMessageContent],
+-        results: [OpenClawChatMessageContent]) -> [ChatToolActivityItem]
++        results: [OpenClawChatMessageContent],
++        activity: [OpenClawAgentActivityItem]? = nil,
++        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
+     {
+         var remainingResults = Array(results.enumerated())
+         var items = calls.enumerated().map { index, call in
++            let id = call.id ?? "call-\(index)"
+             let resultIndex = call.id.flatMap { callID in
+                 remainingResults.firstIndex { _, result in result.id == callID }
+             }
+             let result = resultIndex.map { remainingResults.remove(at: $0).element }
++            // History may record the call before its outcome. Keep the live owner
++            // in that same row until the recorded result takes over.
++            if result == nil, let live = liveTools.first(where: { $0.id == call.id }) {
++                return ChatToolActivityItem(live: live)
++            }
+ 
+             return ChatToolActivityItem(
+-                id: call.id ?? "call-\(index)",
++                id: id,
+                 name: call.name,
+                 arguments: call.arguments,
+                 details: result?.details,
+                 resultText: result?.text,
+                 state: result
+                     .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
+-                liveDiffStat: nil)
++                liveDiffStat: nil,
++                activity: activity?.first { $0.toolCallId == id },
++                activityPrepared: activity != nil)
+         }
+ 
+         items.append(contentsOf: remainingResults.map { index, result in
+-            ChatToolActivityItem(
+-                id: result.id ?? "result-\(index)",
++            let id = result.id ?? "result-\(index)"
++            return ChatToolActivityItem(
++                id: id,
+                 name: result.name,
+                 arguments: nil,
+                 details: result.details,
+                 resultText: result.text,
+                 state: Self.resultIsError(result.isError, text: result.text) ? .failed : .finished,
+-                liveDiffStat: nil)
++                liveDiffStat: nil,
++                activity: activity?.first { $0.toolCallId == id },
++                activityPrepared: activity != nil)
+         })
+         return items
+     }
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift
+index f0d56a22f1c..2df776d4ad1 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift
+@@ -562,33 +562,93 @@ public struct OpenClawChatView: View {
+                 .frame(maxWidth: .infinity, alignment: .leading)
+         }
+ 
+-        ForEach(self.transcriptRows) { row in
+-            switch row {
+-            case let .message(message):
+-                self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
+-                    .background(
+-                        RoundedRectangle(cornerRadius: 12)
+-                            .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
+-                    .overlay(
+-                        RoundedRectangle(cornerRadius: 12)
+-                            .strokeBorder(
+-                                OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.55 : 0),
+-                                lineWidth: 1))
+-            case let .systemNotice(notice):
+-                ChatSystemNoticeRow(notice: notice)
+-                    .frame(maxWidth: .infinity)
+-            case let .historyDivider(divider):
+-                ChatHistoryDividerRow(divider: divider)
+-                    .frame(maxWidth: .infinity)
+-            case let .completedWork(work):
+-                ChatCompletedWorkDisclosure(work: work) { message in
+-                    self.messageRow(for: message, contextWindowTokens: contextWindowTokens)
++        let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
++        let groups = ChatAssistantRunGroup.build(
++            self.transcriptRows,
++            tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
++            liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
++            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText ||
++                (self.displayOptions.contains(.toolActivity) &&
++                    !self.viewModel.subagentActivities.isEmpty),
++            searchActive: self.isSearchPresented)
++        ForEach(groups) { group in
++            if group.runID != nil {
++                ChatAssistantRunFrame(
++                    assistantName: self.assistantName,
++                    assistantAvatarText: self.assistantAvatarText,
++                    assistantAvatarTint: self.assistantAvatarTint,
++                    showsAssistantAvatar: self.showsAssistantAvatars,
++                    isClean: self.composerChrome == .clean)
++                {
++                    ForEach(group.parts) { part in
++                        self.runPart(part, contextWindowTokens: contextWindowTokens,
++                                     isGrouped: true, answerID: group.answerID)
++                    }
++                    if group.includesLive { self.liveAssistantContent }
++                }
++            } else {
++                ForEach(group.parts) { part in
++                    self.runPart(part, contextWindowTokens: contextWindowTokens,
++                                 isGrouped: false, answerID: nil)
+                 }
++                if group.includesLive { self.liveAssistantContent }
+             }
+         }
+-
+         OpenClawQuestionCards(viewModel: self.viewModel)
++    }
++
++    @ViewBuilder
++    private func runPart(
++        _ part: ChatAssistantRunGroup.Part,
++        contextWindowTokens: Int?,
++        isGrouped: Bool,
++        answerID: UUID?) -> some View
++    {
++        switch part {
++        case let .row(row):
++            self.transcriptRow(row, contextWindowTokens: contextWindowTokens,
++                               isGrouped: isGrouped, answerID: answerID)
++                .id(row.id)
++        case let .tool(tool):
++            ChatPendingToolsBubble(toolCalls: [tool])
++        }
++    }
++
++    @ViewBuilder
++    private func transcriptRow(
++        _ row: ChatTranscriptRow,
++        contextWindowTokens: Int?,
++        isGrouped: Bool,
++        answerID: UUID?) -> some View
++    {
++        switch row {
++        case let .message(message):
++            self.messageRow(
++                for: message, contextWindowTokens: contextWindowTokens,
++                showsActions: !isGrouped || message.id == answerID)
++                .background(
++                    RoundedRectangle(cornerRadius: 12)
++                        .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
++                .overlay(
++                    RoundedRectangle(cornerRadius: 12)
++                        .strokeBorder(
++                            OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.55 : 0),
++                            lineWidth: 1))
++        case let .systemNotice(notice):
++            ChatSystemNoticeRow(notice: notice)
++                .frame(maxWidth: .infinity)
++        case let .historyDivider(divider):
++            ChatHistoryDividerRow(divider: divider)
++                .frame(maxWidth: .infinity)
++        case let .completedWork(work):
++            ChatCompletedWorkDisclosure(work: work) { message in
++                self.messageRow(for: message, contextWindowTokens: contextWindowTokens, showsActions: !isGrouped)
++            }
++        }
++    }
+ 
++    @ViewBuilder
++    private var liveAssistantContent: some View {
+         if self.showsWorkingIndicator {
+             ChatTypingIndicatorBubble(
+                 style: self.style,
+@@ -609,12 +669,6 @@ public struct OpenClawChatView: View {
+                 .frame(maxWidth: .infinity, alignment: .leading)
+         }
+ 
+-        if self.displayOptions.contains(.toolActivity), !self.viewModel.toolActivities.isEmpty {
+-            ChatPendingToolsBubble(toolCalls: self.viewModel.toolActivities)
+-                .equatable()
+-                .frame(maxWidth: .infinity, alignment: .leading)
+-        }
+-
+         if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
+             ChatStreamingAssistantBubble(
+                 text: text,
+@@ -632,10 +686,14 @@ public struct OpenClawChatView: View {
+     @ViewBuilder
+     private func messageRow(
+         for msg: OpenClawChatMessage,
+-        contextWindowTokens: Int?) -> some View
++        contextWindowTokens: Int?,
++        showsActions: Bool = true) -> some View
+     {
+         let bubble = ChatMessageBubble(
+             message: msg,
++            liveToolCalls: self.viewModel.toolActivities.filter {
++                $0.runID != nil && $0.runID == msg.workRunID
++            },
+             sourcePreviews: self.viewModel.sourcePreviews(for: msg),
+             sourceContextRevision: self.viewModel.sourcePreviewState.revision,
+             sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,
+@@ -691,7 +749,7 @@ public struct OpenClawChatView: View {
+                     .padding(.leading, 8)
+             }
+             #if os(iOS)
+-            if !isUser {
++            if !isUser, showsActions {
+                 self.messageActionsMenu(for: msg)
+                     .labelStyle(.iconOnly)
+                     .buttonStyle(.borderless)
+@@ -706,7 +764,7 @@ public struct OpenClawChatView: View {
+             }
+             #endif
+             #if os(macOS)
+-            if self.isDesktopLayout, isUser || self.isListenable(msg) {
++            if self.isDesktopLayout, showsActions, isUser || self.isListenable(msg) {
+                 HStack(spacing: 12) {
+                     self.copyMessageButton(for: msg)
+                         .help("Copy message")
+@@ -739,7 +797,7 @@ public struct OpenClawChatView: View {
+             }
+         }
+         #if os(iOS)
+-        if isUser {
++        if isUser || !showsActions {
+             row.contextMenu { self.messageMenuActions(for: msg) }
+         } else {
+             row
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift
+index c44aae953a0..2ba1c8e3406 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ToolActivity.swift
+@@ -30,6 +30,7 @@ extension OpenClawChatViewModel {
+             startedAt: evt.ts.map(Double.init),
+             isError: nil,
+             diffStat: nil)
++        pending.runID = evt.runId
+         pending.activity = activity
+         pending.isComplete = activity.phase == "end"
+         self.turnToolCallsById[toolCallId] = pending
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift
+index d5de9795280..4677e37dac7 100644
+--- a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TransportEvents.swift
+@@ -747,7 +747,8 @@ extension OpenClawChatViewModel {
+                     startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
+                     isError: nil,
+                     diffStat: nil,
+-                    activity: self.turnToolCallsById[toolCallId]?.activity)
++                    activity: self.turnToolCallsById[toolCallId]?.activity,
++                    runID: evt.runId)
+             } else if phase == "input_delta",
+                       let pending = self.turnToolCallsById[toolCallId],
+                       let diff = evt.data["diff"]?.dictionaryValue,
+@@ -764,7 +765,8 @@ extension OpenClawChatViewModel {
+                     isError: pending.isError,
+                     diffStat: ChatToolDiffStat(added: added, removed: removed),
+                     activity: pending.activity,
+-                    isComplete: pending.isComplete)
++                    isComplete: pending.isComplete,
++                    runID: pending.runID)
+             } else if phase == "result" {
+                 if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
+                     pending.isComplete = true
+diff --git a/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatAssistantRunGroup.swift b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatAssistantRunGroup.swift
+new file mode 100644
+index 00000000000..833522fd676
+--- /dev/null
++++ b/apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatAssistantRunGroup.swift
+@@ -0,0 +1,191 @@
++import Foundation
++import SwiftUI
++
++/// Presentation only: keep transcript messages and their individual actions intact.
++struct ChatAssistantRunGroup: Identifiable {
++    enum ID: Hashable {
++        case row(UUID)
++        case tool(String)
++        case run(String, UUID, Int)
++        case live
++    }
++
++    enum Part: Identifiable {
++        case row(ChatTranscriptRow)
++        case tool(OpenClawChatPendingToolCall)
++
++        var id: String {
++            switch self {
++            case let .row(row): "row:\(row.id)"
++            case let .tool(tool): "tool:\(tool.id)"
++            }
++        }
++
++        var runID: String? {
++            switch self {
++            case let .row(row): row.assistantRunID
++            case let .tool(tool): tool.runID
++            }
++        }
++
++        var timestamp: Double? {
++            switch self {
++            case let .row(.message(message)): message.timestamp
++            case let .row(.systemNotice(notice)): notice.timestamp
++            case let .row(.historyDivider(divider)): divider.timestamp
++            case .row(.completedWork): nil
++            case let .tool(tool): tool.startedAt
++            }
++        }
++
++        var boundaryID: UUID? {
++            if case let .row(row) = self, row.startsTurn { return row.id }
++            return nil
++        }
++    }
++
++    let id: ID
++    let runID: String?
++    var parts: [Part]
++    var includesLive = false
++
++    var answerID: UUID? {
++        self.parts.reversed().compactMap { part -> UUID? in
++            if case let .row(.message(message)) = part, message.isCompletedReply { return message.id }
++            return nil
++        }.first
++    }
++
++    static func build(
++        _ rows: [ChatTranscriptRow],
++        tools: [OpenClawChatPendingToolCall] = [],
++        liveRunID: String?,
++        hasLiveContent: Bool,
++        searchActive: Bool) -> [Self]
++    {
++        var parts = rows.map(Part.row)
++        // Use the producer's start time, not the active-first tool list order.
++        // Persisted calls take over their live copy without duplicating activity.
++        let recordedCalls = Set(rows.flatMap { row -> [String] in
++            let messages: [OpenClawChatMessage]
++            switch row {
++            case let .message(message): messages = [message]
++            case let .completedWork(work): messages = work.messages
++            default: messages = []
++            }
++            return messages.flatMap { message in
++                message.content.filter(\.isToolCall).compactMap { block in
++                    message.workRunID.map { "\($0):\(block.id ?? "")" }
++                }
++            }
++        })
++        for tool in tools.sorted(by: {
++            if $0.startedAt == $1.startedAt { return $0.id < $1.id }
++            return ($0.startedAt ?? .infinity) < ($1.startedAt ?? .infinity)
++        }) {
++            if let runID = tool.runID, recordedCalls.contains("\(runID):\(tool.id)") { continue }
++            let index = tool.startedAt.flatMap { startedAt in
++                parts.firstIndex { ($0.timestamp.map { $0 > startedAt }) == true }
++            } ?? parts.endIndex
++            parts.insert(.tool(tool), at: index)
++        }
++        var groups: [Self] = []
++        var boundary: UUID?
++        var segments: [String: Int] = [:]
++        for part in parts {
++            if let nextBoundary = part.boundaryID {
++                boundary = nextBoundary
++                segments = [:]
++            }
++            let runID = searchActive ? nil : part.runID
++            if let runID, let boundary {
++                if part.boundaryID == nil, groups.last?.runID == runID {
++                    groups[groups.count - 1].parts.append(part)
++                } else {
++                    let segment = segments[runID, default: 0]
++                    segments[runID] = segment + 1
++                    groups.append(Self(id: .run(runID, boundary, segment), runID: runID, parts: [part]))
++                }
++            } else {
++                let id: ID
++                switch part {
++                case let .row(row): id = .row(row.id)
++                case let .tool(tool): id = .tool(tool.id)
++                }
++                groups.append(Self(id: id, runID: nil, parts: [part]))
++            }
++        }
++        if hasLiveContent {
++            // Unknown ownership must never make unrelated runs look like one reply.
++            if !searchActive, let liveRunID, let boundary {
++                if groups.last?.runID == liveRunID {
++                    groups[groups.count - 1].includesLive = true
++                } else {
++                    groups.append(Self(
++                        id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),
++                        runID: liveRunID, parts: [], includesLive: true))
++                }
++            } else {
++                groups.append(Self(id: .live, runID: nil, parts: [], includesLive: true))
++            }
++        }
++        return groups
++    }
++}
++
++private extension ChatTranscriptRow {
++    var assistantRunID: String? {
++        switch self {
++        case let .message(message):
++            guard !message.isForwardedTurnBoundary,
++                  ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased())
++            else { return nil }
++            return message.workRunID
++        case let .completedWork(work):
++            let runs = work.messages.map(\.workRunID)
++            guard let first = runs.first, let first, runs.allSatisfy({ $0 == first }) else { return nil }
++            return first
++        case .systemNotice, .historyDivider:
++            return nil
++        }
++    }
++}
++
++struct ChatAssistantRunFrame<Content: View>: View {
++    let assistantName: String?
++    let assistantAvatarText: String?
++    let assistantAvatarTint: Color?
++    let showsAssistantAvatar: Bool
++    let isClean: Bool
++    @ViewBuilder let content: () -> Content
++
++    var body: some View {
++        HStack(alignment: .top, spacing: 8) {
++            if self.showsAssistantAvatar {
++                ChatAgentAvatar(
++                    text: self.assistantAvatarText,
++                    name: self.assistantName,
++                    tint: self.assistantAvatarTint)
++                    .padding(.top, 5)
++            }
++            VStack(alignment: .leading, spacing: 8, content: self.content)
++                .environment(\.openClawAssistantRunContent, true)
++                .padding(self.isClean ? 4 : 12)
++                .assistantBubbleContainerStyle(isClean: self.isClean)
++        }
++        .frame(maxWidth: .infinity, alignment: .leading)
++        .accessibilityElement(children: .contain)
++        .accessibilityIdentifier("chat-assistant-run")
++    }
++}
++
++private struct OpenClawAssistantRunContentKey: EnvironmentKey {
++    static let defaultValue = false
++}
++
++extension EnvironmentValues {
++    var openClawAssistantRunContent: Bool {
++        get { self[OpenClawAssistantRunContentKey.self] }
++        set { self[OpenClawAssistantRunContentKey.self] = newValue }
++    }
++}
+diff --git a/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift b/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
+new file mode 100644
+index 00000000000..c711aa0de15
+--- /dev/null
++++ b/apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatAssistantRunGroupTests.swift
+@@ -0,0 +1,132 @@
++import Foundation
++import Testing
++@testable import OpenClawChatUI
++
++@Suite("Assistant run presentation")
++struct ChatAssistantRunGroupTests {
++    @Test
++    func `one frame survives narration tools and completed work`() throws {
++        let user = Self.message("user", at: 1)
++        let narration = Self.message("assistant", at: 2, phase: "commentary")
++        let tool = Self.tool("read", at: 3)
++        let next = Self.message("assistant", at: 4, phase: "commentary")
++        let rows = ChatTranscriptRow.build(from: [user, narration, next])
++        let live = ChatAssistantRunGroup.build(
++            rows, tools: [tool], liveRunID: "run", hasLiveContent: true, searchActive: false)
++        #expect(live.count == 2)
++        let frame = try #require(live.last)
++        #expect(frame.parts.map(\.id) == ["row:\(narration.id)", "tool:read", "row:\(next.id)"])
++        #expect(frame.includesLive)
++        #expect(frame.answerID == nil)
++
++        let answer = Self.message("assistant", at: 5, phase: "final_answer")
++        let completed = ChatTranscriptRow.collapseCompletedWork(
++            ChatTranscriptRow.build(from: [user, narration, next, answer]), runWorking: false)
++        let final = ChatAssistantRunGroup.build(
++            completed, liveRunID: nil, hasLiveContent: false, searchActive: false)
++        #expect(final.count == 2)
++        #expect(final.last?.id == frame.id)
++        #expect(final.last?.answerID == answer.id)
++        #expect(final.last?.includesLive == false)
++    }
++
++    @Test(arguments: ["user", "assistant"])
++    func `input boundaries split repeated run IDs`(role: String) {
++        let user = Self.message("user", at: 1)
++        let first = Self.message("assistant", at: 2, phase: "commentary")
++        let boundary = Self.message(role, at: 3, boundary: true, phase: "commentary")
++        let next = Self.message("assistant", at: 4, phase: "commentary")
++        let groups = ChatAssistantRunGroup.build(
++            ChatTranscriptRow.build(from: [user, first, boundary, next]),
++            liveRunID: "run", hasLiveContent: true, searchActive: false)
++        let frames = groups.filter { $0.runID != nil }
++        #expect(frames.count == 2)
++        #expect(frames[0].id != frames[1].id)
++        #expect(frames[1].parts.count == (role == "assistant" ? 2 : 1))
++        #expect(frames[1].includesLive)
++    }
++
++    @Test
++    func `unknown and different runs cannot merge across intervening output`() {
++        let user = Self.message("user", at: 1)
++        let first = Self.message("assistant", at: 2)
++        let unknown = Self.message("assistant", at: 3, run: nil)
++        let other = Self.message("assistant", at: 4, run: "other")
++        let last = Self.message("assistant", at: 5)
++        let rows = ChatTranscriptRow.build(from: [user, first, unknown, other, last])
++        let groups = ChatAssistantRunGroup.build(
++            rows, liveRunID: nil, hasLiveContent: true, searchActive: false)
++        #expect(groups.count == 6)
++        #expect(groups[1].id != groups[4].id)
++        #expect(groups.last?.runID == nil)
++        #expect(groups.last?.parts.isEmpty == true)
++
++        let search = ChatAssistantRunGroup.build(
++            rows, liveRunID: "run", hasLiveContent: true, searchActive: true)
++        #expect(search.allSatisfy { $0.runID == nil })
++        #expect(search.flatMap(\.parts).count == rows.count)
++    }
++
++    @Test
++    func `tool completion does not reorder work and history removes its live duplicate`() throws {
++        let user = Self.message("user", at: 1)
++        let narration = Self.message("assistant", at: 2, phase: "commentary")
++        var first = Self.tool("first", at: 3)
++        first.isComplete = true
++        let next = Self.tool("next", at: 4)
++        let rows = ChatTranscriptRow.build(from: [user, narration])
++        let live = ChatAssistantRunGroup.build(
++            rows, tools: [next, first], liveRunID: "run", hasLiveContent: true, searchActive: false)
++        #expect(live.last?.parts.map(\.id) == ["row:\(narration.id)", "tool:first", "tool:next"])
++
++        let call = OpenClawChatMessage(
++            role: "assistant",
++            content: [.init(
++                type: "toolCall", text: nil, mimeType: nil, fileName: nil,
++                content: nil, id: "first", name: "read")],
++            timestamp: 3, transcriptRunID: "run")
++        let persisted = ChatAssistantRunGroup.build(
++            rows + [.message(call)], tools: [next, first],
++            liveRunID: "run", hasLiveContent: true, searchActive: false)
++        #expect(persisted.last?.id == live.last?.id)
++        #expect(persisted.last?.parts.map(\.id) == ["row:\(narration.id)", "row:\(call.id)", "tool:next"])
++    }
++
++    @Test
++    func `recorded call keeps live status until its result takes over`() throws {
++        let call = OpenClawChatMessageContent(
++            type: "toolCall", text: nil, mimeType: nil, fileName: nil,
++            content: nil, id: "read", name: "read")
++        let live = Self.tool("read", at: 2)
++        let running = ChatToolActivity.items(calls: [call], results: [], liveTools: [live])
++        #expect(running.count == 1)
++        #expect(running.first?.isPending == true)
++        let result = OpenClawChatMessageContent(
++            type: "tool_result", text: "Read failed", mimeType: nil, fileName: nil,
++            content: nil, id: "read", name: "read", isError: true)
++        let finished = ChatToolActivity.items(calls: [call], results: [result], liveTools: [live])
++        #expect(finished.count == 1)
++        #expect(finished.first?.isPending == false)
++        #expect(finished.first?.isError == true)
++        #expect(finished.first?.resultText == "Read failed")
++    }
++
++    private static func message(
++        _ role: String,
++        at timestamp: Double,
++        run: String? = "run",
++        boundary: Bool? = nil,
++        phase: String? = nil) -> OpenClawChatMessage
++    {
++        OpenClawChatMessage(
++            role: role,
++            content: [.init(type: "text", text: "Visible content", mimeType: nil, fileName: nil, content: nil)],
++            timestamp: timestamp, transcriptRunID: run, phase: phase, turnBoundary: boundary)
++    }
++
++    private static func tool(_ id: String, at timestamp: Double) -> OpenClawChatPendingToolCall {
++        OpenClawChatPendingToolCall(
++            toolCallId: id, name: "read", args: nil, startedAt: timestamp,
++            isError: nil, diffStat: nil, runID: "run")
++    }
++}

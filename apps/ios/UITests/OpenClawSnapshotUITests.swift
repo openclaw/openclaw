@@ -957,8 +957,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let fixture = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_NARRATION_FIXTURE_URL"])
         let fixtureURL = try XCTUnwrap(URL(string: fixture))
         XCTAssertEqual(fixtureURL.host, "127.0.0.1")
-        let stage = ProcessInfo.processInfo.environment["OPENCLAW_IOS_NARRATION_BASELINE"] == "1"
-            ? "before" : "after"
+        let environment = ProcessInfo.processInfo.environment
+        let stage = environment["OPENCLAW_IOS_NARRATION_STAGE"] ??
+            (environment["OPENCLAW_IOS_NARRATION_BASELINE"] == "1" ? "before" : "after")
+        let groupingComparison = environment["OPENCLAW_IOS_GROUPING_COMPARISON"] == "1"
+
+        func assertRunPresentation(in app: XCUIApplication, expanded: Bool = true) {
+            guard groupingComparison else { return }
+            let avatars = app.scrollViews.descendants(matching: .staticText).matching(
+                NSPredicate(format: "label == %@", "Atlas avatar"))
+            let frames = app.otherElements.matching(identifier: "chat-assistant-run")
+            if stage == "after" {
+                XCTAssertEqual(frames.count, 1, "One assistant run must have one shared message frame")
+                XCTAssertEqual(avatars.count, 1, "One assistant run must have one avatar")
+            } else {
+                XCTAssertEqual(frames.count, 0)
+                if expanded {
+                    XCTAssertGreaterThan(avatars.count, 1, "Current PR must exhibit separate assistant rows")
+                }
+            }
+        }
 
         func control(_ action: String, method: String = "GET") async throws -> [String: Any] {
             var request = URLRequest(url: fixtureURL.appendingPathComponent("narration/\(action)"))
@@ -1003,8 +1021,35 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertLessThan(first.frame.minY, second.frame.minY)
             XCTAssertLessThan(second.frame.minY, current.frame.minY)
         }
+        if groupingComparison && stage == "after" {
+            // The fixture publishes first narration at +1, Read at +2, and
+            // second narration at +4. The visible run must preserve that order.
+            let read = app.descendants(matching: .any).matching(NSPredicate(
+                format: "label == %@ AND value CONTAINS %@", "Read", "Layout.swift")).firstMatch
+            XCTAssertTrue(read.waitForExistence(timeout: 5))
+            XCTAssertTrue((read.value as? String)?.contains("Working") == true)
+            XCTAssertTrue(activeVisible)
+            XCTAssertLessThan(first.frame.minY, read.frame.minY)
+            XCTAssertLessThan(read.frame.minY, second.frame.minY)
+        }
+        assertRunPresentation(in: app)
         self.attachScreenshot(named: "narration-\(stage)-active")
         _ = try await control("capture/\(stage)-active", method: "POST")
+
+        if groupingComparison {
+            _ = try await control("persist-tool", method: "POST")
+            let read = app.buttons["chat-tool-activity-layout-read"]
+            XCTAssertTrue(read.waitForExistence(timeout: 5))
+            XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-layout-read").count, 1,
+                           "Persisting the live tool must not duplicate it")
+            if stage == "after" {
+                XCTAssertLessThan(first.frame.minY, read.frame.minY)
+                XCTAssertLessThan(read.frame.minY, second.frame.minY)
+            }
+            assertRunPresentation(in: app)
+            self.attachScreenshot(named: "narration-\(stage)-tool-persisted")
+            _ = try await control("capture/\(stage)-tool-persisted", method: "POST")
+        }
 
         let reloaded = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
         _ = try await control("await-reconnect")
@@ -1017,8 +1062,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if recoveredVisible {
             XCTAssertLessThan(recoveredFirst.frame.minY, recoveredSecond.frame.minY)
         }
+        assertRunPresentation(in: reloaded)
         self.attachScreenshot(named: "narration-\(stage)-reconnected")
         _ = try await control("capture/\(stage)-reconnected", method: "POST")
+
+        if groupingComparison {
+            let read = reloaded.buttons["chat-tool-activity-layout-read"]
+            XCTAssertTrue(read.waitForExistence(timeout: 5), "Recovered tool result must remain interactive")
+            XCTAssertTrue(read.isHittable)
+            read.tap()
+            let result = narration("Layout checked.", in: reloaded)
+            XCTAssertTrue(result.waitForExistence(timeout: 5))
+            assertRunPresentation(in: reloaded)
+            self.attachScreenshot(named: "narration-\(stage)-tool-expanded")
+            _ = try await control("capture/\(stage)-tool-expanded", method: "POST")
+            read.tap()
+            XCTAssertTrue(result.waitForNonExistence(timeout: 5))
+        }
 
         _ = try await control("complete", method: "POST")
         let finalReply = narration("The mobile layout is ready.", in: reloaded)
@@ -1027,6 +1087,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(work.waitForExistence(timeout: 8), "Completed work disclosure is missing")
         XCTAssertTrue(recoveredFirst.waitForNonExistence(timeout: 5))
         XCTAssertTrue(recoveredSecond.waitForNonExistence(timeout: 5))
+        assertRunPresentation(in: reloaded, expanded: false)
         self.attachScreenshot(named: "narration-\(stage)-completed")
         _ = try await control("capture/\(stage)-completed", method: "POST")
 
@@ -1035,6 +1096,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(recoveredSecond.waitForExistence(timeout: 5))
         XCTAssertLessThan(recoveredFirst.frame.minY, recoveredSecond.frame.minY)
         XCTAssertTrue(finalReply.exists, "Expanding work must preserve the final reply")
+        assertRunPresentation(in: reloaded)
         self.attachScreenshot(named: "narration-\(stage)-expanded")
         _ = try await control("capture/\(stage)-expanded", method: "POST")
         for _ in 0..<3 where !work.isHittable { reloaded.swipeDown() }
@@ -1043,6 +1105,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(recoveredFirst.waitForNonExistence(timeout: 5))
         XCTAssertTrue(recoveredSecond.waitForNonExistence(timeout: 5))
         XCTAssertTrue(finalReply.exists, "Collapsing work must preserve the final reply")
+        assertRunPresentation(in: reloaded, expanded: false)
+        self.attachScreenshot(named: "narration-\(stage)-collapsed")
         _ = try await control("capture/\(stage)-collapsed", method: "POST")
 
         // The baseline still captures the entire real flow, including settled

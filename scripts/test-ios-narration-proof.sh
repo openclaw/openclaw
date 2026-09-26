@@ -7,6 +7,12 @@ output="$3"
 baseline="$4"
 candidate="$5"
 device_family="${7:-iPhone}"
+grouping_patch="${8:-}"
+if [[ -n "$grouping_patch" ]]; then
+  [[ "$baseline" == "$candidate" ]]
+  [[ "${GROUPING_PATCH_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
+  test "$(shasum -a 256 "$grouping_patch" | awk '{print $1}')" = "$GROUPING_PATCH_SHA256"
+fi
 [[ "$device_family" == iPhone || "$device_family" == iPad ]]
 stages=(before after)
 if [[ "${6:-both}" != both ]]; then
@@ -55,6 +61,9 @@ device="$(sed -n '1p' "$scratch/device.txt")"
 runtime="$(sed -n '2p' "$scratch/device.txt")"
 printf 'Baseline: %s\nCandidate: %s\nDevice: %s\nRuntime: %s\n' \
   "$baseline" "$candidate" "$device" "$runtime" > "$output/provenance.txt"
+if [[ -n "$grouping_patch" ]]; then
+  printf 'Comparison: current PR versus grouping patch\nPatch SHA256: %s\n' "$GROUPING_PATCH_SHA256" >> "$output/provenance.txt"
+fi
 xcodebuild -version >> "$output/provenance.txt"
 swift --version >> "$output/provenance.txt"
 
@@ -67,7 +76,14 @@ for stage in "${stages[@]}"; do
   [[ "$stage" == before ]] || revision="$candidate"
   checkout="$scratch/$stage"
   git -C "$source_repo" worktree add --detach "$checkout" "$revision"
-  # Both trees run identical UI-test code; application/library sources stay byte-identical to their commits.
+  if [[ "$stage" == after && -n "$grouping_patch" ]]; then
+    git -C "$checkout" apply --index "$grouping_patch"
+  fi
+  # The index freezes the reviewed product bytes, including newly added files.
+  # Build helpers may change generated files, never the pinned native sources.
+  expected_tree="$(git -C "$checkout" write-tree)"
+  printf '%s source tree: %s\n' "$stage" "$expected_tree" >> "$output/provenance.txt"
+  # Both trees run identical UI-test code; the candidate alone receives the patch.
   cp "$proof_repo/apps/ios/UITests/OpenClawSnapshotUITests.swift" "$checkout/apps/ios/UITests/"
   cp "$proof_repo/scripts/test-ios-shell-gateway.mjs" "$checkout/scripts/"
   (
@@ -78,7 +94,15 @@ for stage in "${stages[@]}"; do
     node scripts/ios-write-swift-filelist.mjs
     xcodegen generate --spec apps/ios/project.yml --project apps/ios
   ) > "$output/$stage-setup.log" 2>&1
-  git -C "$checkout" diff --exit-code -- apps/ios/Sources apps/shared/OpenClawKit/Sources
+  git -C "$checkout" diff --exit-code -- apps/ios/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests
+  if [[ "$stage" == after && -n "$grouping_patch" ]]; then
+    if ! swift test --package-path "$checkout/apps/shared/OpenClawKit" \
+      --filter 'ChatAssistantRunGroupTests|ChatCompletedWorkTests|ChatTranscriptRowTests' \
+      > "$output/$stage-shared-tests.log" 2>&1; then
+      tail -n 100 "$output/$stage-shared-tests.log"
+      exit 1
+    fi
+  fi
   simulator="$(xcrun simctl create "OpenClaw narration $device_family $stage $$" "$device" "$runtime")"
   xcrun simctl boot "$simulator"
   xcrun simctl bootstatus "$simulator" -b
@@ -96,7 +120,9 @@ for stage in "${stages[@]}"; do
     tail -n 100 "$output/$stage-build.log"
     exit 1
   fi
-  node "$checkout/scripts/test-ios-shell-gateway.mjs" --narration > "$output/$stage-gateway.log" 2>&1 &
+  fixture_args=(--narration)
+  if [[ -n "$grouping_patch" ]]; then fixture_args+=(--narration-pending-tool); fi
+  node "$checkout/scripts/test-ios-shell-gateway.mjs" "${fixture_args[@]}" > "$output/$stage-gateway.log" 2>&1 &
   fixture_pid=$!
   for attempt in {1..30}; do
     if curl --fail --silent http://127.0.0.1:19876/narration > "$output/$stage-initial.json"; then break; fi
@@ -104,7 +130,11 @@ for stage in "${stages[@]}"; do
     sleep 1
   done
   curl --fail --silent http://127.0.0.1:19876/narration > "$output/$stage-initial.json"
-  if [[ "$stage" == before ]]; then
+  export TEST_RUNNER_OPENCLAW_IOS_NARRATION_STAGE="$stage"
+  if [[ -n "$grouping_patch" ]]; then
+    export TEST_RUNNER_OPENCLAW_IOS_GROUPING_COMPARISON=1
+    unset TEST_RUNNER_OPENCLAW_IOS_NARRATION_BASELINE
+  elif [[ "$stage" == before ]]; then
     export TEST_RUNNER_OPENCLAW_IOS_NARRATION_BASELINE=1
   else
     unset TEST_RUNNER_OPENCLAW_IOS_NARRATION_BASELINE
@@ -122,7 +152,7 @@ for stage in "${stages[@]}"; do
   xcrun xcresulttool get test-results summary --path "$output/$stage.xcresult" --compact > "$output/$stage-summary.json"
   xcrun xcresulttool export attachments --path "$output/$stage.xcresult" --output-path "$output/$stage-images"
   tail -n 80 "$output/$stage-test.log"
-  if [[ "$stage" == before ]]; then
+  if [[ "$stage" == before && -z "$grouping_patch" ]]; then
     [[ "$status" -ne 0 ]]
     grep -q NARRATION_MISSING_WHILE_RUNNING "$output/$stage-test.log"
     node -e 'const r=require(process.argv[1]);if(r.result!=="Failed"||r.failedTests!==1||r.passedTests!==0)process.exit(1)' "$output/$stage-summary.json"
@@ -130,7 +160,9 @@ for stage in "${stages[@]}"; do
     [[ "$status" -eq 0 ]]
     node -e 'const r=require(process.argv[1]);if(r.result!=="Passed"||r.failedTests!==0||r.passedTests!==1)process.exit(1)' "$output/$stage-summary.json"
   fi
-  git -C "$checkout" diff --exit-code -- apps/ios/Sources apps/shared/OpenClawKit/Sources
+  git -C "$checkout" diff --exit-code -- apps/ios/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests
+  test "$(git -C "$checkout" write-tree)" = "$expected_tree"
+  test -z "$(git -C "$checkout" ls-files --others --exclude-standard -- apps/ios/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests)"
   kill "$fixture_pid"
   wait "$fixture_pid"
   fixture_pid=""

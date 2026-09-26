@@ -1,4 +1,4 @@
-name: iPad narration before-after capture
+name: iPhone grouped assistant before-after capture
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/ios-narration-capture.yml
       - scripts/test-ios-narration-proof.sh
+      - scripts/ios-agent-grouping.patch
       - scripts/test-ios-shell-gateway.mjs
       - apps/ios/UITests/OpenClawSnapshotUITests.swift
 
@@ -14,7 +15,7 @@ permissions:
 
 jobs:
   capture:
-    name: iPad capture (${{ matrix.stage }})
+    name: iPhone grouping capture (${{ matrix.stage }})
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -24,8 +25,9 @@ jobs:
     timeout-minutes: 120
     env:
       CANDIDATE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
-      BASELINE_SHA: 8c870f669e3528864881333d04875512ef81cfdc
-      DEVICE_FAMILY: iPad
+      BASELINE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
+      GROUPING_PATCH_SHA256: 6f73fd398e487eb727b8b0f8150d82aa6f1142d38886c2661602918a5ac28992
+      DEVICE_FAMILY: iPhone
     steps:
       - name: Checkout exact product candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -65,18 +67,19 @@ jobs:
           config="$RUNNER_TEMP/ios-simulator.xcconfig"
           printf 'ARCHS = %s\nCOMPILER_INDEX_STORE_ENABLE = NO\n' "$(uname -m)" > "$config"
           echo "XCODE_XCCONFIG_FILE=$config" >> "$GITHUB_ENV"
-      - name: Prove baseline failure and repaired iPad interaction
+      - name: Compare current PR and grouped iPhone interaction
         env:
           CAPTURE_STAGE: ${{ matrix.stage }}
         run: |
           bash .proof/scripts/test-ios-narration-proof.sh \
             "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.proof" \
-            "$RUNNER_TEMP/ios-narration-capture" "$BASELINE_SHA" "$CANDIDATE_SHA" "$CAPTURE_STAGE" "$DEVICE_FAMILY"
+            "$RUNNER_TEMP/ios-narration-capture" "$BASELINE_SHA" "$CANDIDATE_SHA" "$CAPTURE_STAGE" "$DEVICE_FAMILY" \
+            "$GITHUB_WORKSPACE/.proof/scripts/ios-agent-grouping.patch"
       - name: Upload raw native evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ios-narration-ipad-${{ matrix.stage }}
+          name: ios-agent-grouping-iphone-${{ matrix.stage }}
           path: ${{ runner.temp }}/ios-narration-capture
           if-no-files-found: error
           retention-days: 7
