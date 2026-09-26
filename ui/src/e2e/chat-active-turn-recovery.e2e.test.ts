@@ -703,4 +703,28 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+
+  it("renders the working indicator for a recovered run with no buffered text", async () => {
+    // Server-side restart-recovery adoptions arrive as empty snapshots
+    // ({ runId, text: "", sessionAbortable: true }); the reconnecting UI must
+    // still show the run as live with a working timer and Stop control.
+    const { context, page, gateway } = await openActiveTurn();
+    try {
+      const runId = "run-recovery-empty-text";
+      const startedAt = Date.now() - 10 * 60_000;
+      await installActiveRunSnapshot(gateway, runId, "recovery prompt", "", {
+        events: [],
+        sessionAbortable: true,
+        startedAt,
+      });
+
+      await page.reload();
+      await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
+      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await capture(page, "09-recovery-empty-text");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

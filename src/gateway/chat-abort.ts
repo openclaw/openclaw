@@ -19,6 +19,8 @@ import {
   type AgentEventPayload,
 } from "../infra/agent-events.js";
 import {
+  getAgentRunContext,
+  getAgentRunLifecycleGeneration,
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
@@ -57,10 +59,10 @@ export type InFlightRunSnapshot = {
   text: string;
   startedAt?: number;
   /**
-   * True when the in-flight run is owned by the embedded-run registry and can
-   * only be cancelled through the session-owned abort path (sessions.abort),
-   * never through run-specific chat.abort. Control UI uses this to keep Stop
-   * routing session-scoped for recovered embedded runs.
+   * True when the in-flight run must be cancelled through the session-owned
+   * abort path (sessions.abort), never through run-specific chat.abort. Control
+   * UI uses this to keep Stop routing session-scoped for recovered embedded
+   * runs and adopted restart-recovery resumes.
    */
   sessionAbortable?: boolean;
   plan?: ChatRunPlanSnapshot;
@@ -354,7 +356,11 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
  * flips it to false), not aborted, and visible chat-send runs are returned, so a
  * finalized run — already in persisted history — is not duplicated and hidden
  * agent runs cannot be adopted by chat clients that will not receive their final
- * events.
+ * events. The single exception is an agent-kind run flagged as a restart-recovery
+ * resume: it is the session's foreground turn, so a reconnecting client must see
+ * it. The exception additionally requires execution to have started and the flag
+ * to belong to the current lifecycle generation, so stale or leaked entries stay
+ * hidden. This reads the flag for visibility only; it grants no authority.
  */
 export function resolveInFlightRunSnapshot(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -390,16 +396,25 @@ export function resolveInFlightRunSnapshot(params: {
   // (sessionKey, agentId), Map insertion order is not a meaningful selector;
   // the latest `startedAtMs` is the run a switching-back client wants, and the
   // runId tie-break keeps the choice deterministic when timestamps collide.
-  let best: { runId: string; startedAtMs: number } | undefined;
+  let best: { runId: string; startedAtMs: number; recovery: boolean } | undefined;
   for (const [runId, entry] of params.chatAbortControllers) {
     // Active unless explicitly projected inactive — mirrors sessions.list's
     // collectTrackedActiveSessionRuns (`projectSessionActive !== false`), so a run
-    // that indicator shows active is never silently dropped here.
+    // that indicator shows active is never silently dropped here. Agent-kind runs
+    // stay hidden unless flagged as a restart-recovery resume: that run is the
+    // session's foreground turn, not background work. The exception additionally
+    // requires execution to have started and the flag to belong to the current
+    // lifecycle generation, so stale or leaked entries stay hidden.
+    const recoveryContext = entry.kind === "agent" ? getAgentRunContext(runId) : undefined;
+    const isRecoveryResume =
+      entry.executionStarted === true &&
+      recoveryContext?.mainSessionRestartRecovery === true &&
+      recoveryContext.lifecycleGeneration === getAgentRunLifecycleGeneration();
     if (
       entry.projectSessionActive === false ||
       entry.controlUiVisible === false ||
       entry.controller.signal.aborted ||
-      entry.kind === "agent"
+      (entry.kind === "agent" && !isRecoveryResume)
     ) {
       continue;
     }
@@ -412,18 +427,20 @@ export function resolveInFlightRunSnapshot(params: {
     const newer = best === undefined || entry.startedAtMs > best.startedAtMs;
     const tie = best !== undefined && entry.startedAtMs === best.startedAtMs && runId > best.runId;
     if (newer || tie) {
-      best = { runId, startedAtMs: entry.startedAtMs };
+      best = { runId, startedAtMs: entry.startedAtMs, recovery: isRecoveryResume };
     }
   }
   if (best === undefined) {
     return undefined;
   }
   // A run can be active before its first text arrives. Adopt it now so the UI
-  // stays streaming and can reconcile the eventual reply.
+  // stays streaming and can reconcile the eventual reply. Recovery adoptions
+  // keep Stop session-scoped, matching the embedded recovery owner.
   return projectInFlightRunSnapshot({
     chatRunState: params.chatRunState,
     runId: best.runId,
     startedAtMs: best.startedAtMs,
+    ...(best.recovery ? { sessionAbortable: true } : {}),
   });
 }
 
