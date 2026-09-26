@@ -134,6 +134,7 @@ describe("resolveAndroidVersion", () => {
       ),
       versionCode: 2026060201,
       versionFilePath: path.join(rootDir, "apps/android/version.json"),
+      wearVersionCode: 2026060251,
       versionPropertiesPath: path.join(rootDir, "apps/android/Config/Version.properties"),
     });
   });

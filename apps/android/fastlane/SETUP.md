@@ -109,13 +109,21 @@ pnpm android:release:upload
 ## GitHub Actions release
 
 Run **Android Store Release** from `main` in GitHub Actions without input parameters. The workflow
-plans a release from the root Gateway version, queries Google Play for unused
-phone/Wear build numbers, and generates OpenAI release notes from source changes
-since each form factor's public production release. It keeps tracked version
+plans a release from the root Gateway version, selects the Android public
+revision and sequential phone/Wear codes, and generates OpenAI release notes
+from source changes since each form factor's public production release. It keeps tracked version
 defaults and notes unchanged and passes the saved plan through
 `OPENCLAW_ANDROID_RELEASE_PLAN` to select the build version and codes at runtime.
 `OPENCLAW_MOBILE_RELEASE_NOTES` selects the saved generated notes artifact. The
 local CLI uses the same flow. Android preparation is independent of iOS.
+
+Public versions append a single revision digit to the Gateway patch: Gateway
+`2026.9.4`, revision `0` becomes `2026.9.40`. Candidates keep that revision until
+it is public on either phone or Wear, then advance it; revisions run from `0`
+through `9`. Each revision starts at build `1`. Native codes increase separately:
+phone uses the observed maximum plus `1`, Wear plus `2`, including the pinned
+phone code plus `50` as a floor. See [Version model](../VERSIONING.md#version-model)
+for limits and the distinction from ordinary pinned archives.
 
 The environment supplies these secrets:
 
@@ -127,14 +135,21 @@ The environment supplies these secrets:
 The workflow uses the locked Fastlane bundle and the existing signing assets.
 The upload lane commits phone and Wear bundles, metadata, and screenshots in one
 Play edit to `internal` and `wear:internal`, then records the release commit at
-`refs/openclaw/mobile-releases/android/<version-name>-<phone-version-code>`.
+`refs/openclaw/mobile-releases/android/v2/<G>/<R>/<buildNumber>/<phoneCode>-<wearCode>`.
+Before the first new-format upload, it records the immutable
+`android/cutover-v2/<legacyMaxCode>` marker under the same mobile-release ref prefix.
+The marker distinguishes legacy codes and does not prove an upload succeeded.
+Existing legacy refs remain unchanged.
 The source SHA stays immutable and no preparation commit or follow-up PR is
 created. Production promotion remains manual.
 
 The release artifacts retain `android-plan.json` and `release-notes.json` for 30
 days. Keep the plan and notes and use their recorded source commit for
-[archive replay](../VERSIONING.md#archive-a-saved-store-release). Inspect a failed
-or uncertain store outcome before starting another upload.
+[archive replay](../VERSIONING.md#archive-a-saved-store-release). If ref recording
+fails after Play accepts the upload, the next run stops on the unmapped codes.
+Keep the exact AABs and follow the authorized
+[record-only recovery](../VERSIONING.md#release-sha-tracking); do not automatically
+rerun or re-upload.
 
 The Fastlane planner can be inspected without publishing:
 
@@ -144,14 +159,17 @@ bundle _4.0.21_ exec fastlane android release_plan output_path:/tmp/android-rele
 ```
 
 It lists uploaded APK and AAB version codes in a temporary edit and always aborts
-that edit. The JSON contains `version`, `versionCode`, `wearVersionCode`, and
-`releaseNotesBaselines`. Baselines identify the actual public phone and Wear
-version codes, independent of internal uploads; release names are not identities.
+that edit. The JSON contains the version identity, legacy cutover boundary, and
+`releaseNotesBaselines` described in [Version model](../VERSIONING.md#version-model).
+Baselines identify the actual public phone and Wear version codes, independent
+of internal uploads; release names are not identities.
 Staged, halted, and ambiguous public releases stop planning. The release command
-adds the selected `sourceSha` and generates notes for that source. The build
+binds the plan to the selected `sourceSha` and generates notes for that source. The build
 validates the source and notes artifact before using the plan; the planner's
 initial output alone is not a complete archive-replay plan. Upload checks the
 production baselines again immediately before uploading the bundles.
+Revision selection uses current public state: an unseen publication and rollback
+between runs cannot be recovered from Play's incomplete release history.
 
 Direct Fastlane entry point:
 
@@ -181,7 +199,7 @@ Release rules:
 - `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
 - Supported pinned Android versions use CalVer: `YYYY.M.PATCH`.
-- Phone `versionCode` uses `YYYYMMDDNN`, where `NN` is `01` through `49`; the matching Wear APK adds `50` and uses `51` through `99`.
+- Pinned phone `versionCode` uses `YYYYMMPPNN`, where `NN` is `01` through `49`; the matching Wear archive adds `50` and uses `51` through `99`. Store releases override these defaults with independent sequential codes, each at most `2,100,000,000`.
 - `pnpm android:version:pin` writes the Android version and synchronizes its properties and notes.
 - `pnpm android:version:sync` regenerates properties and notes from the Android pin and changelog.
 - `pnpm android:version:check` validates properties and notes against the pin without changing files.
@@ -196,6 +214,7 @@ Release rules:
 - Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
 - Production promotion remains manual in Google Play Console.
 - If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.
+- Recovery needs explicit maintainer direction after the failure is reported. Record-only repair of a missing success ref requires verifying the saved plan and exact uploaded AAB hashes/codes against Play.
 
 Screenshots:
 

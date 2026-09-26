@@ -31,7 +31,29 @@ function mainSha(root) {
   return git(root, "rev-parse", "FETCH_HEAD");
 }
 
-function uploadedRef(root, platform, plan) {
+function uploadedRef(root, platform, plan, planPath) {
+  if (platform === "android") {
+    const [sha, ref] = run(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/mobile-release-ref.ts",
+        "resolve",
+        "--plan",
+        planPath,
+        "--root",
+        root,
+      ],
+      root,
+    ).split(/\s+/);
+    if (sha !== plan.sourceSha || !ref) {
+      throw new Error(
+        "Android uploaded source ref does not match the saved plan. Inspect the store outcome and perform record-only recovery; do not upload again blindly.",
+      );
+    }
+    return ref;
+  }
   const version = platform === "ios" ? plan.appStoreVersion : plan.version;
   const build = platform === "ios" ? plan.buildNumber : plan.versionCode;
   if (!/^20\d{2}\.[1-9]\d?\.[1-9]\d*$/.test(version) || !Number.isSafeInteger(build) || build < 1) {
@@ -223,7 +245,7 @@ function prepareAndUpload(root, platform, recovery, releaseArgs) {
         env: releaseEnvironment(platform, recovery, sourceSha),
       },
     );
-    console.log(`Verified uploaded release: ${uploadedRef(root, platform, plan)}`);
+    console.log(`Verified uploaded release: ${uploadedRef(root, platform, plan, planPath)}`);
     completed = true;
   } finally {
     collectArtifacts(source, recovery, platform);

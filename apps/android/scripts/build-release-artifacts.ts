@@ -415,6 +415,7 @@ function main() {
 
   console.log(`Android versionName: ${version.canonicalVersion}`);
   console.log(`Android versionCode: ${version.versionCode}`);
+  console.log(`Android Wear versionCode: ${version.wearVersionCode}`);
   console.log(`Android build commit: ${buildMetadata.commit}`);
   console.log(`Android build timestamp: ${buildMetadata.timestamp}`);
   for (const artifact of artifacts) {
@@ -435,6 +436,7 @@ function main() {
       ...androidBuildMetadataGradleArgs(buildMetadata),
       `-POPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
       `-POPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
+      `-POPENCLAW_ANDROID_WEAR_VERSION_CODE=${version.wearVersionCode}`,
       ...artifacts.map((artifact) => artifact.gradleTask),
     ],
     {

@@ -48,6 +48,7 @@ function main(argv = process.argv.slice(2)): number {
       [
         `OPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
         `OPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
+        `OPENCLAW_ANDROID_WEAR_VERSION_CODE=${version.wearVersionCode}`,
       ].join("\n") + "\n",
     );
   } else {

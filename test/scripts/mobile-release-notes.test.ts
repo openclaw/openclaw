@@ -144,30 +144,70 @@ describe("generated mobile store notes", () => {
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow("different production baseline");
   });
 
-  it("keeps phone and Wear baselines and saved text separate while resolving their shared upload ref", async () => {
-    const f = fixture("android");
-    accept();
-    api.parse.mockResolvedValue({ status: "completed", output_parsed: { changes: [] } });
-    api.parse
-      .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [] } })
-      .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [] } })
-      .mockResolvedValueOnce({
-        status: "completed",
-        output_parsed: { approved: true, problems: [] },
-      });
-    const saved = await generateMobileReleaseNotes(f);
-    expect(
-      saved.entries.map((entry) => [
-        entry.audience,
-        entry.baseline.build,
-        entry.baseline.sourceSha,
-        entry.text,
-      ]),
-    ).toEqual([
-      ["phone", "2026070301", f.base, "- Clearer labels when sending messages."],
-      ["wear", "2026070351", f.base, "Bug fixes and improvements."],
-    ]);
-  });
+  it.each(["legacy", "v2"])(
+    "keeps phone and Wear baselines and text separate with %s source records",
+    async (scheme) => {
+      const f = fixture("android");
+      const sourceRef =
+        "refs/openclaw/mobile-releases/android/v2/2026.7.3/0/1/2026070449-2026070450";
+      if (scheme === "v2") {
+        git(f.rootDir, "update-ref", sourceRef, f.base);
+        f.plan.releaseNotesBaselines[0] = {
+          audience: "phone",
+          version: "2026.7.30",
+          build: "2026070449",
+        };
+        fs.writeFileSync(
+          f.planPath,
+          JSON.stringify({
+            ...f.plan,
+            releaseNotesBaselines: [
+              { ...f.plan.releaseNotesBaselines[0], sourceRef },
+              f.plan.releaseNotesBaselines[1],
+            ],
+          }),
+        );
+      }
+      accept();
+      api.parse.mockResolvedValue({ status: "completed", output_parsed: { changes: [] } });
+      api.parse
+        .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [] } })
+        .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [] } })
+        .mockResolvedValueOnce({
+          status: "completed",
+          output_parsed: { approved: true, problems: [] },
+        });
+      const saved = await generateMobileReleaseNotes(f);
+      expect(
+        saved.entries.map((entry) => [
+          entry.audience,
+          entry.baseline.build,
+          entry.baseline.sourceSha,
+          entry.text,
+        ]),
+      ).toEqual([
+        [
+          "phone",
+          scheme === "v2" ? "2026070449" : "2026070301",
+          f.base,
+          "- Clearer labels when sending messages.",
+        ],
+        ["wear", "2026070351", f.base, "Bug fixes and improvements."],
+      ]);
+      vi.stubEnv("OPENAI_API_KEY", "");
+      expect(await generateMobileReleaseNotes(f)).toEqual(saved);
+      if (scheme === "v2") {
+        fs.rmSync(f.outputPath);
+        vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
+        const plan = JSON.parse(fs.readFileSync(f.planPath, "utf8"));
+        plan.releaseNotesBaselines[0].build = "2026070450";
+        fs.writeFileSync(f.planPath, JSON.stringify(plan));
+        await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+          "does not match its recorded store identity",
+        );
+      }
+    },
+  );
 
   it("does not invent notes for a fully reverted app change", async () => {
     const f = fixture();

@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { mobileReleaseRefFor } from "../mobile-release-ref.ts";
+import { validateAndroidStoreBaseline } from "./android-store-version.ts";
 
 const Platform = z.enum(["ios", "android"]);
 const Audience = z.enum(["ios", "phone", "wear"]);
@@ -15,6 +16,7 @@ const Baseline = z.object({
   audience: Audience,
   version: Version.nullable(),
   build: Build.nullable(),
+  sourceRef: z.string().optional(),
 });
 const Claim = z.object({ text: z.string(), evidenceIds: z.array(z.string()) });
 const Draft = z.object({ changes: z.array(Claim) });
@@ -192,7 +194,12 @@ function resolveBaseline(
     throw new Error("Production baseline must include both version and build.");
   }
   let refBuild = baseline.build;
-  if (baseline.audience === "wear") {
+  if (baseline.audience !== "ios") {
+    validateAndroidStoreBaseline({ ...baseline, audience: baseline.audience });
+  } else if (baseline.sourceRef !== undefined) {
+    throw new Error("iOS release baselines do not accept an Android source ref.");
+  }
+  if (baseline.audience === "wear" && !baseline.sourceRef) {
     const suffix = Number(refBuild.slice(-2));
     if (suffix < 51 || suffix > 99) {
       throw new Error(
@@ -201,12 +208,14 @@ function resolveBaseline(
     }
     refBuild = String(Number(refBuild) - 50);
   }
-  const ref = mobileReleaseRefFor({
-    platform,
-    version: baseline.version,
-    build: refBuild,
-    versionCode: refBuild,
-  });
+  const ref =
+    baseline.sourceRef ??
+    mobileReleaseRefFor({
+      platform,
+      version: baseline.version,
+      build: refBuild,
+      versionCode: refBuild,
+    });
   const rows = git(rootDir, "ls-remote", "--refs", "origin", ref)
     .trim()
     .split("\n")
@@ -523,10 +532,11 @@ export async function generateMobileReleaseNotes(options: {
     const saved = validateArtifact(JSON.parse(readFileSync(options.outputPath, "utf8")), identity);
     if (
       JSON.stringify(
-        saved.entries.map(({ baseline: { audience, version, build } }) => ({
+        saved.entries.map(({ baseline: { audience, version, build, sourceRef } }) => ({
           audience,
           version,
           build,
+          ...(sourceRef === undefined ? {} : { sourceRef }),
         })),
       ) !== JSON.stringify(baselines)
     ) {

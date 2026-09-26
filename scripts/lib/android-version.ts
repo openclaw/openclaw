@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { validateAndroidStorePlan } from "./android-store-version.ts";
 import { extractChangelogSection } from "./mobile-changelog.ts";
 import { parsePinnedReleaseVersion, parseReleaseVersion } from "./release-version.mjs";
 
@@ -21,6 +22,7 @@ type ResolvedAndroidVersion = {
   changelogPath: string;
   releaseNotesPath: string;
   versionCode: number;
+  wearVersionCode: number;
   versionFilePath: string;
   versionPropertiesPath: string;
 };
@@ -171,6 +173,7 @@ export function resolveAndroidVersion(rootDir = path.resolve(".")): ResolvedAndr
     changelogPath,
     releaseNotesPath,
     versionCode,
+    wearVersionCode: versionCode + 50,
     versionFilePath,
     versionPropertiesPath,
   };
@@ -185,15 +188,27 @@ export function resolveAndroidBuildVersion(
     return pinned;
   }
   const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
+    schemaVersion?: number;
     version: string;
     versionCode: number;
     wearVersionCode: number;
     sourceSha: string;
   };
-  const canonicalVersion = normalizePinnedAndroidVersion(plan.version);
-  const versionCode = normalizeAndroidVersionCode(plan.versionCode, canonicalVersion);
-  if (plan.wearVersionCode !== versionCode + 50) {
-    throw new Error("Android release plan Wear versionCode must equal the phone code plus 50.");
+  let canonicalVersion: string;
+  let versionCode: number;
+  if (plan.schemaVersion === 2) {
+    const storePlan = validateAndroidStorePlan(plan);
+    canonicalVersion = storePlan.version;
+    versionCode = storePlan.versionCode;
+  } else if (plan.schemaVersion === undefined) {
+    // Retained pre-cutover plans must still reproduce their original artifacts.
+    canonicalVersion = normalizePinnedAndroidVersion(plan.version);
+    versionCode = normalizeAndroidVersionCode(plan.versionCode, canonicalVersion);
+    if (plan.wearVersionCode !== versionCode + 50) {
+      throw new Error("Android release plan Wear versionCode must equal the phone code plus 50.");
+    }
+  } else {
+    throw new Error(`Unsupported Android release plan schema ${plan.schemaVersion}.`);
   }
   const head = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: rootDir,
@@ -202,7 +217,7 @@ export function resolveAndroidBuildVersion(
   if (!/^[a-f0-9]{40}$/u.test(plan.sourceSha) || plan.sourceSha !== head) {
     throw new Error("Android release plan sourceSha must match the checked-out commit.");
   }
-  return { ...pinned, canonicalVersion, versionCode };
+  return { ...pinned, canonicalVersion, versionCode, wearVersionCode: plan.wearVersionCode };
 }
 
 export function renderAndroidVersionProperties(

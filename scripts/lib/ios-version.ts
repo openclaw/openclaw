@@ -2,10 +2,11 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { extractChangelogSection } from "./mobile-changelog.ts";
+import { encodeMobileStoreVersion, MAX_MOBILE_STORE_REVISION } from "./mobile-store-version.ts";
 import { parsePinnedReleaseVersion, parseReleaseVersion } from "./release-version.mjs";
 
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
-export const MAX_IOS_APP_STORE_REVISION = 9;
+export const MAX_IOS_APP_STORE_REVISION = MAX_MOBILE_STORE_REVISION;
 
 type ResolvedIosVersion = {
   appStoreRevision: number | null;
@@ -57,19 +58,17 @@ export function encodeIosAppStoreVersion(
   appStoreRevision: string | number,
 ): string {
   const canonicalVersion = normalizePinnedIosVersion(gatewayVersion);
-  const parsed = parseReleaseVersion(canonicalVersion);
-  if (!parsed) {
-    throw new Error(`Unable to encode invalid gateway version '${gatewayVersion}'.`);
-  }
-
   const revision = normalizeIosAppStoreRevision(appStoreRevision);
-  // Append one revision digit without padding. Keeping the revision to one
-  // digit preserves App Store ordering when the gateway patch increments.
-  const encodedPatch = Number(`${parsed.patch}${revision}`);
-  if (!Number.isSafeInteger(encodedPatch)) {
-    throw new Error(`Encoded iOS App Store version is too large for '${gatewayVersion}'.`);
+  try {
+    return encodeMobileStoreVersion(canonicalVersion, revision);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new Error(`Encoded iOS App Store version is too large for '${gatewayVersion}'.`, {
+        cause: error,
+      });
+    }
+    throw error;
   }
-  return `${parsed.year}.${parsed.month}.${encodedPatch}`;
 }
 
 function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {

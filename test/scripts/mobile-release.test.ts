@@ -53,6 +53,9 @@ function fixture(platform = "ios") {
     "scripts/mobile-release-notes.ts",
     "scripts/lib/mobile-release-notes.ts",
     "scripts/mobile-release-ref.ts",
+    "scripts/lib/android-store-version.ts",
+    "scripts/lib/mobile-store-version.ts",
+    "scripts/lib/release-version.mjs",
   ]) {
     write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
   }
@@ -115,7 +118,7 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       root,
       "scripts/lib/android-fastlane.sh",
       `run_android_fastlane() {
-  echo '{"version":"2026.9.2","versionCode":2026090203,"wearVersionCode":2026090253,"releaseNotesBaselines":[{"audience":"phone","version":null,"build":null},{"audience":"wear","version":null,"build":null}]}' > "\u0024{3#output_path:}"
+  echo '{"schemaVersion":2,"gatewayVersion":"2026.9.2","revision":0,"buildNumber":1,"version":"2026.9.20","versionCode":2026090250,"wearVersionCode":2026090251,"legacyMaxVersionCode":2026090249,"releaseNotesBaselines":[{"audience":"phone","version":null,"build":null},{"audience":"wear","version":null,"build":null}]}' > "\u0024{3#output_path:}"
 }\n`,
     );
     write(root, "scripts/android-release-upload.sh", "exec ruby scripts/fixture-upload.rb\n");
@@ -143,8 +146,10 @@ def build_release_artifacts!
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
 end
 def upload_play_store_build!(metadata, **options)
-  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"] }) + "\n")
-  raise "Record failed" unless system("git", "push", "origin", "HEAD:refs/openclaw/mobile-releases/android/2026.9.2-2026090203")
+  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n")
+  %w(initialize-android record).each do |command|
+    raise "Record failed" unless system("node", "--import", "tsx", "scripts/mobile-release-ref.ts", command, "--plan", ENV.fetch("OPENCLAW_ANDROID_RELEASE_PLAN"))
+  end
 end
 $lanes.fetch(:release_upload).call
 `,
@@ -206,16 +211,23 @@ describe("mobile release CLI", () => {
     const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
     const result = f.invoke("run");
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Android versionName: 2026.9.2");
-    expect(result.stdout).toContain("Android versionCode: 2026090203");
+    expect(result.stdout).toContain("Android versionName: 2026.9.20");
+    expect(result.stdout).toContain("Android versionCode: 2026090250");
+    expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
     expect(f.audit()[0]).toMatchObject({
-      version: "2026.9.2",
-      versionCode: 2026090203,
-      gradleVersion: "2026.9.2",
-      gradleCode: "2026090203",
+      version: "2026.9.20",
+      versionCode: 2026090250,
+      wearVersionCode: 2026090251,
+      gradleVersion: "2026.9.20",
+      gradleCode: "2026090250",
+      gradleWearCode: "2026090251",
     });
     expect(
-      git(f.remote, "rev-parse", "refs/openclaw/mobile-releases/android/2026.9.2-2026090203"),
+      git(
+        f.remote,
+        "rev-parse",
+        "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
+      ),
     ).toBe(f.base);
     expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
     for (const [index, file] of pinned.entries()) {
@@ -235,7 +247,7 @@ describe("mobile release CLI", () => {
       },
     );
     expect(rebuilt.status, rebuilt.stderr).toBe(0);
-    expect(rebuilt.stdout).toContain("Android versionCode: 2026090203");
+    expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
     expect(git(f.root, "status", "--porcelain")).toBe("");
   });
 

@@ -20,13 +20,32 @@ fun requireOpenClawAndroidVersionProperty(name: String): String =
   (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
     ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
-val openClawAndroidPhoneVersionCode = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toInt()
-val openClawAndroidBuildNumber = openClawAndroidPhoneVersionCode % 100
-check(openClawAndroidBuildNumber in 1..49) {
-  "Android build number must be 01 through 49; Wear reserves 51 through 99."
+fun parseOpenClawAndroidVersionCode(
+  name: String,
+  value: String,
+): Int {
+  val code = value.trim().toIntOrNull()
+  check(code != null && code in 1..2_100_000_000) {
+    "$name must be a positive integer no greater than 2100000000."
+  }
+  return code
 }
-val openClawAndroidWearVersionCode = openClawAndroidPhoneVersionCode + 50
-check(openClawAndroidWearVersionCode <= 2_100_000_000) { "Wear versionCode exceeds the Android platform maximum." }
+
+val openClawAndroidPhoneVersionCode =
+  parseOpenClawAndroidVersionCode("OPENCLAW_ANDROID_VERSION_CODE", requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE"))
+val explicitOpenClawAndroidWearVersionCode = providers.gradleProperty("OPENCLAW_ANDROID_WEAR_VERSION_CODE").orNull
+val openClawAndroidWearVersionCode =
+  if (explicitOpenClawAndroidWearVersionCode != null) {
+    parseOpenClawAndroidVersionCode("OPENCLAW_ANDROID_WEAR_VERSION_CODE", explicitOpenClawAndroidWearVersionCode)
+  } else {
+    check(openClawAndroidPhoneVersionCode % 100 in 1..49) {
+      "Android pinned build number must be 01 through 49; Wear reserves 51 through 99."
+    }
+    parseOpenClawAndroidVersionCode("OPENCLAW_ANDROID_WEAR_VERSION_CODE", (openClawAndroidPhoneVersionCode + 50).toString())
+  }
+check(openClawAndroidWearVersionCode > openClawAndroidPhoneVersionCode) {
+  "Wear versionCode must be greater than the phone versionCode."
+}
 
 // Data Layer delivery requires the phone and watch packages to share one certificate.
 evaluationDependsOn(":app")
