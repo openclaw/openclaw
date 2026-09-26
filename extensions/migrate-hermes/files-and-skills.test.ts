@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -13,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { discoverHermesSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 import { makeContext, writeFile } from "./test/provider-helpers.js";
 
 let testWorkspace: TempWorkspace;
@@ -225,7 +225,11 @@ describe("Hermes migration file and skill items", () => {
     expect(source.root).toBe(profileRoot);
     expect(source.globalAuthPath).toBe(path.join(hermesRoot, "auth.json"));
     const ctx = makeContext({ source: profileRoot, stateDir, workspaceDir, includeSecrets: true });
-    const items = await buildAuthItems({ ctx, source, targets: resolveTargets(ctx) });
+    const items = await buildAuthItems({
+      ctx,
+      source,
+      targets: resolvePlannedMigrationTargets(ctx),
+    });
     expect(items).toEqual([
       expect.objectContaining({
         source: path.join(hermesRoot, "auth.json"),

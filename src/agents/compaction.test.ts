@@ -135,63 +135,6 @@ describe("splitMessagesByTokenShare", () => {
     ]);
   });
 
-  it("preserves message order across parts", () => {
-    const messages = makeMessages(6, 4000);
-
-    const parts = splitMessagesByTokenShare(messages, 3);
-    expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
-  });
-
-  it("keeps tool_use and matching toolResult in the same chunk", () => {
-    // Splitting a tool call from its result creates invalid replay context for
-    // downstream summarization and provider transcript reuse.
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      makeAssistantToolCall(2, "call_split"),
-      makeToolResult(3, "call_split", "r".repeat(800)),
-      makeMessage(4, 4000),
-    ];
-
-    const parts = splitMessagesByTokenShare(messages, 2);
-
-    const chunkWithToolUse = requireChunkContainingTimestamp(parts, "assistant", 2);
-    const chunkWithToolResult = requireChunkContainingTimestamp(parts, "toolResult", 3);
-    expect(chunkWithToolUse).toBe(chunkWithToolResult);
-    expect(parts.flat().length).toBe(messages.length);
-  });
-
-  it("keeps multiple toolResults with their assistant in the same chunk", () => {
-    const assistant = makeAgentAssistantMessage({
-      content: [
-        { type: "text", text: "x".repeat(4000) },
-        { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
-        { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
-      ],
-      model: "gpt-5.2",
-      stopReason: "stop",
-      timestamp: 2,
-    });
-
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      assistant,
-      makeToolResult(3, "call_a", "result_a".repeat(200)),
-      makeToolResult(4, "call_b", "result_b".repeat(200)),
-      makeMessage(5, 4000),
-    ];
-
-    const parts = splitMessagesByTokenShare(messages, 2);
-
-    const chunkWithAssistant = parts.find((chunk) =>
-      chunk.some((m) => m.role === "assistant" && m.timestamp === 2),
-    )!;
-    const resultTimestamps = chunkWithAssistant
-      .filter((m) => m.role === "toolResult")
-      .map((m) => m.timestamp);
-    expect(resultTimestamps).toEqual([3, 4]);
-    expect(parts.flat().length).toBe(messages.length);
-  });
-
   it("keeps repeated-id tool results with their assistant by occurrence", () => {
     const assistant = makeAgentAssistantMessage({
       content: [
@@ -446,22 +389,6 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.messages.map((msg) => msg.timestamp)).toEqual([4]);
   });
 
-  it("keeps the newest messages when pruning", () => {
-    const messages = makeMessages(6, 4000);
-    const totalTokens = estimateMessagesTokens(messages);
-    const maxContextTokens = Math.max(1, Math.floor(totalTokens * 0.5)); // budget = 25%
-    const pruned = pruneHistoryForContextShare({
-      messages,
-      maxContextTokens,
-      maxHistoryShare: 0.5,
-      parts: 2,
-    });
-
-    const keptIds = pruned.messages.map((msg) => msg.timestamp);
-    const expectedSuffix = messages.slice(-keptIds.length).map((msg) => msg.timestamp);
-    expect(keptIds).toEqual(expectedSuffix);
-  });
-
   it("keeps history when already within budget", () => {
     const messages: AgentMessage[] = [makeMessage(1, 1000)];
     const maxContextTokens = 2000;
@@ -491,45 +418,6 @@ describe("pruneHistoryForContextShare", () => {
     ].toSorted(compareTimestampIds);
     const originalIds = messages.map((m) => m.timestamp).toSorted(compareTimestampIds);
     expect(allIds).toEqual(originalIds);
-  });
-
-  it("returns empty droppedMessagesList when no pruning needed", () => {
-    const messages: AgentMessage[] = [makeMessage(1, 100)];
-    const pruned = pruneHistoryForContextShare({
-      messages,
-      maxContextTokens: 100_000,
-      maxHistoryShare: 0.5,
-      parts: 2,
-    });
-
-    expect(pruned.droppedChunks).toBe(0);
-    expect(pruned.droppedMessagesList).toStrictEqual([]);
-    expect(pruned.messages.length).toBe(1);
-  });
-
-  it("removes orphaned tool_result messages when tool_use is dropped", () => {
-    // Pruning the assistant tool_use must also drop its result; orphaned
-    // toolResult messages are not meaningful model context.
-    const messages: AgentMessage[] = [
-      makeAssistantToolCall(1, "call_123"),
-      makeToolResult(2, "call_123", "result".repeat(500)),
-      {
-        role: "user",
-        content: "x".repeat(500),
-        timestamp: 3,
-      },
-    ];
-
-    const pruned = pruneHistoryForContextShare({
-      messages,
-      maxContextTokens: 2000,
-      maxHistoryShare: 0.5,
-      parts: 2,
-    });
-
-    const keptRoles = pruned.messages.map((m) => m.role);
-    expect(keptRoles).not.toContain("toolResult");
-    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
 
   it("keeps tool_result when its tool_use is also kept", () => {

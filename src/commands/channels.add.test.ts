@@ -83,7 +83,7 @@ const terminalMocks = vi.hoisted(() => ({
 }));
 
 const policyMocks = vi.hoisted(() => ({
-  readCurrentConfigForPolicyCheck: vi.fn<() => OpenClawConfig>(() => ({})),
+  readCurrentConfigForPolicyCheckAsync: vi.fn<() => Promise<OpenClawConfig>>(async () => ({})),
 }));
 
 vi.mock("../config/io.runtime.js", () => policyMocks);
@@ -506,7 +506,7 @@ describe("channelsAddCommand", () => {
   });
 
   beforeEach(async () => {
-    policyMocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue({});
+    policyMocks.readCurrentConfigForPolicyCheckAsync.mockReset().mockResolvedValue({});
     resetPluginRuntimeStateForTest();
     configFiles.clear();
     configMocks.readConfigFileSnapshot.mockClear();
@@ -952,7 +952,7 @@ describe("channelsAddCommand", () => {
       channelWizardMocks.prompter.select
         .mockResolvedValueOnce({ agentId: "helper" })
         .mockResolvedValueOnce("main");
-      policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue(config);
+      policyMocks.readCurrentConfigForPolicyCheckAsync.mockResolvedValue(config);
       channelWizardMocks.setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
         const options = requireRecord(args[3], "setup options");
         const onSelection = options.onSelection as ((selection: string[]) => void) | undefined;
@@ -1017,7 +1017,7 @@ describe("channelsAddCommand", () => {
       sourceConfig: config,
       config,
     });
-    policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue(config);
+    policyMocks.readCurrentConfigForPolicyCheckAsync.mockResolvedValue(config);
     const session = new WizardSession(async (prompter) => {
       await runChannelsSetupWizard({ channel: "lifecycle-chat" }, runtime, prompter);
     });
@@ -1055,7 +1055,7 @@ describe("channelsAddCommand", () => {
       },
     };
     configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
-    policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue(config);
+    policyMocks.readCurrentConfigForPolicyCheckAsync.mockResolvedValue(config);
     const session = new WizardSession(async (prompter) => {
       await runChannelsSetupWizard({ channel: "lifecycle-chat" }, runtime, prompter);
     });
@@ -1064,7 +1064,7 @@ describe("channelsAddCommand", () => {
       if (selection.done || !selection.step) {
         throw new Error("Expected owner selection step");
       }
-      policyMocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      policyMocks.readCurrentConfigForPolicyCheckAsync.mockResolvedValue({
         agents: {
           ownership: "explicit",
           entries: { main: { workspace: "/tmp/openclaw-main-workspace" } },

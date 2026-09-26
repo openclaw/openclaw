@@ -43,18 +43,8 @@ const {
   revokeMessageActionTurnCapability,
 } = await import("../../gateway/message-action-turn-capability.js");
 const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
-const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
-  await import("./agent-runner-run-params.js");
+const { buildEmbeddedRunBaseParams } = await import("./agent-runner-run-params.js");
 const { setChannelSourceTurnId } = await import("./source-turn-id.js");
-
-function buildEmbeddedRunBaseParams(
-  params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
-) {
-  return buildEmbeddedRunBaseParamsCore({
-    ...params,
-    isReasoningTagProvider: hoisted.isReasoningTagProviderMock,
-  });
-}
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
   return {

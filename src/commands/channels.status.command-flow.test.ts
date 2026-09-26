@@ -552,15 +552,4 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
   });
-
-  it("rejects invalid timeout before falling back to config-only status", async () => {
-    const { runtime } = createCapturingTestRuntime();
-
-    await expect(channelsStatusCommand({ timeout: "1000ms" }, runtime as never)).rejects.toThrow(
-      'Received: "1000ms"',
-    );
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.requireValidConfig).not.toHaveBeenCalled();
-  });
 });

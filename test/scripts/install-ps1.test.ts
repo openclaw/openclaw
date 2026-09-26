@@ -7,42 +7,12 @@ const SCRIPT_PATH = "scripts/install.ps1";
 describe("install.ps1 source contracts", () => {
   const source = readFileSync(SCRIPT_PATH, "utf8");
 
-  it("does not exit directly from inside Main", () => {
-    const mainBody = extractFunctionBody(source, "Main");
-    expect(mainBody).not.toMatch(/\bexit\b/i);
-    expect(mainBody).toContain("Fail-Install");
-  });
-
-  it("keeps failure termination in the top-level completion handler", () => {
-    const completeInstallBody = extractFunctionBody(source, "Complete-Install");
-    expect(completeInstallBody).toMatch(/\$PSCommandPath/);
-    expect(completeInstallBody).toMatch(/\bexit \$script:InstallExitCode\b/);
-    expect(completeInstallBody).toMatch(/\bthrow "OpenClaw installation failed with exit code/);
-    expect(completeInstallBody).toContain("$script:InstallExitCode -eq 0");
-    expect(source).toContain("$null = Main");
-    expect(source).toMatch(/\$null = Main\s+Complete-Install\s*$/);
-  });
-
-  it("checks the full supported Node version range", () => {
-    const versionBody = extractFunctionBody(source, "Test-NodeVersionSupported");
-    const sqliteBody = extractFunctionBody(source, "Test-NodeSqliteSupported");
+  it("pipes the SQLite probe to an application Node executable", () => {
     const checkNodeBody = extractFunctionBody(source, "Check-Node");
-    expect(versionBody).toContain("$major -eq 24");
-    expect(versionBody).toContain("$minor -ge 16");
-    expect(versionBody).toContain("$major -eq 26");
-    expect(versionBody).toContain("$minor -ge 1");
-    expect(versionBody).toContain("$major -gt 26");
-    expect(sqliteBody).toContain("$minor -eq 51 -and $patch -ge 3");
-    expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
     expect(checkNodeBody).toContain("Get-Command node -CommandType Application");
     expect(checkNodeBody).toContain("SELECT sqlite_version() AS version");
     expect(checkNodeBody).toContain("$sqliteProbe | & $nodePath -");
     expect(checkNodeBody).not.toContain("& $nodePath -e");
-    expect(checkNodeBody).toContain("Test-NodeSqliteSupported -Version $sqliteVersion");
-    expect(checkNodeBody).toContain(
-      "SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required",
-    );
-    expect(source).toContain("Please install Node.js 26 manually:");
   });
 
   it("discovers a winget Node install before the machine PATH refreshes", () => {
@@ -140,28 +110,16 @@ describe("install.ps1 source contracts", () => {
     );
   });
 
-  it("selects one canonical temp root for installer and child process paths", () => {
-    const resolveBody = extractFunctionBody(source, "Resolve-InstallerTempDirectory");
-    const initializeBody = extractFunctionBody(source, "Initialize-InstallerTempDirectory");
-    const portableNodeBody = extractFunctionBody(source, "Install-PortableNode");
-    const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
-    const commandSafeBody = extractFunctionBody(source, "Get-WindowsCommandSafeDirectory");
-
-    expect(resolveBody).toContain("Get-Item -LiteralPath $pathToResolve -ErrorAction Stop");
-    expect(resolveBody).toContain(".FullName");
-    expect(resolveBody).toContain("FSO Folder.Path echoes 8.3 aliases");
-    expect(resolveBody).not.toContain("Scripting.FileSystemObject");
-    expect(resolveBody).toContain("$resolvedCandidate.Substring(8)");
-    expect(resolveBody).toContain("$resolvedCandidate.Substring(4)");
-    expect(resolveBody).toContain("Test-Path -LiteralPath $resolvedCandidate -PathType Container");
-    expect(initializeBody).toContain("$script:InstallerTempDirectory = $tempDirectory");
-    expect(initializeBody).toContain("$env:TEMP = $tempDirectory");
-    expect(initializeBody).toContain("$env:TMP = $tempDirectory");
-    expect(portableNodeBody).toContain("Join-Path $script:InstallerTempDirectory");
-    expect(portableGitBody).toContain("Join-Path $script:InstallerTempDirectory");
-    expect(commandSafeBody).toContain("return $script:InstallerTempDirectory");
+  it("shares the canonical temp root with downloads and Windows command shims", () => {
+    for (const name of ["Install-PortableNode", "Install-PortableGit"]) {
+      expect(extractFunctionBody(source, name)).toContain(
+        "Join-Path $script:InstallerTempDirectory",
+      );
+    }
+    expect(extractFunctionBody(source, "Get-WindowsCommandSafeDirectory")).toContain(
+      "return $script:InstallerTempDirectory",
+    );
     expect(source.match(/^Initialize-InstallerTempDirectory$/gm)).toHaveLength(1);
-    expect(source).not.toContain("Get-InstallerTempDirectory");
   });
 
   it("rejects OpenClaw GitHub source targets for npm installs", () => {

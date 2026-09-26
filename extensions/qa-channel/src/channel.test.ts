@@ -1,6 +1,7 @@
 // Qa Channel tests cover channel plugin behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
@@ -17,7 +18,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
-import type { ChannelMessageActionName } from "./runtime-api.js";
 
 type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 

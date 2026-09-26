@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements chatgpt import behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -564,40 +563,10 @@ function renderConversationPage(record: ChatGptConversationRecord): string {
   });
 }
 
-function replaceSimpleManagedBlock(params: {
-  original: string;
-  startMarker: string;
-  endMarker: string;
-  replacement: string;
-}): string {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.original.replace(blockPattern, () => params.replacement);
-}
-
-function extractSimpleManagedBlock(params: {
-  body: string;
-  startMarker: string;
-  endMarker: string;
-}): string | null {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`);
-  return params.body.match(blockPattern)?.[0] ?? null;
-}
-
-function extractManagedBlockBody(params: {
-  body: string;
-  startMarker: string;
-  endMarker: string;
-}): string | null {
-  const escapedStart = params.startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = params.endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const blockPattern = new RegExp(`${escapedStart}\\n?([\\s\\S]*?)\\n?${escapedEnd}`);
-  const captured = params.body.match(blockPattern)?.[1];
-  return typeof captured === "string" ? captured.trim() : null;
-}
+const HUMAN_BLOCK_PATTERN = new RegExp(`${HUMAN_START_MARKER}[\\s\\S]*?${HUMAN_END_MARKER}`);
+const RELATED_BLOCK_BODY_PATTERN = new RegExp(
+  `${WIKI_RELATED_START_MARKER}\\n?([\\s\\S]*?)\\n?${WIKI_RELATED_END_MARKER}`,
+);
 
 function preserveExistingPageBlocks(rendered: string, existing: string): string {
   if (!existing.trim()) {
@@ -607,25 +576,12 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
   const parsedRendered = parseWikiMarkdown(rendered);
   let nextBody = parsedRendered.body;
 
-  const humanBlock = extractSimpleManagedBlock({
-    body: parsedExisting.body,
-    startMarker: HUMAN_START_MARKER,
-    endMarker: HUMAN_END_MARKER,
-  });
+  const humanBlock = parsedExisting.body.match(HUMAN_BLOCK_PATTERN)?.[0];
   if (humanBlock) {
-    nextBody = replaceSimpleManagedBlock({
-      original: nextBody,
-      startMarker: HUMAN_START_MARKER,
-      endMarker: HUMAN_END_MARKER,
-      replacement: humanBlock,
-    });
+    nextBody = nextBody.replace(HUMAN_BLOCK_PATTERN, () => humanBlock);
   }
 
-  const relatedBody = extractManagedBlockBody({
-    body: parsedExisting.body,
-    startMarker: WIKI_RELATED_START_MARKER,
-    endMarker: WIKI_RELATED_END_MARKER,
-  });
+  const relatedBody = parsedExisting.body.match(RELATED_BLOCK_BODY_PATTERN)?.[1]?.trim();
   if (relatedBody) {
     nextBody = replaceManagedMarkdownBlock({
       original: nextBody,

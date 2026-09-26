@@ -85,9 +85,6 @@ function matchesCleanupAttempt(
 ): current is BrowserSessionTabRecord {
   return Boolean(
     current &&
-    current.cleanupAttemptToken === tab.cleanupAttemptToken &&
-    current.cleanupRequestedAt === tab.cleanupRequestedAt &&
-    current.cleanupKind === tab.cleanupKind &&
     // Lifecycle activity may advance lastUsedAt without revoking mandatory
     // cleanup. Every other field, especially the generation, must still match.
     sameBrowserSessionTabRecord({ ...current, lastUsedAt: tab.lastUsedAt }, tab),

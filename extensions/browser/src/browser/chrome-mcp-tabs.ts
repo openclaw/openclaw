@@ -20,7 +20,6 @@ import {
 import { extractStructuredPages } from "./chrome-mcp-result.js";
 import {
   callTool,
-  clearChromeMcpSnapshotRefsForTarget,
   getChromeMcpRoutingState,
   listChromeMcpTargetsWithLease,
   registerChromeMcpTargets,
@@ -254,7 +253,7 @@ export async function openChromeMcpTab(
               );
               const routing = getChromeMcpRoutingState(lease.session);
               routing.targetIdByPageId.delete(created.page.id);
-              clearChromeMcpSnapshotRefsForTarget(routing, created.targetId);
+              routing.snapshotsByTarget.delete(created.targetId);
               return;
             }
           } catch (error) {
@@ -278,7 +277,7 @@ export async function openChromeMcpTab(
         );
         const routing = getChromeMcpRoutingState(lease.session);
         routing.targetIdByPageId.delete(created.page.id);
-        clearChromeMcpSnapshotRefsForTarget(routing, created.targetId);
+        routing.snapshotsByTarget.delete(created.targetId);
       };
       try {
         const captured = await captureChromeMcpTabOwnership({

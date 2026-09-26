@@ -162,8 +162,23 @@ New agents inherit the live-verified default inference route. The agent ids `ope
 writes use the existing config validator and writer. Validation or write errors
 return to the assistant for one corrective proposal, which needs fresh approval.
 A failure after saving is reported as such. Config writes do not test whether a
-model route or API key works. Follow your secret storage preference; for environment
-storage, use `config set-ref`. Secret values are not echoed in chat.
+model route or API key works. Masked setup flows keep keys out of the model's
+context. If you paste an API key or token in chat anyway, OpenClaw saves it in the
+[shared secret store](/gateway/secrets/secret-store-and-egress#shared-secret-store),
+points the config key at it with a `store` SecretRef, and does not echo it back.
+The pasted message itself already reached the model provider and the transcript;
+OpenClaw masks the value in later logs and output from that point on. Each save
+creates a new entry named after the config key plus a random suffix (for example
+`GATEWAY_REMOTE_TOKEN_3F9A0C1B7D2E4A68`), so it can never take over a name that
+another config key, an auth profile, or a stale reference to a removed entry
+still uses. OpenClaw never overwrites or deletes an existing entry: replacing a
+key leaves its previous entry in the store. If the config write fails after the
+key was saved, the error names the saved entry and says whether the config key
+points at it. The entry is kept either way, since another config key or auth
+profile may already use it: fix the error and reuse that entry rather than
+pasting the key again, and remove an entry with `openclaw secrets store rm <NAME>`
+only once nothing uses it. For environment storage, use
+`config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
 Plugin installation keeps its source restrictions. Plugin uninstall refuses a
@@ -221,8 +236,8 @@ when it finishes, run `openclaw gateway restart` to apply the saved settings.
 
 `configure model provider` directs you to **Settings → Models → Connect provider**
 without starting a wizard or changing config. Check the connected Gateway and
-selected **System** or agent scope in Settings before signing in. Enter credentials
-only in the protected sign-in controls, never in chat. Connecting another provider
+selected **System** or agent scope in Settings before signing in, and sign in with
+the controls there. Connecting another provider
 does not select it as the active model or require stopping the host. Model selection
 is separate; replacing credentials for a provider already in use can affect work.
 

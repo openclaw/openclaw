@@ -38,7 +38,6 @@ import { createTelegramBot } from "./bot.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError, isTelegramAuthenticationError } from "./network-errors.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
-import { resolveTelegramIngressSpoolDir } from "./telegram-ingress-spool.js";
 import { createTelegramStatusPublisher } from "./transport-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -291,7 +290,7 @@ export async function startTelegramWebhook(opts: {
   publicUrl?: string;
   webhookCertPath?: string;
   webhookRegistrationRetryPolicy?: BackoffPolicy;
-  spoolDir?: string;
+  stateDir?: string;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
   const readConfig = createRuntimeConfigReader(opts.config ?? {});
@@ -314,7 +313,6 @@ export async function startTelegramWebhook(opts: {
   status.noteStart();
   const webhookRegistrationRetryPolicy =
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
-  const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
   let shutdownPromise: Promise<void> | undefined;
   let ownedServer: ReturnType<typeof createServer> | undefined = undefined;
@@ -428,7 +426,7 @@ export async function startTelegramWebhook(opts: {
     // Shutdown must abort in-flight drain work (tombstone retries), not just
     // stop the next claim; the composed signal carries webhook stop + caller abort.
     webhookIngressMonitor = createTelegramTransportIngressMonitor({
-      spoolDir,
+      stateDir: opts.stateDir,
       bot,
       botInfo,
       accountId: opts.accountId ?? "default",

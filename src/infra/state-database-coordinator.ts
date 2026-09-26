@@ -361,6 +361,17 @@ export function tryCreateStateLifecycleDelegate(
   if (heldCoordinators.size === 0) {
     return undefined;
   }
+  let hasLifecycleOwner = false;
+  for (const pathname of heldCoordinators.keys()) {
+    // Explicit coordinator paths can cross families; the derived delegate path cannot.
+    if (path.basename(pathname).startsWith("state-lifecycle.")) {
+      hasLifecycleOwner = true;
+      break;
+    }
+  }
+  if (!hasLifecycleOwner) {
+    return undefined;
+  }
   const coordinatorPath = buildLifecycleCoordinatorPath(
     "state-lifecycle",
     resolveCoordinatorBase({ databasePath: params.databasePath }),

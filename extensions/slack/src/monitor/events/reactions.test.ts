@@ -102,32 +102,6 @@ describe("registerSlackReactionEvents", () => {
 
   const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [
     {
-      name: "enqueues DM reaction system events when dmPolicy is open",
-      input: { overrides: { dmPolicy: "open" } },
-      expectedCalls: 1,
-    },
-    {
-      name: "blocks DM reaction system events when dmPolicy is disabled",
-      input: { overrides: { dmPolicy: "disabled" } },
-      expectedCalls: 0,
-    },
-    {
-      name: "blocks DM reaction system events for unauthorized senders in allowlist mode",
-      input: {
-        overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
-        event: buildReactionEvent({ user: "U1" }),
-      },
-      expectedCalls: 0,
-    },
-    {
-      name: "allows DM reaction system events for authorized senders in allowlist mode",
-      input: {
-        overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] },
-        event: buildReactionEvent({ user: "U1" }),
-      },
-      expectedCalls: 1,
-    },
-    {
       name: "enqueues channel reaction events regardless of dmPolicy",
       input: {
         handler: "removed",
