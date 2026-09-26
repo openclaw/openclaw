@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../config/config.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { purgeExpiredSecretStoreEntries } from "../secrets/store/secret-store.js";
 import {
   createGitHubOAuthLifecycle,
@@ -87,6 +88,7 @@ function startSecretStoreExpiryMaintenance(
 }
 
 export async function attachInitialGatewayLifetimeSidecars(params: {
+  scheduler: GatewayScheduler;
   chatMetadataLifecycle: GatewayChatMetadataLifecycle;
   gatewayRequestContext: GatewayRequestContext;
   flushPendingSessionsChangedEvents: (context?: object) => Promise<void>;
@@ -98,6 +100,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   // Kernel preparation precedes HTTP/internal dispatch. Incognito has no restart inventory.
   params.publishSidecars(
     startIncognitoSessionLifetime({
+      scheduler: params.scheduler,
       context: params.gatewayRequestContext,
       logWarning: params.logWarning,
     }),
