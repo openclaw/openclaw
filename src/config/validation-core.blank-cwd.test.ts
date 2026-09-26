@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation-core.js";
+import { validateConfigObject, validateConfigObjectRaw } from "./validation-core.js";
 
 describe("agent blank cwd config", () => {
   it("reports a field-level issue for an explicitly blank per-agent cwd", () => {
@@ -22,6 +22,26 @@ describe("agent blank cwd config", () => {
   it("reports a field-level issue for a blank defaults cwd that agents depend on", () => {
     const result = validateConfigObjectRaw({
       agents: { defaults: { cwd: " " }, entries: { alpha: {} } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected blank defaults cwd to fail validation");
+    }
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "agents.defaults.cwd",
+        message: expect.stringContaining("must not be blank"),
+      }),
+    );
+  });
+
+  it("reports a blank defaults cwd when the implicit main agent has no explicit roster", () => {
+    // The product boundary materializes the implicit main agent through the
+    // roster migration, so a saved blank default cwd is flagged exactly as if
+    // an explicit entry depended on it.
+    const result = validateConfigObject({
+      agents: { defaults: { cwd: "   " } },
     });
 
     expect(result.ok).toBe(false);
