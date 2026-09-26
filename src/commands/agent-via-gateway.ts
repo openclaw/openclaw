@@ -1232,11 +1232,9 @@ export async function agentCliCommand(
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
   if (isCompactControlCommand(messageOpts.message)) {
-    runtime.error?.(
+    throw new Error(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
-    runtime.exit(1);
-    return undefined;
   }
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
