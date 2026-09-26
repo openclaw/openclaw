@@ -55,6 +55,19 @@ export const SessionsSendOutputSchema = Type.Union([
       error: Type.String(),
       sessionKey: Type.Optional(Type.String()),
       sentBeforeError: Type.Optional(Type.Literal(true)),
+      dispatch: Type.Optional(
+        Type.Object(
+          {
+            outcome: Type.Union([Type.Literal("unknown"), Type.Literal("not_sent")]),
+            code: Type.Literal("CLIENT_TIMEOUT"),
+            method: Type.String(),
+            requestSent: Type.Boolean(),
+            timeoutMs: Type.Number(),
+            idempotencyKey: Type.String(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
       watched: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
