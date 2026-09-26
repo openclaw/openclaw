@@ -24,6 +24,15 @@ import type { ConfigFileSnapshot } from "./types.openclaw.js";
 const log = createSubsystemLogger("config/redaction");
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
+/**
+ * Maximum nesting depth for the recursive config redaction walk. redactValue()
+ * recurses through every nested object/array; without a bound a deeply nested
+ * config exhausts the call stack and throws "RangeError: Maximum call stack size
+ * exceeded" while preparing diagnostics or UI output. Hand-authored configs nest
+ * only a handful of levels, so this cap rejects pathological input cleanly.
+ */
+const MAX_REDACTION_DEPTH = 100;
+
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
     return isSensitiveConfigPath(path.slice(0, -2));
@@ -153,7 +162,14 @@ function redactValue(
   prefix: string,
   values: string[],
   context: RedactionContext,
+  depth = 0,
 ): unknown {
+  if (depth > MAX_REDACTION_DEPTH) {
+    throw new Error(
+      `Config redaction exceeded maximum nesting depth (${MAX_REDACTION_DEPTH}) at: ${prefix || "<root>"}`,
+    );
+  }
+
   if (obj === null || obj === undefined) {
     return obj;
   }
@@ -173,7 +189,7 @@ function redactValue(
         values.push(item);
         return REDACTED_SENTINEL;
       }
-      return redactValue(item, path, values, fallbackContext);
+      return redactValue(item, path, values, fallbackContext, depth + 1);
     });
   }
 
@@ -212,7 +228,7 @@ function redactValue(
             result[key] = REDACTED_SENTINEL;
           }
         } else {
-          result[key] = redactValue(value, candidate, values, context);
+          result[key] = redactValue(value, candidate, values, context, depth + 1);
         }
       } else if (
         context.hints?.[candidate]?.sensitive === true &&
@@ -257,7 +273,7 @@ function redactValue(
         result[key] = value;
       }
     } else if (typeof value === "object" && value !== null) {
-      result[key] = redactValue(value, path, values, fallbackContext);
+      result[key] = redactValue(value, path, values, fallbackContext, depth + 1);
     } else {
       result[key] = value;
     }
