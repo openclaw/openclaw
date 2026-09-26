@@ -143,7 +143,6 @@ describe("assistant transcript-role Markdown annotations", () => {
     ).join("\n");
     const ir = annotated(markdown);
 
-    expect(ir.annotations).toHaveLength(64);
     expect(ir.annotations?.map((span) => ir.text.slice(span.start, span.end))).toEqual(
       Array.from({ length: 64 }, (_, index) => `user[t${index * 2}]`),
     );

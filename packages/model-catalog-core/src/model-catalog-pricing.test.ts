@@ -245,7 +245,6 @@ describe("OpenRouter native pricing", () => {
         ...base,
         overrides: [{ min_prompt_tokens: 100, prompt: "0.000004", completion: "0.00002" }],
       });
-      expect(pricing).toBeDefined();
       if (!pricing) {
         throw new Error("Expected a complete native schedule");
       }

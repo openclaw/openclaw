@@ -61,7 +61,6 @@ describe("Cloud Workers documentation contract", () => {
         typeof entry === "object" && entry.group === "Scaling and operations",
     );
 
-    expect(english).toBeDefined();
     expect(countPage(english?.tabs, CLOUD_WORKER_PAGE)).toBe(1);
     expect(countPage(scaling?.pages, CLOUD_WORKER_PAGE)).toBe(1);
   });
