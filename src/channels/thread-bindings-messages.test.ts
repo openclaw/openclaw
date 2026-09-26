@@ -1,11 +1,34 @@
 // Thread-binding message tests cover user-visible names and lifecycle text.
 import { describe, expect, it } from "vitest";
 import {
+  resolveThreadBindingFarewellText,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
 } from "./thread-bindings-messages.js";
 
 describe("thread-binding names", () => {
+  it.each([
+    { idle: 0.9, max: 0.9, idleLabel: "disabled", maxLabel: "disabled" },
+    { idle: 59_999.9, max: 59_999.9, idleLabel: "<1m", maxLabel: "<1m" },
+    { idle: 60_000.9, max: 3_600_000.9, idleLabel: "1m", maxLabel: "1h" },
+  ])(
+    "normalizes $idle ms idle and $max ms max-age in lifecycle text",
+    ({ idle, max, idleLabel, maxLabel }) => {
+      const params = { idleTimeoutMs: idle, maxAgeMs: max };
+      expect(resolveThreadBindingIntroText({ agentId: "worker", ...params })).toBe(
+        idleLabel === "disabled"
+          ? "⚙️ worker session active. Messages here go directly to this session."
+          : `⚙️ worker session active (idle expiry after ${idleLabel} inactivity; max age ${maxLabel}). Messages here go directly to this session.`,
+      );
+      expect(resolveThreadBindingFarewellText({ reason: "idle-expired", ...params })).toBe(
+        `⚙️ Conversation binding expired after ${idleLabel} of inactivity. Messages here will no longer go to that session.`,
+      );
+      expect(resolveThreadBindingFarewellText({ reason: "max-age-expired", ...params })).toBe(
+        `⚙️ Conversation binding expired at max age of ${maxLabel}. Messages here will no longer go to that session.`,
+      );
+    },
+  );
+
   it("includes lifecycle details in intro text", () => {
     const intro = resolveThreadBindingIntroText({
       agentId: "main",

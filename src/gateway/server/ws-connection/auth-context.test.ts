@@ -1,6 +1,6 @@
 // WebSocket auth-context tests cover token, password, bootstrap, and device-token decision state.
 import { describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
 type ConnectAuthState = Awaited<ReturnType<typeof resolveConnectAuthState>>;
@@ -485,7 +485,7 @@ describe("resolveConnectAuthDecision", () => {
   });
 
   it("serializes concurrent bootstrap-token failures before checking the next attempt", async () => {
-    const rateLimiter = createAuthRateLimiter({
+    const rateLimiter = createGatewayAuthRateLimiter({
       maxAttempts: 3,
       windowMs: 60_000,
       lockoutMs: 60_000,

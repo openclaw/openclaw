@@ -1,9 +1,10 @@
 // Snapshots every SQLite database owned by the frozen backup resource inventory.
-import type { Dirent, Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "@openclaw/fs-safe/path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import {
   sealBackupResourceInventory,
   type BackupCoreDatabase,
@@ -120,53 +121,46 @@ async function discoverBackupSqliteSources(params: {
   const visitedDirectories = new Set<string>();
   const gatewayLockDir = resolveGatewayLockDir(params.inventory.stateDir);
 
-  async function visit(directoryPath: string): Promise<void> {
-    const resolvedDirectoryPath = path.resolve(directoryPath);
-    if (visitedDirectories.has(resolvedDirectoryPath)) {
-      return;
+  const isRetainedPath = (pathname: string) =>
+    !isPathInside(gatewayLockDir, pathname) && !params.inventory.isVolatile(pathname);
+  for (const directory of [
+    params.inventory.stateDir,
+    ...params.inventory.agentRoots.map(({ sourcePath }) => sourcePath),
+  ]) {
+    const root = path.resolve(directory);
+    if (visitedDirectories.has(root)) {
+      continue;
     }
-    visitedDirectories.add(resolvedDirectoryPath);
-
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(resolvedDirectoryPath, { withFileTypes: true });
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return;
-      }
-      throw error;
-    }
-
-    for (const entry of entries) {
-      const entryPath = path.join(resolvedDirectoryPath, entry.name);
-      if (isPathInside(gatewayLockDir, entryPath) || params.inventory.isVolatile(entryPath)) {
-        continue;
-      }
-      if (entry.isDirectory()) {
+    visitedDirectories.add(root);
+    const { entries, failedDirs } = await walkDirectory(root, {
+      symlinks: "include",
+      include: (entry) =>
+        (entry.kind === "file" || entry.kind === "symlink") &&
+        isRetainedPath(entry.path) &&
+        classifyBackupSqliteSource(entry.path, params.inventory) === "sqlite",
+      descend: (entry) => {
         if (
-          params.inventory.isTraversable(entryPath) &&
-          !params.inventory.isPackageContent(entryPath)
+          visitedDirectories.has(entry.path) ||
+          !isRetainedPath(entry.path) ||
+          !params.inventory.isTraversable(entry.path) ||
+          params.inventory.isPackageContent(entry.path)
         ) {
-          await visit(entryPath);
+          return false;
         }
-        continue;
-      }
-      if (
-        (!entry.isFile() && !entry.isSymbolicLink()) ||
-        classifyBackupSqliteSource(entryPath, params.inventory) !== "sqlite"
-      ) {
-        continue;
-      }
-      discoveredSourcePaths.add(entryPath);
+        visitedDirectories.add(entry.path);
+        return true;
+      },
+    });
+    const failure = failedDirs.find(({ error }) => !hasErrnoCode(error, "ENOENT"));
+    if (failure) {
+      throw failure.error;
+    }
+    for (const entry of entries) {
+      discoveredSourcePaths.add(entry.path);
       if (entry.name.endsWith(".sqlite")) {
-        snapshotPaths.add(entryPath);
+        snapshotPaths.add(entry.path);
       }
     }
-  }
-
-  await visit(params.inventory.stateDir);
-  for (const { sourcePath } of params.inventory.agentRoots) {
-    await visit(sourcePath);
   }
 
   for (const sourcePath of params.inventory.coreDatabaseSourcePaths) {

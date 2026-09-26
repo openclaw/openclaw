@@ -91,9 +91,8 @@ export type BackgroundTasksHost = TaskTranscriptHost & {
   chatSecondaryReadsReady?: (explicit?: boolean) => boolean;
 };
 
-// The chat rail stays bounded to its session while the full Tasks page drains
-// every active page. A separate active query still keeps long-running work
-// from hiding behind newer terminal records here.
+// The chat rail stays bounded to its session. A separate active query keeps
+// long-running work from hiding behind newer terminal records.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 const TASK_LIST_MAX_ATTEMPTS = 2;

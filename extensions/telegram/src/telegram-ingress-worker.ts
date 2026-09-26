@@ -70,15 +70,7 @@ type TelegramIngressWorkerHandle = {
   onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
   ackSpooledUpdate?(
     requestId: string,
-    result:
-      | {
-          ok: true;
-          updateId: number;
-        }
-      | {
-          ok: false;
-          message: string;
-        },
+    result: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
   ): void;
   stop(): Promise<void>;
   task(): Promise<void>;

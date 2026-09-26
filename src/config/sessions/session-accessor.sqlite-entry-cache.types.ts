@@ -25,6 +25,7 @@ export type SessionSharingEntry = Pick<
   | "sessionId"
   | "updatedAt"
   | "lifecycleRevision"
+  | "archivedAt"
   | "visibility"
   | "incognito"
   | "createdActor"

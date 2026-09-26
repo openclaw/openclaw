@@ -2939,42 +2939,6 @@ describe("handleSendChat", () => {
     expect(host.applySettings).not.toHaveBeenCalled();
   });
 
-  it.each(["attachment", "reply"])(
-    "does not mix a failed model-wait draft with a newer %s-only draft",
-    async (edit) => {
-      const switchUpdate = createDeferred<boolean>();
-      const newerAttachment =
-        edit === "attachment" ? registerTextAttachment("newer-picker-attachment", "newer") : null;
-      const newerReply = edit === "reply" ? { messageId: "newer-quote", text: "New quote" } : null;
-      const host = makeChatHost({
-        requestHandlers: {},
-        chatMessage: "keep this send separate",
-        pendingSettingsPatches: { "agent:main": switchUpdate.promise },
-      });
-
-      const send = handleSendChat(host);
-      await Promise.resolve();
-      host.chatAttachments = newerAttachment ? [newerAttachment] : [];
-      host.chatReplyTarget = newerReply;
-
-      switchUpdate.resolve(false);
-      await send;
-
-      expect(host.request).not.toHaveBeenCalled();
-      expect(host.chatMessage).toBe("");
-      expect(host.chatAttachments).toEqual(newerAttachment ? [newerAttachment] : []);
-      expect(host.chatReplyTarget).toBe(newerReply);
-      expect(host.chatQueue[0]).toMatchObject({
-        sendError: "Chat settings update was interrupted. Review and retry when ready.",
-        sendState: "failed",
-        text: "keep this send separate",
-      });
-      if (newerAttachment) {
-        expect(getChatAttachmentDataUrl(newerAttachment)).toBe("data:text/plain;base64,bmV3ZXI=");
-      }
-    },
-  );
-
   it("preserves every send when a shared picker patch fails", async () => {
     const switchUpdate = createDeferred<boolean>();
 

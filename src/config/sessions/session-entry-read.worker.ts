@@ -18,6 +18,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
+import { readSelectedSessionEntryMetadataInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-read.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
@@ -45,10 +46,12 @@ export function readExactSessionEntriesWithLifecycle(
 ): SessionExactEntriesWorkerResult {
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      request.projection === "backing"
+      request.projection === "backing" || request.projection === "list"
         ? {
             kind: "session-exact-entries" as const,
-            entries: readSessionBackingFactsInDatabase(
+            entries: (request.projection === "list"
+              ? readSelectedSessionEntryMetadataInDatabase
+              : readSessionBackingFactsInDatabase)(
               database,
               request.sessionKeys,
               request.continuation,
@@ -59,7 +62,7 @@ export function readExactSessionEntriesWithLifecycle(
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
               if (request.projection === "creation") {
-                const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+                const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
                 if (
                   typeof identity !== "string" ||
@@ -77,6 +80,7 @@ export function readExactSessionEntriesWithLifecycle(
                   creation: {
                     ...readSessionCreationSnapshotInDatabase(database, sessionKey),
                     databaseIdentity: identity,
+                    databasePath: filename,
                   },
                 };
               }

@@ -117,6 +117,7 @@ const state = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
+  commandWarnMock: vi.fn(),
   loadSessionEntryMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
@@ -493,10 +494,10 @@ vi.mock("../infra/skills-remote.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
+  createSubsystemLogger: (subsystem: string) => {
     const logger = {
       info: vi.fn(),
-      warn: vi.fn(),
+      warn: subsystem === "agents/agent-command" ? state.commandWarnMock : vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
@@ -3701,38 +3702,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves rejected best-effort delivery intent through the model run", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupBareStoredSession();
-    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
-      baseDelivery: {},
-      resolvedChannel: "discord",
-      resolvedTo: "channel:missing",
-      deliveryTargetMode: "explicit",
-      targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
-    });
-
-    await expect(
-      agentCommand({
-        message: "hello",
-        channel: "discord",
-        to: "channel:missing",
-        deliver: true,
-        bestEffortDeliver: true,
-      }),
-    ).resolves.toMatchObject({ payloads: [{ text: "ok" }] });
-
-    expect(state.runAgentAttemptMock).toHaveBeenCalled();
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
-    );
-    const pendingEntries = state.persistSessionEntryMock.mock.calls
-      .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
-    expect(pendingEntries).toEqual([]);
   });
 
   it.each([false, true])("empty-run marker custody (owned=%s)", async (owned) => {

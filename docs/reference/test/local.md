@@ -340,6 +340,12 @@ For local PR land/gate checks, run:
 - `pnpm test`
 - `pnpm check:docs`
 
+`pnpm check --base <ref>` pins the line-cap, max-lines suppression, and assertion
+safety ratchets to the merge base of `HEAD` and that ref. Native PR gates pass
+their candidate's fork from the captured main snapshot, so inherited main
+changes retain their allowance even when the shared `origin/main` ref is stale.
+Other check stages still run normally.
+
 If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`

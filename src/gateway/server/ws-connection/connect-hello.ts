@@ -41,11 +41,11 @@ import {
   WEBSOCKET_OPEN_READY_STATE,
 } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../health-refresh-admission.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
-import { broadcastPresenceSnapshot } from "../presence-events.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -116,11 +116,19 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const sessionRowProjection = getSessionRowProjection(buildRequestContext());
+  while (sessionRowProjection?.needsMembershipPreparation()) {
+    await sessionRowProjection.prepareMembership();
+    if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
+      throw new Error("Gateway connection closed before hello");
+    }
+  }
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
     revisionProjector: buildRequestContext().configRevisionProjector,
+    sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -436,6 +444,6 @@ export async function sendGatewayHello(
   ) {
     // The row is already in hello's snapshot. Notify established readers now,
     // without queueing this connection's redundant snapshot ahead of hello.
-    broadcastPresenceSnapshot(buildRequestContext());
+    buildRequestContext().publishPresence();
   }
 }

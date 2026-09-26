@@ -222,11 +222,11 @@ describe("plugin npm extended-stable workflow", () => {
     ["beta publication", "beta", "beta", "full-release-validation", false],
     ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
     [
-      "waived stable publication",
+      "retired waiver cannot qualify stable publication",
       "beta",
       "latest",
       "full-release-validation",
-      true,
+      false,
       "Operator approved soak waiver",
     ],
     ["unwaived stable publication", "beta", "latest", "full-release-validation", false],
@@ -292,17 +292,9 @@ describe("plugin npm extended-stable workflow", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "round-trips attested stable/full and waived beta bootstrap approvals and retains beta",
+    "round-trips attested stable/full bootstrap approvals and retains beta publication",
     () => {
-      for (const input of [
-        { releaseProfile: "stable" },
-        { releaseProfile: "full" },
-        {
-          releaseProfile: "beta",
-          stableSoakWaiver: 'Operator approved "stable" publication.\nSoak waived.',
-          stableSoakWaiverSource: "explicit",
-        },
-      ]) {
+      for (const input of [{ releaseProfile: "stable" }, { releaseProfile: "full" }]) {
         const result = runStableBootstrapAdmission({ input });
         expect(result.status, result.stderr).toBe(0);
       }
@@ -324,6 +316,16 @@ describe("plugin npm extended-stable workflow", () => {
       { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
     ],
     ["profile", { approval: { releaseProfile: "beta" } }],
+    [
+      "retired waiver",
+      {
+        approval: {
+          releaseProfile: "beta",
+          stableSoakWaiver: "2026.9.3 approved",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
     ["empty waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: "" } }],
     [
       "blank waiver",
