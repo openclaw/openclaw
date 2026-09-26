@@ -396,7 +396,7 @@ function respondCronJobNotFound(
     undefined,
     errorShape(
       ErrorCodes.INVALID_REQUEST,
-      `${message} For cross-session management, use a fresh authenticated Control UI administrator turn or the Automations page.`,
+      `${message} For cross-session management, use a fresh authenticated Control UI administrator turn, a fresh configured owner chat turn, or the Automations page.`,
       {
         details: { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId },
       },

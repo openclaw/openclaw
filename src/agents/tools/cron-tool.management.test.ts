@@ -20,7 +20,7 @@ import {
 } from "./gateway-caller-context.js";
 
 async function withAdminTool(
-  origin: "local" | "unknown",
+  origin: "local" | "unknown" | "external",
   run: (fixture: {
     tool: ReturnType<typeof createCronTool>;
     calls: Array<{ method: string; params: unknown }>;
@@ -31,11 +31,16 @@ async function withAdminTool(
   const runId = "admin-management-tool-run";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const capability = createCronCreatorAuthorityCapability(runId, { kind: origin }, true)!;
+  const capability = createCronCreatorAuthorityCapability(
+    runId,
+    origin === "external" ? { kind: origin, channel: "slack" } : { kind: origin },
+    origin === "external" ? { source: "channel-owner", isCurrent: () => true } : true,
+  )!;
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: "main",
-    sessionKey: "agent:main:control-ui",
+    sessionKey:
+      origin === "external" ? "agent:main:slack:direct:user:uowner" : "agent:main:control-ui",
     operationalRunInstance,
     delegatedAuthority: { ...authority, kind: "local" },
   };
@@ -96,6 +101,8 @@ describe("Control UI admin automation management tool", () => {
     ["local", true],
     ["unknown", true],
     ["unknown", false],
+    ["external", true],
+    ["external", false],
   ] as const)(
     "forwards a normalized partial update without recapturing creator authority (%s, trigger=%s)",
     async (origin, withTrigger) => {

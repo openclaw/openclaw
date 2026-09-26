@@ -8,6 +8,7 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
   type CronCreatorAuthorityRunScope,
+  type CronManagementEntitlement,
 } from "../gateway/cron-creator-authority-grant.js";
 import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type {
@@ -32,11 +33,11 @@ export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
 export function createCronCreatorAuthorityCapability(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
-  controlUiAdmin?: true,
+  managementEntitlement?: true | CronManagementEntitlement,
 ): CronCreatorAuthorityCapability | undefined {
   const normalizedRunId = runId.trim();
   return normalizedRunId
-    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin, controlUiAdmin)
+    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin, managementEntitlement)
     : undefined;
 }
 
@@ -49,9 +50,11 @@ export function bindCronManagementGrant(runId: string | undefined) {
   const scope = activeCronCreatorAuthority.getStore();
   const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
   if (
-    !scope?.controlUiAdmin ||
+    !scope?.managementEntitlement ||
     !scope.active ||
     scope.signal.aborted ||
+    (scope.managementEntitlement.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent()) ||
     scope.runId !== runId ||
     !authority ||
     authority.operationalRunInstance.runId !== runId ||
@@ -138,7 +141,7 @@ function bindCronCreatorAuthorityResolver(params: {
     !normalizedRunId ||
     authority?.active !== true ||
     authority.runId !== normalizedRunId ||
-    (authority.controlUiAdmin && authority.callerOrigin.kind === "unknown")
+    (authority.managementEntitlement && authority.callerOrigin.kind === "unknown")
   ) {
     return undefined;
   }

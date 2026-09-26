@@ -25,11 +25,16 @@ const activeManagement = new AsyncLocalStorage<{
   assertActive: () => void;
 }>();
 
+export type CronManagementEntitlement =
+  | Readonly<{ source: "control-ui-admin" }>
+  | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
+
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;
   readonly callerOrigin: CronScheduledToolCallerOrigin;
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
+  readonly managementEntitlement?: CronManagementEntitlement;
   readonly controlUiAdmin?: true;
   active: boolean;
   abort: () => void;
@@ -57,15 +62,21 @@ function expiredAuthorityError(): Error & { status: number } {
 export function createCronCreatorAuthorityRunScope(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
-  controlUiAdmin?: true,
+  entitlement?: true | CronManagementEntitlement,
 ): CronCreatorAuthorityRunScope {
+  // Preserve the September 4 harness contract for existing Control UI callers.
+  const managementEntitlement =
+    entitlement === true ? { source: "control-ui-admin" as const } : entitlement;
   const abortController = new AbortController();
   return {
     runId,
     callerOrigin: normalizeCronScheduledToolCallerOrigin(callerOrigin),
     signal: abortController.signal,
     grantTokens: new Set(),
-    ...(controlUiAdmin ? { controlUiAdmin } : {}),
+    ...(managementEntitlement ? { managementEntitlement } : {}),
+    get controlUiAdmin(): true | undefined {
+      return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
+    },
     active: true,
     abort: () => abortController.abort(expiredAuthorityError()),
   };
@@ -77,17 +88,23 @@ export function mintCronCreatorAuthorityGrant(
   runtimeAuthority?: CronRuntimeAuthority,
   management?: CronManagementBinding,
 ): CronCreatorAuthorityGrant {
-  if (!scope.active || scope.signal.aborted || operationSignal?.aborted) {
+  if (
+    !scope.active ||
+    scope.signal.aborted ||
+    operationSignal?.aborted ||
+    (scope.managementEntitlement?.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent())
+  ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
-  if (!management && scope.controlUiAdmin && scope.callerOrigin.kind === "unknown") {
+  if (!management && scope.managementEntitlement && scope.callerOrigin.kind === "unknown") {
     throw new TypeError(
       "Automation creation is not granted to this turn. Use the Automations page to create an automation.",
     );
   }
   if (
     management &&
-    (!scope.controlUiAdmin ||
+    (!scope.managementEntitlement ||
       !CRON_MANAGEMENT_METHODS.some((method) => method === management.method) ||
       management.authority.operationalRunInstance.runId !== scope.runId ||
       !validateAgentRunDelegatedAuthority(management.authority))
@@ -143,7 +160,7 @@ export function revokeCronCreatorAuthorityRunScope(scope: CronCreatorAuthorityRu
 
 function expiredManagementError(): TypeError {
   return new TypeError(
-    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated Control UI administrator turn, or use the Automations page.",
+    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated Control UI administrator turn or configured owner chat turn, or use the Automations page.",
   );
 }
 
@@ -176,6 +193,8 @@ export async function withCronManagementGrant<T>(
       !entry.scope.active ||
       entry.scope.signal.aborted ||
       entry.operationSignal?.aborted ||
+      (entry.scope.managementEntitlement?.source === "channel-owner" &&
+        !entry.scope.managementEntitlement.isCurrent()) ||
       Date.now() >= management.expiresAtMs ||
       !validateAgentRunDelegatedAuthority(management.authority)
     ) {

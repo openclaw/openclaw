@@ -18,6 +18,7 @@ import {
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
@@ -28,6 +29,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { isConfiguredCommandOwner } from "../command-auth.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
@@ -573,12 +575,21 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ? (opts?.runId ?? crypto.randomUUID())
     : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
+  const cronOwner = {
+    channel: messageProvider,
+    accountId: replyRoute.accountId,
+    senderId: normalizeOptionalString(command.senderId),
+  };
   const createdCronCreatorAuthorityCapability =
     !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
-      ? createCronCreatorAuthorityCapability(authorityRunId, {
-          kind: "external",
-          channel: messageProvider,
-        })
+      ? createCronCreatorAuthorityCapability(
+          authorityRunId,
+          { kind: "external", channel: messageProvider },
+          {
+            source: "channel-owner",
+            isCurrent: () => isConfiguredCommandOwner(getRuntimeConfig(), cronOwner),
+          },
+        )
       : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;

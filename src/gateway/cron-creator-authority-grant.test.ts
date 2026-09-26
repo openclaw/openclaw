@@ -14,6 +14,7 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
   withCronManagementGrant,
+  type CronManagementEntitlement,
 } from "./cron-creator-authority-grant.js";
 
 afterEach(() => {
@@ -21,14 +22,14 @@ afterEach(() => {
   resetAgentRunRegistryForTest();
 });
 
-function createManagementFixture(controlUiAdmin = true) {
+function createManagementFixture(entitlement: boolean | CronManagementEntitlement = true) {
   const runId = "run-admin-management";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const scope = createCronCreatorAuthorityRunScope(
     runId,
     { kind: "local" },
-    controlUiAdmin ? true : undefined,
+    entitlement === false ? undefined : entitlement,
   );
   const operation = new AbortController();
   const identity: AgentRuntimeIdentity = {
@@ -94,6 +95,45 @@ describe("legacy cron creator scope cleanup", () => {
 
 describe("cron management authority grants", () => {
   const denied = /Retry from a fresh authenticated Control UI administrator turn/;
+
+  it("lets a live channel owner redeem management without Control UI authority", async () => {
+    const fixture = createManagementFixture({ source: "channel-owner", isCurrent: () => true });
+    expect(fixture.scope.controlUiAdmin).toBeUndefined();
+    await expect(
+      withCronManagementGrant(fixture.mint(), fixture.identity, "cron.get", async () => "allowed"),
+    ).resolves.toBe("allowed");
+  });
+
+  it.each(["mint", "redeem", "commit"] as const)(
+    "rejects channel owner revocation before %s",
+    async (phase) => {
+      let currentOwner = true;
+      const fixture = createManagementFixture({
+        source: "channel-owner",
+        isCurrent: () => currentOwner,
+      });
+      const effect = vi.fn();
+      if (phase === "mint") {
+        currentOwner = false;
+        expect(fixture.mint).toThrow(denied);
+        return;
+      }
+      const grant = fixture.mint();
+      if (phase === "redeem") {
+        currentOwner = false;
+      }
+      await expect(
+        withCronManagementGrant(grant, fixture.identity, "cron.get", async () => {
+          const assertActive = getCronManagementAuthority(fixture.identity)!;
+          await Promise.resolve();
+          currentOwner = false;
+          assertActive();
+          effect();
+        }),
+      ).rejects.toThrow(denied);
+      expect(effect).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains a redeemed queued operation until its exact run closes, without permitting replay", async () => {
     const fixture = createManagementFixture();
