@@ -182,6 +182,39 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("recoverStaleClaims does not consume retry budget or erase the previous failure", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 10;
+      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue("evt", { text: "x" }, { receivedAt: 1 });
+      // A real handler failure consumes budget and records the error.
+      const claimed = await queue.claim("evt", { ownerId: "worker-1" });
+      if (!claimed) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      expect(await queue.release(claimed, { lastError: "real failure", releasedAt: 20 })).toBe(
+        true,
+      );
+
+      // A replacement claims the event, then its owner is lost (lease expired or
+      // process died). Recovery returns the row without a real handler failure.
+      const replacement = await queue.claim("evt", { ownerId: "worker-2" });
+      if (!replacement) {
+        throw new Error("Expected a reclaimed ingress event");
+      }
+      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 30 })).toBe(1);
+
+      // Owner-loss recovery must not consume retry budget nor erase the previous
+      // real failure (same contract as release with recordAttempt: false).
+      expect((await queue.listPending()).find((record) => record.id === "evt")).toMatchObject({
+        attempts: 1,
+        lastAttemptAt: 20,
+        lastError: "real failure",
+      });
+    });
+  });
+
   it("claims, releases, and skips blocked lanes", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;

@@ -970,15 +970,16 @@ export function createChannelIngressQueue<
           tx.db,
           kysely
             .updateTable("channel_ingress_events")
-            .set((eb) => ({
+            .set({
               status: "pending",
               claim_token: null,
               claim_owner: null,
               claimed_at: null,
-              attempts: eb("attempts", "+", 1),
-              last_attempt_at: releaseOptions.releasedAt,
+              // Recovery returns a claim whose owner was lost (lease expired or
+              // process died). That is not a handler failure, so it must not
+              // consume retry budget nor erase the previous real failure.
               updated_at: releaseOptions.releasedAt,
-            }))
+            })
             .where("queue_name", "=", queueName)
             .where("event_id", "=", eventId)
             .where("status", "=", "claimed")
