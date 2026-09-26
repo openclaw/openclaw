@@ -124,6 +124,153 @@ function functionDefinition(source: string, name: string): string {
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction + 1);
 }
 
+function runReleaseReconcileFixture(scenario: string) {
+  const fixture = mkdtempSync(path.join(tmpdir(), "openclaw-ios-reconcile-fastlane-"));
+  const outputPath = path.join(fixture, "observation.json");
+  const source = readFastfile();
+  const ruby = String.raw`
+require "json"
+require "fileutils"
+require "time"
+
+module UI
+  def self.user_error!(message); raise message; end
+end
+
+module Spaceship
+  module ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+
+BuildBetaDetail = Struct.new(:internal_build_state)
+Build = Struct.new(
+  :id, :app_version, :version, :platform, :processing_state, :expired, :build_beta_detail
+)
+Upload = Struct.new(
+  :id, :cf_build_short_version_string, :cf_build_version, :platform, :state, :uploaded_date
+)
+Group = Struct.new(:id, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    builds
+  end
+end
+App = Struct.new(:id, :bundle_id, :builds, :groups) do
+  def get_builds(**)
+    builds
+  end
+  def get_beta_groups(**)
+    groups
+  end
+end
+
+${functionDefinition(source, "normalized_app_store_timestamp")}
+${functionDefinition(source, "ios_release_reconcile_observation!")}
+
+group_id = "group-primary"
+build = Build.new(
+  "build-1", "2026.9.20", "1", "IOS", "VALID", false,
+  BuildBetaDetail.new("READY_FOR_BETA_TESTING")
+)
+upload = Upload.new(
+  "upload-1", "2026.9.20", "1", "IOS",
+  { "state" => "COMPLETE", "errors" => [], "infos" => [], "warnings" => [] },
+  "2026-09-10T00:55:00Z"
+)
+target = Group.new(group_id, true, true, [build])
+other = Group.new("other-group", true, false, [])
+builds = [build]
+uploads = [upload]
+groups = [target, other]
+
+case ARGV.fetch(0)
+when "scalar-state"
+  upload.state = "COMPLETE"
+when "missing-state-diagnostics"
+  upload.state = { "state" => "COMPLETE" }
+when "valid-state-diagnostics"
+  upload.state = {
+    "state" => "COMPLETE",
+    "warnings" => [{ "code" => "notice", "description" => "retained warning" }]
+  }
+when "malformed-state-diagnostics"
+  upload.state = {
+    "state" => "COMPLETE",
+    "errors" => nil,
+    "infos" => [],
+    "warnings" => []
+  }
+when "malformed-state-entry"
+  upload.state = {
+    "state" => "COMPLETE",
+    "errors" => [{ "code" => 7 }]
+  }
+when "extra-state-field"
+  upload.state = { "state" => "COMPLETE", "unexpected" => [] }
+when "duplicate-upload"
+  uploads << upload.dup
+when "duplicate-build"
+  builds << build.dup
+when "invalid-build"
+  build.processing_state = "PROCESSING"
+when "extra-assignment"
+  other.builds = [build]
+when "automatic-nontarget"
+  other.has_access_to_all_builds = true
+when "unknown-automatic"
+  other.has_access_to_all_builds = nil
+when "unknown-internal"
+  other.is_internal_group = nil
+when "target-not-automatic"
+  target.has_access_to_all_builds = false
+when "unusable-internal-state"
+  build.build_beta_detail.internal_build_state = "MISSING_EXPORT_COMPLIANCE"
+when "missing-target"
+  groups = [other]
+end
+
+$fixture_app = App.new("1234567890", "com.example.release", builds, groups)
+$fixture_uploads = uploads
+def app_store_connect_target_app
+  $fixture_app
+end
+def app_store_build_uploads(app_id:, short_version:)
+  raise "wrong app" unless app_id == "1234567890" && short_version == "2026.9.20"
+  $fixture_uploads
+end
+
+begin
+  result = ios_release_reconcile_observation!(
+    app_store_version: "2026.9.20",
+    build_number: "1",
+    configured_group_id: group_id,
+    output_path: ARGV.fetch(1)
+  )
+  puts JSON.generate({ ok: true, result: result })
+rescue => error
+  puts JSON.generate({ ok: false, error: error.message })
+end
+`;
+  try {
+    const result = spawnSync("ruby", ["-e", ruby, scenario, outputPath], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return {
+      outcome: JSON.parse(result.stdout) as {
+        error?: string;
+        ok: boolean;
+        result?: Record<string, unknown>;
+      },
+      output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
+    };
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+}
+
 function swiftFunctionBody(source: string, name: string): string {
   const startMarker = `func ${name}(`;
   const start = source.indexOf(startMarker);
@@ -137,6 +284,48 @@ function swiftFunctionBody(source: string, name: string): string {
 }
 
 describe("iOS Fastlane release upload gates", () => {
+  it("observes the existing App Store build without mutating it", () => {
+    for (const scenario of ["accepted", "missing-state-diagnostics", "valid-state-diagnostics"]) {
+      const { outcome, output } = runReleaseReconcileFixture(scenario);
+
+      expect(outcome.ok).toBe(true);
+      expect(JSON.parse(output)).toMatchObject({
+        readOnly: true,
+        upload: { state: { state: "COMPLETE" } },
+        build: { processingState: "VALID", expired: false },
+        groups: [
+          {
+            containsBuild: true,
+            id: "group-primary",
+          },
+        ],
+      });
+    }
+  });
+
+  it.each([
+    ["scalar-state", "complete StateDetail object"],
+    ["malformed-state-diagnostics", "complete StateDetail object"],
+    ["malformed-state-entry", "complete StateDetail object"],
+    ["extra-state-field", "complete StateDetail object"],
+    ["duplicate-upload", "Expected one iOS build upload"],
+    ["duplicate-build", "Expected one iOS TestFlight build"],
+    ["invalid-build", "not VALID and unexpired"],
+    ["extra-assignment", "not assigned exclusively"],
+    ["automatic-nontarget", "non-target internal TestFlight group"],
+    ["unknown-automatic", "group flags must be explicit booleans"],
+    ["unknown-internal", "group flags must be explicit booleans"],
+    ["target-not-automatic", "automatic internal TestFlight group"],
+    ["unusable-internal-state", "not usable for internal testing"],
+    ["missing-target", "does not uniquely contain"],
+  ])("rejects unsafe existing-build state: %s", (scenario, error) => {
+    const { outcome, output } = runReleaseReconcileFixture(scenario);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain(error);
+    expect(output).toBe("");
+  });
+
   it("uses the build attached to the latest public version for notes and rejects missing history", () => {
     const source = String.raw`
 require "json"
