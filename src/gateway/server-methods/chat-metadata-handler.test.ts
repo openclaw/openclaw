@@ -485,7 +485,7 @@ describe("chat metadata dispatch authority", () => {
   );
 
   it.each([
-    { change: "title", patch: { title: "First reply" }, current: true },
+    { change: "title", patch: { displayName: "First reply" }, current: true },
     {
       change: "run start",
       patch: { updatedAt: 2, startedAt: 2, status: "running" },
