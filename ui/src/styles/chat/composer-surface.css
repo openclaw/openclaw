@@ -962,9 +962,8 @@
     margin-left: 0;
   }
 
-  /* `interactive-widget=resizes-content` already keeps the composer above the
-     virtual keyboard. Focus alone also covers hardware keyboards and tests, so
-     it must not collapse the normal bottom breathing room. */
+  /* The shell owns keyboard viewport sizing. Focus alone also covers hardware
+     keyboards, so it must not collapse the normal bottom breathing room. */
   .agent-chat__composer-shell {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;

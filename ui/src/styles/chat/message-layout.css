@@ -1088,9 +1088,3 @@
     outline: 1px solid Highlight;
   }
 }
-
-@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-thread {
-    min-height: 40vh;
-  }
-}

@@ -71,6 +71,7 @@ import {
 } from "./navigation-surface.ts";
 import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { connectShellViewport } from "./shell-viewport.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
 let nativeCommandsOwner: AbortController | undefined;
@@ -102,6 +103,7 @@ export class ShellChromeOwner {
   private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
+  private disconnectViewport: (() => void) | undefined;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
     this.palette = new ShellCommandPaletteOwner(host, {
@@ -119,6 +121,7 @@ export class ShellChromeOwner {
   connect(): void {
     this.disconnect();
     this.listeners = new AbortController();
+    this.disconnectViewport = connectShellViewport(this.host);
     // One connection owns all three targets; abort removes exactly its listeners.
     const options = { signal: this.listeners.signal };
     const host = this.host;
@@ -169,6 +172,8 @@ export class ShellChromeOwner {
     const listenerOwner = this.listeners;
     this.listeners?.abort();
     this.listeners = undefined;
+    this.disconnectViewport?.();
+    this.disconnectViewport = undefined;
     this.navDrawerSwipe.disconnect();
     if (listenerOwner && nativeCommandsOwner === listenerOwner) {
       nativeCommandsOwner = undefined;
