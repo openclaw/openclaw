@@ -327,36 +327,44 @@ function execTimedTransactionStep(params: {
       params.db.exec(params.sql);
     }
     const elapsedMs = Date.now() - startedAt;
-    logSlowTransactionStep({
-      beginAdmission,
-      db: params.db,
-      elapsedMs,
-      options: params.options,
-      step: params.step,
-    });
+    try {
+      logSlowTransactionStep({
+        beginAdmission,
+        db: params.db,
+        elapsedMs,
+        options: params.options,
+        step: params.step,
+      });
+    } catch {
+      // Diagnostics cannot abandon a successful BEGIN or reject a completed COMMIT.
+    }
     return elapsedMs;
   } catch (error) {
-    const elapsedMs = Date.now() - startedAt;
-    if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
-      const sqliteErrcode = sqliteExtendedResultCode(error);
-      const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
-      transactionLogger(params.options).warn("SQLite transaction lock wait failed", {
-        async: false,
-        ...(params.options?.busyTimeoutMs !== undefined
-          ? { busyTimeoutMs: params.options.busyTimeoutMs }
-          : {}),
-        ...transactionDiagnosticLabels(params.db, params.options),
-        code: sqliteErrorCode(error),
-        elapsedMs,
-        failureKind: "lock-contention",
-        isMainThread,
-        pid: process.pid,
-        ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
-        ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
-        step: params.step,
-        threadId,
-        ...(beginAdmission ? { beginAdmission: { ...beginAdmission } } : {}),
-      });
+    try {
+      const elapsedMs = Date.now() - startedAt;
+      if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
+        const sqliteErrcode = sqliteExtendedResultCode(error);
+        const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
+        transactionLogger(params.options).warn("SQLite transaction lock wait failed", {
+          async: false,
+          ...(params.options?.busyTimeoutMs !== undefined
+            ? { busyTimeoutMs: params.options.busyTimeoutMs }
+            : {}),
+          ...transactionDiagnosticLabels(params.db, params.options),
+          code: sqliteErrorCode(error),
+          elapsedMs,
+          failureKind: "lock-contention",
+          isMainThread,
+          pid: process.pid,
+          ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
+          ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
+          step: params.step,
+          threadId,
+          ...(beginAdmission ? { beginAdmission: { ...beginAdmission } } : {}),
+        });
+      }
+    } catch {
+      // Preserve the native failure so its caller retains rollback and retry authority.
     }
     throw error;
   }

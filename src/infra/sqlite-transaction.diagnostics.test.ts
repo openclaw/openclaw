@@ -1,7 +1,9 @@
+import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
@@ -237,6 +239,102 @@ describe("SQLite transaction diagnostics", () => {
           threadId,
         }),
       );
+    },
+  );
+
+  it.each(["immediate", "deferred"] as const)(
+    "preserves successful %s transactions when warnings throw",
+    (mode) => {
+      const db = createDatabase();
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const exec = db.exec.bind(db);
+      const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
+        exec(sql);
+        now += 1_500;
+      });
+      const logger = {
+        warn: vi.fn(() => {
+          throw new Error("diagnostics failed");
+        }),
+      };
+      const withCommit = vi.fn((commit: () => void) => commit());
+      const run =
+        mode === "immediate" ? runSqliteImmediateTransactionSync : runSqliteDeferredTransactionSync;
+      expect(
+        run(
+          db,
+          () => {
+            expect(db.isTransaction).toBe(true);
+            db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
+            return "committed";
+          },
+          { logger, withCommit },
+        ),
+      ).toBe("committed");
+      expect(db.isTransaction).toBe(false);
+      expect(readEntries(db)).toEqual(["committed"]);
+      expect(withCommit).toHaveBeenCalledTimes(1);
+      expect(execSpy.mock.calls.map(([sql]) => sql)).toEqual([
+        mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
+        "COMMIT",
+      ]);
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each(["begin", "commit"] as const)(
+    "preserves the native %s lock failure when its warning throws",
+    async (step) => {
+      await withTestDir({ prefix: "openclaw-sqlite-diagnostics-" }, async (dir) => {
+        const { DatabaseSync } = requireNodeSqlite();
+        const databasePath = path.join(dir, "locked.sqlite");
+        const db = new DatabaseSync(databasePath);
+        const blocker = new DatabaseSync(databasePath);
+        try {
+          db.exec("PRAGMA busy_timeout = 0; CREATE TABLE entries (id TEXT PRIMARY KEY)");
+          blocker.exec(step === "begin" ? "BEGIN IMMEDIATE" : "BEGIN");
+          if (step === "commit") {
+            blocker.prepare("SELECT id FROM entries").all();
+          }
+          let nativeError: unknown;
+          const exec = db.exec.bind(db);
+          const execSpy = vi.spyOn(db, "exec").mockImplementation((sql) => {
+            try {
+              exec(sql);
+            } catch (error) {
+              nativeError = error;
+              throw error;
+            }
+          });
+          const logger = {
+            warn: vi.fn(() => {
+              throw new Error("diagnostics failed");
+            }),
+          };
+          const operation = vi.fn(() => {
+            db.prepare("INSERT INTO entries VALUES ('uncommitted')").run();
+          });
+          let thrown: unknown;
+          try {
+            runSqliteImmediateTransactionSync(db, operation, { logger });
+          } catch (error) {
+            thrown = error;
+          }
+          expect(nativeError).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 5 });
+          expect(thrown).toBe(nativeError);
+          expect(db.isTransaction).toBe(false);
+          expect(readEntries(db)).toEqual([]);
+          expect(operation).toHaveBeenCalledTimes(step === "begin" ? 0 : 1);
+          expect(execSpy.mock.calls.map(([sql]) => sql)).toEqual(
+            step === "begin" ? ["BEGIN IMMEDIATE"] : ["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"],
+          );
+          expect(logger.warn).toHaveBeenCalledTimes(1);
+        } finally {
+          blocker.close();
+          db.close();
+        }
+      });
     },
   );
 
