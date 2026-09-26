@@ -529,9 +529,9 @@ it.each(["current row", "retired store", "retired admission"] as const)(
     const releaseRead = createDeferred();
     const asyncRead = vi
       .spyOn(store, "loadMutationSnapshotAsync")
-      .mockImplementation(async (context) => {
-        const admission = context.admission;
-        context.admission = {
+      .mockImplementation(async (readContext) => {
+        const admission = readContext.admission;
+        readContext.admission = {
           ...admission,
           get identity() {
             return admission.identity;
