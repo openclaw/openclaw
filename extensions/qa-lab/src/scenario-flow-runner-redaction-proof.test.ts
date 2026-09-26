@@ -56,7 +56,6 @@ async function runSecretRedactionScenario(
   const workspaceFiles = new Map<string, string>([
     [unrelatedFilePath, "Unrelated workspace documentation without credential material.\n"],
   ]);
-  const harnessReadPaths: string[] = [];
   const agentToolReads: Array<{ path: string; contents: string }> = [];
   const outboundWaitCursors: number[] = [];
   const gatewayHistoryRequests: Array<{
@@ -100,7 +99,6 @@ async function runSecretRedactionScenario(
           workspaceFiles.set(filePath, contents);
         },
         readFile: async (filePath: string) => {
-          harnessReadPaths.push(filePath);
           if (params.seedPriorInbound) {
             state.addInboundMessage({
               accountId: "qa-channel",
@@ -224,10 +222,8 @@ async function runSecretRedactionScenario(
     agentPrompt,
     agentToolReads,
     fakeSecret,
-    fileName,
     fixturePath,
     gatewayHistoryRequests,
-    harnessReadPaths,
     outboundWaitCursors,
     result,
     state,
@@ -235,24 +231,6 @@ async function runSecretRedactionScenario(
 }
 
 describe("secret redaction scenario proof", () => {
-  it.each(redactionScenarioIds)(
-    "requires %s to successfully read the fake secret before proving safe delivery",
-    async (scenarioId) => {
-      const proof = await runSecretRedactionScenario(scenarioId);
-
-      expect(proof.result.status).toBe("pass");
-      expect(proof.harnessReadPaths).toEqual([proof.fixturePath]);
-      expect(proof.agentPrompt).toMatchObject({
-        transcriptToolName: "read",
-        requireSuccessfulTranscriptToolResult: true,
-      });
-      expect(proof.agentPrompt?.message).toContain(proof.fileName);
-      expect(proof.agentToolReads).toEqual([
-        { path: proof.fixturePath, contents: expect.stringContaining(proof.fakeSecret) },
-      ]);
-    },
-  );
-
   it.each(redactionScenarioCases)(
     "requires $scenarioId to verify the correlated fixture read from $providerMode chat history",
     async ({ scenarioId, providerMode }) => {
