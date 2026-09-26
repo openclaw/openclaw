@@ -91,10 +91,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
 } from "../command/attempt-execution.helpers.js";
-import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { resolveContextTokensForModel } from "../context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
@@ -109,7 +106,6 @@ import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engi
 import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
-import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import {
@@ -156,7 +152,8 @@ import {
   normalizeOptionalMcpContextValue,
 } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { detectNodeClaudePlacement } from "./prepare-claude.js";
+import { resolveCliRunContextBudget } from "./prepare-context-budget.js";
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
@@ -168,7 +165,6 @@ import {
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
   loadCliSessionPromptContext,
-  resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import { prepareCliReplyToolAuthority } from "./tool-authority.js";
@@ -194,11 +190,6 @@ function unsupportedIsolatedCompletionError(backendId: string): Error & { code: 
   return error;
 }
 
-function resolveClaudeCliContextModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  const lower = trimmed.toLowerCase();
-  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
-}
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
@@ -852,45 +843,6 @@ async function prepareCliRunContextWithinReadFence(
   const promptBuildRestrictsTools =
     promptBuildToolsAllow !== undefined &&
     !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
-  const isClaudeCli = isClaudeCliBackendId(params.provider);
-  const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
-  const normalizedContextModelId = isClaudeCli
-    ? resolveClaudeCliContextModelId(normalizedCatalogModel)
-    : normalizedCatalogModel;
-  // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
-  // a canonical id. Resolve both identities and keep the safest owned limit.
-  const contextModelIds = [
-    requestedContextModelId,
-    ...(normalizedContextModelId !== requestedContextModelId ? [normalizedContextModelId] : []),
-  ];
-  const resolveContextModelTokens = (contextModelId: string) =>
-    resolveContextTokensForModel({
-      cfg: params.config,
-      provider: params.provider,
-      modelProvider: backendResolved.modelProvider,
-      model: contextModelId,
-      modelContextWindow: params.modelContextWindow,
-      modelContextTokens: params.modelContextTokens,
-      allowAsyncLoad: false,
-      // A same-name API model may have a different native window from this CLI runtime.
-      allowUnscopedModelLookup: false,
-    });
-  let modelContextTokens: number | undefined;
-  for (const contextModelId of contextModelIds) {
-    const candidateContextTokens = resolveContextModelTokens(contextModelId);
-    if (candidateContextTokens !== undefined) {
-      modelContextTokens =
-        modelContextTokens === undefined
-          ? candidateContextTokens
-          : Math.min(modelContextTokens, candidateContextTokens);
-    }
-  }
-  modelContextTokens ??= DEFAULT_CONTEXT_TOKENS;
-  // Session-selectable context windows (catalog `contextWindows`, e.g. Claude
-  // CLI 200k/1m) cap the resolved window here: the fixed provider contract in
-  // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
-  // so the selected (or default) option must apply after it or a 200k session
-  // would auto-compact against a 1M budget.
   const modelCatalog = params.config
     ? overlayConfiguredModelCatalog({
         catalog: prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir }),
@@ -907,33 +859,19 @@ async function prepareCliRunContextWithinReadFence(
     agentRuntime: backendResolved.id,
     thinkLevel: params.thinkLevel,
   });
-  if (selectableContextEntry) {
-    const contextWindowProfile = resolveModelContextWindowProfile({
-      catalogEntry: selectableContextEntry,
-      selected: params.contextWindow,
-    });
-    // Only an effective option caps the window; the bare catalog scalar stays
-    // subordinate to the fixed provider contract above.
-    if (contextWindowProfile.contextWindow && contextWindowProfile.contextTokens !== undefined) {
-      modelContextTokens = Math.min(modelContextTokens, contextWindowProfile.contextTokens);
-    }
-  }
-  const resolvedContextWindowInfo = resolveContextWindowInfo({
-    cfg: params.config,
+  const { contextWindowInfo, autoReseedHistoryChars } = resolveCliRunContextBudget({
+    config: params.config,
     provider: params.provider,
+    backendModelProvider: backendResolved.modelProvider,
     modelId,
-    modelContextTokens,
-    defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    normalizedCatalogModel,
+    selectedContextWindow: params.contextWindow,
+    // The catalog identity is already selected by resolveCliCatalogCapabilities,
+    // which also owns the thinking level from the same logical/native entry.
+    selectableContextEntry,
+    modelContextWindow: params.modelContextWindow,
+    modelContextTokens: params.modelContextTokens,
   });
-  // The generic guard rechecks the requested id in config. An alias target may
-  // have a tighter owned limit, so the alias-aware result remains an upper bound.
-  const contextWindowInfo =
-    resolvedContextWindowInfo.tokens > modelContextTokens
-      ? { tokens: modelContextTokens, source: "model" as const }
-      : resolvedContextWindowInfo;
-  const autoReseedHistoryChars = isClaudeCli
-    ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
-    : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
@@ -1064,6 +1002,10 @@ async function prepareCliRunContextWithinReadFence(
           runtimePolicyAgentId: params.runtimePolicySessionKey ? policyAgentId : undefined,
           modelProvider,
           modelId,
+          // The finalized budget (session-selected option, configured limits,
+          // alias bound), not the raw catalog inputs on params: the loopback
+          // tools size their projections by the same number the run compacts on.
+          modelContextWindowTokens: contextWindowInfo.tokens,
         })
       : undefined;
   const mcpToolAuthAgentDir = mcpContextBase

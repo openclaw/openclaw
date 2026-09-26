@@ -41,6 +41,14 @@ export type McpLoopbackRequestContext = {
   /** Prepared current-turn identity supplied only by the Gateway-launched run owner. */
   requesterModel?: ProviderModelRef;
   modelHasVision?: boolean;
+  /**
+   * The run's finalized context budget (tokens) as CLI preparation resolved it
+   * (`contextWindowInfo.tokens`): session-selected catalog option, configured
+   * limits and alias bound already applied. Sizes model-facing tool projections
+   * (read budgets, result caps) on the loopback surface the same way the embedded
+   * runner sizes them.
+   */
+  modelContextWindowTokens?: number;
   messageProvider?: string;
   clientCaps?: string[];
   gatewayUiCommandTarget?: import("./ui-command-target.types.js").GatewayUiCommandTarget;
