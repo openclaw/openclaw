@@ -37,6 +37,7 @@ type AgentRoutePath = {
 };
 
 const APP_ROUTE_DEFINITIONS = {
+  "panel-embed": { path: "/apps/panel" },
   settings: { path: "/settings" },
   chat: { path: "/chat" },
   terminal: { path: "/terminal" },

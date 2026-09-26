@@ -336,6 +336,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 }
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
+  "panel-embed": ["panelRightOpen", "chat.sidePanel.label", "tabs.chat"],
   settings: ["settings", "nav.settings", "common.settingsSections"],
   "agents-home": navigationPresentation("bot", "agentsHome"),
   agents: navigationPresentation("bot", "agents"),

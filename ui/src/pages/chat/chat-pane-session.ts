@@ -294,6 +294,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
+    if (this.panelEmbed && this.panelEmbed.panel?.slot !== "conversation") {
+      return;
+    }
     const state = this.state;
     if (!state?.connected || !row) {
       return;

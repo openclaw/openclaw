@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import type { AgentsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
+  isSettingsNavigationRoute,
   isSettingsNavigationRouteVisible,
   navigationIconForRoute,
   scheduleRoutePreload,
@@ -40,6 +41,7 @@ type AgentRosterRow = AgentsListResult["agents"][number];
 
 type SettingsSidebarProps = {
   presentation?: "sidebar" | "embed-list" | "embed-page";
+  navigationChrome?: "host";
   basePath: string;
   activeRouteId: RouteId;
   agents: readonly AgentRosterRow[];
@@ -324,6 +326,9 @@ function renderSettingsConnectionStatus(props: SettingsSidebarProps) {
 }
 
 function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
+  if (props.navigationChrome === "host") {
+    return renderSettingsConnectionStatus(props);
+  }
   return html`<header class="native-embed-header">
     ${
       props.presentation === "embed-page"
@@ -346,7 +351,12 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
 
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   if (props.presentation === "embed-page") {
-    return html`${renderEmbeddedSettingsHeader(props)} ${renderSettingsAgentSelector(props)}`;
+    const showAgentSelector =
+      props.navigationChrome !== "host" ||
+      props.activeRouteId === "settings" ||
+      isSettingsNavigationRoute(props.activeRouteId);
+    return html`${renderEmbeddedSettingsHeader(props)}
+    ${showAgentSelector ? renderSettingsAgentSelector(props) : nothing}`;
   }
   const searchBlockMatches =
     props.searchBlockMatches ??

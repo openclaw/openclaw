@@ -44,6 +44,7 @@ import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import type { PanelEmbedTarget } from "../panel-embed/target.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -158,6 +159,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) agentId?: string;
   @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) panelEmbed?: PanelEmbedTarget;
   @property({ attribute: false }) workContext?: ChatWorkContext;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
