@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getJson, getJsonNoStore, postJson } from "./http.js";
+import { getJson, postJson } from "./http.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,7 +30,7 @@ describe("QA Lab dashboard HTTP", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await getJson("/api/bootstrap");
-    await getJsonNoStore("/api/ui-version");
+    await getJson("/api/ui-version", "no-store");
     await postJson("/api/runner/start", { scenario: "baseline" });
 
     expect(timeout).toHaveBeenCalledTimes(3);
@@ -108,7 +108,7 @@ describe("QA Lab dashboard HTTP", () => {
       ),
     );
 
-    await expect(getJsonNoStore("/api/ui-version")).rejects.toThrow(
+    await expect(getJson("/api/ui-version", "no-store")).rejects.toThrow(
       /\/api\/ui-version: empty JSON response/,
     );
   });

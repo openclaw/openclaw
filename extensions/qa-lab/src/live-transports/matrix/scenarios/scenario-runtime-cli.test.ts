@@ -211,7 +211,7 @@ describe("Matrix QA CLI runtime", () => {
     }
   });
 
-  it("can close stdin after interactive CLI prompts", async () => {
+  it("closes stdin after interactive prompts and settles every waiting caller", async () => {
     const root = await mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-interactive-"),
     );
@@ -240,11 +240,15 @@ describe("Matrix QA CLI runtime", () => {
         "interactive prompt acknowledgement",
         5_000,
       );
+      const firstWait = session.wait();
+      const secondWait = session.wait();
       session.endStdin();
-      const result = await session.wait();
+      const result = await secondWait;
 
       expect(result.stdout).toContain('"input":"yes"');
       expect(result.stdout).toContain('"ended":true');
+      await expect(firstWait).resolves.toEqual(result);
+      await expect(session.wait()).resolves.toEqual(result);
     } finally {
       await rm(root, { force: true, recursive: true });
     }

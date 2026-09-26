@@ -24,6 +24,7 @@ import {
   type RuntimeParityCacheDiagnostics,
 } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
+import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
 export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
@@ -377,25 +378,8 @@ function extractToolCalls(message: Record<string, unknown>): Array<{
       });
     }
   }
-  const rawToolCalls =
-    message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
-  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
-  for (const call of toolCalls) {
-    if (!isMessageRecord(call)) {
-      continue;
-    }
-    const functionRecord = isMessageRecord(call.function) ? call.function : undefined;
-    const tool =
-      readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name) ?? "unknown";
-    calls.push({
-      id:
-        readNonEmptyString(call.id) ??
-        readNonEmptyString(call.toolCallId) ??
-        readNonEmptyString(call.toolUseId),
-      tool,
-      args:
-        call.arguments ?? functionRecord?.arguments ?? call.input ?? functionRecord?.input ?? null,
-    });
+  for (const call of readQaMessageFunctionCalls(message)) {
+    calls.push({ ...call, tool: call.tool ?? "unknown" });
   }
   return calls;
 }
@@ -896,27 +880,10 @@ function extractBootStateLines(logs: string | undefined): string[] {
 
 function buildTranscriptRecords(transcriptBytes: string): RuntimeParityTranscriptRecord[] {
   const records: RuntimeParityTranscriptRecord[] = [];
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const message = isMessageRecord(parsed.message) ? parsed.message : undefined;
-      const role = readNonEmptyString(message?.role);
-      if (
-        !message ||
-        (role !== "user" && role !== "assistant" && role !== "tool" && role !== "toolResult")
-      ) {
-        continue;
-      }
-      records.push({
-        message,
-        role,
-      });
-    } catch {
-      // Ignore malformed QA transcript rows and keep the classifier deterministic.
+  for (const message of readQaTranscriptMessages(transcriptBytes)) {
+    const role = readNonEmptyString(message.role);
+    if (role === "user" || role === "assistant" || role === "tool" || role === "toolResult") {
+      records.push({ message, role });
     }
   }
   return records;

@@ -467,6 +467,45 @@ describe("QA Lab UI evidence render", () => {
     ]);
   });
 
+  it.each([
+    ["most-events", ["a.test", "z.test", "m.test"]],
+    ["most-errors", ["a.test", "z.test", "m.test"]],
+    ["severity", ["z.test", "m.test", "a.test"]],
+    ["alphabetical", ["a.test", "m.test", "z.test"]],
+  ] as const)("orders capture lanes by %s with the same displayed severity", (sort, hosts) => {
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "capture",
+        captureViewMode: "timeline",
+        captureTimelineLaneSort: sort,
+        selectedCaptureEventKey: "1:selected:1000:request",
+        captureEvents: [
+          { host: "z.test", flowId: "selected", ts: 1000, status: 500 },
+          { host: "a.test", flowId: "other", ts: 2000, errorText: "connection failed" },
+          { host: "m.test", flowId: "selected", ts: 3000 },
+          { host: "a.test", flowId: "other", ts: 4000 },
+        ].map((event, index) =>
+          Object.assign(event, {
+            id: index + 1,
+            kind: "request",
+            direction: "outbound",
+            protocol: "https",
+          }),
+        ),
+      }),
+    );
+
+    expect(
+      [...html.matchAll(/data-capture-lane-toggle="([^"]+)"/g)].map((match) => match[1]),
+    ).toEqual(hosts);
+    if (sort === "severity") {
+      expect(html).toContain("severity 77.2");
+      expect(html).toContain("severity 41.2");
+      expect(html).toContain("severity 33.4");
+      expect(html).toContain("1 errors (100%) · focused flow 100% · active now · 1 events");
+    }
+  });
+
   it("maps blocked and skipped evidence statuses to styled tones", () => {
     const html = renderQaLabUi(
       evidenceState({

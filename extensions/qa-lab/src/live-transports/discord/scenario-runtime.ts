@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
@@ -142,9 +143,7 @@ export async function runDiscordScenario(
     });
 
     const failed = await observeProgressTurn(run.errorInput, run.errorFinalText);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_500);
-    });
+    await sleep(1_500);
     await discordQaScenarioSupport.testing.waitForDiscordMessageText({
       token: environment.runtimeEnv.driverBotToken,
       channelId: environment.runtimeEnv.channelId,

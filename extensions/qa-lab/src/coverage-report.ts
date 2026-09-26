@@ -348,18 +348,16 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
     "",
   ];
 
-  lines.push("## By Theme", "");
-  for (const theme of Object.keys(inventory.byTheme).toSorted()) {
-    lines.push(`### ${theme}`, "");
-    pushCoverageIdLines(lines, inventory.byTheme[theme] ?? []);
-    lines.push("");
-  }
-
-  lines.push("## By Surface", "");
-  for (const surface of Object.keys(inventory.bySurface).toSorted()) {
-    lines.push(`### ${surface}`, "");
-    pushCoverageIdLines(lines, inventory.bySurface[surface] ?? []);
-    lines.push("");
+  for (const [title, groups] of [
+    ["Theme", inventory.byTheme],
+    ["Surface", inventory.bySurface],
+  ] as const) {
+    lines.push(`## By ${title}`, "");
+    for (const key of Object.keys(groups).toSorted()) {
+      lines.push(`### ${key}`, "");
+      pushCoverageIdLines(lines, groups[key] ?? []);
+      lines.push("");
+    }
   }
 
   pushScorecardTaxonomyLines(lines, inventory.scorecardTaxonomy);

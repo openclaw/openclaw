@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Crabline channel-driver transport behavior against local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -28,7 +27,6 @@ import { readQaJsonResponse } from "./ignored-response-body.js";
 import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
 import {
   QaStateBackedTransportAdapter,
-  type QaTransportActionName,
   type QaTransportAdapter,
   type QaTransportGatewayConfig,
   type QaTransportNativeCommandInput,
@@ -40,11 +38,7 @@ import {
   waitForQaTransportAccountReady,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
-import type {
-  QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusOutboundMessageInput,
-} from "./runtime-api.js";
+import type { QaBusInboundMessageInput, QaBusMessage } from "./runtime-api.js";
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -258,34 +252,31 @@ function createCrablineState(params: {
             }
           : event;
       const observation = params.adapter.createOutboundObservation({ event: normalizedEvent });
-      const target = observation?.providerTargetKeys
+      if (!observation) {
+        return;
+      }
+      const target = observation.providerTargetKeys
         .map((key) => targetByProviderTarget.get(key))
         .find((candidate) => candidate !== undefined);
-      const outbound: QaBusOutboundMessageInput | null = observation
-        ? target
-          ? {
-              accountId: observation.accountId,
-              senderId: observation.senderId,
-              senderName: observation.senderName,
-              text: observation.text,
-              to: buildQaConversationTarget({
-                chatType: target.conversation.kind,
-                conversationId: target.conversation.id,
-              }),
-              threadId: target.threadId,
-            }
-          : observation.fallbackTarget
-            ? {
-                accountId: observation.accountId,
-                senderId: observation.senderId,
-                senderName: observation.senderName,
-                text: observation.text,
-                to: observation.fallbackTarget,
-              }
-            : null
-        : null;
-      if (outbound) {
-        baseState.addOutboundMessage(outbound);
+      const destination = target
+        ? {
+            to: buildQaConversationTarget({
+              chatType: target.conversation.kind,
+              conversationId: target.conversation.id,
+            }),
+            threadId: target.threadId,
+          }
+        : observation.fallbackTarget
+          ? { to: observation.fallbackTarget }
+          : undefined;
+      if (destination) {
+        baseState.addOutboundMessage({
+          accountId: observation.accountId,
+          senderId: observation.senderId,
+          senderName: observation.senderName,
+          text: observation.text,
+          ...destination,
+        });
       }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
@@ -563,12 +554,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
         }
       : this.#adapter.createProviderReadinessEnv({});
 
-  handleAction = async (_params: {
-    action: QaTransportActionName;
-    args: Record<string, unknown>;
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => {
+  handleAction = async (_params: Parameters<QaStateBackedTransportAdapter["handleAction"]>[0]) => {
     throw new Error(`Crabline channel-driver transport does not support ${_params.action} yet.`);
   };
 

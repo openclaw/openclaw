@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements runtime tool fixture behavior.
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

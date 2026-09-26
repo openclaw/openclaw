@@ -36,12 +36,8 @@ export function getQaProvider(input: QaProviderModeInput): QaProviderDefinition 
   return provider;
 }
 
-function listQaProviderModes() {
-  return PROVIDERS.map((provider) => provider.mode);
-}
-
 export function formatQaProviderModeHelp() {
-  return `Provider mode: ${listQaProviderModes().join(", ")}`;
+  return `Provider mode: ${PROVIDERS.map((provider) => provider.mode).join(", ")}`;
 }
 
 export function listQaStandaloneProviderCommands() {

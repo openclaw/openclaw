@@ -223,6 +223,7 @@ describe("qa suite runtime agent media helpers", () => {
 
   it("applies provider image generation config with transport-required plugins", async () => {
     const env = {
+      gateway: { runtimeEnv: {} },
       providerMode: "mock-openai",
       mock: { baseUrl: "http://127.0.0.1:9999" },
       transport: { requiredPluginIds: ["qa-channel", "browser"] },
@@ -249,6 +250,7 @@ describe("qa suite runtime agent media helpers", () => {
     });
 
     await ensureImageGenerationConfigured({
+      gateway: { runtimeEnv: {} },
       providerMode: "mock-openai",
       mock: { baseUrl: "http://127.0.0.1:9999" },
       transport: { requiredPluginIds: ["qa-channel"] },

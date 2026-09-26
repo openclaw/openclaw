@@ -1,4 +1,3 @@
-// QA Lab Slack credentials, instrumentation, and channel config.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";

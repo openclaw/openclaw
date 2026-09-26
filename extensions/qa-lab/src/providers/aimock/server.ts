@@ -9,8 +9,10 @@ import {
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 
 type AimockRequestSnapshot = {
   raw: string;
@@ -85,40 +87,22 @@ function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
 }
 
 function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "tool") {
-      return getTextContent(message.content) ?? "";
-    }
-  }
-  return "";
+  const message = requestMessages(body).findLast((entry) => entry?.role === "tool");
+  return message ? (getTextContent(message.content) ?? "") : "";
 }
 
 function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: unknown; tool_call_id?: unknown };
-    if (message?.role === "tool" && typeof message.tool_call_id === "string") {
-      return message.tool_call_id;
-    }
-  }
-  return "";
+  const message = requestMessages(body).findLast(
+    (entry) => entry?.role === "tool" && typeof entry.tool_call_id === "string",
+  );
+  return message?.tool_call_id ?? "";
 }
 
 function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as {
-      role?: unknown;
-      isError?: unknown;
-      is_error?: unknown;
-    };
-    if (message?.role === "tool") {
-      return message.isError === true || message.is_error === true;
-    }
-  }
-  return false;
+  const message = asOptionalObjectRecord(
+    requestMessages(body).findLast((entry) => entry?.role === "tool"),
+  );
+  return message?.isError === true || message?.is_error === true;
 }
 
 function countImageInputs(value: unknown): number {
@@ -137,24 +121,6 @@ function countImageInputs(value: unknown): number {
     countImageInputs(record.image_url) +
     countImageInputs(record.source);
   return (imageLikeType ? 1 : 0) + nested;
-}
-
-function resolveProviderVariant(model: string): AimockRequestSnapshot["providerVariant"] {
-  const normalized = model.trim().toLowerCase();
-  const provider = /^([^/:]+)[/:]/.exec(normalized)?.[1] ?? normalized;
-  if (provider === "openai" || provider === "aimock") {
-    return "openai";
-  }
-  if (provider === "anthropic" || provider === "claude-cli") {
-    return "anthropic";
-  }
-  if (/^(?:gpt-|o1-|openai-)/.test(normalized)) {
-    return "openai";
-  }
-  if (/^(?:claude-|anthropic-)/.test(normalized)) {
-    return "anthropic";
-  }
-  return "unknown";
 }
 
 function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): AimockToolFacts {
@@ -181,7 +147,7 @@ function extractRequestFacts(
     ...tools,
     model,
     prompt: extractLastUserText(body),
-    providerVariant: resolveProviderVariant(model),
+    providerVariant: resolveMockProviderVariant(model, "aimock"),
     imageInputCount: countImageInputs(requestMessages(body)),
     ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
     toolOutput: extractToolOutput(body),

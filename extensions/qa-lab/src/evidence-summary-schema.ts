@@ -4,6 +4,7 @@ import { qaEvidenceAssertionSchema, qaEvidenceCoverageSchema } from "./evidence-
 import { qaRuntimePairLaneSchema } from "./scenario-catalog.js";
 import {
   qaMaturityTaxonomyIdentitySchema,
+  qaProofClassSchema,
   qaProofRequirementsSchema,
   qaScorecardEvidenceModeSchema,
 } from "./scorecard-taxonomy.js";
@@ -290,16 +291,7 @@ const qaEvidenceIdentitySchema = z.strictObject({
     .nullable(),
   protocol: nullableStringSchema,
   accountRef: nullableStringSchema,
-  proofClass: z
-    .enum([
-      "fixture-only",
-      "real-plugin/local-protocol",
-      "native-host",
-      "packaged-install/upgrade",
-      "live-channel",
-      "live-provider",
-    ])
-    .nullable(),
+  proofClass: qaProofClassSchema.nullable(),
 });
 
 const qaEvidenceOccurrenceSchema = z.strictObject({

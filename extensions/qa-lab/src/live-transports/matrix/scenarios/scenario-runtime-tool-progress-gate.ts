@@ -9,17 +9,13 @@ import {
 const MATRIX_QA_GATE_CONSUME_TIMEOUT_MS = 5_000;
 const MATRIX_QA_GATE_POLL_INTERVAL_MS = 50;
 
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
-}
-
 async function waitForMatrixMentionProgressGateConsumption(gatePath: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     try {
       await stat(gatePath);
     } catch (error) {
-      if (isErrnoException(error) && error.code === "ENOENT") {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
         return true;
       }
       throw error;
@@ -42,27 +38,17 @@ export async function prepareMatrixMentionProgressGate(
     context.gatewayWorkspaceDir,
     MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   );
-  // Directory existence is the complete handshake. No migration is required:
-  // existing state remains compatible, and the payload-free lifecycle test
-  // verifies upgrade compatibility inside this disposable QA workspace.
+  // The command consumes this payload-free release directory.
   await rm(gatePath, { force: true, recursive: true });
   let closed = false;
-  let gatePromise: Promise<void> | undefined;
   let consumptionPromise: Promise<boolean> | undefined;
-  const waitForConsumption = () => {
-    if (!gatePromise) {
-      gatePromise = mkdir(gatePath);
-    }
-    if (!consumptionPromise) {
-      consumptionPromise = gatePromise.then(() =>
-        waitForMatrixMentionProgressGateConsumption(
-          gatePath,
-          opts.consumeTimeoutMs ?? MATRIX_QA_GATE_CONSUME_TIMEOUT_MS,
-        ),
-      );
-    }
-    return consumptionPromise;
-  };
+  const waitForConsumption = () =>
+    (consumptionPromise ??= mkdir(gatePath).then(() =>
+      waitForMatrixMentionProgressGateConsumption(
+        gatePath,
+        opts.consumeTimeoutMs ?? MATRIX_QA_GATE_CONSUME_TIMEOUT_MS,
+      ),
+    ));
   const release = async () => {
     if (closed) {
       throw new Error("Matrix mention progress gate has already been cleaned up.");

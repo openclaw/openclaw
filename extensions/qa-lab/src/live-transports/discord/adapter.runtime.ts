@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -113,9 +114,7 @@ export async function createDiscordQaTransportAdapter(
           throw error;
         }
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
+      await sleep(250);
     }
   })().catch((error: unknown) => {
     if (!stopped) {

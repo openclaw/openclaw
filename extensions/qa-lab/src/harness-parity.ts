@@ -1,5 +1,4 @@
 import { compareToolCallShape, stableHash } from "./parity-shared.js";
-// Qa Lab plugin module implements harness parity behavior.
 import type {
   RuntimeId,
   RuntimeParityCell,

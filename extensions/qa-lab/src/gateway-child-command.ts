@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway child command bootstrap behavior.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
