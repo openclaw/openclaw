@@ -150,6 +150,7 @@ export async function startGatewayCoreRuntime(input: {
       .measure("runtime.early", () =>
         loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
+            scheduler: runtime.scheduler,
             minimalTestGateway,
             isClosing: () => runtime.lifecycle.closePreludeStarted,
             updateCanary: runtime.opts.updateCanary,
