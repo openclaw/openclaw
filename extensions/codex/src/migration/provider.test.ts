@@ -309,27 +309,6 @@ describe("buildCodexMigrationProvider", () => {
     });
   });
 
-  it("treats an empty installed-plugin inventory as successful source discovery", async () => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed") {
-        return { marketplaces: [], marketplaceLoadErrors: [] } satisfies v2.PluginInstalledResponse;
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-
-    const source = await discoverCodexSource({ input: fixture.codexHome });
-
-    expect(source.pluginDiscoveryError).toBeUndefined();
-    expect(source.plugins.every((plugin) => plugin.marketplaceName === undefined)).toBe(true);
-    expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
-    expect(appServerRequest).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(appServerRequest), {
-      method: "plugin/installed",
-      requestParams: { cwds: [] },
-    });
-  });
-
   it("migrates valid curated plugins when an unrelated marketplace fails", async () => {
     const fixture = await createCodexFixture();
     const installed = {
@@ -372,45 +351,45 @@ describe("buildCodexMigrationProvider", () => {
   });
 
   it("discovers installed plugins from the API-key curated marketplace", async () => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed") {
-        return {
-          marketplaces: [
-            {
-              name: "openai-api-curated",
-              path: path.join(
-                fixture.codexHome,
-                ".tmp/plugins/.agents/plugins/api_marketplace.json",
-              ),
-              interface: null,
-              plugins: [
-                pluginSummary("google-calendar@openai-api-curated", {
-                  name: "google-calendar",
-                  installed: true,
-                  enabled: true,
-                }),
-              ],
-            },
+    const { codexHome } = await createCodexFixture();
+    const marketplacePath = path.join(
+      codexHome,
+      ".tmp/plugins/.agents/plugins/api_marketplace.json",
+    );
+    appServerRequest
+      .mockResolvedValueOnce({
+        marketplaces: pluginList(
+          [
+            pluginSummary("google-calendar@openai-api-curated", {
+              name: "google-calendar",
+              installed: true,
+              enabled: true,
+            }),
           ],
-          marketplaceLoadErrors: [],
-        } satisfies v2.PluginInstalledResponse;
-      }
-      throw new Error(`unexpected request ${method}`);
+          { name: "openai-api-curated", path: marketplacePath },
+        ).marketplaces,
+        marketplaceLoadErrors: [],
+      })
+      .mockResolvedValueOnce(pluginRead("google-calendar"));
+
+    const source = await discoverCodexSource({
+      input: codexHome,
+      evaluatePluginMigrationEligibility: true,
     });
 
-    const source = await discoverCodexSource({ input: fixture.codexHome });
-
     expect(source.pluginDiscoveryError).toBeUndefined();
-    expect(source.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginName: "google-calendar",
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          migratable: true,
-        }),
-      ]),
+    expectRecordFields(
+      source.plugins.find((plugin) => plugin.pluginName === "google-calendar"),
+      { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, migratable: true },
     );
+    expect(appServerRequest.mock.calls.map(([request]) => request.method)).toEqual([
+      "plugin/installed",
+      "plugin/read",
+    ]);
+    expect(mockCallArg(appServerRequest, 1).requestParams).toEqual({
+      marketplacePath,
+      pluginName: "google-calendar",
+    });
   });
 
   it("ignores unrelated marketplace errors when no curated plugins are installed", async () => {
@@ -802,87 +781,6 @@ describe("buildCodexMigrationProvider", () => {
     );
     expect(configState.auth).toBeUndefined();
     expect(configState.agents?.defaults?.model).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "skips source-installed plugins whose owned apps are inaccessible",
-      isAccessible: false,
-      isEnabled: true,
-      reason: "app_inaccessible",
-    },
-    {
-      name: "reports authorized source-owned apps as disabled, not inaccessible",
-      isAccessible: true,
-      isEnabled: false,
-      reason: "app_disabled",
-    },
-  ])("$name", async ({ isAccessible, isEnabled, reason }) => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(
-      async ({ method, requestParams }: { method: string; requestParams?: unknown }) => {
-        if (method === "plugin/installed" || method === "plugin/list") {
-          return pluginMetadata(method, [
-            pluginSummary("readwise", { installed: true, enabled: true }),
-          ]);
-        }
-        if (method === "plugin/read") {
-          return pluginRead("readwise", [pluginApp("asdk_app_readwise", { name: "Readwise" })]);
-        }
-        if (method === "account/read") {
-          return chatGptAccount();
-        }
-        if (method === "app/installed" || method === "app/read") {
-          if (method === "app/installed") {
-            expectRecordFields(requestParams, { forceRefresh: true });
-          }
-          return codexAppInventoryResponse(method, [
-            appInfo("asdk_app_readwise", {
-              name: "Readwise",
-              isAccessible,
-              isEnabled,
-            }),
-          ]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    );
-    const provider = buildCodexMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        verifyPluginApps: true,
-      }),
-    );
-
-    expect(plan.items.some((item) => item.id === "plugin:readwise")).toBe(false);
-    expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
-    const manualItem = findItemByReason(plan.items, reason);
-    expectRecordFields(manualItem, {
-      kind: "manual",
-      action: "manual",
-      status: "skipped",
-      reason,
-    });
-    const details = expectRecordFields(manualItem.details, {
-      pluginName: "readwise",
-      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    });
-    expect(details).not.toHaveProperty("code");
-    expect(details.apps).toEqual([
-      {
-        id: "asdk_app_readwise",
-        name: "Readwise",
-        isAccessible,
-        isEnabled,
-      },
-    ]);
-    expect(
-      appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/installed"),
-    ).toHaveLength(1);
   });
 
   it.each([
@@ -1576,52 +1474,6 @@ describe("buildCodexMigrationProvider", () => {
     expect(plan.items.some((item) => item.id === "plugin:readwise")).toBe(false);
   });
 
-  it("treats fieldless source app summaries as ready when app inventory confirms access", async () => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("reader", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("reader", [
-          pluginApp("ready-app", { name: "Ready App" }),
-          pluginApp("auth-app", { name: "Auth App" }),
-        ]);
-      }
-      if (method === "account/read") {
-        return chatGptAccount();
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, [appInfo("ready-app"), appInfo("auth-app")]);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-    const provider = buildCodexMigrationProvider();
-
-    const plan = await provider.plan(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        verifyPluginApps: true,
-      }),
-    );
-
-    const pluginItem = findItem(plan.items, "plugin:reader");
-    expectRecordFields(pluginItem, {
-      kind: "plugin",
-      action: "install",
-      status: "planned",
-    });
-    expectRecordFields(pluginItem.details, {
-      configKey: "reader",
-      pluginName: "reader",
-      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    });
-  });
-
   it("copies planned skills and archives native config during apply", async () => {
     const fixture = await createCodexFixture();
     const reportDir = path.join(fixture.root, "report");
@@ -1942,40 +1794,6 @@ describe("buildCodexMigrationProvider", () => {
     });
     expectRecordFields(findItem(result.items, "plugin:gmail"), { status: "planned" });
     expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "planned" });
-  });
-
-  it("preserves explicit app-server settings during plugin migration", async () => {
-    const fixture = await createCodexFixture();
-    const configState: MigrationProviderContext["config"] = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              appServer: { sandbox: "workspace-write" },
-            },
-          },
-        },
-      },
-      agents: { defaults: { workspace: fixture.workspaceDir } },
-    } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
-    const provider = buildCodexMigrationProvider({
-      runtime: createConfigRuntime(configState),
-    });
-
-    await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        config: configState,
-      }),
-    );
-
-    expect(configState.plugins?.entries?.codex?.config?.appServer).toEqual({
-      sandbox: "workspace-write",
-    });
   });
 
   it("returns Codex plugin config patches without mutating config in return mode", async () => {

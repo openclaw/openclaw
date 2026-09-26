@@ -26,6 +26,8 @@ it("streams native file notifications and closes the watcher when its input clos
     );
     await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
     await started.mock.results[0]?.value;
+    // Discard earlier change notifications without losing unavailable diagnostics.
+    events = events.replaceAll('"change"\n', "");
     await fs.writeFile(path.join(workspace, "memory", "notes.md"), "after\n");
     await vi.waitFor(() => expect(events).toContain('"change"\n'), { timeout: 10_000 });
     input.end();

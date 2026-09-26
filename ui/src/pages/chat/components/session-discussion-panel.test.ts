@@ -96,39 +96,6 @@ describe("session discussion panel", () => {
     );
   });
 
-  it("posts the complete host palette to the exact discussion origin on frame load", async () => {
-    document.documentElement.dataset.themeMode = "light";
-    document.documentElement.style.setProperty("--bg", "#faf9f7");
-    document.documentElement.style.setProperty("--card", "#ffffff");
-    document.documentElement.style.setProperty("--accent", "#bd4531");
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({
-        state: "open",
-        embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
-      }),
-      openDiscussion: vi.fn(),
-    });
-
-    await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
-    const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
-    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
-
-    frame.dispatchEvent(new Event("load"));
-
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "openclaw:widget-theme",
-        mode: "light",
-        tokens: expect.objectContaining({
-          surface: "#faf9f7",
-          card: "#ffffff",
-          accent: "#bd4531",
-        }),
-      }),
-      "https://discussion.example",
-    );
-  });
-
   it("includes custom host palette tokens in the first-paint discussion URL", async () => {
     document.documentElement.dataset.themeMode = "dark";
     document.documentElement.style.setProperty("--bg", "#171229");

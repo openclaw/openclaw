@@ -3,7 +3,7 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {

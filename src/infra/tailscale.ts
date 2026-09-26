@@ -59,16 +59,7 @@ function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   throw new Error("Could not determine Tailscale DNS or IP");
 }
 
-/**
- * Locate Tailscale binary using multiple strategies:
- * 1. Filesystem PATH lookup
- * 2. Known macOS app path
- * 3. locate database (if available)
- *
- * @returns Path to Tailscale binary or null if not found
- */
 export async function findTailscaleBinary(): Promise<string | null> {
-  // Helper to check if a binary exists and is executable
   const checkBinary = async (filePath: string): Promise<boolean> => {
     if (!filePath || !existsSync(filePath)) {
       return false;
@@ -81,7 +72,6 @@ export async function findTailscaleBinary(): Promise<string | null> {
     }
   };
 
-  // Strategy 1: PATH lookup
   try {
     const fromPath = resolveExecutableFromPathEnv(
       "tailscale",
@@ -99,13 +89,11 @@ export async function findTailscaleBinary(): Promise<string | null> {
     // PATH lookup failed, continue
   }
 
-  // Strategy 2: Known macOS app path
   const macAppPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
   if (await checkBinary(macAppPath)) {
     return macAppPath;
   }
 
-  // Strategy 3: locate command
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout
@@ -125,7 +113,6 @@ export async function findTailscaleBinary(): Promise<string | null> {
 }
 
 export async function getTailnetHostname(exec: typeof runExec = runExec, detectedBinary?: string) {
-  // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
   const candidates = detectedBinary
     ? [detectedBinary]
     : ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
@@ -152,10 +139,6 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
   );
 }
 
-/**
- * Get the Tailscale binary command to use.
- * Returns a cached detected binary or the default "tailscale" command.
- */
 let cachedTailscaleBinary: string | null = null;
 
 function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {

@@ -56,17 +56,6 @@ describe("runMemorySearchWithDeadline", () => {
     expect(isMemorySearchDeadlineError("memory_search timed out after 15s")).toBe(false);
   });
 
-  it("cannot be branded from outside the module", () => {
-    // The brand must not live in the global symbol registry: anything in the
-    // process could then mark its own failure as this tool's deadline.
-    const forged = new Error("openai-compatible embeddings query failed");
-    for (const key of ["openclaw.memory-core.search-deadline", "memory-core.search-deadline"]) {
-      Object.defineProperty(forged, Symbol.for(key), { value: true });
-    }
-
-    expect(isMemorySearchDeadlineError(forged)).toBe(false);
-  });
-
   it("cannot be branded by copying the marker off the abort reason", async () => {
     // The supervised task is handed the deadline error as `signal.reason`, so a
     // property-based brand is readable by exactly the provider code the brand

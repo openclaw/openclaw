@@ -1,8 +1,10 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   PreservedSessionWorktree,
   SessionRow,
   SessionsDeleteResult,
+  SessionsPatchResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
@@ -50,23 +52,11 @@ type SessionsLifecycleResult = {
 
 type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "agentId" | "archived" | "isMain">;
 
-type SessionsListResult = {
-  sessions?: SessionsListRow[];
-  hasMore?: boolean;
-  nextOffset?: number | null;
-};
-
-type SessionsPatchResult = {
-  ok?: boolean;
-  key?: string;
-  entry?: { archivedAt?: number };
+type SessionsDescribeResult = {
+  session: SessionsListRow | null;
 };
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
-
-// Keep each read bounded while exhausting pagination when an invalid key must
-// be distinguished from a session outside the first Gateway list page.
-const SESSION_TARGET_PAGE_SIZE = 200;
 
 function resolveLifecycleAgentId(rawAgent: string | undefined): string | undefined {
   const requested = rawAgent?.trim();
@@ -103,41 +93,20 @@ async function listRequestedSessions(
   agent: string | undefined,
   rpcOptions: SessionsLifecycleRpcOptions,
 ): Promise<Map<string, SessionsListRow>> {
-  const wanted = new Set(keys);
   const found = new Map<string, SessionsListRow>();
-  let offset = 0;
-
-  while (wanted.size > found.size) {
-    const page = (await callGatewayFromCliWithTransport(
-      "sessions.list",
+  for (const key of keys) {
+    const response = (await callGatewayFromCliWithTransport(
+      "sessions.describe",
       rpcOptions,
-      {
-        limit: SESSION_TARGET_PAGE_SIZE,
-        ...(offset > 0 ? { offset } : {}),
-        archived: "all",
-        includeGlobal: true,
-        includeUnknown: true,
-        configuredAgentsOnly: true,
-        ...(agent ? { agentId: agent } : {}),
-      },
+      { key, ...(agent ? { agentId: agent } : {}) },
       { defaultTimeoutMs: 30_000 },
-    )) as SessionsListResult;
-    if (!page || !Array.isArray(page.sessions)) {
-      throw new Error("Gateway returned an invalid sessions.list response.");
+    )) as SessionsDescribeResult;
+    if (!response || !("session" in response)) {
+      throw new Error("Gateway returned an invalid sessions.describe response.");
     }
-    for (const row of page.sessions) {
-      if (wanted.has(row.key) && !found.has(row.key)) {
-        found.set(row.key, row);
-      }
+    if (response.session) {
+      found.set(key, response.session);
     }
-    if (found.size === wanted.size || page.hasMore !== true) {
-      break;
-    }
-    const nextOffset = page.nextOffset;
-    if (typeof nextOffset !== "number" || nextOffset <= offset) {
-      throw new Error("Gateway returned invalid sessions.list pagination.");
-    }
-    offset = nextOffset;
   }
 
   return found;
@@ -221,7 +190,7 @@ async function runSessionsLifecycleCommand(
   opts: SessionsLifecycleCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const keys = opts.keys.map((key) => key.trim());
+  const keys = uniqueStrings(opts.keys.map((key) => key.trim()));
   const rpcOptions: SessionsLifecycleRpcOptions = {
     url: opts.url,
     token: opts.token,
@@ -330,7 +299,7 @@ async function runSessionsLifecycleCommand(
           },
           { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsPatchResult;
-        if (response?.ok !== true || response.entry?.archivedAt === undefined) {
+        if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
         results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };

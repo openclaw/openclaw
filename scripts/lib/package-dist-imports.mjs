@@ -1,6 +1,6 @@
 // Scans packaged JavaScript for relative imports and missing closure entries.
 import path from "node:path";
-import { parse } from "acorn";
+import { visitJavaScriptStatements } from "./javascript-statements.mjs";
 const JS_FILE_RE = /\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {
@@ -25,11 +25,6 @@ function literal(node) {
 }
 
 function appendImportEdges(source, importerPath, imports) {
-  const program = parse(source, {
-    ecmaVersion: "latest",
-    sourceType: importerPath.endsWith(".cjs") ? "script" : "module",
-    allowReturnOutsideFunction: true,
-  });
   function visit(node) {
     let kind;
     let specifier;
@@ -94,7 +89,18 @@ function appendImportEdges(source, importerPath, imports) {
       }
     }
   }
-  visit(program);
+  visitJavaScriptStatements(
+    source,
+    {
+      sourceType: importerPath.endsWith(".cjs") ? "script" : "module",
+      allowReturnOutsideFunction: true,
+    },
+    (statements) => {
+      for (const statement of statements) {
+        visit(statement);
+      }
+    },
+  );
 }
 
 /** Collect missing-file errors for relative imports inside package files. */

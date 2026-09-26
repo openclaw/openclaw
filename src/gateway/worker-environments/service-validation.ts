@@ -9,7 +9,6 @@ import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.clou
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
-  type WorkerDesktopEndpoint,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
@@ -18,8 +17,9 @@ import {
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+import { normalizeWorkerSshEndpoint } from "./store-validation.js";
 
 export function requireWorkerProfile(
   value: unknown,
@@ -223,7 +223,7 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
-      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),
+      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop) }),
   };
   if (hasSsh) {
     return {

@@ -31,6 +31,10 @@ async function makeLauncherVersionFixture(
     path.join(fixtureRoot, "node-host-launcher.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-compile-cache.mjs"),
+    path.join(fixtureRoot, "node-compile-cache.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
     path.join(fixtureRoot, "node-version.mjs"),
   );

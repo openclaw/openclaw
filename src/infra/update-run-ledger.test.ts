@@ -26,7 +26,7 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { parseUpdateAdmissionVerdict, UpdateRunRecordSchema } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const tempDirs = createTempDirTracker();
 const admissionRouting = {

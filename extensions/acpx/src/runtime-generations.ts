@@ -62,9 +62,7 @@ export class AcpxGenerationRegistry {
   }
 
   currentGeneration(resource: string): AcpxGeneration {
-    if (this.stopping) {
-      throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "ACP runtime is shut down.");
-    }
+    this.assertRunning();
     let generation = this.generations.get(resource);
     if (!generation) {
       const fresh = this.sessionStore.isFresh(resource);

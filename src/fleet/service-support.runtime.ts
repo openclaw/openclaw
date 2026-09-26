@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import {
   buildCellEnvironment,
@@ -37,7 +37,7 @@ const HEALTH_TIMEOUT_MS = 1_000;
 const CELL_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
 const FLEET_OPERATION_HEARTBEAT_MS = 60_000;
 
-type FleetHealthResult =
+export type FleetHealthResult =
   | { status: "ok"; url: string; httpStatus: number }
   | { status: "failed"; url: string; error: string; httpStatus?: number }
   | { status: "skipped"; url: string; reason: string };
@@ -123,6 +123,10 @@ export async function prepareCellConfig(
   const nextAuth: Record<string, unknown> = { ...auth, mode: "token" };
   delete nextAuth.token;
   const origins = new Set(readAllowedOrigins(controlUi.allowedOrigins));
+  const inheritsPublicOrigin =
+    controlUi.allowedOrigins === undefined &&
+    typeof gateway.publicOrigin === "string" &&
+    gateway.publicOrigin.trim().length > 0;
   origins.add(`http://localhost:${record.hostPort}`);
   origins.add(`http://127.0.0.1:${record.hostPort}`);
 
@@ -135,7 +139,7 @@ export async function prepareCellConfig(
       auth: nextAuth,
       controlUi: {
         ...controlUi,
-        allowedOrigins: [...origins],
+        ...(inheritsPublicOrigin ? {} : { allowedOrigins: [...origins] }),
       },
     },
   };
@@ -217,10 +221,7 @@ export function inspectionState(
   if (inspection.kind !== "ok") {
     return inspection.state;
   }
-  return inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-    inspection.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir)
-    ? inspection.state
-    : "unknown";
+  return inspectionHasFleetOwner(record, inspection) ? inspection.state : "unknown";
 }
 
 export function assertManagedInspection(
@@ -235,10 +236,7 @@ export function assertManagedInspection(
       `Cannot inspect ${record.runtime} container for tenant ${record.tenantId}: ${inspection.error}`,
     );
   }
-  if (
-    inspection.labels[FLEET_TENANT_LABEL] !== record.tenantId ||
-    inspection.labels[FLEET_OWNER_LABEL] !== cellOwnerId(record.dataDir)
-  ) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     throw new Error(
       `Refusing to manage ${record.containerName}: fleet ownership labels do not match tenant ${record.tenantId}.`,
     );
@@ -548,12 +546,10 @@ export async function cleanupFailedCreateContainer(
   if (inspection.kind === "unavailable") {
     return false;
   }
-  const tenantLabel = inspection.labels[FLEET_TENANT_LABEL];
-  const ownerLabel = inspection.labels[FLEET_OWNER_LABEL];
   // Fleet always labels what it creates, so a container without fleet labels (or with
   // another owner's labels) is foreign: leave it untouched but release the reservation,
   // otherwise a name collision strands a tenant no fleet command can recover.
-  if (tenantLabel !== record.tenantId || ownerLabel !== cellOwnerId(record.dataDir)) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     return true;
   }
   if (inspection.labels[FLEET_ATTEMPT_LABEL] !== attemptId) {
@@ -583,11 +579,9 @@ export async function cleanupFailedCreateNetwork(
   if (inspection.kind === "unavailable") {
     return false;
   }
-  const tenantLabel = inspection.labels[FLEET_TENANT_LABEL];
-  const ownerLabel = inspection.labels[FLEET_OWNER_LABEL];
   // Same foreign-resource rule as cleanupFailedCreateContainer: unlabeled or
   // other-owner networks are never fleet's to delete, but must not pin the reservation.
-  if (tenantLabel !== record.tenantId || ownerLabel !== cellOwnerId(record.dataDir)) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     return true;
   }
   if (
@@ -601,9 +595,9 @@ export async function cleanupFailedCreateNetwork(
   return (await containers.inspectNetwork(record.runtime, networkName)).kind === "missing";
 }
 
-function inspectionHasFleetOwner(
+export function inspectionHasFleetOwner(
   record: FleetCellRecord,
-  inspection: Extract<FleetContainerInspectResult, { kind: "ok" }>,
+  inspection: { labels: Readonly<Record<string, string>> },
 ): boolean {
   return (
     inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
@@ -623,10 +617,7 @@ export function assertManagedNetwork(
       `Cannot inspect ${record.runtime} network for tenant ${record.tenantId}: ${inspection.error}`,
     );
   }
-  if (
-    inspection.labels[FLEET_TENANT_LABEL] !== record.tenantId ||
-    inspection.labels[FLEET_OWNER_LABEL] !== cellOwnerId(record.dataDir)
-  ) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     throw new Error(
       `Refusing to manage ${cellNetworkName(record.tenantId)}: fleet ownership labels do not match tenant ${record.tenantId}.`,
     );

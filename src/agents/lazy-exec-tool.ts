@@ -89,13 +89,16 @@ export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: 
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
   const layeredPolicy = applyExecPolicyLayer(applyExecPolicyLayer({}, globalExec), agentExec);
+  const configuredPathPrepend = agentExec?.pathPrepend ?? globalExec?.pathPrepend;
   return {
     host: agentExec?.host ?? globalExec?.host,
     mode: layeredPolicy.mode,
     security: layeredPolicy.security,
     ask: layeredPolicy.ask,
     node: agentExec?.node ?? globalExec?.node,
-    pathPrepend: mergeGatewayAgentCliPath(agentExec?.pathPrepend ?? globalExec?.pathPrepend),
+    // Native harnesses distinguish operator PATH policy from the automatic CLI shim.
+    configuredPathPrepend,
+    pathPrepend: mergeGatewayAgentCliPath(configuredPathPrepend),
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     commandHighlighting: resolveExecCommandHighlighting({

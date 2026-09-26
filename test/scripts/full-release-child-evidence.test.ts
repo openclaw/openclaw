@@ -115,13 +115,14 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
 
 describe("full release child evidence producer", () => {
   it.each(["normalCi", "pluginPrereleaseIndependent"])(
-    "keeps failed metadata advisory without masking failed %s workload jobs",
+    "blocks failed selected metadata and workload jobs for %s",
     (key) => {
       const workload = {
         name: "install_smoke",
         status: "completed",
         conclusion: "success",
       };
+      const metadata = { name: PUBLISHER, status: "completed", conclusion: "failure" };
       const snapshot = () =>
         classifyReleaseSnapshot({
           children: [
@@ -135,12 +136,17 @@ describe("full release child evidence producer", () => {
               runAttempt: 1,
               status: "completed",
               conclusion: "success",
-              jobs: [workload, { name: PUBLISHER, status: "completed", conclusion: "failure" }],
+              jobs: [workload, metadata],
             },
           ],
           releaseProfile: "stable",
           workflowRef: "main",
         });
+      expect(snapshot()).toMatchObject({
+        state: "blocked_complete",
+        blockers: [expect.objectContaining({ job: PUBLISHER, kind: "job_failure" })],
+      });
+      metadata.conclusion = "success";
       expect(snapshot()).toMatchObject({ state: "passed", blockers: [] });
       workload.conclusion = "failure";
       expect(snapshot()).toMatchObject({

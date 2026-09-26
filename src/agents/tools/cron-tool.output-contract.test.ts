@@ -111,6 +111,16 @@ describe("automations output contract", () => {
     },
     { name: "job details", args: { action: "get", jobId: job.id }, reply: job },
     {
+      // The scheduler reports scheduleErrorCount in state once a job has
+      // schedule-computation errors; the read schema must accept it (#157477).
+      name: "job details with scheduler diagnostics",
+      args: { action: "get", jobId: job.id },
+      reply: {
+        ...job,
+        state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
+      },
+    },
+    {
       name: "creation",
       args: { action: "add", job: createJob },
       reply: { ...job, deliveryPreview },

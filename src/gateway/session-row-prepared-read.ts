@@ -12,6 +12,7 @@ export type SessionRowPreparationOptions = { includeAncestors?: boolean };
 export type SessionRowReadView = {
   describe(query: records.Lookup, captured?: records.Row): records.MaterializedRow | undefined;
   readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
+  readMembership(query: records.Lookup): ReadonlySet<string> | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
@@ -130,6 +131,17 @@ function consumePreparedSessionRows<T>(
       }
       const row = privateRows.get(key);
       return captured && !records.isCurrentGeneration(captured, row) ? undefined : row;
+    },
+    readMembership(query) {
+      assertActive();
+      const key = privateKey(query);
+      if (key) {
+        if (!privateRows.has(key)) {
+          throw new Error("Incognito session description was not prepared");
+        }
+        return privateRows.get(key)?.membership;
+      }
+      return owner.readMembership(query);
     },
     present(record, options) {
       assertActive();

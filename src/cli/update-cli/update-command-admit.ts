@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -32,6 +31,7 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { resolveUpdateRoot, UpdatePreMutationError } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -110,7 +110,8 @@ async function inspectUpdateAdmission(
           "config",
           error.reason,
           error.message,
-          "Run openclaw doctor --fix, then correct any remaining configuration errors and retry.",
+          error.nextAction ??
+            "Run openclaw doctor --fix, then correct any remaining configuration errors and retry.",
         );
         databaseContext = undefined;
       }
@@ -147,24 +148,12 @@ async function inspectUpdateAdmission(
           shellEnvFallback: "defer",
         }).readConfigFileSnapshotWithPluginMetadata();
         if (!snapshot.valid || snapshot.readError) {
-          const message = [
-            "Update refused: configuration is invalid or unreadable.",
-            ...formatConfigIssueLines(
-              snapshot.issues.map(({ path: issuePath, pathSegments }) => ({
-                path: issuePath,
-                pathSegments,
-                message: "Invalid configuration field",
-              })),
-              "-",
-              { normalizeRoot: true },
-            ),
-          ].join("\n");
-          checks[0] = { name: "config", status: "refuse", detail: message };
+          const failure = createUpdateConfigFailure(snapshot);
+          checks[0] = { name: "config", status: "refuse", detail: failure.message };
           reasons.push({
-            code: "invalid-config",
-            message,
-            nextAction:
-              "Run openclaw doctor --fix, then correct any remaining configuration errors and retry.",
+            code: failure.reason,
+            message: failure.message,
+            nextAction: failure.nextAction,
           });
           databaseContext = undefined;
         } else {

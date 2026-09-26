@@ -35,6 +35,25 @@ export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
   return {
+    readPendingArchives: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "session-pending-archives", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          assertResultKind(value, "session-pending-archives", "pending archives");
+          return value.pending;
+        },
+        signal,
+      ),
+    findTranscriptEvent: async (request) =>
+      await runRequest(
+        () => ({ kind: "transcript-match", request }),
+        JSON.stringify(request).length * 2,
+        (value) => {
+          assertResultKind(value, "transcript-match", "a transcript match");
+          return value.result;
+        },
+      ),
     readHistoricalEvictionCandidates: async (input) =>
       await runRequest(
         () => ({ kind: "historical-eviction-candidates", ...input }),
@@ -103,7 +122,13 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "rpc" &&
+          (value.kind !== "transcript-binding" &&
+            value.kind !== "artifacts" &&
+            value.kind !== "message-page" &&
+            value.kind !== "around-id" &&
+            value.kind !== "source-messages" &&
+            value.kind !== "recent-page" &&
+            value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "recent" &&
@@ -263,6 +288,15 @@ export function createSessionHistoryWorkerReaders(
             : ok(value.entry);
         },
       ),
+    readDiagnosticText: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-diagnostic-text", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          assertResultKind(value, "session-diagnostic-text", "diagnostic text");
+          return value.text;
+        },
+      ),
     readEntries: async (scope) =>
       await runRequest(
         () => ({ kind: "session-entry-list", scope }),
@@ -280,6 +314,18 @@ export function createSessionHistoryWorkerReaders(
           assertResultKind(value, "session-identity-evidence", "identity evidence");
           return value.evidence;
         },
+      ),
+    readProjectionStatus: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "projection-status", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (typeof value !== "boolean") {
+            throw new Error("Session history worker returned history instead of projection status");
+          }
+          return value;
+        },
+        signal,
       ),
     readEntryPresence: async (scope) =>
       await runRequest(

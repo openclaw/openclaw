@@ -34,7 +34,7 @@ import {
   resolveTelegramTestUpload,
   useTelegramHttpFixture,
 } from "./send.telegram-http.test-support.js";
-import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
+import { getTopicName } from "./topic-name-cache.js";
 
 describe("Telegram registered adapter conformance over HTTP", () => {
   const fixture = useTelegramHttpFixture();
@@ -978,22 +978,10 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       });
       resetTelegramTopicNameCacheForTest();
       await expect(
-        getTopicName(
-          "-1001",
-          99,
-          resolveTopicNameCacheScope(
-            resolveStorePath(actionCfg.session?.store, { agentId: "ops" }),
-          ),
-        ),
+        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),
       ).resolves.toBe("Renamed");
       await expect(
-        getTopicName(
-          "-1001",
-          99,
-          resolveTopicNameCacheScope(
-            resolveStorePath(actionCfg.session?.store, { agentId: "main" }),
-          ),
-        ),
+        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "main" })),
       ).resolves.toBeUndefined();
     });
   });

@@ -50,15 +50,21 @@ describe("model metadata invalidation broadcasts", () => {
         },
         { toJSON: () => ({}) },
         new Proxy({}, {}),
+        { modelCatalogChanged: "false" },
+        { authChanged: true, profileId: "private-profile" },
+        Object.defineProperty({}, "authChanged", { value: false }),
       ]) {
         broadcast("chat.metadata.changed", payload);
       }
       expect(narrow.frames()).toEqual([]);
-      expect(staff.send).toHaveBeenCalledTimes(5);
+      expect(staff.send).toHaveBeenCalledTimes(8);
       expect(getter).toHaveBeenCalledOnce();
       broadcast("config.changed", { path: "/private/example-config", hash: "example-hash", ts: 1 });
       broadcast("chat.metadata.changed", {});
       broadcast("chat.metadata.changed", { modelSelectionChanged: true });
+      broadcast("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
+      broadcast("chat.metadata.changed", { modelCatalogChanged: true, authChanged: false });
+      broadcast("chat.metadata.changed", { modelCatalogChanged: true, authChanged: true });
       expect(narrow.frames()).toEqual([
         { type: "event", event: "chat.metadata.changed", seq: 1, payload: {} },
         {
@@ -66,6 +72,24 @@ describe("model metadata invalidation broadcasts", () => {
           event: "chat.metadata.changed",
           seq: 2,
           payload: { modelSelectionChanged: true },
+        },
+        {
+          type: "event",
+          event: "chat.metadata.changed",
+          seq: 3,
+          payload: { modelCatalogChanged: false, authChanged: false },
+        },
+        {
+          type: "event",
+          event: "chat.metadata.changed",
+          seq: 4,
+          payload: { modelCatalogChanged: true, authChanged: false },
+        },
+        {
+          type: "event",
+          event: "chat.metadata.changed",
+          seq: 5,
+          payload: { modelCatalogChanged: true, authChanged: true },
         },
       ]);
       expect(pairing.frames()).toEqual([]);

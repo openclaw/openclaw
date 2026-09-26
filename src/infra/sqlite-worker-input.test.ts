@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
@@ -12,7 +10,10 @@ import {
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import {
-  openSqliteWorkerStore,
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+} from "./sqlite-worker-fixture.test-support.js";
+import {
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
@@ -22,35 +23,11 @@ import {
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
-);
+const { stores, databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-input-", () => {
+  vi.restoreAllMocks();
+});
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const payload = (mib: number) => "x".repeat(mib * 1024 * 1024);
-const databasePath = () => path.join(dirs.make("sqlite-worker-input-"), "store.sqlite");
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string, signal?: AbortSignal) {
-  return store.execute({ type: "append", input: { value } }, { signal });
-}
 
 async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected: string[]) {
   const rows = await store.execute({ type: "read", input: undefined });

@@ -13,6 +13,7 @@ import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -31,6 +32,7 @@ import {
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
@@ -290,7 +292,6 @@ it.each(["success", "failed-write"])(
       getResolvedSessionId: () => sessionId,
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
-      getCfgForAgent: () => cfg,
       getSessionPersisted: () => true,
       getSupersededSessionId: () => undefined,
       setAdmittedSessionId: (admittedSessionId) => expect(admittedSessionId).toBe(sessionId),
@@ -339,6 +340,7 @@ it.each(["success", "failed-write"])(
       const sessionEventSubscribers = createSessionEventSubscriberRegistry();
       sessionEventSubscribers.subscribe("session-observer");
       subscriptions = startGatewayEventSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         getSessionRowProjection: () => getSessionRowProjection(context),
         signal: new AbortController().signal,
         log: silentLog,
@@ -576,6 +578,7 @@ it.for([
         const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
         const agentRunSeq = new Map<string, number>();
         subscriptions = startGatewayEventSubscriptions({
+          scheduler: createTestGatewayScheduler(),
           signal: new AbortController().signal,
           log: silentLog,
           broadcast: vi.fn(),
@@ -624,6 +627,17 @@ it.for([
         );
         expect(persistenceTestWarnings).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)?.status).toBe(status);
+        if (status === "failed") {
+          await expect(loadTranscriptEvents({ ...target, sessionId })).resolves.toContainEqual(
+            expect.objectContaining({
+              type: "custom_message",
+              customType: "run-failed-before-reply",
+              content: "This turn ended before a reply: Preparation failed",
+              display: true,
+              details: { runId, error: "Preparation failed" },
+            }),
+          );
+        }
         expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
           "clear-requested",
         );

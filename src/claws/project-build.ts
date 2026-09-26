@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
@@ -53,26 +54,20 @@ function assertValidatedBytes(
   }
 }
 
-export async function extractBuiltClawArtifact(artifact: string): Promise<{
-  temporaryDirectory: string;
-  packageRoot: string;
-  dispose: () => Promise<void>;
-}> {
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "openclaw-claw-artifact-"));
+export async function extractBuiltClawArtifact(
+  artifact: string,
+): Promise<AsyncDisposable & { packageRoot: string }> {
+  const workspace = await tempWorkspace({ rootDir: tmpdir(), prefix: "openclaw-claw-artifact-" });
   try {
-    await tar.x({ cwd: temporaryDirectory, file: resolve(artifact), strict: true });
-    const packageRoot = join(temporaryDirectory, "package");
+    await tar.x({ cwd: workspace.dir, file: resolve(artifact), strict: true });
+    const packageRoot = workspace.path("package");
     const packageStat = await lstat(packageRoot);
     if (!packageStat.isDirectory()) {
       throw new Error("artifact does not contain a package directory");
     }
-    return {
-      temporaryDirectory,
-      packageRoot,
-      dispose: () => rm(temporaryDirectory, { recursive: true, force: true }),
-    };
+    return { packageRoot, [Symbol.asyncDispose]: workspace[Symbol.asyncDispose] };
   } catch (error) {
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    await workspace[Symbol.asyncDispose]();
     throw new ClawProjectError(
       "artifact_verification_failed",
       `Could not extract built Claw artifact: ${(error as Error).message}`,
@@ -183,8 +178,8 @@ export async function buildClawProject(
 
     const packed = await readFile(temporaryArtifact);
     const integrity = `sha256:${createHash("sha256").update(packed).digest("hex")}`;
-    const extracted = await extractBuiltClawArtifact(temporaryArtifact);
-    try {
+    {
+      await using extracted = await extractBuiltClawArtifact(temporaryArtifact);
       const reread = await readClawManifestFile(extracted.packageRoot);
       if (!reread.ok) {
         throw new ClawProjectError(
@@ -201,8 +196,6 @@ export async function buildClawProject(
           "Built artifact identity differs from the validated project.",
         );
       }
-    } finally {
-      await extracted.dispose();
     }
 
     try {

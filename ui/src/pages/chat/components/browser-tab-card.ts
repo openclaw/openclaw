@@ -201,12 +201,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.pagePreview = undefined;
       return;
     }
-    if (
-      this.pageIdentity?.client === client &&
-      this.pageIdentity.url === url &&
-      this.pageIdentity.generation === client.connectionGeneration &&
-      this.pageIdentity.recoveryScope === client.recoveryScope
-    ) {
+    if (this.pagePreviewCurrent) {
       return;
     }
     const identity = {
@@ -221,18 +216,24 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     void loadLinkPreview(client, url).then((preview) => {
       // Recycled transcript cards and connection/config changes retire the old
       // request; its result must never become another page's preview.
-      if (
-        this.isConnected &&
-        this.pageIdentity === identity &&
-        this.canLoadPagePreview &&
-        this.preview?.url === url &&
-        this.context?.gateway.snapshot.client === client &&
-        client.connectionGeneration === identity.generation &&
-        client.recoveryScope === identity.recoveryScope
-      ) {
+      if (this.isConnected && this.pageIdentity === identity && this.pagePreviewCurrent) {
         this.pagePreview = preview;
       }
     });
+  }
+
+  private get pagePreviewCurrent(): boolean {
+    const identity = this.pageIdentity;
+    const client = this.context?.gateway.snapshot.client;
+    return Boolean(
+      identity &&
+      client &&
+      this.canLoadPagePreview &&
+      identity.client === client &&
+      identity.url === this.preview?.url &&
+      identity.generation === client.connectionGeneration &&
+      identity.recoveryScope === client.recoveryScope,
+    );
   }
 
   override disconnectedCallback() {
@@ -325,15 +326,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
       this.requestIdentity?.key === JSON.stringify([browserTabKey(preview), this.revision])
         ? this.thumbnailSrc
         : undefined;
-    const page =
-      this.canLoadPagePreview &&
-      this.pageIdentity?.client === this.context?.gateway.snapshot.client &&
-      this.pageIdentity?.url === preview.url &&
-      this.pageIdentity?.generation ===
-        this.context?.gateway.snapshot.client?.connectionGeneration &&
-      this.pageIdentity?.recoveryScope === this.context?.gateway.snapshot.client?.recoveryScope
-        ? this.pagePreview
-        : undefined;
+    const page = this.pagePreviewCurrent ? this.pagePreview : undefined;
     const favicon = page?.faviconDataUrl;
     const image =
       currentImage && !this.failedImages.has(currentImage) ? currentImage : page?.imageDataUrl;

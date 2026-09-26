@@ -149,37 +149,6 @@ describe("agents delete workspace lifecycle", () => {
     wizardMocks.createClackPrompter.mockReset();
   });
 
-  it("deletes workspace state after local workspace removal", async () => {
-    await withStateDirEnv("openclaw-agents-delete-workspace-state-", async ({ stateDir }) => {
-      const opsWorkspace = path.join(stateDir, "workspace-ops");
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: opsWorkspace },
-          ],
-        },
-      } satisfies OpenClawConfig;
-      await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        deletedAgentId: "ops",
-        sessions: {},
-      });
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith(
-        {
-          workspaceDir: opsWorkspace,
-        },
-        { assertCurrent: expect.any(Function) },
-      );
-      const workspaceTrashOrder = fsSafeMocks.movePathToTrash.mock.invocationCallOrder[0];
-      const stateDeleteOrder = workspaceStateMocks.deleteWorkspaceState.mock.invocationCallOrder[0];
-      expect(workspaceTrashOrder).toBeLessThan(stateDeleteOrder ?? 0);
-    });
-  });
-
   it("finishes agent-directory cleanup when workspace state deletion fails", async () => {
     await withStateDirEnv("openclaw-agents-delete-state-failure-", async ({ stateDir }) => {
       const opsWorkspace = path.join(stateDir, "workspace-ops");
@@ -429,6 +398,9 @@ describe("agents delete workspace lifecycle", () => {
         },
         { assertCurrent: expect.any(Function) },
       );
+      expect(fsSafeMocks.movePathToTrash.mock.invocationCallOrder[0]).toBeLessThan(
+        workspaceStateMocks.deleteWorkspaceState.mock.invocationCallOrder[0] ?? 0,
+      );
       expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     });
   });
@@ -459,6 +431,31 @@ describe("agents delete workspace lifecycle", () => {
         ],
         failed: [{ path: opsWorkspace, reason: "trash unavailable" }],
       });
+      expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+    });
+  });
+
+  it("reports local trash failures on the text path", async () => {
+    await withStateDirEnv("openclaw-agents-delete-trash-text-", async ({ stateDir }) => {
+      const opsWorkspace = path.join(stateDir, "workspace-ops");
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: opsWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      fsSafeMocks.movePathToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${opsWorkspace}`,
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
     });
   });

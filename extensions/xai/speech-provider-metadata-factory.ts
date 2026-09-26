@@ -192,37 +192,24 @@ export function createXaiSpeechProviderMetadata(
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeXaiSpeechProviderConfig(baseTtsConfig);
       const responseFormat = normalizeXaiSpeechResponseFormat(talkProviderConfig.responseFormat);
+      const baseUrl = normalizeOptionalString(talkProviderConfig.baseUrl);
       return {
         ...base,
-        ...(talkProviderConfig.apiKey === undefined
-          ? {}
-          : {
-              apiKey: normalizeResolvedSecretInputString({
+        apiKey:
+          talkProviderConfig.apiKey === undefined
+            ? base.apiKey
+            : normalizeResolvedSecretInputString({
                 value: talkProviderConfig.apiKey,
                 path: "talk.providers.xai.apiKey",
               }),
-            }),
-        ...(normalizeOptionalString(talkProviderConfig.baseUrl) === undefined
-          ? {}
-          : {
-              baseUrl: normalizeXaiTtsBaseUrl(normalizeOptionalString(talkProviderConfig.baseUrl)),
-            }),
-        ...(normalizeOptionalString(talkProviderConfig.voiceId) === undefined
-          ? {}
-          : { voiceId: normalizeOptionalString(talkProviderConfig.voiceId) }),
-        ...(normalizeXaiLanguageCode(
-          talkProviderConfig.language ?? talkProviderConfig.languageCode,
-        ) === undefined
-          ? {}
-          : {
-              language: normalizeXaiLanguageCode(
-                talkProviderConfig.language ?? talkProviderConfig.languageCode,
-              ),
-            }),
-        ...(normalizeXaiSpeechSpeed(talkProviderConfig.speed) === undefined
-          ? {}
-          : { speed: normalizeXaiSpeechSpeed(talkProviderConfig.speed) }),
-        ...(responseFormat === undefined ? {} : { responseFormat }),
+        baseUrl: baseUrl === undefined ? base.baseUrl : normalizeXaiTtsBaseUrl(baseUrl),
+        voiceId: normalizeOptionalString(talkProviderConfig.voiceId) ?? base.voiceId,
+        language:
+          normalizeXaiLanguageCode(
+            talkProviderConfig.language ?? talkProviderConfig.languageCode,
+          ) ?? base.language,
+        speed: normalizeXaiSpeechSpeed(talkProviderConfig.speed) ?? base.speed,
+        responseFormat: responseFormat ?? base.responseFormat,
       };
     },
     resolveTalkOverrides: ({ params }) => ({

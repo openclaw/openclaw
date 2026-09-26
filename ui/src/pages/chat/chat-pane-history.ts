@@ -110,19 +110,24 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       startedBeforeReady,
       readyAt,
       promise: reading
-        .then((snapshot) => {
+        .then((storedSnapshot) => {
           if (
-            !snapshot ||
             requests.initialSnapshotHydration !== hydration ||
+            requests.acceptedHistory ||
             this.state !== state ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey ||
-            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
           ) {
             return;
           }
-          // The memory miss fences network replacement; the pane projection merges
-          // live and pending rows that arrived while IndexedDB was pending.
+          // A sibling can fill the shared cache while this pane still needs its
+          // own transcript. Adopt those messages before revalidating their cursor.
+          const snapshot =
+            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ??
+            storedSnapshot;
+          if (!snapshot) {
+            return;
+          }
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
           cacheChatSessionSnapshot(
@@ -313,11 +318,8 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
     // A failed request or exhausted bootstrap stays disarmed until renewed
     // upward intent, preventing request loops without stranding older history.
-    if (newHistoryIntent && this.historyAutoLoadBlocked) {
+    if (newHistoryIntent && (this.historyAutoLoadBlocked || !this.historyObserverArmed)) {
       this.historyAutoLoadBlocked = false;
-      this.historyObserverArmed = true;
-      this.syncHistoryObserver();
-    } else if (newHistoryIntent && !this.historyObserverArmed) {
       this.historyObserverArmed = true;
       this.syncHistoryObserver();
     }
@@ -594,6 +596,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const sourceCatalogGeneration = this.catalogLoadGeneration;
     const continuation = Symbol("catalog-continuation");
     this.activeCatalogContinuation = continuation;
+    const isCurrent = () =>
+      this.activeCatalogContinuation === continuation &&
+      this.isConnectionScopeCurrent(scope) &&
+      this.catalogLoadGeneration === sourceCatalogGeneration &&
+      state.sessionKey === sourceSessionKey &&
+      resolveChatAgentId(state) === sourceAgentId;
     state.chatSending = true;
     state.requestUpdate();
     const releaseStaleContinuation = () => {
@@ -620,13 +628,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       );
       // A catalog adoption must not navigate or send into a pane that switched
       // sessions or reconnected while its original continuation was in flight.
-      if (
-        this.activeCatalogContinuation !== continuation ||
-        !this.isConnectionScopeCurrent(scope) ||
-        this.catalogLoadGeneration !== sourceCatalogGeneration ||
-        state.sessionKey !== sourceSessionKey ||
-        resolveChatAgentId(state) !== sourceAgentId
-      ) {
+      if (!isCurrent()) {
         releaseStaleContinuation();
         return;
       }
@@ -649,13 +651,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       state.chatSending = false;
       state.requestUpdate();
     } catch (error) {
-      if (
-        this.activeCatalogContinuation !== continuation ||
-        !this.isConnectionScopeCurrent(scope) ||
-        this.catalogLoadGeneration !== sourceCatalogGeneration ||
-        state.sessionKey !== sourceSessionKey ||
-        resolveChatAgentId(state) !== sourceAgentId
-      ) {
+      if (!isCurrent()) {
         releaseStaleContinuation();
         return;
       }
@@ -672,12 +668,8 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return false;
     }
     const result = await rewindChatHistory(state, entryId, this.chatState.attachmentReads);
-    if (!result) {
-      state.requestUpdate?.();
-      return false;
-    }
     state.requestUpdate?.();
-    return true;
+    return Boolean(result);
   }
 
   protected async forkFromMessage(entryId: string): Promise<void> {
@@ -704,6 +696,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
         draft: editorText,
         mentions: [],
+        replyTarget: null,
       });
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
         attachments: replaceChatAttachmentsFromEditor([], result.editorAttachments),

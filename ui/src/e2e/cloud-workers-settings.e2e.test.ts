@@ -227,7 +227,7 @@ suite.define(() => {
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = page.getByRole("button", { name: "Save", exact: true });
       // Saved temporarily hides Apply changes; wait for the applied revision so
-      // its background config.get cannot consume the foreground refresh gate.
+      // its background config.get cannot consume the notification refresh gate.
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -240,13 +240,16 @@ suite.define(() => {
         .toBe("cloud-workers-2");
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
+      await saveButton.focus();
       await gateway.emitGatewayEvent("config.changed", {
         path: "/tmp/openclaw.json",
         hash: "cloud-workers-2",
         ts: Date.now(),
       });
       await gateway.waitForRequest("config.get", { after: configGetCount });
-      await expect.poll(() => saveButton.isDisabled()).toBe(true);
+      expect(await saveButton.isEnabled()).toBe(true);
+      expect(await saveButton.evaluate((button) => button === document.activeElement)).toBe(true);
+      expect(await machineClass.inputValue()).toBe("batch/ARM64.v2");
       await gateway.resolveDeferred(
         "config.get",
         configResponse(

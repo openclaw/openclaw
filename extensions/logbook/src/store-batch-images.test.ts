@@ -1,8 +1,10 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase, openSqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 
 vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
@@ -10,7 +12,7 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
   return { ...actual, openSqliteWorkerStore: vi.fn(actual.openSqliteWorkerStore) };
 });
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const stores = new Set<LogbookStore>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

@@ -119,6 +119,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     const baseStreamFn = activeSession.agent.streamFn;
     const persistThenStream: StreamFn = async (model, context, options) => {
       await input.persistToolResultProjections();
+      // Runtime admission queues behind the user append; join it outside that write lane.
+      await userTurnRecorder?.waitForRuntimePersistence();
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
       const stream = await baseStreamFn(model, context, options);

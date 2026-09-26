@@ -1,4 +1,5 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
 
@@ -99,28 +100,9 @@ export function buildMatrixReactionRelation(
   };
 }
 
-function escapeMatrixHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      case "'":
-        return "&#39;";
-      default:
-        return char;
-    }
-  });
-}
-
 function buildMatrixMentionLink(userId: string) {
   const href = `https://matrix.to/#/${encodeURIComponent(userId)}`;
-  const label = escapeMatrixHtml(userId);
+  const label = escapeHtml(userId);
   return `<a href="${href}">${label}</a>`;
 }
 
@@ -150,7 +132,7 @@ export function buildMatrixQaMessageContent(params: {
       usedFormattedMention = true;
       continue;
     }
-    formattedParts.push(escapeMatrixHtml(body[cursor] ?? ""));
+    formattedParts.push(escapeHtml(body[cursor] ?? ""));
     cursor += 1;
   }
 

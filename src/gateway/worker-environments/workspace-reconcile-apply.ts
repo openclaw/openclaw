@@ -152,16 +152,17 @@ async function applyStagedWorkerWorkspaceWithMemo(
   const inspectPaths = () =>
     preflightWorkspaceApply({ root, base: params.base, current: params.current });
   const preflight = await inspectPaths();
-  if (changed.size === 0) {
-    if (acceptance.kind === "exact-target") {
-      return await acceptExactTarget(acceptance.verify);
-    }
+  const acceptReconciled = async (
+    reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
+    preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
+  ) => {
     const actual = await readActualWorkspaceManifest({
       root,
       baseCommit: params.current.baseCommit,
       preserveDirectories,
       includePaths,
     });
+    const finalPreflight = preparedPreflight ?? (await inspectPaths());
     await assertActualWorkspaceManifest({
       root,
       expectedRef: actual.manifestRef,
@@ -169,12 +170,17 @@ async function applyStagedWorkerWorkspaceWithMemo(
       preserveDirectories,
       includePaths,
     });
-    const conflictPaths = retainedConflictPaths(preflight, preflight.applyPaths);
+    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
     params.assertCurrent?.();
-    await acceptance.publish?.({ ...actual, conflictPaths });
+    await reconcile.publish?.({ ...actual, conflictPaths });
     params.assertCurrent?.();
     params.journal.commit(actual.manifestRef);
     return createApplyResult(actual, conflictPaths);
+  };
+  if (changed.size === 0) {
+    return acceptance.kind === "exact-target"
+      ? await acceptExactTarget(acceptance.verify)
+      : await acceptReconciled(acceptance, preflight);
   }
   const baseByPath = new Map(
     reconciliationEntries(params.base.entries).map((entry) => [entry.path, entry]),
@@ -264,26 +270,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     if (acceptance.kind === "exact-target") {
       await inspectPaths();
     } else {
-      const actual = await readActualWorkspaceManifest({
-        root,
-        baseCommit: params.current.baseCommit,
-        preserveDirectories,
-        includePaths,
-      });
-      const finalPreflight = await inspectPaths();
-      await assertActualWorkspaceManifest({
-        root,
-        expectedRef: actual.manifestRef,
-        baseCommit: actual.manifest.baseCommit,
-        preserveDirectories,
-        includePaths,
-      });
-      const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-      params.assertCurrent?.();
-      await acceptance.publish?.({ ...actual, conflictPaths });
-      params.assertCurrent?.();
-      params.journal.commit(actual.manifestRef);
-      return createApplyResult(actual, conflictPaths);
+      return await acceptReconciled(acceptance);
     }
   } catch (error) {
     // Transport or settlement timeouts are observation evidence, never authority

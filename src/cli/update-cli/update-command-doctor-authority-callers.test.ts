@@ -87,7 +87,8 @@ vi.mock("../../infra/update-candidate-state.sizes.js", async (importOriginal) =>
 // Package effects and process dispatch are inert. Resume, config preparation,
 // plugin lease, retirement ledger, fresh Doctor and readiness remain real owners.
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./update-command-runtime.js", () => ({
+vi.mock("./update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-runtime.js")>()),
   completeSourceUpdateRuntime: vi.fn(async () => ({ changed: false })),
 }));
 
@@ -342,6 +343,7 @@ describe("unproved Doctor authority callers", () => {
           : { kind: "deferred", reason: "coordinator-contention" },
       );
       const maintenance = {
+        signal: new AbortController().signal,
         run: <T>(operation: () => T) => operation(),
         releaseState: vi.fn(async () => {}),
         finish: vi.fn(async () => {}),
@@ -465,6 +467,7 @@ describe("unproved Doctor authority callers", () => {
       vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
       let restored = false;
       const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue({
+        signal: new AbortController().signal,
         run: (operation) => operation(),
         releaseState: async () => {},
         release: async () => {},

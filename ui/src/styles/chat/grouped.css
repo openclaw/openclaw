@@ -34,10 +34,10 @@
   --chat-group-content-column: 2;
   display: grid;
   grid-template-columns: var(--chat-avatar-column) minmax(0, var(--chat-message-column-max));
-  grid-template-rows: auto minmax(calc(var(--chat-turn-gap) - 2px), auto);
-  gap: 2px var(--chat-avatar-gap);
+  grid-template-rows: auto auto;
+  /* The footer offset owns bubble-to-footer space for grid and block groups alike. */
+  gap: 0 var(--chat-avatar-gap);
   justify-content: start;
-  padding-bottom: 0;
 }
 
 .chat-group.user.chat-group--with-footer {
@@ -54,9 +54,11 @@
   justify-content: start;
 }
 
+/* Top-aligned avatars span the message and footer rows, so a short message never
+   grows its row and the space above it stays the turn gap. */
 .chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot) {
   grid-column: var(--chat-group-avatar-column);
-  grid-row: 1;
+  grid-row: 1 / span 2;
 }
 
 /* Preview chips are shorter than avatars; keep the avatar from enlarging the message row. */
@@ -112,10 +114,10 @@
   padding-inline-start: var(--chat-avatar-gutter);
 }
 
-/* Tool groups have no footer; attach their activity to the following reply. */
-.chat-group.tool.chat-group--with-footer {
-  display: block;
-  padding-bottom: var(--chat-run-block-gap);
+/* Tool activity, completed work and live narration are blocks inside a turn,
+   not turn ends: no footer row, and the inline run-frame gap to what follows. */
+.chat-group.chat-group--turn-block {
+  margin-block-end: var(--chat-run-block-gap);
 }
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
@@ -130,18 +132,19 @@
   justify-content: flex-start;
 }
 
-/* Footer at bottom of a message group (role + time). It stays in flow while
-   visually hidden so wrapped controls contribute to virtual-row measurement
-   instead of painting over the next message. */
+/* Footer at bottom of every group (role + time). The row keeps the same size
+   whether its content is visible, hidden or absent, so revealing it never moves
+   the next turn and every group ends the same distance above the turn gap. */
 .chat-group-footer {
   display: flex;
-  align-self: stretch;
+  align-self: start;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   min-width: 0;
-  min-height: 24px;
+  min-height: var(--chat-footer-row);
+  margin-block-start: var(--chat-footer-offset);
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition: opacity 120ms ease-out;
@@ -202,9 +205,7 @@
   flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
-}
-
-.chat-group.user.chat-group--peer .chat-group-footer__meta {
+  /* Text shares the compact 24px visual row, never the larger touch hit area. */
   min-height: 24px;
 }
 
@@ -347,6 +348,8 @@
   /* Keep full-opacity --muted: opacity < 1 composites below WCAG AA on dark surfaces. */
   color: var(--muted);
   line-height: 1.2;
+  /* Keep relative dates intact while adjacent names truncate or move rows. */
+  white-space: nowrap;
 }
 
 /* ── Group footer action buttons ── */
@@ -756,10 +759,6 @@ img.chat-avatar {
     --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   }
 
-  .chat-group-footer {
-    margin-top: 4px;
-  }
-
   :where(.chat-thread) .chat-group {
     --chat-footer-disclosure-opacity: 0;
     --chat-footer-disclosure-pointer-events: none;
@@ -774,22 +773,82 @@ img.chat-avatar {
     --chat-persistent-footer-opacity: 1;
   }
 
-  :where(.chat-thread)
-    .chat-group.user.chat-group--peer:not(.chat-group--meta-revealed, :focus-within) {
-    --chat-footer-detail-position: absolute;
+  /* Reserve hidden controls for every user footer so revealing them never
+     changes the natural row height or moves the next turn. */
+  .chat-group.user {
+    --chat-footer-detail-position: static;
+  }
+
+  /* Keep assistant actions beside metadata; long names may shrink instead of
+     sending the whole action group to a detached, indented second row. */
+  .chat-group.assistant .chat-group-footer {
+    flex-wrap: nowrap;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer {
+    flex-wrap: nowrap;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer__meta {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    gap: 0 8px;
   }
 
   .chat-group.user.chat-group--peer .chat-group-footer-actions {
-    flex-basis: 100%;
+    flex: 0 0 auto;
     justify-content: flex-end;
   }
 
-  .chat-group-footer-actions .chat-copy-btn,
-  .chat-group-footer-actions .chat-reply-btn,
-  .chat-message-actions-row .chat-copy-btn,
-  .chat-message-actions-row .chat-reply-btn {
-    min-width: 44px;
-    min-height: 44px;
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
+    position: relative;
+    margin-inline: 10px;
+  }
+
+  /* This transparent extension belongs to the native button. It is anchored to
+     the button's bottom edge and grows up over the group's own message, never
+     into the turn gap; inline margins keep neighboring targets apart. It
+     inherits the button’s pointer policy during disclosure. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
+    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)::before {
+    content: "";
+    position: absolute;
+    inset-block-end: 0;
+    inset-inline-start: -10px;
+    width: var(--chat-touch-target);
+    height: var(--chat-touch-target);
+    pointer-events: inherit;
+  }
+
+  /* Every control in message content, including openable attachment cards,
+     wins hit-testing over that upward extension; plain text keeps the tap
+     area. Zero specificity keeps any position or stacking they already
+     declare. Tool cards and the action row keep their own stacking. */
+  :where(.chat-group-messages)
+    :where(
+      a,
+      button,
+      summary,
+      [role="button"],
+      [data-openable],
+      input:not(.oc-sensitive-input > input),
+      select,
+      textarea,
+      label,
+      video,
+      audio
+    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)) {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* GitHub reference chips reset their link positioning; lift them too. */
+  .chat-group-messages .chat-text a.markdown-github-item {
+    position: relative;
+    z-index: 1;
   }
 }
 

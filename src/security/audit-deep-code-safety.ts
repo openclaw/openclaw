@@ -1,6 +1,7 @@
 // Audits code paths for deep safety risks that require manual review.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { CodeSafetySummaryCache } from "./audit.deep.runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
 /** Lazily load deep audit code paths so normal audits avoid plugin/skill scans. */
@@ -12,7 +13,7 @@ export async function collectDeepCodeSafetyFindings(params: {
   stateDir: string;
   deep: boolean;
   workspaceDir?: string;
-  summaryCache?: Map<string, Promise<unknown>>;
+  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   if (!params.deep) {
     return [];

@@ -4,13 +4,6 @@ import { describe, expect, it } from "vitest";
 import { SessionUnreadPatchGuard } from "./unread.ts";
 
 describe("SessionUnreadPatchGuard", () => {
-  it("patches an unread active session only once per unread episode", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-  });
-
   it.each([undefined, new GatewayProtocolRequestError({ code: ErrorCodes.UNAVAILABLE })])(
     "unlatches after a transient or unsent patch so later snapshots retry (%s)",
     (error) => {

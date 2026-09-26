@@ -14,7 +14,7 @@ import {
   hasGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import {
   createPackageIntegrityReader,
@@ -39,7 +39,7 @@ import type {
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
-import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
+import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.js";
 
 async function nodeIdentity(nodeRunner: string): Promise<string> {
   const real = await fs.realpath(nodeRunner);
@@ -134,13 +134,11 @@ export async function revalidateOriginalManagedServiceRuntime(
   allowOwnRebind = false,
 ) {
   assertCurrent();
-  const state = await readGatewayServiceState(resolveGatewayService(), {
-    env: original.service.serviceEnv,
-    requireEffective: true,
-    requireLoadedCommand: true,
-    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+  const state = await readGatewayServiceStateForUpdate(
+    resolveGatewayService(),
+    original.service.serviceEnv,
     timeoutMs,
-  });
+  );
   assertCurrent();
   const definition = await fingerprintGatewayServiceDefinition(state.command);
   assertCurrent();
@@ -245,13 +243,11 @@ export async function observeOriginalManagedServiceRuntime(
       throw new Error("Original service Node or manager environment is unavailable.");
     }
     assertCurrent();
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: before.serviceEnv,
-      requireEffective: true,
-      requireLoadedCommand: true,
-      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      timeoutMs: params.updateStepTimeoutMs,
-    });
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      before.serviceEnv,
+      params.updateStepTimeoutMs,
+    );
     assertCurrent();
     const files = await readOriginalServiceFiles({
       root,

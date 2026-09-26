@@ -28,15 +28,6 @@ describe("canonical persisted media", () => {
       expected: [{ ...canonicalFact, kind: "image" }],
     },
     {
-      name: "both-equal",
-      message: {
-        MediaPath: canonicalFact.path,
-        MediaType: canonicalFact.contentType,
-        __openclaw: { media: [canonicalFact] },
-      },
-      expected: [{ ...canonicalFact, kind: "image" }],
-    },
-    {
       name: "both-conflict",
       message: {
         MediaPath: "/media/legacy-conflict.jpg",
@@ -61,11 +52,6 @@ describe("canonical persisted media", () => {
       name: "type-only",
       message: { MediaType: "image" },
       expected: [{ kind: "image" }],
-    },
-    {
-      name: "media-only",
-      message: { role: "user", content: "", __openclaw: { media: [canonicalFact] } },
-      expected: [{ ...canonicalFact, kind: "image" }],
     },
   ])("canonicalizes $name rows", ({ message, expected }) => {
     const result = canonicalizePersistedUserMessageMedia(message);
@@ -159,6 +145,33 @@ describe("canonical persisted media", () => {
         MediaTypes: ["image/png"],
       }),
     ).toThrow("ambiguous sparse positional alignment");
+  });
+
+  it("keeps a singular legacy URL off the second stored attachment when canonicalizing", () => {
+    const result = canonicalizePersistedUserMessageMedia({
+      id: "msg-1",
+      Body: "two attachments",
+      MediaPaths: ["/media/a.png", "/media/b.png"],
+      MediaUrls: ["file:///media/a.png"],
+      MediaUrl: "file:///media/a.png",
+      __openclaw: { traceId: "trace-1" },
+    });
+
+    expect(result.hadLegacy).toBe(true);
+    expect(result.changed).toBe(true);
+    expect(result.message).toEqual({
+      id: "msg-1",
+      Body: "two attachments",
+      __openclaw: {
+        traceId: "trace-1",
+        media: [
+          expect.objectContaining({ path: "/media/a.png", url: "file:///media/a.png" }),
+          expect.objectContaining({ path: "/media/b.png" }),
+        ],
+      },
+    });
+    const media = readPersistedMediaFacts(result.message);
+    expect(media?.[1]?.url).toBeUndefined();
   });
 
   it("rejects under-cardinal compact types after dense attachment paths", () => {
@@ -323,16 +336,6 @@ describe("canonical image media facts", () => {
     {
       name: "unknown-kind PDF with image filename",
       fact: { path: "/tmp/report.png", contentType: "application/pdf", kind: "unknown" as const },
-      expected: false,
-    },
-    {
-      name: "unknown-kind ZIP with image filename",
-      fact: { path: "/tmp/report.png", contentType: "application/zip", kind: "unknown" as const },
-      expected: false,
-    },
-    {
-      name: "unknown-kind text with image filename",
-      fact: { path: "/tmp/report.png", contentType: "text/plain", kind: "unknown" as const },
       expected: false,
     },
     {

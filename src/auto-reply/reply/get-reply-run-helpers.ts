@@ -221,17 +221,9 @@ export async function prewarmReplyRunRuntimes(): Promise<void> {
   ]);
 }
 
-export function loadEmbeddedAgentRuntime() {
-  return embeddedAgentRuntimeLoader.load();
-}
-
-export function loadAgentRunnerRuntime() {
-  return agentRunnerRuntimeLoader.load();
-}
-
-export function loadSessionUpdatesRuntime() {
-  return sessionUpdatesRuntimeLoader.load();
-}
+export const loadEmbeddedAgentRuntime = embeddedAgentRuntimeLoader.load;
+export const loadAgentRunnerRuntime = agentRunnerRuntimeLoader.load;
+export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (

@@ -329,7 +329,8 @@ describe("tlon outbound loopback", () => {
       await outbound.sendText?.({ cfg, to: "~nec", text: chunk });
     }
 
-    expect(chunks.length).toBeGreaterThan(1);
+    expect(outbound.chunkerMode).toBe("markdown");
+    expect(chunks).toEqual(["x".repeat(TEXT_LIMIT), "x"]);
     expect(pokes).toHaveLength(chunks.length);
     expect(loginCount).toBeGreaterThan(0);
     // Every unit fits the transport limit, so the urbit transport accepts each poke.

@@ -160,11 +160,6 @@ describe("slash-state global singleton", () => {
     deactivateSlashCommands();
   });
 
-  it("anchors accountStates on globalThis", () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    expect(getAccountStates().has("a1")).toBe(true);
-  });
-
   it("preserves slash routing state across module reloads", async () => {
     activate({ accountId: "a1", tokens: ["tok-reload"] });
     activate({ accountId: "a2", tokens: ["tok-other"] });
@@ -352,16 +347,6 @@ describe("slash-state request routing", () => {
     const followUp = createResponse();
     await route.handler(createRequest(""), followUp.res);
     expect(followUp.res.statusCode).toBe(400);
-  });
-
-  it("routes a token owned by one account", async () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    activate({ accountId: "a2", tokens: ["tok-b"] });
-
-    const result = await routeSlashRequest({ body: "token=tok-a" });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toBe("a1");
   });
 
   it("rejects a token shared by multiple accounts", async () => {

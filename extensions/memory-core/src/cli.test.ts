@@ -89,50 +89,16 @@ async function seedCliBackfillTranscript(
 
 vi.mock("./memory-forget.js", () => ({ forgetMemoryEntries }));
 
-vi.mock("./cli.host.runtime.js", async () => {
-  const [
-    {
-      defaultRuntime,
-      formatErrorMessage,
-      formatCliJsonFailure,
-      getMemoryEmbeddingCommandSecretTargetIds,
-      setVerbose,
-      shortenHomeInString,
-      shortenHomePath,
-      theme,
-      withManager,
-      withProgress,
-      withProgressTotals,
-    },
-    { resolveSessionTranscriptsDirForAgent, resolveStateDir },
-    { listMemoryFiles, normalizeExtraMemoryPaths },
-  ] = await Promise.all([
-    import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
-    import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
-    import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
-  ]);
-  return {
-    defaultRuntime,
-    formatErrorMessage,
-    formatCliJsonFailure,
-    getMemoryEmbeddingCommandSecretTargetIds,
-    getMemorySearchManager,
-    listMemoryFiles,
-    getRuntimeConfig,
-    normalizeExtraMemoryPaths,
-    resolveCommandSecretRefsViaGateway,
-    resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent,
-    resolveStateDir,
-    setVerbose,
-    shortenHomeInString,
-    shortenHomePath,
-    theme,
-    withManager,
-    withProgress,
-    withProgressTotals,
-  };
-});
+vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),
+  resolveCommandSecretRefsViaGateway,
+}));
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
+  getRuntimeConfig,
+  resolveDefaultAgentId,
+}));
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;

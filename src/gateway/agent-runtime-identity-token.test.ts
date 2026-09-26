@@ -111,6 +111,7 @@ async function createIdentity(
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetAgentRunRegistryForTest();
   closeOpenClawStateDatabaseForTest();
   for (const closeDatabase of reloadedStateDatabaseClosers) {
@@ -426,12 +427,43 @@ describe("agent runtime identity token", () => {
       executionIdentityToken: createExecutionIdentityAdmissionToken("run-other"),
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(identity).toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "session-1",
       operationalRunInstance: operationalRun("run-1").operationalRunInstance,
     });
+    expect(identity).not.toHaveProperty("executionIdentity");
+  });
+
+  it("preserves inherited permission modes in signed spawn context and rejects malformed modes", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const run = operationalRun();
+    const inheritedToolPolicy = { version: 1 as const, allow: ["read"], deny: ["exec"] };
+    let token = "";
+
+    for (const inheritedPermissionMode of ["read-only", "guarded", "workspace", "full"] as const) {
+      token = await runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance: run.operationalRunInstance,
+        sessionSpawnContext: { inheritedPermissionMode, inheritedToolPolicy },
+      });
+
+      await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+        sessionSpawnContext: { inheritedPermissionMode, inheritedToolPolicy },
+      });
+    }
+
+    const malformed = rewriteSignedPayload(token, (payload) => {
+      payload.sessionSpawnContext = {
+        inheritedToolPolicy,
+        inheritedPermissionMode: "approve-all",
+      };
+    });
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(malformed)).resolves.toBeUndefined();
   });
 
   it("round-trips spawn policy without serializing private lineage", async () => {
@@ -501,7 +533,7 @@ describe("agent runtime identity token", () => {
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    vi.spyOn(Date, "now").mockReturnValue(1000);
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "ops",
       sessionKey: "agent:ops:cron:job-1:run:run-1",
@@ -521,7 +553,6 @@ describe("agent runtime identity token", () => {
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
     ).resolves.toBeUndefined();
-    nowSpy.mockRestore();
   });
 
   it.each(["signed", "direct"] as const)(
@@ -760,7 +791,7 @@ describe("agent runtime identity token", () => {
   it("bounds run-lifetime message action bearers independently of local revocation", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    vi.spyOn(Date, "now").mockReturnValue(1000);
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
@@ -776,7 +807,6 @@ describe("agent runtime identity token", () => {
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken(token, 61_000),
     ).resolves.toBeUndefined();
-    nowSpy.mockRestore();
   });
 
   it("queues parallel verifications behind a same-process approvals update", async () => {

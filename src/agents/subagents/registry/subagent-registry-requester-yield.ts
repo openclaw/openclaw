@@ -3,6 +3,7 @@ import { captureTaskProgressContinuationForRequesterTurn } from "../../../tasks/
 import { scheduleYieldedSubagentRunProgress } from "../../../tasks/task-registry-progress.js";
 /** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
   captureRequesterCronAuthority,
   promoteRequesterCronAuthority,
@@ -353,6 +354,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     throw error;
   }
 
+  promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
   promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
   if (rearmGeneration !== undefined && params.requesterAgentId) {
     promoteRequesterFinalAttachment({

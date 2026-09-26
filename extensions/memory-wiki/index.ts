@@ -1,4 +1,3 @@
-// Memory Wiki plugin entrypoint registers its OpenClaw integration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { definePluginEntry, type OpenClawConfig } from "./api.js";

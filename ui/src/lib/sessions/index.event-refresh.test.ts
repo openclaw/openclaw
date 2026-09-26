@@ -631,6 +631,7 @@ describe("event-driven session list refresh", () => {
 
   it("debounces rapid session events into one trailing list refresh", async () => {
     vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
@@ -654,12 +655,14 @@ describe("event-driven session list refresh", () => {
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       sessions.dispose();
+      random.mockRestore();
       vi.useRealTimers();
     }
   });
 
   it("bounds canonical refresh latency during sustained event traffic", async () => {
     vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
@@ -683,6 +686,7 @@ describe("event-driven session list refresh", () => {
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       sessions.dispose();
+      random.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -823,6 +827,7 @@ describe("event-driven session list refresh", () => {
     "keeps event invalidation $timing",
     async ({ eventBeforeAppend, queueForeground, eventDuringForeground, expectedCalls }) => {
       vi.useFakeTimers();
+      const random = vi.spyOn(Math, "random").mockReturnValue(0);
       const firstList = createDeferred<SessionsListResult>();
       const secondList = createDeferred<SessionsListResult>();
       const secondListStarted = createDeferred();
@@ -892,6 +897,7 @@ describe("event-driven session list refresh", () => {
         firstList.resolve(sessionsResult([], 1));
         secondList.resolve(sessionsResult([], 2));
         sessions.dispose();
+        random.mockRestore();
         vi.useRealTimers();
       }
     },

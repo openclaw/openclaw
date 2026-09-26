@@ -1,6 +1,7 @@
 // Persistence helpers for plugin installs plus related config mutation.
 import path from "node:path";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -47,22 +48,6 @@ import {
   planPluginUninstall,
   type PluginUninstallDirectoryRemoval,
 } from "./uninstall.js";
-
-function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const allow = cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0 || allow.includes(pluginId)) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      // Preserve authored allowlist order so env-backed entries remain aligned
-      // with the write-time env restoration snapshot.
-      allow: [...allow, pluginId],
-    },
-  };
-}
 
 function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const deny = cfg.plugins?.deny;
@@ -311,10 +296,11 @@ export async function persistPluginInstall(params: {
         if (params.enable === false) {
           continue;
         }
-        next = removeInstalledPluginFromDenylist(
-          addInstalledPluginToAllowlist(next, pluginId),
-          pluginId,
-        );
+        // Append in authored order so env-backed entries retain their write-time alignment.
+        if (next.plugins?.allow?.length) {
+          next = ensurePluginAllowlisted(next, pluginId);
+        }
+        next = removeInstalledPluginFromDenylist(next, pluginId);
         if (configEnablement.mode !== "ready" || explicitlyDisabled) {
           continue;
         }

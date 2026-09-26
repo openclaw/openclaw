@@ -356,17 +356,12 @@ describe("loadToolsCatalog", () => {
 
   it("ignores catalog responses after selected agent changes mid-request", async () => {
     const { state, request } = createState();
-    const resolvers: Array<(value: unknown) => void> = [];
-    request.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
+    const response = deferred<unknown>();
+    request.mockReturnValue(response.promise);
 
     const pending = loadToolsCatalog(state, "main");
     state.agentsSelectedId = "other-agent";
-    resolvers.shift()?.({
+    response.resolve({
       agentId: "main",
       profiles: [{ id: "full", label: "Full" }],
       groups: [],
@@ -456,17 +451,12 @@ describe("loadToolsEffective", () => {
 
   it("ignores effective-tool responses after selected agent changes mid-request", async () => {
     const { state, request } = createState();
-    const resolvers: Array<(value: unknown) => void> = [];
-    request.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
+    const response = deferred<unknown>();
+    request.mockReturnValue(response.promise);
 
     const pending = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
     state.agentsSelectedId = "other-agent";
-    resolvers.shift()?.({
+    response.resolve({
       agentId: "main",
       profile: "coding",
       groups: [],

@@ -1,11 +1,7 @@
-// Ollama plugin module implements discovery shared behavior.
 import { isIPv4 } from "node:net";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type {
-  ModelProviderConfig,
-  ModelDefinitionConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,11 +12,6 @@ import {
 } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
-
-/** Provider config input type — partial config without required `models`. */
-type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
 
 export const OLLAMA_PROVIDER_ID = "ollama";
 export { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
@@ -38,7 +29,7 @@ type OllamaDiscoveryContext = {
   providerIds?: readonly string[];
   config: {
     models?: {
-      providers?: Record<string, OllamaProviderConfigInput | undefined>;
+      providers?: Record<string, Partial<ModelProviderConfig> | undefined>;
     };
   };
   env: NodeJS.ProcessEnv;
@@ -182,7 +173,7 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
 }
 
 function hasExplicitRemoteOllamaApiProvider(
-  providers: Record<string, OllamaProviderConfigInput | undefined> | undefined,
+  providers: Record<string, Partial<ModelProviderConfig> | undefined> | undefined,
 ): boolean {
   if (!providers) {
     return false;
@@ -203,7 +194,7 @@ function hasExplicitRemoteOllamaApiProvider(
 }
 
 export function shouldUseSyntheticOllamaAuth(
-  providerConfig: OllamaProviderConfigInput | undefined,
+  providerConfig: Partial<ModelProviderConfig> | undefined,
 ): boolean {
   // Explicit literal credentials and refs belong to configured auth, not the
   // synthetic local no-auth path.
@@ -219,7 +210,7 @@ export function shouldUseSyntheticOllamaAuth(
 }
 
 function hasMeaningfulExplicitOllamaConfig(
-  providerConfig: OllamaProviderConfigInput | undefined,
+  providerConfig: Partial<ModelProviderConfig> | undefined,
 ): boolean {
   if (!providerConfig) {
     return false;

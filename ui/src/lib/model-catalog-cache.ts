@@ -26,10 +26,15 @@ export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
 ): ModelCatalogInvalidation | undefined {
   if (event.event === "config.changed") {
-    return "clear";
+    return "refresh";
   }
   if (event.event === "chat.metadata.changed") {
-    return asNullableRecord(event.payload)?.modelSelectionChanged === true ? "clear" : "refresh";
+    const payload = asNullableRecord(event.payload);
+    return payload?.modelSelectionChanged === true
+      ? "clear"
+      : payload?.modelCatalogChanged === false
+        ? undefined
+        : "refresh";
   }
   return undefined;
 }

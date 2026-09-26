@@ -33,10 +33,6 @@ export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPa
   return resolvedPolicy;
 }
 
-function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]): boolean {
-  return pattern.every((segment, index) => commandPath[index] === segment);
-}
-
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const tokens =
@@ -48,7 +44,7 @@ function resolveCliCatalogCommandPath(argv: string[]): string[] {
   }
   let bestMatch: readonly string[] | null = null;
   for (const entry of cliCommandCatalog) {
-    if (!isCommandPathPrefix(tokens, entry.commandPath)) {
+    if (!matchesCommandPath(tokens, entry.commandPath)) {
       continue;
     }
     if (!bestMatch || entry.commandPath.length > bestMatch.length) {

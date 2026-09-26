@@ -186,10 +186,6 @@ function readHttpStatusFromError(error: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
-function isHttpStatusError(error: unknown, status: number): boolean {
-  return readHttpStatusFromError(error) === status;
-}
-
 function containsEastAsianScript(value: string): boolean {
   return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(value);
 }
@@ -287,18 +283,10 @@ async function saveFeishuResponseMedia(params: {
     );
   }
 
-  if (responseWithOptionalFields.data && Buffer.isBuffer(responseWithOptionalFields.data)) {
+  const data = responseWithOptionalFields.data;
+  if (Buffer.isBuffer(data) || data instanceof ArrayBuffer) {
     return saveMediaBuffer(
-      responseWithOptionalFields.data,
-      contentType,
-      "inbound",
-      maxBytes,
-      fileName,
-    );
-  }
-  if (responseWithOptionalFields.data instanceof ArrayBuffer) {
-    return saveMediaBuffer(
-      Buffer.from(responseWithOptionalFields.data),
+      Buffer.isBuffer(data) ? data : Buffer.from(data),
       contentType,
       "inbound",
       maxBytes,
@@ -385,7 +373,7 @@ export async function saveMessageResourceFeishu(params: {
       originalFilename,
     });
   } catch (err) {
-    if (type !== "file" || !isHttpStatusError(err, 502)) {
+    if (type !== "file" || readHttpStatusFromError(err) !== 502) {
       throw err;
     }
     try {
@@ -801,18 +789,6 @@ async function probeMediaDurationMs(params: {
   }
 }
 
-async function maybeProbeUploadDurationMs(params: {
-  buffer: Buffer;
-  fileName: string;
-  contentType?: string;
-  msgType: "file" | "audio" | "media";
-}): Promise<number | undefined> {
-  if (params.msgType !== "audio" && params.msgType !== "media") {
-    return undefined;
-  }
-  return await probeMediaDurationMs(params);
-}
-
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * Local paths require host-owned mediaAccess or approved legacy roots/readers.
@@ -847,10 +823,6 @@ export async function sendMediaFeishu(params: {
     FEISHU_MAX_FILE_UPLOAD_BYTES,
   );
 
-  let buffer: Buffer;
-  let name: string;
-  let contentType: string | undefined;
-
   const loaded = await runBeforeFeishuMessageDispatch(async () => {
     if (mediaBuffer) {
       return { buffer: mediaBuffer, name: fileName ?? "file", contentType: undefined };
@@ -874,32 +846,26 @@ export async function sendMediaFeishu(params: {
     }
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   });
-  buffer = loaded.buffer;
-  name = loaded.name;
-  contentType = loaded.contentType;
-
+  const loadedMedia = {
+    buffer: loaded.buffer,
+    fileName: loaded.name,
+    contentType: loaded.contentType,
+  };
   const loadedRouting = await runBeforeFeishuMessageDispatch(() =>
-    resolveFeishuOutboundMediaKind({ buffer, fileName: name, contentType }),
+    resolveFeishuOutboundMediaKind(loadedMedia),
   );
   await runBeforeFeishuMessageDispatch(() =>
     assertFeishuUploadWithinEnvelope({
-      buffer,
+      buffer: loaded.buffer,
       mediaMaxBytes,
       msgType: loadedRouting.msgType,
     }),
   );
 
   const prepared = await runBeforeFeishuMessageDispatch(() =>
-    prepareFeishuVoiceMedia({
-      buffer,
-      fileName: name,
-      contentType,
-      audioAsVoice,
-    }),
+    prepareFeishuVoiceMedia({ ...loadedMedia, audioAsVoice }),
   );
-  buffer = prepared.buffer;
-  name = prepared.fileName;
-  contentType = prepared.contentType;
+  const { buffer, fileName: name, contentType } = prepared;
 
   const routing =
     prepared.buffer === loaded.buffer &&
@@ -927,12 +893,10 @@ export async function sendMediaFeishu(params: {
       ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
     };
   }
-  const durationMs = await maybeProbeUploadDurationMs({
-    buffer,
-    fileName: name,
-    contentType,
-    msgType: routing.msgType,
-  });
+  const durationMs =
+    routing.msgType === "audio" || routing.msgType === "media"
+      ? await probeMediaDurationMs({ buffer, fileName: name, contentType })
+      : undefined;
   const { fileKey } = await runBeforeFeishuMessageDispatch(() =>
     uploadFileFeishu({
       cfg,

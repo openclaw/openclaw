@@ -81,6 +81,17 @@ struct MacControlRequestHandlerTests {
         #expect(password == nil)
     }
 
+    @Test(arguments: ["gateway.list", "gateway.reconnect", "gateway.remove"])
+    func `only explicit Gateway mutations retry denied Keychain access`(_ operation: String) async {
+        let owner = FakeMacControlOwner()
+        owner.profiles = [Self.profile(id: "saved", name: "Research")]
+        let handler = MacControlRequestHandler(owner: owner)
+        var request = MacControlRequest(operation: operation)
+        request.idOrName = "Research"
+        _ = await handler.handle(request)
+        #expect(owner.keychainRetries == [operation != "gateway.list"])
+    }
+
     @Test func `invalid operations and mixed configuration do not reach mutation owners`() async throws {
         let owner = FakeMacControlOwner()
         let handler = MacControlRequestHandler(owner: owner)
@@ -170,6 +181,7 @@ private final class FakeMacControlOwner: MacControlOwner {
     var selection: PrimaryGatewayControlConfiguration?
     var removedIDs: [String] = []
     var addCount = 0
+    var keychainRetries: [Bool] = []
     var failure: Error?
     var holdSignIn = false
     var signInContinuation: CheckedContinuation<Void, Never>?
@@ -185,8 +197,9 @@ private final class FakeMacControlOwner: MacControlOwner {
         return self.primary
     }
 
-    func gateways() async throws -> [MacControlGatewayStatus] {
-        self.profiles
+    func gateways(retryKeychainAccess: Bool) async throws -> [MacControlGatewayStatus] {
+        self.keychainRetries.append(retryKeychainAccess)
+        return self.profiles
     }
 
     func addGateway(_ request: MacControlRequest) async throws -> MacControlGatewayStatus {

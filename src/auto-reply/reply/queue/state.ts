@@ -4,6 +4,8 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import { normalizeThinkLevel } from "../../thinking.js";
@@ -190,6 +192,38 @@ export function clearFollowupQueue(key: string): number {
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
   return cleared;
+}
+
+export function clearRemovedQueuedAuthProfiles(params: {
+  removedByAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  rewriteConfig: (cfg: OpenClawConfig) => OpenClawConfig;
+}): void {
+  const clearRun = (run: FollowupRun["run"]) => {
+    const removed = params.removedByAgent.get(normalizeAgentId(run.agentId));
+    if (!removed?.size) {
+      return;
+    }
+    // Pending work retains config as well as a selected account. Clear both sources
+    // so a later model switch cannot restore the deleted account from its snapshot.
+    run.config = params.rewriteConfig(run.config);
+    if (run.authProfileId && removed.has(run.authProfileId)) {
+      delete run.authProfileId;
+      delete run.authProfileIdSource;
+    }
+    const probe = run.autoFallbackPrimaryProbe;
+    if (probe?.fallbackAuthProfileId && removed.has(probe.fallbackAuthProfileId)) {
+      delete probe.fallbackAuthProfileId;
+      delete probe.fallbackAuthProfileIdSource;
+    }
+  };
+  for (const queue of FOLLOWUP_QUEUES.values()) {
+    if (queue.lastRun) {
+      clearRun(queue.lastRun);
+    }
+    for (const item of followupQueueSources(queue)) {
+      clearRun(item.run);
+    }
+  }
 }
 
 export function refreshQueuedFollowupSession(params: {

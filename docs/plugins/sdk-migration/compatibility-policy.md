@@ -105,6 +105,13 @@ result includes the required `modelCatalog` with
 the selected physical-route metadata. Both builders use one metadata producer;
 callers must carry prepared rows forward rather than reconstructing them from IDs.
 
+Both builders return the currently published menu rows without waiting for full
+discovery. Results may be partial while acquisition continues in the background;
+`pendingProviders` identifies providers still refreshing. Keep known choices usable
+and call the builder again when the menu is reopened. Awaiting a menu builder is
+not a complete-inventory guarantee. Use the catalog's explicit refresh operation
+when requesting inventory acquisition rather than treating a menu read as one.
+
 Use `getModelsRuntimeChoices(data, provider, model)` from the same SDK subpath
 for a selected model. A nonempty array contains that model's eligible runtime
 choices. An empty array means the current observation permits no runtime for
@@ -200,6 +207,25 @@ provides bounded `readPluginStateEntriesInKeyRange` and
 `deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
 unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
 retained after maintenance ends cannot authorize later writes.
+
+Trusted bundled and official plugins may also use the optional
+`inspectCronJobs` and `repairCronJobs` context methods for explicit cron
+migrations. Inspection is non-creating and returns raw definitions, row IDs,
+ordering, validation findings, and store keys for every persisted partition.
+`repairCronJobs(inventory, changes)` is available only during offline repair:
+it saves a verified shared-state SQLite backup, rechecks current authority and
+the inspected definitions, then applies all selected replacements or deletions
+in one transaction. A replacement preserves the row ID, partition, ordering,
+and runtime state. A deletion uses normal cron scratch and grant cleanup.
+The result reports `changed` and the retained `backupPath`; a no-op creates no
+backup. Plugins classify their own historical jobs and retain ambiguous rows.
+Older hosts may omit these methods, so a migration must check availability.
+
+These helpers follow the [native-plugin trust model](/plugins/architecture#execution-model):
+eligible plugins run with host privileges and own historical job classification.
+The host enforces installation provenance, offline repair authority, unchanged
+definitions, verified backup, and atomic persistence. The API does not promise
+isolation between mutually untrusted native plugins.
 
 The setup-entry `legacyStateMigrations` option and feature flag,
 `setupFeatures.legacyStateMigrations`,

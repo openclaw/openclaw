@@ -29,7 +29,7 @@ import {
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
-} from "../text-runtime.js";
+} from "../targets-runtime.js";
 import {
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,

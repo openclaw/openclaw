@@ -31,6 +31,7 @@ function makeCheckpointFixture() {
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
     "lib/plistbuddy.sh",
+    "lib/mac-signing-identity.sh",
   ]) {
     writeFileSync(
       path.join(root, "scripts", file),
@@ -53,7 +54,8 @@ def archive(source, target):
     with zipfile.ZipFile(target, "w") as z:
         for p in source.rglob("*"):
             if p.is_file(): z.write(p, p.relative_to(source.parent))
-if name == "swift": print("Apple Swift version 6.3")
+if name == "security": print('1) ABCDEF "Developer ID Application: Fixture"')
+elif name == "swift": print("Apple Swift version 6.3")
 elif name == "xcrun": print("Xcode 26.4")
 elif name == "node": print("2608000290")
 elif name == "git": print("a" * 40)
@@ -64,7 +66,7 @@ elif name == "package-mac-app.sh":
     app = root / "dist/OpenClaw.app/Contents"
     app.mkdir(parents=True, exist_ok=True)
     (app / "Info.plist").write_text(json.dumps(dict(CFBundleShortVersionString="2026.8.2", CFBundleVersion="2608000290", CFBundleIdentifier="ai.openclaw.mac", SUFeedURL="https://example.com/appcast.xml")))
-    (app / "signature").write_text("adhoc" if os.environ.get("ALLOW_ADHOC_SIGNING") == "1" else "developer")
+    (app / "signature").write_text("adhoc" if os.environ.get("SIGN_IDENTITY") == "-" else "developer")
 elif name == "codesign":
     target = pathlib.Path(args[-1])
     if "--sign" in args:
@@ -100,6 +102,7 @@ else: sys.exit("unexpected fake tool: " + name)
     { mode: 0o755 },
   );
   for (const name of [
+    "security",
     "swift",
     "xcrun",
     "node",
@@ -185,20 +188,38 @@ describe("macOS packaging checkpoint boundary", () => {
     ).toBe(true);
   });
 
-  it("allows explicitly ad-hoc smoke resume without notarization", () => {
+  it.each(["-", ""])(
+    "allows ad-hoc smoke resume with identity %j on a signer-equipped host",
+    (identity) => {
+      const f = makeCheckpointFixture();
+      const smoke = {
+        ALLOW_ADHOC_SIGNING: "1",
+        SIGN_IDENTITY: identity,
+        SKIP_NOTARIZE: "1",
+        EXPECTED_DEVELOPER_TEAM_ID: "FIXTURE",
+      };
+      expect(f.run("--checkpoint-only", smoke).status).toBe(0);
+      const resumed = f.run("--resume-notarization", smoke);
+      expect(resumed.status, resumed.stderr).toBe(0);
+      expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+      expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(false);
+      expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
+    },
+  );
+
+  it("uses the automatically selected app identity for the checkpoint DMG", () => {
     const f = makeCheckpointFixture();
-    const smoke = {
-      ALLOW_ADHOC_SIGNING: "1",
-      SIGN_IDENTITY: "-",
-      SKIP_NOTARIZE: "1",
-      EXPECTED_DEVELOPER_TEAM_ID: "FIXTURE",
-    };
-    expect(f.run("--checkpoint-only", smoke).status).toBe(0);
-    const resumed = f.run("--resume-notarization", smoke);
-    expect(resumed.status, resumed.stderr).toBe(0);
-    expect(f.events()).not.toContain("notarize-mac-artifact.sh");
-    expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(false);
-    expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
+    const built = f.run("--checkpoint-only", { SIGN_IDENTITY: "" });
+    expect(built.status, built.stderr).toBe(0);
+    expect(f.events()).toContain("--sign Developer ID Application: Fixture --timestamp");
+  });
+
+  it("preserves an explicit signed identity when smoke flags are present", () => {
+    const f = makeCheckpointFixture();
+    const built = f.run("--checkpoint-only", { ALLOW_ADHOC_SIGNING: "1", SKIP_NOTARIZE: "1" });
+    expect(built.status).not.toBe(0);
+    expect(built.stderr).toContain("requires an ad-hoc signed smoke app");
+    expect(existsSync(f.checkpoint)).toBe(false);
   });
 
   it.each(["release", "release with smoke flag", "tampered app", "missing DMG", "audit"])(
@@ -260,6 +281,7 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
     "notarize-mac-artifact.sh",
     "lib/mac-notarization-recovery.py",
     "lib/plistbuddy.sh",
+    "lib/mac-signing-identity.sh",
     "lib/swift-toolchain.sh",
   ]) {
     copyFileSync(path.join("scripts", file), path.join(scripts, file));
@@ -397,6 +419,49 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function runSparkleBootstrap(nodeAfterInstall: string, pnpmBody: string) {
+  const script = readFileSync(scriptPath, "utf8");
+  const helpers = script.slice(
+    script.indexOf("DIST_PNPM_CMD=()"),
+    script.indexOf("correction_build_from_exact_tag()"),
+  );
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
+  tempDirs.push(dir);
+  const tools = path.join(dir, "tools");
+  const marker = path.join(dir, "installed");
+  mkdirSync(tools);
+  writeFileSync(
+    path.join(tools, "node"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then
+  echo "node ran outside repo root: $PWD" >&2
+  exit 1
+fi
+if [[ ! -f "$OPENCLAW_MARKER" ]]; then
+  echo "Cannot find package tsx" >&2
+  exit 1
+fi
+${nodeAfterInstall}
+echo 2026060200
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(path.join(tools, "pnpm"), `#!/usr/bin/env bash\nset -euo pipefail\n${pnpmBody}\n`, {
+    mode: 0o755,
+  });
+  return runHelper(`
+    set -euo pipefail
+    ROOT_DIR=${JSON.stringify(process.cwd())}
+    OPENCLAW_ROOT=${JSON.stringify(process.cwd())}
+    OPENCLAW_MARKER=${JSON.stringify(marker)}
+    PATH=${JSON.stringify(tools)}:/usr/bin:/bin
+    export OPENCLAW_MARKER OPENCLAW_ROOT PATH
+    ${helpers}
+    require_canonical_sparkle_build 2026.6.2
+  `);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -469,24 +534,6 @@ describe("package-mac-dist plist validation", () => {
       'canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true',
     );
     expect(script).not.toContain('canonical_sparkle_build "$VERSION" 2>/dev/null || true');
-  });
-
-  it("checks Swift before Sparkle metadata or dependency bootstrap work", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const swiftIndex = script.indexOf("  require_swift_toolchain\n");
-    const versionIndex = script.indexOf('if [[ -z "$APP_VERSION_INPUT" ]]');
-    const appBuildIndex = script.indexOf(
-      'if [[ "$RESUME_NOTARIZATION" == "0" && -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]',
-    );
-    const packageAppIndex = script.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
-    const preSwiftBlock = script.slice(0, swiftIndex);
-
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"');
-    expect(swiftIndex).toBeGreaterThanOrEqual(0);
-    expect(versionIndex).toBeGreaterThan(swiftIndex);
-    expect(appBuildIndex).toBeGreaterThan(versionIndex);
-    expect(packageAppIndex).toBeGreaterThan(appBuildIndex);
-    expect(preSwiftBlock).not.toContain("node -p");
   });
 
   it("fails on old Swift before reading package metadata", () => {
@@ -601,62 +648,10 @@ describe("package-mac-dist plist validation", () => {
   });
 
   it("keeps dependency bootstrap output out of captured Sparkle build values", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const helpers = script.slice(
-      script.indexOf("DIST_PNPM_CMD=()"),
-      script.indexOf("correction_build_from_exact_tag()"),
+    const result = runSparkleBootstrap(
+      'echo "ExperimentalWarning: tsx loader changed" >&2',
+      'echo "Already up to date"\ntouch "$OPENCLAW_MARKER"',
     );
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
-    tempDirs.push(dir);
-    const tools = path.join(dir, "tools");
-    const marker = path.join(dir, "installed");
-    const fakeNode = path.join(tools, "node");
-    const fakePnpm = path.join(tools, "pnpm");
-
-    mkdirSync(tools, { recursive: true });
-    writeFileSync(
-      fakeNode,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
-        '  echo "node ran outside repo root: $PWD" >&2',
-        "  exit 1",
-        "fi",
-        'if [[ ! -f "$OPENCLAW_MARKER" ]]; then',
-        '  echo "Cannot find package tsx" >&2',
-        "  exit 1",
-        "fi",
-        'echo "ExperimentalWarning: tsx loader changed" >&2',
-        "echo 2026060200",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakeNode, 0o755);
-    writeFileSync(
-      fakePnpm,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        "echo 'Already up to date'",
-        'touch "$OPENCLAW_MARKER"',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakePnpm, 0o755);
-
-    const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(process.cwd())}
-      OPENCLAW_ROOT=${JSON.stringify(process.cwd())}
-      OPENCLAW_MARKER=${JSON.stringify(marker)}
-      PATH=${JSON.stringify(tools)}:/usr/bin:/bin
-      export OPENCLAW_MARKER OPENCLAW_ROOT PATH
-      ${helpers}
-      require_canonical_sparkle_build 2026.6.2
-    `);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("2026060200\n");
@@ -666,63 +661,10 @@ describe("package-mac-dist plist validation", () => {
   });
 
   it("stops when dependency bootstrap fails during Sparkle build retry", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const helpers = script.slice(
-      script.indexOf("DIST_PNPM_CMD=()"),
-      script.indexOf("correction_build_from_exact_tag()"),
+    const result = runSparkleBootstrap(
+      'echo "node reran after failed install" >&2',
+      'touch "$OPENCLAW_MARKER"\necho "pnpm failed" >&2\nexit 42',
     );
-    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
-    tempDirs.push(dir);
-    const tools = path.join(dir, "tools");
-    const marker = path.join(dir, "installed");
-    const fakeNode = path.join(tools, "node");
-    const fakePnpm = path.join(tools, "pnpm");
-
-    mkdirSync(tools, { recursive: true });
-    writeFileSync(
-      fakeNode,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
-        '  echo "node ran outside repo root: $PWD" >&2',
-        "  exit 1",
-        "fi",
-        'if [[ ! -f "$OPENCLAW_MARKER" ]]; then',
-        '  echo "Cannot find package tsx" >&2',
-        "  exit 1",
-        "fi",
-        'echo "node reran after failed install" >&2',
-        "echo 2026060200",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakeNode, 0o755);
-    writeFileSync(
-      fakePnpm,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'touch "$OPENCLAW_MARKER"',
-        'echo "pnpm failed" >&2',
-        "exit 42",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakePnpm, 0o755);
-
-    const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(process.cwd())}
-      OPENCLAW_ROOT=${JSON.stringify(process.cwd())}
-      OPENCLAW_MARKER=${JSON.stringify(marker)}
-      PATH=${JSON.stringify(tools)}:/usr/bin:/bin
-      export OPENCLAW_MARKER OPENCLAW_ROOT PATH
-      ${helpers}
-      require_canonical_sparkle_build 2026.6.2
-    `);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");

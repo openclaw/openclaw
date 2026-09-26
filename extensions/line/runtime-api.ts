@@ -102,12 +102,6 @@ export type {
   ResolvedLineAccount,
 } from "./src/types.js";
 export { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./src/webhook-node.js";
-export {
-  createLineWebhookMiddleware,
-  type LineWebhookOptions,
-  startLineWebhook,
-  type StartLineWebhookOptions,
-} from "./src/webhook.js";
 export { parseLineWebhookBody } from "./src/webhook-utils.js";
 export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/actions.js";
 export type { Action } from "./src/actions.js";

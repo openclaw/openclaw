@@ -487,7 +487,9 @@ describe("formatAssistantErrorText", () => {
   });
   it("keeps plain HTTP rate-limit guidance user-facing", () => {
     const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
-    expect(formatAssistantErrorText(msg)).toContain("24 hours");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Your quota has been exhausted, try again in 24 hours",
+    );
     expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
   });
 
@@ -516,14 +518,6 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe(
       "⚠️ API rate limit reached. Please try again later.",
     );
-  });
-
-  it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {
-    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
-    const result = formatAssistantErrorText(msg);
-    expect(result).toContain("try again in 24 hours");
-    expect(result).not.toMatch(/^⚠️ 429\b/);
-    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
   });
 
   it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
@@ -919,11 +913,6 @@ describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
 
   it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
     const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
-    expect(result).toMatch(/api key/i);
-  });
-
-  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
-    const result = formatBillingErrorMessage();
     expect(result).toMatch(/api key/i);
   });
 });

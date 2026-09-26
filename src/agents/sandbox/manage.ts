@@ -50,12 +50,19 @@ function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): Sandbo
 }
 
 /** Lists registered sandbox containers with live backend status and config-label match state. */
-export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
+export async function listSandboxContainers(
+  matches?: (entry: SandboxRegistryEntry) => boolean,
+): Promise<SandboxContainerInfo[]> {
   const config = getRuntimeConfig();
   const registry = await readRegistry();
   const results: SandboxContainerInfo[] = [];
 
   for (const entry of registry.entries) {
+    // Scope selection precedes backend probes: an unrelated target can be offline
+    // or require a different connection without blocking this runtime's recovery.
+    if (matches && !matches(entry)) {
+      continue;
+    }
     const backendId = entry.backendId ?? "docker";
     const manager = getSandboxBackendManager(backendId);
     if (!manager) {
@@ -84,12 +91,17 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
 }
 
 /** Lists registered browser sandbox containers with live Docker status. */
-export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
+export async function listSandboxBrowsers(
+  matches?: (entry: SandboxBrowserRegistryEntry) => boolean,
+): Promise<SandboxBrowserInfo[]> {
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const results: SandboxBrowserInfo[] = [];
 
   for (const entry of registry.entries) {
+    if (matches && !matches(entry)) {
+      continue;
+    }
     const agentId = resolveSandboxAgentId(entry.sessionKey);
     const runtime = await dockerSandboxBackendManager.describeRuntime({
       entry: toBrowserDockerRuntimeEntry(entry),

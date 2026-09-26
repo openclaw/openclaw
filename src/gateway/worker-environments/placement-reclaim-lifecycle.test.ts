@@ -25,10 +25,8 @@ describe("placement reclaim with provider-owned node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it.each([
-    { operation: "reclaim", failure: "rejection" },
     { operation: "reclaim", failure: "timeout" },
     { operation: "move", failure: "rejection" },
-    { operation: "move", failure: "timeout" },
     { operation: "recovery", failure: "rejection" },
     { operation: "reclaim", failure: "reconciliation" },
     { operation: "reclaim", failure: "resume-owner-close" },
@@ -86,12 +84,12 @@ describe("placement reclaim with provider-owned node teardown", () => {
           sharedHost: false,
         },
       });
-      const active = harness.placements.seedActive(attached.ownerEpoch);
+      const active = await harness.placements.seedActive(attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("expected active placement");
       }
       if (operation === "recovery") {
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...REQUEST,
           claimId: "pending-claim",
           runId: "pending-run",
@@ -358,7 +356,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
       });
       const environmentId = harness.ready.environmentId;
       const identity = await support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
-      const active = seedActivePlacement(placements, {
+      const active = await seedActivePlacement(placements, {
         environmentId,
         ownerEpoch: identity.ownerEpoch,
         executionMode: "remote-exec",

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
@@ -33,6 +34,7 @@ import {
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -224,9 +226,16 @@ it("rechecks the current manager after the membership read yields", async () => 
   });
 });
 
-it("commits worker membership and participant facts before publishing, and rejects stale authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:worker-writes" };
+it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const alias = state.path("member-alias");
+    fs.symlinkSync(path.dirname(database.path), alias, "junction");
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:worker-writes",
+      storePath: path.join(alias, path.basename(database.path)),
+    };
     const entry = {
       sessionId: "worker-writes",
       updatedAt: 1,
@@ -247,7 +256,6 @@ it("commits worker membership and participant facts before publishing, and rejec
         participantLifecycle(event);
       }
     });
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
     const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
     const queries: string[] = [];
     const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
@@ -336,6 +344,71 @@ it("commits worker membership and participant facts before publishing, and rejec
       }
     }
     expect(await listSessionMembersInWorker(scope)).toEqual([]);
+  });
+});
+
+it("rejects the complete aliased category update when a later member changes after preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const alias = state.path("category-alias");
+    fs.symlinkSync(path.dirname(database.path), alias, "junction");
+    const scopeAt = (index: number) => ({
+      agentId: "main",
+      storePath: path.join(alias, path.basename(database.path)),
+      sessionKey: `agent:main:category-revalidation:${String(index).padStart(2, "0")}`,
+    });
+    const firstScope = scopeAt(0);
+    const replacedScope = scopeAt(11);
+    const scopes = [
+      firstScope,
+      ...Array.from({ length: 10 }, (_, index) => scopeAt(index + 1)),
+      replacedScope,
+    ];
+    for (const [index, scope] of scopes.entries()) {
+      replaceSessionEntrySync(scope, {
+        sessionId: `original-${index}`,
+        updatedAt: 1,
+        category: "Work",
+      });
+    }
+    let changed = false;
+    await expect(
+      updateSessionGroupCategoriesInWorker({
+        scope: firstScope,
+        from: "Work",
+        assertTargetCurrent() {
+          if (!changed) {
+            changed = true;
+            replaceSessionEntrySync(replacedScope, {
+              sessionId: "replacement",
+              updatedAt: 2,
+              category: "Replacement",
+            });
+          }
+        },
+      }),
+    ).rejects.toThrow(
+      `SQLite session entry changed before replacement for ${replacedScope.sessionKey}`,
+    );
+    expect(loadSessionEntry(firstScope)).toMatchObject({
+      sessionId: "original-0",
+      updatedAt: 1,
+      category: "Work",
+    });
+    expect(loadSessionEntry(replacedScope)).toMatchObject({
+      sessionId: "replacement",
+      updatedAt: 2,
+      category: "Replacement",
+    });
+    await expect(
+      updateSessionGroupCategoriesInWorker({ scope: firstScope, from: "Work" }),
+    ).resolves.toBe(11);
+    for (const [index, scope] of scopes.slice(0, -1).entries()) {
+      const entry = loadSessionEntry(scope);
+      expect(entry).toMatchObject({ sessionId: `original-${index}`, updatedAt: 1 });
+      expect(entry?.category).toBeUndefined();
+    }
+    expect(loadSessionEntry(replacedScope)?.category).toBe("Replacement");
   });
 });
 

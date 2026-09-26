@@ -1,5 +1,27 @@
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 
+type ForegroundClaims = NonNullable<
+  NonNullable<SessionEntry["mainRestartRecovery"]>["foregroundClaims"]
+>;
+
+export function removeMainSessionRecoveryForegroundClaim(
+  claims: ForegroundClaims,
+  claimId: string,
+): ForegroundClaims | undefined {
+  const tokens = claims.tokens.filter((token) => token !== claimId);
+  if (tokens.length === 0) {
+    return undefined;
+  }
+  const runIdsByClaimId = Object.fromEntries(
+    Object.entries(claims.runIdsByClaimId ?? {}).filter(([token]) => token !== claimId),
+  );
+  return {
+    lifecycleGeneration: claims.lifecycleGeneration,
+    tokens,
+    ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
+  };
+}
+
 type MainRecoveryStateFields = Pick<
   SessionEntry,
   "abortedLastRun" | "restartRecoveryRuns" | "mainRestartRecovery"
@@ -31,13 +53,13 @@ export function clearMainSessionRecoveryAfterAgentRun(
   entry: SessionEntry,
   clearForceSafeTools: boolean | undefined,
 ): void {
-  const aborted = entry.abortedLastRun === true;
-  if (clearForceSafeTools && !aborted) {
+  if (entry.abortedLastRun === true) {
+    return;
+  }
+  if (clearForceSafeTools) {
     entry.restartRecoveryForceSafeTools = undefined;
   }
-  if (!aborted) {
-    Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
-  }
+  Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
 }
 
 export type { MainRecoveryStateFields };

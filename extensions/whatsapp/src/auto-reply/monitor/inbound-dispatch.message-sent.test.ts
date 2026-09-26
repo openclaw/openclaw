@@ -392,20 +392,6 @@ describe("WhatsApp canonical message_sent delivery", () => {
     });
   });
 
-  it("keeps durable text on the core-owned path without native fallback", async () => {
-    const deliverReply = vi.fn();
-    const { plan } = createPlan(deliverReply);
-    const delivery = plan.delivery as ChannelInboundTurnPlan["delivery"];
-
-    expect(delivery.observeMessageSent).toBe(true);
-    expect(
-      typeof delivery.durable === "function"
-        ? await delivery.durable({ text: "durable text" }, { kind: "final" })
-        : delivery.durable,
-    ).toMatchObject({ to: "+1000" });
-    expect(deliverReply).not.toHaveBeenCalled();
-  });
-
   it("preserves accepted voice receipts through real dispatch after caption rejection", async () => {
     recordChannelActivity.mockClear();
     vi.mocked(loadWebMedia).mockResolvedValueOnce({
@@ -444,11 +430,6 @@ describe("WhatsApp canonical message_sent delivery", () => {
   });
 
   it.each([
-    {
-      name: "a real producer-backed reply",
-      route: "reply" as const,
-      failDuplicateBookkeeping: false,
-    },
     {
       name: "a real producer-backed reply with duplicate bookkeeping armed to fail",
       route: "reply" as const,

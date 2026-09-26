@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { describe, expect, it, vi } from "vitest";
-import * as replaceFile from "../infra/replace-file.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
@@ -18,6 +18,10 @@ import {
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+}));
 
 const { createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
@@ -226,7 +230,7 @@ describe("runDoctorSessionSqlite", () => {
             readConfig: async () => ({}),
             confirm,
           }),
-        ).rejects.toThrow("Gateway or another SQLite maintenance");
+        ).rejects.toThrow("state directory is locked by sqlite-maintenance");
       },
     });
     expect(confirm).not.toHaveBeenCalled();

@@ -502,42 +502,6 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
-  it("installs a local path after a trailing --force acknowledgement", async () => {
-    installPluginFromPathMock.mockResolvedValue({
-      ok: true,
-      pluginId: "path-demo",
-      targetDir: "/tmp/path-demo",
-      version: "1.0.0",
-      extensions: ["index.js"],
-    });
-    persistPluginInstallMock.mockResolvedValue({});
-
-    await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const pluginDir = path.join(workspaceDir, "fixtures", "path-install-plugin");
-      await fs.mkdir(pluginDir, { recursive: true });
-      const params = buildPluginsParams(
-        `/plugins install ${pluginDir} --force --accept-capabilities`,
-        workspaceDir,
-      );
-
-      const result = await handlePluginsCommand(params, true);
-
-      expect(result?.reply?.text).toContain('Installed plugin "path-demo"');
-      expect(result?.reply?.text).toContain("outside ClawHub review");
-      expectObjectFields(mockFirstObjectArg(installPluginFromPathMock), {
-        path: pluginDir,
-        mode: "update",
-      });
-      expectPersistedInstall("path-demo", {
-        source: "path",
-        sourcePath: pluginDir,
-        installPath: "/tmp/path-demo",
-        version: "1.0.0",
-      });
-    });
-  });
-
   it("installs a bundled local path without --force", async () => {
     // Resolve the canonical bundled path from discovery: built checkouts
     // resolve bundled sources to dist/extensions, not the source tree.
@@ -701,6 +665,7 @@ describe("handleCommands /plugins install", () => {
       const result = await handlePluginsCommand(params, true);
 
       expect(result?.reply?.text).toContain('Installed plugin "gateway-admin-plugin"');
+      expect(result?.reply?.text).toContain("outside ClawHub review");
       expectObjectFields(mockFirstObjectArg(installPluginFromPathMock), {
         path: pluginDir,
         mode: "update",
@@ -708,6 +673,8 @@ describe("handleCommands /plugins install", () => {
       expectPersistedInstall("gateway-admin-plugin", {
         source: "path",
         sourcePath: pluginDir,
+        installPath: "/tmp/gateway-admin-plugin",
+        version: "1.0.0",
       });
     });
   });

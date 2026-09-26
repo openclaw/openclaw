@@ -1,3 +1,7 @@
+import {
+  getInternalDiagnosticEventSequence,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import type { CoreModelRequestOwnerGeneration } from "../infra/diagnostic-model-request-provenance.js";
 
 type DiagnosticRecoveryMarker = {
@@ -38,6 +42,39 @@ type DiagnosticRecoveryActivity = {
   recoveredOwnerStartEventCutoffs: Map<string, number>;
 };
 
+const pendingCutoffCleanup = new Set<DiagnosticRecoveryActivity>();
+let cutoffCleanupScheduled = false;
+
+function drainRecoveryCutoffCleanup(): void {
+  cutoffCleanupScheduled = true;
+  const activities = [...pendingCutoffCleanup];
+  pendingCutoffCleanup.clear();
+  const throughSequence = getInternalDiagnosticEventSequence();
+  void waitForDiagnosticEventsDrained().then(() => {
+    for (const activity of activities) {
+      for (const [ownerRef, cutoff] of activity.recoveredOwnerStartEventCutoffs) {
+        if (cutoff <= throughSequence) {
+          activity.recoveredOwnerStartEventCutoffs.delete(ownerRef);
+        }
+      }
+    }
+    cutoffCleanupScheduled = false;
+    if (pendingCutoffCleanup.size > 0) {
+      drainRecoveryCutoffCleanup();
+    }
+  });
+}
+
+export function queueRecoveryCutoffCleanup(activity: DiagnosticRecoveryActivity): void {
+  if (activity.recoveredOwnerStartEventCutoffs.size === 0) {
+    return;
+  }
+  pendingCutoffCleanup.add(activity);
+  if (!cutoffCleanupScheduled) {
+    drainRecoveryCutoffCleanup();
+  }
+}
+
 export function ownerRefsForRecovery(params: {
   sessionId?: string;
   activeSessionId?: string;
@@ -65,13 +102,6 @@ export function markerBelongsToRecoveredOwner(
   );
 }
 
-function embeddedRunStartedAfter(
-  embeddedRun: DiagnosticRecoveryEmbeddedRun,
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && embeddedRun.sequence > sequence;
-}
-
 export function activityMarkerStartedAfter(
   marker: DiagnosticRecoveryMarker,
   sequence: number | undefined,
@@ -92,7 +122,7 @@ export function clearRecoveredOwnerEmbeddedRuns(
     if (
       embeddedRun.sessionId !== undefined &&
       ownerRefs.has(embeddedRun.sessionId) &&
-      !embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterSequence)
+      !activityMarkerStartedAfter(embeddedRun, recoveryStartedAfterSequence)
     ) {
       removeEmbeddedRun(key);
     }
@@ -122,35 +152,12 @@ export function clearRecoveredOwnerMarkers(
   if (ownerRefs.size === 0) {
     return;
   }
-  for (const [key, tool] of activity.activeTools) {
-    if (
-      markerBelongsToRecoveredOwner(tool, ownerRefs) &&
-      !activityMarkerStartedAfter(tool, recoveryStartedAfterSequence)
-    ) {
-      activity.activeTools.delete(key);
-    }
-  }
-  for (const [key, modelCall] of activity.activeModelCalls) {
-    if (
-      markerBelongsToRecoveredOwner(modelCall, ownerRefs) &&
-      !activityMarkerStartedAfter(modelCall, recoveryStartedAfterSequence)
-    ) {
-      activity.activeModelCalls.delete(key);
-    }
-  }
-  for (const [generation, modelCalls] of activity.activeCoreModelCalls) {
-    for (const [callId, modelCall] of modelCalls) {
-      if (
-        markerBelongsToRecoveredOwner(modelCall, ownerRefs) &&
-        !activityMarkerStartedAfter(modelCall, recoveryStartedAfterSequence)
-      ) {
-        modelCalls.delete(callId);
-      }
-    }
-    if (modelCalls.size === 0) {
-      activity.activeCoreModelCalls.delete(generation);
-    }
-  }
+  clearActivityMarkers(
+    activity,
+    (marker) =>
+      markerBelongsToRecoveredOwner(marker, ownerRefs) &&
+      !activityMarkerStartedAfter(marker, recoveryStartedAfterSequence),
+  );
 }
 
 export function pruneActivityStartedBeforeRecoveryCutoff(
@@ -166,26 +173,31 @@ export function pruneActivityStartedBeforeRecoveryCutoff(
     return;
   }
   for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
-    if (!embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
+    if (!activityMarkerStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
       removeEmbeddedRun(key);
     }
   }
-  for (const [key, tool] of activity.activeTools) {
-    if (!activityMarkerStartedAfter(tool, recoveryStartedAfterDiagnosticEventSequence)) {
-      activity.activeTools.delete(key);
-    }
-  }
-  for (const [key, modelCall] of activity.activeModelCalls) {
-    if (!activityMarkerStartedAfter(modelCall, recoveryStartedAfterDiagnosticEventSequence)) {
-      activity.activeModelCalls.delete(key);
-    }
-  }
-  for (const [generation, modelCalls] of activity.activeCoreModelCalls) {
-    for (const [callId, modelCall] of modelCalls) {
-      if (!activityMarkerStartedAfter(modelCall, recoveryStartedAfterDiagnosticEventSequence)) {
-        modelCalls.delete(callId);
+  clearActivityMarkers(
+    activity,
+    (marker) => !activityMarkerStartedAfter(marker, recoveryStartedAfterDiagnosticEventSequence),
+  );
+}
+
+function clearActivityMarkers(
+  activity: DiagnosticRecoveryActivity,
+  shouldClear: (marker: DiagnosticRecoveryMarker) => boolean,
+): void {
+  const clear = (markers: Map<string, DiagnosticRecoveryMarker>) => {
+    for (const [key, marker] of markers) {
+      if (shouldClear(marker)) {
+        markers.delete(key);
       }
     }
+  };
+  clear(activity.activeTools);
+  clear(activity.activeModelCalls);
+  for (const [generation, modelCalls] of activity.activeCoreModelCalls) {
+    clear(modelCalls);
     if (modelCalls.size === 0) {
       activity.activeCoreModelCalls.delete(generation);
     }
@@ -219,6 +231,8 @@ export function rememberRecoveredOwnerStartEventCutoffs(
       ),
     );
   }
+  // After this queue prefix drains, no future start can carry one of its sequences.
+  queueRecoveryCutoffCleanup(activity);
 }
 
 export function shouldIgnoreRecoveredOwnerStartEvent(

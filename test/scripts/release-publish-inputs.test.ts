@@ -62,7 +62,6 @@ describe("sealed publication inputs", () => {
     const sealed = await seal({
       ...input,
       fetchImpl,
-      stableSoakWaiver: "approved\nreason",
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(sealed).toMatchObject({
@@ -71,7 +70,6 @@ describe("sealed publication inputs", () => {
       npmDistTag: "latest",
       pluginSdkApiAcknowledgement: "",
       pluginSdkApiEvidenceDigest: input.digest,
-      stableSoakWaiver: "approved\nreason",
       npmDecisions: [
         {
           packageName: "@openclaw/example",
@@ -87,11 +85,9 @@ describe("sealed publication inputs", () => {
     expect(resolveReleasePublishInputs(manifest).pluginSdkApiAcknowledgement).toBe("");
     expect(
       resolveReleasePublishInputs(manifest, {
-        stableSoakWaiver: " \n ",
         pluginSdkApiAcknowledgement: " \t ",
       }),
     ).toMatchObject({
-      stableSoakWaiver: "approved\nreason",
       pluginSdkApiAcknowledgement: "",
     });
     expect(
@@ -100,11 +96,9 @@ describe("sealed publication inputs", () => {
     ).toBe("12345678");
     expect(
       resolveReleasePublishInputs(manifest, {
-        stableSoakWaiver: "override",
         pluginSdkApiAcknowledgement: "12345678",
       }),
     ).toMatchObject({
-      stableSoakWaiver: "override",
       pluginSdkApiAcknowledgement: "12345678",
     });
     expect(() => resolveReleasePublishInputs(manifest, { targetSha: "d".repeat(40) })).toThrow(
@@ -181,7 +175,7 @@ describe("sealed publication inputs", () => {
     ).toThrow("SDK override");
   });
 
-  it("revokes a sealed soak waiver once the repository variable no longer holds it", () => {
+  it("rejects a historical sealed soak waiver rather than restoring its authority", () => {
     const { manifest: base } = fixture();
     const manifest = {
       ...base,
@@ -196,34 +190,15 @@ describe("sealed publication inputs", () => {
         npmDecisions: [],
       },
     };
-    const resolve = (currentStableSoakWaiver?: string, stableSoakWaiver?: string) =>
-      resolveReleasePublishInputs(manifest, { currentStableSoakWaiver, stableSoakWaiver })
-        .stableSoakWaiver;
-    expect(resolve(undefined)).toBe("approved\nreason");
-    expect(resolve("approved\nreason")).toBe("approved\nreason");
-    expect(resolve("")).toBe("");
-    expect(resolve("2026.9.7 other")).toBe("");
-    expect(resolve("", "explicit override")).toBe("explicit override");
+    expect(() => resolveReleasePublishInputs(manifest)).toThrow("waivers are no longer supported");
   });
 
   it("leaves historical manifest planning with its existing observer", () => {
-    expect(
-      resolveReleasePublishInputs(
-        {},
-        { stableSoakWaiver: " \n ", pluginSdkApiAcknowledgement: " \t " },
-      ),
-    ).toEqual({
-      stableSoakWaiver: "",
+    expect(resolveReleasePublishInputs({}, { pluginSdkApiAcknowledgement: " \t " })).toEqual({
       pluginSdkApiAcknowledgement: "",
       npmDecisions: undefined,
     });
-    expect(
-      resolveReleasePublishInputs(
-        {},
-        { stableSoakWaiver: "legacy", pluginSdkApiAcknowledgement: "12345678" },
-      ),
-    ).toEqual({
-      stableSoakWaiver: "legacy",
+    expect(resolveReleasePublishInputs({}, { pluginSdkApiAcknowledgement: "12345678" })).toEqual({
       pluginSdkApiAcknowledgement: "12345678",
       npmDecisions: undefined,
     });

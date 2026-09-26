@@ -1,3 +1,5 @@
+import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+
 type ProviderModelAuthReadiness = "ready" | "unknown" | "unavailable";
 
 export type ProviderModelAuthEvidence =
@@ -14,6 +16,9 @@ export type ProviderModelAuthProfileSource = {
   profileId: string;
   provider?: string;
   mode?: string;
+  authFlow?: string;
+  /** Provider-owned route classification; null explicitly excludes inference. */
+  authRequirement?: ProviderModelRouteAuthRequirement | null;
   readiness: ProviderModelAuthReadiness;
   cooldown: "active" | "clear";
 };

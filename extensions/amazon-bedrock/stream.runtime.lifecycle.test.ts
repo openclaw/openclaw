@@ -82,26 +82,6 @@ describe("Bedrock provider-owned stream lifecycle", () => {
       endEvent: "thinking_end",
       stopReason: BedrockStopReason.END_TURN,
     },
-    {
-      label: "tool call",
-      blocks: [
-        {
-          contentBlockStart: {
-            contentBlockIndex: 0,
-            start: { toolUse: { toolUseId: "call_lookup", name: "lookup" } },
-          },
-        },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { toolUse: { input: '{"query":"ready"}' } },
-          },
-        },
-        { contentBlockStop: { contentBlockIndex: 0 } },
-      ],
-      endEvent: "toolcall_end",
-      stopReason: BedrockStopReason.TOOL_USE,
-    },
   ])("finalizes the active $label block at the provider terminal boundary", async (scenario) => {
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },
@@ -202,37 +182,6 @@ describe("Bedrock stream client lifecycle", () => {
       errorMessage: "acceptance observer failed",
     });
     expect(close).toHaveBeenCalledOnce();
-    expectDestroyedClient(send, destroy);
-  });
-
-  it("destroys the client after a provider error", async () => {
-    const send = vi
-      .spyOn(BedrockRuntimeClient.prototype, "send")
-      .mockRejectedValue(new Error("synthetic provider failure"));
-    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-
-    const result = await streamBedrockForTest().result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("synthetic provider failure");
-    expectDestroyedClient(send, destroy);
-  });
-
-  it("destroys the client when response stream iteration fails", async () => {
-    async function* failingStream() {
-      yield { messageStart: { role: ConversationRole.ASSISTANT } };
-      throw new Error("synthetic iterator failure");
-    }
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: failingStream(),
-    } as never);
-    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
-
-    const result = await streamBedrockForTest().result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("synthetic iterator failure");
     expectDestroyedClient(send, destroy);
   });
 

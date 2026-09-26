@@ -1,7 +1,29 @@
+import type { SessionEntry } from "../config/sessions/types.js";
+import { withReadySessionRows } from "../gateway/session-row-prepared-read.js";
+import type * as records from "../gateway/session-row-projection-record.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiBackend } from "./tui-backend.js";
+
+export function readEmbeddedHistorySessionInfo(
+  projection: SessionRowProjection,
+  target: records.Lookup,
+  identity: Pick<Partial<SessionEntry>, "sessionId" | "lifecycleRevision">,
+) {
+  return withReadySessionRows(
+    projection,
+    () => [target],
+    (read) => {
+      const current = read.describe(target);
+      return current &&
+        current.entry.sessionId === identity.sessionId &&
+        current.entry.lifecycleRevision === identity.lifecycleRevision
+        ? read.present(current)
+        : undefined;
+    },
+  );
+}
 
 export function createEmbeddedSessionReader(lifecycle: {
   ready: () => Promise<void>;

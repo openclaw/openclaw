@@ -2451,8 +2451,10 @@
 .workboard-card__action-menu-panel {
   overflow-y: auto;
   display: grid;
+  grid-auto-rows: max-content;
   gap: 4px;
   width: 208px;
+  height: max-content;
   padding: 5px;
   border-radius: var(--menu-radius);
 }

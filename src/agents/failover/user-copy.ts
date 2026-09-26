@@ -141,19 +141,12 @@ const FAILOVER_REASON_BASE_COPY = {
   unknown: () => "LLM request failed with an unknown error.",
 } satisfies Record<FailoverReason, FailoverBaseCopyRenderer>;
 
-function renderFailoverBaseCopy(
-  reason: FailoverReason,
-  context: FailoverUserCopyContext = {},
-): string {
-  return FAILOVER_REASON_BASE_COPY[reason](context);
-}
-
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
 }): string {
-  return renderFailoverBaseCopy(params.reason, { raw: params.raw });
+  return FAILOVER_REASON_BASE_COPY[params.reason]({ raw: params.raw });
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -259,10 +252,10 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return renderFailoverBaseCopy("context_overflow");
+    return FAILOVER_REASON_BASE_COPY.context_overflow();
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
-    return renderFailoverBaseCopy(reason, { raw: trimmed });
+    return FAILOVER_REASON_BASE_COPY[reason]({ raw: trimmed });
   }
   // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
   const providerRequestCode = resolveProviderRequestFailureCode({
@@ -294,7 +287,7 @@ export function renderSanitizedUserFacingText(
       return formatRawAssistantErrorForUi(trimmed);
     }
     if (reason === "timeout") {
-      return renderFailoverBaseCopy("timeout");
+      return FAILOVER_REASON_BASE_COPY.timeout();
     }
     return formatRawAssistantErrorForUi(trimmed);
   }
@@ -481,8 +474,7 @@ export function renderBillingReplyCopy(params: {
       : params.authMode === "oauth" || params.authMode === "token"
         ? params
         : undefined;
-  return billingFailure &&
-    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
+  return billingFailure
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,
@@ -596,42 +588,33 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
   unknown: authProfileUnavailableCopy,
 } satisfies Record<FailoverReason, (provider: string) => string>;
 
-type AuthProfileReasonPolicy = {
-  direct: ((provider: string) => string) | undefined;
-  recovery: boolean;
+const AUTH_PROFILE_DIRECT_COPY: Partial<Record<FailoverReason, (provider: string) => string>> = {
+  auth: AUTH_PROFILE_COOLDOWN_COPY.auth,
+  auth_permanent: (provider) => `${provider} isn't accepting your saved login.`,
+  billing: AUTH_PROFILE_COOLDOWN_COPY.billing,
+  session_expired: AUTH_PROFILE_COOLDOWN_COPY.session_expired,
 };
 
-const AUTH_PROFILE_REASON_POLICY = {
-  auth: { direct: AUTH_PROFILE_COOLDOWN_COPY.auth, recovery: true },
-  auth_permanent: {
-    direct: (provider) => `${provider} isn't accepting your saved login.`,
-    recovery: true,
-  },
-  format: { direct: undefined, recovery: false },
-  rate_limit: { direct: undefined, recovery: false },
-  overloaded: { direct: undefined, recovery: false },
-  billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },
-  server_error: { direct: undefined, recovery: false },
-  timeout: { direct: undefined, recovery: false },
-  tls_certificate: { direct: undefined, recovery: false },
-  context_overflow: { direct: undefined, recovery: true },
-  model_not_found: { direct: undefined, recovery: false },
-  session_expired: { direct: AUTH_PROFILE_COOLDOWN_COPY.session_expired, recovery: true },
-  empty_response: { direct: undefined, recovery: true },
-  no_error_details: { direct: undefined, recovery: true },
-  unclassified: { direct: undefined, recovery: true },
-  unknown: { direct: undefined, recovery: true },
-} satisfies Record<FailoverReason, AuthProfileReasonPolicy>;
+const AUTH_PROFILE_RECOVERY_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "context_overflow",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
-  const policy = AUTH_PROFILE_REASON_POLICY[params.reason];
   const description = params.allInCooldown
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : policy.direct?.(params.provider);
+    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
   if (!description) {
     return params.causeText?.trim() || authProfileUnavailableCopy(params.provider);
   }
-  const hint = policy.recovery ? params.recoveryHint : null;
+  const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
   const causeText = params.causeText?.trim() ?? "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;
@@ -647,9 +630,6 @@ export function replaceGenericExternalRunFailureText(text: string): {
   text: string;
   replaced: boolean;
 } {
-  if (text.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT) {
-    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, replaced: true };
-  }
   const start = text.indexOf(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
   if (start < 0 || text.slice(start + GENERIC_EXTERNAL_RUN_FAILURE_TEXT.length).trim()) {
     return { text, replaced: false };

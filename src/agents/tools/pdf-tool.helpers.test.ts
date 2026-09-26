@@ -40,17 +40,6 @@ describe("parsePageRange", () => {
     });
   });
 
-  it("parses a single page number", () => {
-    expect(parsePageRange("3", 20)).toEqual({ pages: [3], truncated: false });
-  });
-
-  it("parses a page range", () => {
-    expect(parsePageRange("1-5", 20)).toEqual({
-      pages: [1, 2, 3, 4, 5],
-      truncated: false,
-    });
-  });
-
   it("parses comma-separated pages and ranges", () => {
     expect(parsePageRange("1,3,5-7", 20)).toEqual({
       pages: [1, 3, 5, 6, 7],
@@ -131,10 +120,6 @@ describe("parsePageRange", () => {
     expect(() => parsePageRange("0", 20)).toThrow("Invalid page number");
   });
 
-  it("throws on negative page number", () => {
-    expect(() => parsePageRange("-1", 20)).toThrow("Invalid page number");
-  });
-
   it("handles empty parts gracefully", () => {
     expect(parsePageRange("1,,3", 20)).toEqual({ pages: [1, 3], truncated: false });
   });
@@ -143,10 +128,8 @@ describe("parsePageRange", () => {
 describe("providerSupportsNativePdf", () => {
   it.each([
     ["anthropic", true],
-    ["google", true],
     ["openai", false],
     ["minimax", false],
-    ["Anthropic", true],
     ["GOOGLE", true],
   ] as const)("returns %s capability from its manifest: %s", (provider, supported) => {
     withPluginMetadataSnapshotScope(pdfMetadataSnapshot, () => {

@@ -3,13 +3,15 @@ import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   fingerprintConfigSnapshotAuthoredConfig,
-  readConfigSnapshotAuditRecord,
   readLatestConfigSnapshotAuditRecord,
+  readLatestConfigSnapshotAuditRecordAsync,
   restoreConfigSnapshotAuditRecord,
   upsertConfigSnapshotAuditRecord,
+  upsertConfigSnapshotAuditRecordAsync,
 } from "./config-journal-snapshot.js";
 
 describe("config journal snapshots", () => {
@@ -68,18 +70,16 @@ describe("config journal snapshots", () => {
     const context = { env, homedir: () => home };
     const pathA = path.join(home, ".openclaw", "config-a.json");
     const pathB = path.join(home, ".openclaw", "config-b.json");
-    upsertConfigSnapshotAuditRecord({
+    await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath: pathA,
       rawHash: "path-a-hash",
       authoredConfig: { gateway: { port: 1 } },
     });
-    // Path-filtered read for B sees nothing, but the unfiltered slot is the
-    // CAS token that lets B take the slot over from A.
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath: pathB })).toBeNull();
-    const foreign = readLatestConfigSnapshotAuditRecord(context);
+    // The unfiltered slot is the CAS token that lets B take the slot over from A.
+    const foreign = await readLatestConfigSnapshotAuditRecordAsync(context);
     expect(foreign?.configPath).toBe(path.resolve(pathA));
-    const taken = upsertConfigSnapshotAuditRecord({
+    const taken = await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath: pathB,
       rawHash: "path-b-hash",
@@ -87,12 +87,10 @@ describe("config journal snapshots", () => {
       expectedSnapshot: foreign,
     });
     expect(taken?.configPath).toBe(path.resolve(pathB));
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath: pathB })?.rawHash).toBe(
-      "path-b-hash",
-    );
+    expect((await readLatestConfigSnapshotAuditRecordAsync(context))?.rawHash).toBe("path-b-hash");
   });
 
-  it("does not restore a snapshot slot after another writer replaces it", async () => {
+  it("preserves another writer's snapshot across queued publication and rollback", async () => {
     const home = await suiteRootTracker.make("snapshot-compare-and-set");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") } as NodeJS.ProcessEnv;
@@ -103,11 +101,19 @@ describe("config journal snapshots", () => {
       rawHash: "prior",
       authoredConfig: { gateway: { port: 18789 } },
     });
-    const written = upsertConfigSnapshotAuditRecord({
+    const written = await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath,
       rawHash: "written",
       authoredConfig: { gateway: { port: 18790 } },
+    });
+    expect(written).not.toBeNull();
+    const pending = upsertConfigSnapshotAuditRecordAsync({
+      ...context,
+      configPath,
+      rawHash: "queued",
+      authoredConfig: { gateway: { port: 18792 } },
+      expectedSnapshot: written,
     });
     upsertConfigSnapshotAuditRecord({
       ...context,
@@ -115,6 +121,7 @@ describe("config journal snapshots", () => {
       rawHash: "newer-process",
       authoredConfig: { gateway: { port: 18791 } },
     });
+    await expect(pending).resolves.toBeNull();
 
     restoreConfigSnapshotAuditRecord({
       ...context,
@@ -122,9 +129,38 @@ describe("config journal snapshots", () => {
       expectedSnapshot: written,
     });
 
-    expect(readConfigSnapshotAuditRecord({ ...context, configPath })).toMatchObject({
+    expect(readLatestConfigSnapshotAuditRecord(context)).toMatchObject({
       rawHash: "newer-process",
     });
+    expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(
+      readLatestConfigSnapshotAuditRecord(context),
+    );
+  });
+
+  it("refuses a queued publication after its owner is revoked", async () => {
+    const home = await suiteRootTracker.make("snapshot-revoked-publication");
+    const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+    const context = { env, homedir: () => home };
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const prior = await upsertConfigSnapshotAuditRecordAsync({
+      ...context,
+      configPath,
+      rawHash: "prior",
+      authoredConfig: { gateway: { port: 18789 } },
+    });
+    expect(prior).not.toBeNull();
+    let revoked = false;
+    const pending = upsertConfigSnapshotAuditRecordAsync(
+      { ...context, configPath, rawHash: "revoked", authoredConfig: {}, expectedSnapshot: prior },
+      () => {
+        if (revoked) {
+          throw new Error("Config source owner stopped");
+        }
+      },
+    );
+    revoked = true;
+    await expect(pending).rejects.toThrow("Config source owner stopped");
+    expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(prior);
   });
 
   it("falls back to a redaction marker when the fingerprint key cannot be stored", async () => {
@@ -144,7 +180,8 @@ describe("config journal snapshots", () => {
     await suiteRootTracker.cleanup();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 });

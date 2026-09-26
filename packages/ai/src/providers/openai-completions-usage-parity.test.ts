@@ -32,6 +32,7 @@ const tieredCost = {
 
 type UsageScenario = {
   name: string;
+  package?: boolean;
   usage: Record<string, unknown>;
   expectedUsage: Record<string, unknown>;
   expectedCost?: number;
@@ -42,6 +43,7 @@ type UsageScenario = {
 const scenarios: UsageScenario[] = [
   {
     name: "documented reasoning tokens and cache buckets",
+    package: true,
     usage: {
       prompt_tokens: 100,
       completion_tokens: 20,
@@ -148,25 +150,6 @@ const scenarios: UsageScenario[] = [
     expectedCost: 0.00012125,
   },
   {
-    name: "authoritative provider-billed zero cost",
-    usage: {
-      prompt_tokens: 100,
-      completion_tokens: 20,
-      total_tokens: 120,
-      prompt_tokens_details: { cached_tokens: 25, cache_write_tokens: 10 },
-      cost: 0,
-    },
-    expectedUsage: {
-      input: 65,
-      output: 20,
-      cacheRead: 25,
-      cacheWrite: 10,
-      totalTokens: 120,
-      cost: { total: 0, totalOrigin: "provider-billed" },
-    },
-    expectedCost: 0,
-  },
-  {
     name: "invalid provider cost and cached-token overflow",
     usage: {
       prompt_tokens: 2,
@@ -180,6 +163,7 @@ const scenarios: UsageScenario[] = [
   },
   {
     name: "provider-compatible usage nested in a choice",
+    package: true,
     usage: {
       prompt_tokens: 20,
       completion_tokens: 10,
@@ -253,8 +237,10 @@ describe.each([
       }),
   },
   { name: "managed", preservesReasoningTokens: true, createStream: createManagedFixtureStream },
-])("$name Chat Completions usage", ({ createStream, preservesReasoningTokens }) => {
-  it.each(scenarios)("preserves $name", async (scenario) => {
+])("$name Chat Completions usage", ({ name, createStream, preservesReasoningTokens }) => {
+  const ownerScenarios =
+    name === "package" ? scenarios.filter((scenario) => scenario.package) : scenarios;
+  it.each(ownerScenarios)("preserves $name", async (scenario) => {
     installUsageChunk(scenario);
     const result = await createStream({ ...model, cost: scenario.cost ?? model.cost }).result();
     const expectedUsage = { ...scenario.expectedUsage };

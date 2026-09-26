@@ -14,7 +14,6 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -174,7 +173,6 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     prefix: "openclaw-session-worktree-rollback-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   testState.sessionConfig = { sharing: { drafts: false } };
   const { storePath } = await createSessionStoreDir();
@@ -303,7 +301,6 @@ test.each([
       prefix: "openclaw-session-worktree-allocation-outcome-",
     });
     const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-    closeOpenClawStateDatabaseForTest();
     const disk = fsSync.statfsSync(openClawState.root);
     const diskSpace = vi.spyOn(fsSync, "statfsSync").mockReturnValue({
       type: disk.type,
@@ -430,7 +427,6 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { dir, storePath } = await createSessionStoreDir();
   const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
@@ -544,7 +540,6 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     prefix: "openclaw-session-existing-worktree-cwd-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentsConfig = {
     list: [
       { id: "main", default: true },
@@ -696,7 +691,6 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
     prefix: "openclaw-session-worktree-post-commit-failure-",
   });
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:post-commit-worktree";

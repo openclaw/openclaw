@@ -1,5 +1,6 @@
 import type { IMessageActivityInput } from "@microsoft/teams.api";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Msteams plugin module implements sdk proactive behavior.
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import {
@@ -149,10 +150,6 @@ function buildSdkConversationReference(
   };
 }
 
-function getStructuralApiClient(app: MSTeamsApp): MSTeamsApiClient {
-  return app.api as MSTeamsApiClient;
-}
-
 function sameServiceUrl(left: string | undefined, right: string): boolean {
   if (!left) {
     return false;
@@ -185,7 +182,7 @@ async function getApiClientForReference(
   app: MSTeamsApp,
   ref: MSTeamsSdkConversationReference,
 ): Promise<MSTeamsApiClient> {
-  const api = getStructuralApiClient(app);
+  const api: MSTeamsApiClient = app.api;
   if (sameServiceUrl(api.serviceUrl, ref.serviceUrl)) {
     return api;
   }
@@ -208,22 +205,12 @@ function mergeReferenceIntoActivity(
   activity: unknown,
   ref: MSTeamsSdkConversationReference,
 ): Record<string, unknown> {
-  const source =
-    activity && typeof activity === "object" && !Array.isArray(activity)
-      ? (activity as Record<string, unknown>)
-      : { type: "message", text: stringifyReferenceFallbackActivity(activity) };
-  const existingChannelData =
-    source.channelData &&
-    typeof source.channelData === "object" &&
-    !Array.isArray(source.channelData)
-      ? (source.channelData as Record<string, unknown>)
-      : undefined;
-  const existingTenant =
-    existingChannelData?.tenant &&
-    typeof existingChannelData.tenant === "object" &&
-    !Array.isArray(existingChannelData.tenant)
-      ? (existingChannelData.tenant as Record<string, unknown>)
-      : undefined;
+  const source = asOptionalRecord(activity) ?? {
+    type: "message",
+    text: stringifyReferenceFallbackActivity(activity),
+  };
+  const existingChannelData = asOptionalRecord(source.channelData);
+  const existingTenant = asOptionalRecord(existingChannelData?.tenant);
   let channelData = existingChannelData ? { ...existingChannelData } : undefined;
   if (ref.tenantId) {
     channelData ??= {};

@@ -110,7 +110,12 @@ export async function stageAndEnqueueOutboundDelivery(
     {
       stateDir,
       payloads: acceptedPayloads,
-      ...(params.sessionGeneration ? { artifactFormat: "session-generation-v1" as const } : {}),
+      ...(params.deliveryCompletion?.kind === "pending-final" &&
+      params.deliveryCompletion.commandOwnerReference !== undefined
+        ? { artifactFormat: "command-owner-v1" as const }
+        : params.sessionGeneration
+          ? { artifactFormat: "session-generation-v1" as const }
+          : {}),
       // Resolved exactly as the live send resolves it: staging must neither
       // reject media the send would deliver (agent workspace sources are only
       // reachable through the agent-scoped roots) nor read more than the send may.

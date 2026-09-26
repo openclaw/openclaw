@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
@@ -168,12 +169,11 @@ export function registerPendingAgentQuestion(params: {
   if (existing) {
     throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
-  let resolveRegistration!: (value: unknown) => void;
-  let rejectRegistration!: (error: unknown) => void;
-  const registration = new Promise<unknown>((resolve, reject) => {
-    resolveRegistration = resolve;
-    rejectRegistration = reject;
-  });
+  const {
+    promise: registration,
+    resolve: resolveRegistration,
+    reject: rejectRegistration,
+  } = createDeferredCore<unknown>();
   void registration.catch(() => undefined);
   let registrationAttached = false;
   const state: PendingAgentQuestion = {
@@ -458,20 +458,9 @@ export async function cancelPendingAgentQuestionForSession(params: {
   }
 }
 
-type RunAgentHarnessSecretInputParams = {
-  questions: readonly AgentHarnessUserInputQuestion[];
-  sessionKey: string;
-  timeoutMs: number;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
-    hostCapabilities?: AgentHarnessHostCapabilities;
-  };
-  promptOptions?: AgentHarnessUserInputPromptOptions;
-  signal?: AbortSignal;
-};
-
 /** Presents one warned secret prompt and keeps its answer out of durable question records. */
 function runAgentHarnessSecretInput(
-  params: RunAgentHarnessSecretInputParams,
+  params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<string | undefined> {
   params.signal?.throwIfAborted();
   const sessionKey = params.sessionKey.trim();
@@ -548,14 +537,7 @@ async function runScopedAgentHarnessQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   if (params.questions.some((question) => question.isSecret)) {
-    const text = await runAgentHarnessSecretInput({
-      questions: params.questions,
-      sessionKey: params.sessionKey,
-      timeoutMs: params.timeoutMs,
-      delivery: params.delivery,
-      promptOptions: params.promptOptions,
-      signal: params.signal,
-    });
+    const text = await runAgentHarnessSecretInput(params);
     if (text === undefined) {
       return { status: "cancelled" };
     }

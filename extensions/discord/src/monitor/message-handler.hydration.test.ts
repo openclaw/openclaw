@@ -64,6 +64,16 @@ function createReferencedMessagePayload(content: string, bot = false) {
   });
 }
 
+async function buildHydratedContext(message: Message) {
+  const ctx = await createBaseDiscordMessageContext({
+    message,
+    author: message.author,
+    baseText: message.content,
+    messageText: message.content,
+  });
+  return buildDiscordMessageProcessContext({ ctx, text: message.content, mediaList: [] });
+}
+
 describe("hydrateDiscordMessageIfNeeded", () => {
   it("hydrates partial internal messages without assigning over getters", async () => {
     const client = createInternalTestClient();
@@ -95,13 +105,14 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         }),
       }),
     ]);
-    const message = new Message<true>(client, {
+    const message = new Message(client, {
       id: "1001",
       channelId: "c1",
-    }) as unknown as Message;
+    });
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -128,8 +139,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const outcome = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -161,8 +173,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -202,8 +215,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         }),
       );
 
+      client.rest = rest;
       const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-        client: { rest },
+        client,
         message,
         messageChannelId: "c1",
       });
@@ -252,8 +266,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -262,17 +277,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.id).toBe("1000");
     expect(hydrated.referencedMessage?.content).toBe("the canonical reply target");
 
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
+    const result = await buildHydratedContext(hydrated);
     if (!result) {
       throw new Error("expected a built Discord message context");
     }
@@ -298,25 +303,16 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
 
     expect(hydrated.referencedMessage).toBeNull();
 
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
+    const result = await buildHydratedContext(hydrated);
     if (!result) {
       throw new Error("expected a built Discord message context");
     }
@@ -339,8 +335,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     ]);
     const message = new Message(client, reply);
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -358,8 +355,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     rest.get = get;
     const message = new Message(client, createDefaultReplyPayload());
 
+    client.rest = rest;
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message,
       messageChannelId: "c1",
     });
@@ -389,13 +387,14 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
+    client.rest = rest;
     await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message: deletedReply,
       messageChannelId: "c1",
     });
     await hydrateDiscordMessageIfNeeded({
-      client: { rest },
+      client,
       message: forwardedMessage,
       messageChannelId: "c1",
     });

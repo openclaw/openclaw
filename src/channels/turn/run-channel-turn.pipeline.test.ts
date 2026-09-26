@@ -1,13 +1,15 @@
-// Channel turn pipeline tests cover orchestration, dispatch, and completion behavior.
+// Preserve mock setup before modules that consume it.
+// oxfmt-ignore
+import { channelTurnMocks } from "./run-channel-turn.test-support.js";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { getReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
-import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -25,24 +27,16 @@ import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-
 import { logMessageProcessed } from "../../logging/diagnostic.js";
 import { getChildLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
-import type { RecordInboundSession } from "../session.types.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
-import { createReplyDispatchReceipt } from "./run-channel-turn.delivery.test-helpers.js";
-import type { ChannelTurnResult, PreparedChannelTurn } from "./types.js";
+import {
+  createCtx,
+  createRecordInboundSession,
+  createReplyDispatchReceipt,
+  expectDispatched,
+} from "./run-channel-turn.delivery.test-helpers.js";
+import type { PreparedChannelTurn } from "./types.js";
 
-const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
-const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
-const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
-const recordInboundSessionCore = vi.hoisted(() => vi.fn(async () => undefined));
-const dispatchReplyWithBufferedBlockDispatcherCore = vi.hoisted(() => vi.fn());
-const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
-const emitMessageSent = vi.hoisted(() => vi.fn());
-const getGlobalHookRunner = vi.hoisted(() => vi.fn());
-const createMessageSentEmitter = vi.hoisted(() =>
-  vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
-);
-const readRecentUserAssistantTextForSession = vi.hoisted(() => vi.fn());
 const subsystemWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
@@ -65,82 +59,22 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../auto-reply/reply/provider-dispatcher.js")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcherCore,
-  };
-});
-
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  return {
-    ...actual,
-    dispatchInboundMessageWithRoutedChannelDispatcher: dispatchReplyWithRoutedChannelDispatcherCore,
-  };
-});
-
-vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
-  return {
-    ...actual,
-    deliverOutboundPayloads,
-    resolveOutboundDurableFinalDeliverySupport,
-  };
-});
-
-vi.mock("../message/send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../message/send.js")>();
-  return {
-    ...actual,
-    sendDurableMessageBatchCore: sendDurableMessageBatch,
-  };
-});
-
-vi.mock("../session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session.js")>();
-  return { ...actual, recordInboundSession: recordInboundSessionCore };
-});
-
-vi.mock("../../infra/outbound/message-sent-hook.js", () => ({
+const {
+  deliverOutboundPayloads,
+  resolveOutboundDurableFinalDeliverySupport,
+  recordInboundSessionCore,
+  dispatchReplyWithBufferedBlockDispatcherCore,
+  dispatchReplyWithRoutedChannelDispatcherCore,
+  emitMessageSent,
+  getGlobalHookRunner,
   createMessageSentEmitter,
-}));
-
-vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/hook-runner-global.js")>();
-  return { ...actual, getGlobalHookRunner };
-});
-
-vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession,
-}));
+} = channelTurnMocks;
 
 const cfg = {} as OpenClawConfig;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
 const visibleFinalReceipt = createReplyDispatchReceipt({ final: { delivered: 1 } });
-
-function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
-  return {
-    Body: "hello",
-    RawBody: "hello",
-    CommandBody: "hello",
-    From: "sender",
-    To: "target",
-    SessionKey: "agent:main:test:peer",
-    Provider: "test",
-    Surface: "test",
-    ...overrides,
-  } as FinalizedMsgContext;
-}
-
-function createRecordInboundSession(events: string[] = []): RecordInboundSession {
-  return vi.fn(async () => {
-    events.push("record");
-  }) as unknown as RecordInboundSession;
-}
 
 function createDispatch(
   events: string[] = [],
@@ -195,15 +129,6 @@ type DeliveryResult = {
   messageIds?: string[];
   visibleReplySent?: boolean;
 };
-
-function expectDispatched<TDispatchResult>(
-  result: ChannelTurnResult<TDispatchResult>,
-): asserts result is Extract<ChannelTurnResult<TDispatchResult>, { dispatched: true }> {
-  expect(result.dispatched).toBe(true);
-  if (!result.dispatched) {
-    throw new Error("expected dispatch");
-  }
-}
 
 function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
   return log.mock.calls.map(([event]) => {
@@ -276,19 +201,10 @@ describe("channel turn pipeline", () => {
     expect(onDelivered).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      channel: "slack",
-      routeSessionKey: "agent:main:slack:channel:c1",
-      dispatchSessionKey: "agent:main:slack:channel:c1:thread:123.456",
-    },
-    {
-      channel: "discord",
-      routeSessionKey: "agent:main:discord:channel:c1",
-      dispatchSessionKey: "agent:main:discord:channel:c1:thread:t1",
-    },
-  ])("carries $channel route system-event ownership privately into dispatch", async (scenario) => {
-    const { channel, routeSessionKey, dispatchSessionKey } = scenario;
+  it("carries route system-event ownership privately into a threaded dispatch", async () => {
+    const channel = "slack";
+    const routeSessionKey = "agent:main:slack:channel:c1";
+    const dispatchSessionKey = "agent:main:slack:channel:c1:thread:123.456";
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
       expect(getReplySystemEventContext({ ...params.replyOptions })?.sessionKey).toBe(
@@ -348,14 +264,11 @@ describe("channel turn pipeline", () => {
   });
 
   it("observes early finalization rejection before reporting partial delivery", async () => {
-    let rejectFinalization!: (error: unknown) => void;
-    const finalization = new Promise<{
+    const { promise: finalization, reject: rejectFinalization } = createDeferred<{
       content: string;
       messageIds: string[];
       visibleReplySent: true;
-    }>((_resolve, reject) => {
-      rejectFinalization = reject;
-    });
+    }>();
     const catchSpy = vi.spyOn(finalization, "catch");
     const partialError = Object.assign(
       new Error("final edit failed", { cause: new Error("provider rejected edit") }),
@@ -406,14 +319,11 @@ describe("channel turn pipeline", () => {
   });
 
   it("preserves deferred partial delivery when dispatch also fails", async () => {
-    let rejectFinalization!: (error: unknown) => void;
-    const finalization = new Promise<{
+    const { promise: finalization, reject: rejectFinalization } = createDeferred<{
       content: string;
       messageIds: string[];
       visibleReplySent: true;
-    }>((_resolve, reject) => {
-      rejectFinalization = reject;
-    });
+    }>();
     const dispatchError = new Error("stream close failed");
     const settlementError = Object.assign(new Error("static fallback failed"), {
       code: "CHANNEL_PARTIAL_DELIVERY",
@@ -453,14 +363,8 @@ describe("channel turn pipeline", () => {
   });
 
   it("prefers a later visible partial error across deferred payloads", async () => {
-    let rejectFirst!: (error: unknown) => void;
-    let rejectSecond!: (error: unknown) => void;
-    const firstFinalization = new Promise<never>((_resolve, reject) => {
-      rejectFirst = reject;
-    });
-    const secondFinalization = new Promise<never>((_resolve, reject) => {
-      rejectSecond = reject;
-    });
+    const { promise: firstFinalization, reject: rejectFirst } = createDeferred<never>();
+    const { promise: secondFinalization, reject: rejectSecond } = createDeferred<never>();
     const firstError = new Error("first finalization failed");
     const partialError = Object.assign(new Error("second finalization failed"), {
       code: "CHANNEL_PARTIAL_DELIVERY",

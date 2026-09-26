@@ -95,7 +95,7 @@ async function withHostedQuestion(
     context.resolveGatewayContext = () => context;
     const source = new AbortController();
     const captured = expectDefined(
-      captureGatewayOperatorRunAuthority({
+      await captureGatewayOperatorRunAuthority({
         client: browser,
         context,
         sourceAuthority: {

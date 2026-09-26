@@ -81,7 +81,6 @@ function prepareDocsPublisher() {
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "tsx.mjs",
-    "lib/mintlify-accordion.mjs",
     "docs-mdx-repair.md",
   ]) {
     const output = path.join(target, ".openclaw-sync", name);
@@ -464,7 +463,7 @@ async function command() {
   }
   if (mode === "observe") {
     await boundary(args[0]);
-    if (args[0] === "backoff-ready" && options.cancelDuringBackoff && !options.performance) {
+    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
       publish("backoff-ready.json", true);
       await until(
         () => fs.existsSync(path.join(root, "backoff-release.json")),
@@ -591,20 +590,46 @@ async function command() {
       const result = spawnSync("bash", [options.publisher.gh, ...args], { stdio: "inherit" });
       process.exit(result.status ?? 1);
     }
+    if (mode === "gh" && options.docsAgent) {
+      const runsEndpoint = `repos/${process.env.GITHUB_REPOSITORY}/actions/workflows/docs-agent.yml/runs`;
+      if (
+        args[0] === "api" &&
+        args[1] === "--method" &&
+        args[2] === "GET" &&
+        args[3] === runsEndpoint
+      ) {
+        fs.writeSync(1, JSON.stringify({ workflow_runs: options.workflowRuns ?? [] }));
+      } else {
+        const selected = options.workflowJobs?.find(
+          ({ runId, runAttempt }) =>
+            args[3] ===
+            `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+        );
+        if (
+          args.length !== 4 ||
+          args[0] !== "api" ||
+          args[1] !== "--paginate" ||
+          args[2] !== "--slurp" ||
+          !selected
+        ) {
+          throw new Error(`Unexpected Docs Agent gh request: ${JSON.stringify(args)}`);
+        }
+        fs.writeSync(1, JSON.stringify([{ jobs: selected.jobs }]));
+      }
+      process.exit(0);
+    }
     if (mode === "gh") {
       fs.writeSync(
         1,
-        options.docsAgent
-          ? JSON.stringify({ workflow_runs: options.workflowRuns ?? [] })
-          : options.lsRemoteResults
-            ? args.includes(".status")
-              ? "ahead\n"
-              : `${"c".repeat(40)}\n`
-            : JSON.stringify({
-                state: "open",
-                head: { sha: "a".repeat(40) },
-                base: { repo: { full_name: "fixture/checkout" } },
-              }),
+        options.lsRemoteResults
+          ? args.includes(".status")
+            ? "ahead\n"
+            : `${"c".repeat(40)}\n`
+          : JSON.stringify({
+              state: "open",
+              head: { sha: "a".repeat(40) },
+              base: { repo: { full_name: "fixture/checkout" } },
+            }),
       );
     }
     process.exit(0);
@@ -1375,7 +1400,13 @@ async function supervise() {
       process.platform === "win32"
         ? [
             "-c",
-            'export PATH="$(cygpath -u "$1"):$PATH"; export TEMP="$3" TMP="$4"; source "$2"',
+            `export PATH="$(cygpath -u "$1"):$PATH"
+git() {
+  ${gitArgs.map((value) => quote(shellPath(value))).join(" ")} "$@"
+}
+export -f git
+export TEMP="$3" TMP="$4"
+source "$2"`,
             "checkout-fixture",
             bin,
             checkoutScript,
@@ -1449,7 +1480,7 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
-    if (options.cancelDuringBackoff && !options.performance) {
+    if (options.cancelDuringBackoff) {
       try {
         await until(
           () =>
@@ -1467,19 +1498,6 @@ async function supervise() {
       } finally {
         publish("backoff-release.json", true);
       }
-    } else if (
-      options.cancelDuringBackoff &&
-      (await waitForReady(
-        () =>
-          options.performance
-            ? fs.readFileSync(eventsFile, "utf8").includes('"name":"backoff"')
-            : fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
-        shell,
-        () => Boolean(stopping),
-      ))
-    ) {
-      await boundary("backoff-cancel");
-      shell.kill("SIGTERM");
     }
     const code = await closed;
     if (stopping) {

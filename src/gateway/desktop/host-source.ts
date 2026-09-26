@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
-import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  DesktopObserveResult,
+  EnvironmentSummary,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { DesktopHostConfig } from "../../config/types.desktop.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RfbAttachment } from "./attachment.js";
 import { getHostDesktopGuidance } from "./host-guidance.js";
 import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
+import type { DesktopAudioSource } from "./managed-linux-audio.js";
 import {
   createManagedLinuxDesktop,
   type DesktopComputerLease,
@@ -13,6 +17,7 @@ import {
 } from "./managed-linux.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
 import type { DesktopObserveRequester } from "./observe-requester.js";
+import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
@@ -23,6 +28,9 @@ export type HostDesktopAcquireResult = {
   attachment: RfbAttachment;
   auth: "vnc-password" | "ard-account";
   vncPassword?: string;
+  resolveAudio?: () => DesktopAudioSource | undefined;
+  /** Internal setup detail; project only a fixed availability code to viewers. */
+  readonly audioUnavailableReason?: string;
 };
 
 export type HostDesktopStatus =
@@ -354,6 +362,9 @@ export type HostDesktopService = {
     control: boolean;
     auth: "vnc-password" | "ard-account";
     vncPassword?: string;
+    audio?: DesktopObserveResult["audio"];
+    audioUnavailableReason?: DesktopObserveResult["audioUnavailableReason"];
+    preauthenticated?: boolean;
   }>;
   acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
   status(): Promise<HostDesktopStatus>;
@@ -468,15 +479,11 @@ export function createHostDesktopService(params: {
       const { acquired, runtime } = await acquire();
       assertCurrent(runtime);
       const auth = acquired.auth;
+      const audio = acquired.resolveAudio?.();
       if (!auth) {
         throw new Error("gateway host desktop authentication state is unavailable; retry observe");
       }
-      let preauth:
-        | {
-            auth: "ard-account";
-            credentials: { username: string; password: string };
-          }
-        | undefined;
+      let preauth: RfbPreauthDescriptor | undefined;
       if (auth === "ard-account") {
         const username = observeParams.credentials?.username?.trim() ?? "";
         const password = observeParams.credentials?.password ?? "";
@@ -485,6 +492,10 @@ export function createHostDesktopService(params: {
         }
         registerSecretValueForRedaction(password);
         preauth = { auth: "ard-account", credentials: { username, password } };
+      }
+      if (audio && auth === "vnc-password" && acquired.vncPassword) {
+        // The audio grant shares this screen authentication outcome; it cannot bypass VNC.
+        preauth = { auth, credentials: { password: acquired.vncPassword } };
       }
       const minted = mintDesktopObserverToken({
         sourceKey: "host",
@@ -498,6 +509,7 @@ export function createHostDesktopService(params: {
           isCurrent: () => isCurrent(runtime) && observeParams.requester?.isCurrent() !== false,
         },
         attachment: acquired.attachment,
+        ...(audio ? { audio } : {}),
         ...(preauth ? { preauth } : {}),
       });
       return {
@@ -506,7 +518,11 @@ export function createHostDesktopService(params: {
         expiresAtMs: minted.expiresAtMs,
         control: observeParams.control,
         auth,
-        ...(auth === "vnc-password" && acquired.vncPassword
+        ...(minted.audio ? { audio: minted.audio, preauthenticated: true } : {}),
+        ...(!audio && acquired.audioUnavailableReason
+          ? { audioUnavailableReason: "setup-unavailable" as const }
+          : {}),
+        ...(auth === "vnc-password" && acquired.vncPassword && !preauth
           ? { vncPassword: acquired.vncPassword }
           : {}),
       };

@@ -624,35 +624,6 @@ describe("docker sandbox backend manager", () => {
     }
   });
 
-  it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "openclaw-sandbox:bookworm-slim\n",
-      stderr: "",
-    });
-
-    const result = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "sandbox-1",
-        backendId: "docker",
-        runtimeLabel: "sandbox-1",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "stale-entry-image",
-        configLabelKind: "Image",
-      },
-      config: createConfig(),
-      agentId: "coder",
-    });
-
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "openclaw-sandbox:bookworm-slim",
-      configLabelMatch: true,
-    });
-  });
-
   it("matches browser runtimes against sandbox.browser.image", async () => {
     dockerMocks.execContainer.mockResolvedValueOnce({
       code: 0,

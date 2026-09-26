@@ -1,7 +1,7 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
-import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
+import type { CronRunRecoveryResult, InterruptedStartupRun } from "../store/run-recovery.types.js";
 import {
   configureForeignReceiptMonitor,
   enrollForeignReceipt,
@@ -17,7 +17,6 @@ import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import type { InterruptedStartupRun } from "./startup-run-repair.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";

@@ -11,7 +11,6 @@ import { resolveTaskRequesterSessionTarget } from "./task-session-access.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 type TaskPublication = { summary: string };
-type PendingTaskClose = { taskId: string; deleted: boolean; parent?: PendingTaskClose };
 
 function sameTaskOwner(current: TaskRecord, observed: Omit<TaskRecord, "detail">): boolean {
   return (
@@ -36,7 +35,6 @@ export function startGatewayTaskSubscriptions(params: {
   let disposed = false;
   const state = getTaskRegistryProcessState();
   const publications = new Map<string, TaskPublication>();
-  let pendingClose: PendingTaskClose | undefined;
   const registered = Promise.all([
     import("../tasks/task-registry.store.js"),
     import("../tasks/task-backing-authority.js"),
@@ -126,12 +124,6 @@ export function startGatewayTaskSubscriptions(params: {
             break;
           }
           case "deleted":
-            // A reentrant delete retires active closes even if that task ID is republished.
-            for (let closing = pendingClose; closing; closing = closing.parent) {
-              if (closing.taskId === event.taskId) {
-                closing.deleted = true;
-              }
-            }
             publications.delete(event.taskId);
             payload = { action: "deleted", taskId: event.taskId };
             target = resolveTaskRequesterSessionTarget(event.previous);
@@ -145,12 +137,6 @@ export function startGatewayTaskSubscriptions(params: {
           rollback?.();
           return;
         }
-        const closing: PendingTaskClose | undefined = terminalId
-          ? { taskId: terminalId, deleted: false, parent: pendingClose }
-          : undefined;
-        if (closing) {
-          pendingClose = closing;
-        }
         let broadcastCompleted = false;
         try {
           params.broadcast("task", payload, {
@@ -158,18 +144,14 @@ export function startGatewayTaskSubscriptions(params: {
             ...(target ? { sessionKeys: [target.sessionKey], agentId: target.agentId } : {}),
           });
           broadcastCompleted = true;
-          if (closing && !closing.deleted && isCurrent()) {
-            params.terminalSessions.closeTaskSessions(closing.taskId);
+          if (terminalId && isCurrent()) {
+            params.terminalSessions.closeTaskSessions(terminalId);
           }
         } catch (error) {
           if (!broadcastCompleted) {
             rollback?.();
           }
           throw error;
-        } finally {
-          if (closing) {
-            pendingClose = closing.parent;
-          }
         }
       },
     };
@@ -188,7 +170,10 @@ export function startGatewayTaskSubscriptions(params: {
         : state.tasks.keys();
       for (const taskId of taskIds) {
         const task = state.tasks.get(taskId);
-        if (task?.runtime === "cli" && !isTerminalTaskStatus(task.status)) {
+        if (
+          (task?.runtime === "cli" || task?.runtime === "subagent") &&
+          !isTerminalTaskStatus(task.status)
+        ) {
           observers.onEvent({ kind: "upserted", task: cloneTaskRecordForObserver(task) });
         }
       }

@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   ensureConfigReady:
     vi.fn<
       (options: {
-        beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+        beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
       }) => Promise<void>
     >(),
 }));
@@ -73,7 +73,7 @@ describe("preaction migration agent owner", () => {
         agents: { ownership: "explicit", entries: { main: {}, work: {} } },
       } satisfies OpenClawConfig;
       mocks.ensureConfigReady.mockImplementationOnce(async (options) => {
-        await options.beforeStateMigrations?.(createDoctorConfigSnapshot({ config }));
+        await options.beforeStatePreparation?.(createDoctorConfigSnapshot({ config }));
       });
       const program = createProgram();
       const { registerPreActionHooks } = await import("./preaction.js");

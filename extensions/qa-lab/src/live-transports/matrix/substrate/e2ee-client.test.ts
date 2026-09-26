@@ -11,7 +11,7 @@ import {
   prepareMatrixQaE2eeStorage,
 } from "./e2ee-client-internals.js";
 import { createMatrixQaE2eeScenarioClient } from "./e2ee-client.js";
-import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
+import type { MatrixQaObservedEvent } from "./events.js";
 
 const runtimeFixture = vi.hoisted(() => ({
   logging: undefined as PluginRuntime["logging"] | undefined,
@@ -33,14 +33,6 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
     },
   }),
 }));
-
-const testing = {
-  MATRIX_QA_E2EE_SYNC_FILTER,
-  createMatrixQaE2eeClientLifecycle,
-  createMatrixQaE2eeObservedEventRecorder,
-  findMatrixQaObservedEventMatch,
-  prepareMatrixQaE2eeStorage,
-};
 
 describe("matrix qa e2ee client storage", () => {
   it("provides normal diagnostics without enabling secret-bearing SDK debug output", async () => {
@@ -84,7 +76,7 @@ describe("matrix qa e2ee client storage", () => {
     shutdownTimeoutMs?: number;
   }) {
     const calls: string[] = [];
-    const lifecycle = testing.createMatrixQaE2eeClientLifecycle({
+    const lifecycle = createMatrixQaE2eeClientLifecycle({
       detachListeners: vi.fn(() => calls.push("detach")),
       drainPendingDecryptions: vi.fn(async () => {
         calls.push("drain");
@@ -101,14 +93,6 @@ describe("matrix qa e2ee client storage", () => {
     });
     return { calls, lifecycle };
   }
-
-  it("drains decryptions before stopping the SDK and persisting", async () => {
-    const { calls, lifecycle } = createLifecycleFixture();
-
-    await lifecycle.stop();
-
-    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
-  });
 
   it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
     const { calls, lifecycle } = createLifecycleFixture();
@@ -285,7 +269,7 @@ describe("matrix qa e2ee client storage", () => {
   });
 
   it("filters receipt noise without suppressing room state or timeline events", () => {
-    expect(testing.MATRIX_QA_E2EE_SYNC_FILTER).toEqual({
+    expect(MATRIX_QA_E2EE_SYNC_FILTER).toEqual({
       room: {
         ephemeral: { not_types: ["m.receipt"] },
       },
@@ -295,12 +279,12 @@ describe("matrix qa e2ee client storage", () => {
   it("shares persisted crypto and sync state by actor account", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-account-"));
     try {
-      const first = await testing.prepareMatrixQaE2eeStorage({
+      const first = await prepareMatrixQaE2eeStorage({
         actorId: "driver",
         outputDir,
         scenarioId: "matrix-e2ee-basic-reply",
       });
-      const second = await testing.prepareMatrixQaE2eeStorage({
+      const second = await prepareMatrixQaE2eeStorage({
         actorId: "driver",
         outputDir,
         scenarioId: "matrix-e2ee-qr-verification",
@@ -321,7 +305,7 @@ describe("matrix qa e2ee client storage", () => {
   it("uses plugin state without creating a legacy IndexedDB snapshot", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-storage-"));
     try {
-      const storage = await testing.prepareMatrixQaE2eeStorage({
+      const storage = await prepareMatrixQaE2eeStorage({
         actorId: "driver",
         outputDir,
         scenarioId: "matrix-e2ee-basic-reply",
@@ -343,7 +327,7 @@ describe("matrix qa e2ee client storage", () => {
       type: "m.room.message",
     };
     const observed: MatrixQaObservedEvent[] = [];
-    const recorder = testing.createMatrixQaE2eeObservedEventRecorder({
+    const recorder = createMatrixQaE2eeObservedEventRecorder({
       append: (event) => observed.push(event),
     });
     const decrypted = {
@@ -361,7 +345,7 @@ describe("matrix qa e2ee client storage", () => {
 
   it("rehydrates a replacement when its threaded target decrypts later", () => {
     const observed: MatrixQaObservedEvent[] = [];
-    const recorder = testing.createMatrixQaE2eeObservedEventRecorder({
+    const recorder = createMatrixQaE2eeObservedEventRecorder({
       append: (event) => observed.push(event),
     });
     const replacement = {

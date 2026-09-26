@@ -39,7 +39,6 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected responseCreateInFlight = false;
   protected responseCancelInFlight = false;
   protected responseCreatePending = false;
-  protected continuingToolCallIds = new Set<string>();
   protected pendingToolCallIds = new Set<string>();
   protected latestMediaTimestamp = 0;
   protected outputAudioGeneration = 0;
@@ -86,10 +85,9 @@ export abstract class XaiRealtimeVoiceProtocol {
       },
     });
     this.pendingToolResultAcks.add(callId);
-    this.continuingToolCallIds.delete(callId);
     this.pendingToolCallIds.delete(callId);
     if (options?.suppressResponse !== true) {
-      this.flushPendingResponseCreateAfterToolResults();
+      this.requestResponseCreate();
     }
   }
 
@@ -279,14 +277,6 @@ export abstract class XaiRealtimeVoiceProtocol {
     this.submitToolResultNow(params.callId, { error: "Invalid tool arguments." });
   }
 
-  private flushPendingResponseCreateAfterToolResults(): void {
-    if (this.pendingToolCallIds.size > 0 || this.continuingToolCallIds.size > 0) {
-      this.responseCreatePending = true;
-      return;
-    }
-    this.requestResponseCreate();
-  }
-
   protected requestResponseCreate(): void {
     // xAI requires every parallel function output before one response.create, and
     // relay playback must drain before the next response starts.
@@ -296,7 +286,6 @@ export abstract class XaiRealtimeVoiceProtocol {
       this.responseCreateInFlight ||
       this.responseCancelInFlight ||
       this.markQueue.length > 0 ||
-      this.continuingToolCallIds.size > 0 ||
       this.pendingToolCallIds.size > 0
     ) {
       this.responseCreatePending = true;
@@ -325,7 +314,6 @@ export abstract class XaiRealtimeVoiceProtocol {
     this.assistantAudioItem = null;
     this.resetInputTranscripts();
     if (!options.preserveToolCallState) {
-      this.continuingToolCallIds.clear();
       this.pendingToolCallIds.clear();
       this.toolCallBuffers.clear();
       this.deliveredToolCallKeys.clear();

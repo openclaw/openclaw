@@ -130,6 +130,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   TaskWorktreeSourceRequiredErrorDetailsSchema,
+  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

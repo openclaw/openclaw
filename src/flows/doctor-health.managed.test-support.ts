@@ -327,6 +327,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "config-refused") {
+            await expect(run).rejects.toThrow("persisted repair state is not ready");
+            expect(runtime.exit).toHaveBeenCalledWith(1);
           } else if (outcome === "store-close-failed") {
             await expect(run).rejects.toThrow("synthetic database close failure");
             expectCoordinatorReleased();

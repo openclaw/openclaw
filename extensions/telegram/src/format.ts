@@ -1,5 +1,4 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-// Telegram helper module supports format behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
@@ -10,8 +9,10 @@ import {
   type MarkdownLinkSpan,
   type MarkdownIR,
   renderMarkdownIRChunksWithinLimit,
+  renderMarkdownWithMarkers,
   tokenizeHtmlTags,
 } from "openclaw/plugin-sdk/text-chunking";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   protectTelegramAssistantTranscriptRoleHeaders,
   TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX,
@@ -24,7 +25,6 @@ import {
   prepareTelegramHtmlTextSplitter,
   type TelegramHtmlTextSplitter,
 } from "./format-html.js";
-import { renderTelegramMarkdownIR } from "./format-render.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export { escapeTelegramHtml } from "./format-html.js";
@@ -38,17 +38,6 @@ function isTelegramRichLinkHref(href: string): boolean {
   return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
 
-/**
- * File extensions that share TLDs and commonly appear in code/documentation.
- * These are wrapped in <code> tags to prevent Telegram from generating
- * spurious domain registrar previews.
- *
- * Only includes extensions that are:
- * 1. Commonly used as file extensions in code/docs
- * 2. Rarely used as intentional domain references
- *
- * Excluded: .ai, .io, .tv, .fm (popular domain TLDs like x.ai, vercel.io, github.io)
- */
 function buildTelegramLink(
   link: MarkdownLinkSpan,
   text: string,
@@ -88,10 +77,31 @@ function buildTelegramCodeBlockOpen(span: { language?: string }): string {
 }
 
 function renderTelegramHtml(ir: MarkdownIR): string {
-  return renderTelegramMarkdownIR(ir, {
+  return renderMarkdownWithMarkers(ir, {
+    annotationMarkers: {
+      assistant_transcript_role: {
+        open: "<code>",
+        close: "</code>",
+        suppressNestedFormatting: true,
+      },
+    },
+    styleMarkers: {
+      bold: { open: "<b>", close: "</b>" },
+      italic: { open: "<i>", close: "</i>" },
+      strikethrough: { open: "<s>", close: "</s>" },
+      code: { open: "<code>", close: "</code>" },
+      code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
+      spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
+      blockquote: { open: "<blockquote>", close: "</blockquote>" },
+      heading_1: { open: "<h1>", close: "</h1>" },
+      heading_2: { open: "<h2>", close: "</h2>" },
+      heading_3: { open: "<h3>", close: "</h3>" },
+      heading_4: { open: "<h4>", close: "</h4>" },
+      heading_5: { open: "<h5>", close: "</h5>" },
+      heading_6: { open: "<h6>", close: "</h6>" },
+    },
     escapeText: escapeTelegramHtml,
     buildLink: buildTelegramLink,
-    buildCodeBlockOpen: buildTelegramCodeBlockOpen,
   });
 }
 
@@ -149,6 +159,10 @@ function parseTelegramLegacyMarkdown(markdown: string, tableMode?: MarkdownTable
     headingStyle: "none",
     blockquotePrefix: "",
     tableMode: tableMode === "block" ? "code" : tableMode,
+    // buildTelegramLink already collapses unsupported hrefs (file:, data:, ...)
+    // to their label; let the parser tokenize them instead of leaking raw
+    // `[label](href)` source when markdown-it's own scheme denylist rejects it.
+    allowAllLinkSchemes: true,
   });
 }
 
@@ -164,19 +178,6 @@ export function markdownToTelegramHtml(
     return wrapFileReferencesInHtml(telegramHtml);
   }
   return telegramHtml;
-}
-
-/**
- * Wraps standalone file references (with TLD extensions) in <code> tags.
- * This prevents Telegram from treating them as URLs and generating
- * irrelevant domain registrar previews.
- *
- * Runs AFTER markdown→HTML conversion to avoid modifying HTML attributes.
- * Skips content inside <code>, <pre>, and <a> tags to avoid nesting issues.
- */
-/** Escape regex metacharacters in a string */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
@@ -217,13 +218,12 @@ let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;
 
 function popLastTagName(tags: string[], name: string): boolean {
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    if (tags[index] === name) {
-      tags.splice(index, 1);
-      return true;
-    }
+  const index = tags.lastIndexOf(name);
+  if (index < 0) {
+    return false;
   }
-  return false;
+  tags.splice(index, 1);
+  return true;
 }
 
 function isSupportedTelegramHtmlTag(closing: boolean, name: string, attrs: string): boolean {
@@ -395,7 +395,9 @@ function getFileReferencePattern(): RegExp {
   if (fileReferencePattern) {
     return fileReferencePattern;
   }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
+    .map(escapeRegExp)
+    .join("|");
   fileReferencePattern = new RegExp(
     `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
     "gi",
@@ -407,7 +409,9 @@ function getOrphanedTldPattern(): RegExp {
   if (orphanedTldPattern) {
     return orphanedTldPattern;
   }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD).map(escapeRegex).join("|");
+  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
+    .map(escapeRegExp)
+    .join("|");
   orphanedTldPattern = new RegExp(
     `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
     "g",
@@ -527,7 +531,6 @@ function buildTelegramHtmlOpenPrefix(tags: TelegramHtmlTag[]): string {
 
 function buildTelegramHtmlCloseSuffix(tags: TelegramHtmlTag[]): string {
   return tags
-    .slice()
     .toReversed()
     .map((tag) => tag.closeTag)
     .join("");
@@ -538,11 +541,9 @@ function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
 }
 
 function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    if (tags[index]?.name === name) {
-      tags.splice(index, 1);
-      return;
-    }
+  const index = tags.findLastIndex((tag) => tag.name === name);
+  if (index >= 0) {
+    tags.splice(index, 1);
   }
 }
 

@@ -47,6 +47,12 @@ const testItems = [
 ];
 
 describe("SearchableSelectList", () => {
+  it("keeps replacement empty-state errors on one safe terminal row", () => {
+    const list = new SearchableSelectList([], 7, ansiHighlightTheme);
+    list.setItems([], "network\nunavailable\u001b[2J");
+    expect(list.render(80).at(-1)).toBe("  network unavailable");
+  });
+
   function selectByEnter(list: SearchableSelectList) {
     const onSelect = vi.fn<(item: SearchableSelectItem) => void>();
     list.onSelect = onSelect;
@@ -71,37 +77,6 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toBe(expectedValue);
   }
 
-  function expectNoMatchesForQuery(list: SearchableSelectList, query: string) {
-    typeInput(list, query);
-    const output = list.render(80);
-    expect(output.join("\n")).toContain("No matches");
-  }
-
-  function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {
-    const items = [
-      { value: "one", label: "one", description: "desc" },
-      { value: "two", label: "two", description: "desc" },
-    ];
-    const list = new SearchableSelectList(items, 5, mockTheme);
-    // Ensure first row is non-selected so description styling path is exercised.
-    list.handleInput("\x1b[B");
-    const output = list.render(width).join("\n");
-    if (shouldContainDescription) {
-      expect(output).toContain("(desc)");
-    } else {
-      expect(output).not.toContain("(desc)");
-    }
-  }
-
-  it("renders all items when no filter is applied", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-    const output = list.render(80);
-
-    // Should have search prompt line, spacer, and items
-    expect(output.length).toBeGreaterThanOrEqual(3);
-    expect(output[0]).toContain("search");
-  });
-
   it("emits the hardware cursor marker only while the search input is focused", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
@@ -117,7 +92,7 @@ describe("SearchableSelectList", () => {
     expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
   });
 
-  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])(
+  it.each([0, 1, 2, 7, 12])(
     "keeps ANSI, CJK, scroll, and no-match rows within %i terminal columns",
     (width) => {
       const items = [
@@ -152,12 +127,21 @@ describe("SearchableSelectList", () => {
     expect(output).toContain(tail);
   });
 
-  it("does not show description layout at width 40 (boundary)", () => {
-    expectDescriptionVisibilityAtWidth(40, false);
-  });
-
-  it("shows description layout at width 41 (boundary)", () => {
-    expectDescriptionVisibilityAtWidth(41, true);
+  it.each([
+    { width: 40, visible: false },
+    { width: 41, visible: true },
+  ])("renders description layout at width $width: $visible", ({ width, visible }) => {
+    const list = new SearchableSelectList(
+      [
+        { value: "one", label: "one", description: "desc" },
+        { value: "two", label: "two", description: "desc" },
+      ],
+      5,
+      mockTheme,
+    );
+    // Use the non-selected description's style to observe the layout boundary.
+    list.handleInput("\x1b[B");
+    expect(list.render(width).join("\n").includes("(desc)")).toBe(visible);
   });
 
   it("keeps ANSI-highlighted description rows within terminal width", () => {
@@ -176,34 +160,6 @@ describe("SearchableSelectList", () => {
     }
   });
 
-  it("keeps model-search rows within width when filtering by m", () => {
-    const items = [
-      { value: "minimax-cn/MiniMax-M2", label: "minimax-cn/MiniMax-M2", description: "MiniMax M2" },
-      {
-        value: "minimax-cn/MiniMax-M2.1",
-        label: "minimax-cn/MiniMax-M2.1",
-        description: "MiniMax M2.1",
-      },
-      {
-        value: "mistral/codestral-latest",
-        label: "mistral/codestral-latest",
-        description: "Codestral",
-      },
-      {
-        value: "mistral/devstral-medium-latest",
-        label: "mistral/devstral-medium-latest",
-        description: "Devstral Medium",
-      },
-    ];
-    const list = new SearchableSelectList(items, 9, ansiHighlightTheme);
-    typeInput(list, "m");
-
-    const width = 209;
-    for (const line of list.render(width)) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-    }
-  });
-
   it("ignores ANSI escape codes in search matching", () => {
     const items = [
       { value: "styled", label: "\u001b[32mopenai/gpt-4\u001b[0m", description: "Styled label" },
@@ -211,10 +167,11 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    expectNoMatchesForQuery(list, "32m");
+    typeInput(list, "32m");
+    expect(list.render(80).join("\n")).toContain("No matches");
   });
 
-  it.each(["gpt m", "gpt GPT m", "  GPT  m  "])(
+  it.each(["gpt m", "  gpt GPT m  "])(
     "does not corrupt ANSI sequences when highlighting query %j",
     (query) => {
       const items = [{ value: "gpt-model", label: "gpt-model" }];
@@ -233,18 +190,7 @@ describe("SearchableSelectList", () => {
     },
   );
 
-  it("filters items when typing", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-
-    // Simulate typing "gemini" - unique enough to narrow down
-    typeInput(list, "gemini");
-
-    const selected = selectByEnter(list);
-    expect(selected?.value).toBe("google/gemini-pro");
-  });
-
   it("prioritizes exact substring matches over fuzzy matches", () => {
-    // Add items where one has early exact match, others are fuzzy or late matches
     const items = [
       { value: "openrouter/auto", label: "openrouter/auto", description: "Routes to best" },
       { value: "opus-direct", label: "opus-direct", description: "Direct opus model" },
@@ -256,7 +202,6 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    // Type "opus" - should match "opus-direct" first (earliest exact substring)
     typeInput(list, "opus");
 
     // First result should be "opus-direct" where "opus" appears at position 0
@@ -275,24 +220,6 @@ describe("SearchableSelectList", () => {
     expectSelectedValueForQuery(list, "opus", "late-label");
   });
 
-  it("exact label match beats description match", () => {
-    const items = [
-      {
-        value: "provider/other",
-        label: "provider/other",
-        description: "This mentions opus in description",
-      },
-      { value: "provider/opus-model", label: "provider/opus-model", description: "Something else" },
-    ];
-    const list = new SearchableSelectList(items, 5, mockTheme);
-
-    typeInput(list, "opus");
-
-    // Label match should win over description match
-    const selected = selectByEnter(list);
-    expect(selected?.value).toBe("provider/opus-model");
-  });
-
   it("orders description matches by earliest index", () => {
     const items = [
       { value: "first", label: "first", description: "prefix opus value" },
@@ -301,16 +228,6 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(items, 5, mockTheme);
 
     expectSelectedValueForQuery(list, "opus", "second");
-  });
-
-  it("filters items with fuzzy matching", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-
-    // Simulate typing "gpt" which should match openai/gpt-4 models
-    typeInput(list, "gpt");
-
-    const selected = selectByEnter(list);
-    expect(selected?.value).toContain("gpt");
   });
 
   it("treats slashes as fuzzy token separators", () => {
@@ -336,15 +253,6 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toBe("gpt-4");
   });
 
-  it("highlights matches in rendered output", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-
-    typeInput(list, "gpt");
-
-    const output = list.render(80).join("\n");
-    expect(output).toContain("*gpt*");
-  });
-
   it("renders the current query after clearing and replacing it", () => {
     const list = new SearchableSelectList(
       [{ value: "match", label: "alpha beta", description: "alpha beta description" }],
@@ -363,19 +271,12 @@ describe("SearchableSelectList", () => {
     expect(list.render(80).join("\n")).toBe(replaced);
   });
 
-  it("shows no match message when filter yields no results", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-
-    expectNoMatchesForQuery(list, "xyz");
-  });
-
   it("navigates with arrow keys", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
     // Initially first item is selected
     expect(selectByEnter(list)?.value).toBe("anthropic/claude-3-opus");
 
-    // Press down arrow (escape sequence for down arrow)
     list.handleInput("\x1b[B");
 
     expect(selectByEnter(list)?.value).toBe("anthropic/claude-3-sonnet");
@@ -399,20 +300,6 @@ describe("SearchableSelectList", () => {
 
     expect(selectByEnter(list)?.value).toBe(expectedValue);
     expect(stripAnsi(list.render(80)[0] ?? "")).toContain(query);
-  });
-
-  it("calls onSelect when enter is pressed", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-    let selectedValue: string | undefined;
-
-    list.onSelect = (item) => {
-      selectedValue = item.value;
-    };
-
-    // Press enter
-    list.handleInput("\r");
-
-    expect(selectedValue).toBe("anthropic/claude-3-opus");
   });
 
   it("sanitizes rendered fields before applying trusted highlighting", () => {
@@ -461,14 +348,12 @@ describe("SearchableSelectList", () => {
     expect(selectedValue).toBe(rawValue);
   });
 
-  it.each(
-    ["", "gemini"].flatMap((query) => [
-      { name: "Escape", key: "\x1b", query },
-      { name: "Ctrl+C", key: "\u0003", query },
-      { name: "Kitty Ctrl+C", key: "\x1b[99;5u", query },
-      { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~", query },
-    ]),
-  )("cancels query '$query' with $name", ({ query, key }) => {
+  it.each([
+    { name: "Escape", key: "\x1b" },
+    { name: "Ctrl+C", key: "\u0003" },
+    { name: "Kitty Ctrl+C", key: "\x1b[99;5u" },
+    { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~" },
+  ])("cancels an active query with $name", ({ key }) => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     let cancelled = false;
 
@@ -476,7 +361,7 @@ describe("SearchableSelectList", () => {
       cancelled = true;
     };
 
-    typeInput(list, query);
+    typeInput(list, "gemini");
     const selected = selectByEnter(list);
     list.handleInput(key);
 

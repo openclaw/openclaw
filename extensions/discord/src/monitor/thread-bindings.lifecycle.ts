@@ -1,19 +1,19 @@
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord plugin module implements thread bindings.lifecycle behavior.
+import {
+  resolveThreadBindingIntroText,
+  resolveThreadBindingThreadName,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
-import {
-  resolveThreadBindingIntroText,
-  resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
 import { removeBindingRecordSync } from "./thread-bindings.persistence.js";
 import {
   mutateBindingsForTargetSession,
@@ -23,7 +23,6 @@ import {
   BINDINGS_BY_THREAD_ID,
   MANAGERS_BY_ACCOUNT_ID,
   getThreadBindingToken,
-  normalizeThreadId,
   refreshUnboundThreadWebhookIdentity,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
@@ -57,11 +56,7 @@ type AcpThreadBindingHealthProbe = (params: {
 const ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT = 8;
 
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
-  const manager = getThreadBindingManager(accountId);
-  if (!manager) {
-    return [];
-  }
-  return manager.listBindings();
+  return getThreadBindingManager(accountId)?.listBindings() ?? [];
 }
 
 export function listThreadBindingsBySessionKey(params: {
@@ -96,7 +91,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   }
   const managerToken = getThreadBindingToken(manager.accountId);
 
-  const requesterThreadId = normalizeThreadId(params.threadId);
+  const requesterThreadId = normalizeOptionalStringifiedId(params.threadId);
   let channelId = "";
   if (requesterThreadId) {
     const existing = manager.getByThreadId(requesterThreadId);
@@ -211,15 +206,6 @@ export async function unbindThreadBindingsBySessionKeyAsync(
   );
 }
 
-function resolveStoredAcpBindingHealth(params: {
-  session: AcpSessionStoreEntry;
-}): AcpThreadBindingHealthStatus {
-  if (!params.session.acp) {
-    return "stale";
-  }
-  return "healthy";
-}
-
 export async function reconcileAcpThreadBindingsOnStartup(params: {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -268,7 +254,7 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       continue;
     }
 
-    if (resolveStoredAcpBindingHealth({ session }) === "stale") {
+    if (!session.acp) {
       staleBindings.push(binding);
       continue;
     }

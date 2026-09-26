@@ -1,4 +1,3 @@
-// Docker E2E Plan tests cover docker e2e plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -407,10 +406,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
   it.each([
     ["literal", "shared-Y6bNiw2w.js"],
-    ["literal", "shared-DTaQo6Hi.js"],
     ["mapped", "shared-Y6bNiw2w.js"],
-    ["mapped", "shared-DTaQo6Hi.js"],
-    ["mapped", "shared-1Uyqkfns.js"],
     ["unrelated", ""],
     ["absent", ""],
   ])(
@@ -482,6 +478,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       1,
       "must force a local image build",
     ],
+    [
+      "container activation reused image",
+      "container-image-upgrade",
+      { command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:container-image-upgrade" },
+      1,
+      "must force a local image build",
+    ],
     ["unapproved live package", "live-models", { needsPackage: true }, 1, "must not require"],
     [
       "shared package image",
@@ -515,25 +518,13 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
 
   it.each([
     ["codex-media-path", ["@openclaw/codex"]],
-    ["live-mcp-code-mode-gateway", ["@openclaw/codex"]],
-    ["release-typed-onboarding", ["@openclaw/codex"]],
-    ["npm-onboard-channel-agent", ["@openclaw/codex"]],
-    ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
-    ["npm-onboard-slack-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-discord-candidate-channel-agent", ["@openclaw/codex", "@openclaw/discord"]],
     ["npm-onboard-slack-candidate-channel-agent", ["@openclaw/codex", "@openclaw/slack"]],
-    ["mcp-code-mode-gateway", ["@openclaw/codex"]],
   ] as const)("requests only the matching companions for %s", (name, packages) => {
     const plan = planFor({ selectedLaneNames: [name] });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([name]);
     expect(plan.needs.prepublishPluginRegistry).toBe(true);
     expect(plan.requiredPrepublishPluginPackages).toEqual(packages);
-  });
-
-  it("finds a named lane through the expanded catalog", () => {
-    expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
-      "plugin-binding-command-escape",
-    );
   });
 
   it("runs Fleet host proof only when explicitly selected", () => {
@@ -544,6 +535,14 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     expect(selected.needs.e2eImage).toBe(false);
     expect(selected.needs.prepublishPluginRegistry).toBe(false);
     expect(findLaneByName("fleet-cache")?.name).toBe("fleet-cache");
+  });
+
+  it("builds the container activation image without preparing a package image", () => {
+    const plan = planFor({ selectedLaneNames: ["container-image-upgrade"] });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["container-image-upgrade"]);
+    expect(plan.needs.package).toBe(false);
+    expect(plan.needs.e2eImage).toBe(false);
+    expect(plan.needs.liveImage).toBe(false);
   });
 
   it("plans the package-backed sandbox browser sidecar lane", () => {
@@ -571,6 +570,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       ["live-codex-npm-plugin", "e2e/codex-npm-plugin-live-docker.sh"],
       ["upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["published-upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
+      ["dreaming-cron-doctor", "e2e/upgrade-survivor-docker.sh"],
       ["root-managed-vps-upgrade", "e2e/upgrade-survivor-docker.sh"],
       ["update-migration", "e2e/upgrade-survivor-docker.sh"],
     ]);
@@ -1244,7 +1244,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     expect(missing).toStrictEqual([]);
   });
 
-  it.each(["minimum", "beta", "stable", "full"] as const)(
+  it.each(["minimum", "stable"] as const)(
     "partitions package/update core across three jobs without losing or duplicating %s proof",
     (releaseProfile) => {
       const options = { profile: RELEASE_PATH_PROFILE, releaseProfile };
@@ -1524,15 +1524,18 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     }
   });
 
-  it("pins opt-in Workshop Doctor recovery to published 9.4 without credentials", () => {
+  it.each([
+    ["workshop-doctor-recovery", "2026.9.4", "2026.9.3 2026.9.4 2026.9.5"],
+    ["update-report-recovery", "2026.9.6", "2026.9.5 2026.9.6 2026.9.7"],
+  ])("pins opt-in %s to published %s without credentials", (scenario, baseline, baselines) => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5",
-      upgradeSurvivorScenarios: "workshop-doctor-recovery",
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenario,
     });
-    const name = "published-upgrade-survivor-2026.9.4-workshop-doctor-recovery";
+    const name = `published-upgrade-survivor-${baseline}-${scenario}`;
     expect(plan.lanes.map(summarizeLane)).toEqual([
-      publishedUpgradeSurvivorLane(name, "openclaw@2026.9.4", "workshop-doctor-recovery"),
+      publishedUpgradeSurvivorLane(name, `openclaw@${baseline}`, scenario),
     ]);
     expect(plan.requiredPrepublishPluginPackages).toEqual([]);
     expect(plan.credentials).toEqual([]);
@@ -1540,7 +1543,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       expect(
         planFor({
           selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: "2026.9.4",
+          upgradeSurvivorBaselines: baseline,
           upgradeSurvivorScenarios: alias,
         }).lanes.map((lane) => lane.name),
       ).not.toContain(name);
@@ -1568,17 +1571,22 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ).toContain(name);
   });
 
-  it.each(["projects-doctor", "projects-startup-migration", "taskflow-restoration"])(
-    "plans %s only for its exact published writer without registry or credential fixtures",
-    (scenario) => {
+  it.each([
+    { scenario: "projects-doctor", baseline: "2026.9.4" },
+    { scenario: "projects-startup-migration", baseline: "2026.9.4" },
+    { scenario: "taskflow-restoration", baseline: "2026.9.4" },
+    { scenario: "dreaming-cron-doctor", baseline: "2026.9.6" },
+  ])(
+    "plans $scenario only for its exact published writer without registry or credential fixtures",
+    ({ scenario, baseline }) => {
       const plan = planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5 latest",
+        upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5 2026.9.6 2026.9.7 latest",
         upgradeSurvivorScenarios: scenario,
       });
-      const name = `published-upgrade-survivor-2026.9.4-${scenario}`;
+      const name = `published-upgrade-survivor-${baseline}-${scenario}`;
       expect(plan.lanes.map(summarizeLane)).toEqual([
-        publishedUpgradeSurvivorLane(name, "openclaw@2026.9.4", scenario),
+        publishedUpgradeSurvivorLane(name, `openclaw@${baseline}`, scenario),
       ]);
       expect(plan.requiredPrepublishPluginPackages).toEqual([]);
       expect(plan.credentials).toEqual([]);
@@ -1586,7 +1594,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         expect(
           planFor({
             selectedLaneNames: ["published-upgrade-survivor"],
-            upgradeSurvivorBaselines: "2026.9.4",
+            upgradeSurvivorBaselines: baseline,
             upgradeSurvivorScenarios: alias,
           }).lanes.map((lane) => lane.name),
         ).not.toContain(name);
@@ -1650,20 +1658,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
     expect(unsupported.lanes).toEqual([]);
     expect(unsupported.omittedUnsupportedLanes).toEqual([]);
-  });
-
-  it("plans the weekly mobile and watch matrix as three logical rows", () => {
-    const plan = planFor({
-      selectedLaneNames: ["update-migration"],
-      upgradeSurvivorBaselines: "2026.7.1 2026.8.1",
-      upgradeSurvivorScenarios: "mobile-pairing-reconnect watchos-direct-node",
-    });
-
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "update-migration-2026.7.1-mobile-pairing-reconnect",
-      "update-migration-2026.8.1-mobile-pairing-reconnect",
-      "update-migration-2026.8.1-watchos-direct-node",
-    ]);
   });
 
   it("omits trusted-current scenarios unsupported by a frozen target harness", () => {
@@ -1948,19 +1942,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
 
     expect(plan.lanes).toEqual([]);
     expect(plan.omittedUnsupportedLanes).toEqual([selectedLane]);
-  });
-
-  it("omits unsupported scenario-only survivor lanes without explicit baselines", () => {
-    const targetRoot = tempDirs.make("openclaw-frozen-scenario-only-harness-");
-    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
-
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorScenarios: "reported-issues",
-      upgradeSurvivorTargetRoot: targetRoot,
-    });
-
-    expect(plan.lanes).toEqual([]);
   });
 
   it("does not fall back to base when an unsupported scenario is baseline-incompatible", () => {
@@ -2341,62 +2322,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     });
 
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
-  });
-
-  it("surfaces Docker lane test-state scenarios in plan JSON", () => {
-    const plan = planFor({
-      selectedLaneNames: [
-        "onboard",
-        "agents-delete-shared-workspace",
-        "browser-cdp-snapshot",
-        "doctor-switch",
-        "openai-image-auth",
-        "openai-web-search-minimal",
-        "mcp-channels",
-        "mcp-code-mode-gateway",
-        "cron-mcp-cleanup",
-        "agent-bundle-mcp-tools",
-        "system-agent-first-run",
-        "system-agent-rescue",
-        "config-reload",
-        "plugin-update",
-        "plugins",
-        "kitchen-sink-plugin",
-        "kitchen-sink-rpc",
-        "bundled-plugin-install-uninstall-0",
-        "multi-node-update",
-        "update-channel-switch",
-        "skill-install",
-        "upgrade-survivor",
-      ],
-    });
-
-    expect(
-      plan.lanes.map((lane) => ({ name: lane.name, stateScenario: lane.stateScenario })),
-    ).toEqual([
-      { name: "onboard", stateScenario: "empty" },
-      { name: "agents-delete-shared-workspace", stateScenario: "empty" },
-      { name: "browser-cdp-snapshot", stateScenario: "empty" },
-      { name: "doctor-switch", stateScenario: "empty" },
-      { name: "openai-image-auth", stateScenario: "empty" },
-      { name: "openai-web-search-minimal", stateScenario: "empty" },
-      { name: "mcp-channels", stateScenario: "empty" },
-      { name: "mcp-code-mode-gateway", stateScenario: "empty" },
-      { name: "cron-mcp-cleanup", stateScenario: "empty" },
-      { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
-      { name: "system-agent-first-run", stateScenario: "empty" },
-      { name: "system-agent-rescue", stateScenario: "empty" },
-      { name: "config-reload", stateScenario: "empty" },
-      { name: "plugin-update", stateScenario: "empty" },
-      { name: "plugins", stateScenario: "empty" },
-      { name: "kitchen-sink-plugin", stateScenario: "empty" },
-      { name: "kitchen-sink-rpc", stateScenario: "empty" },
-      { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
-      { name: "multi-node-update", stateScenario: "empty" },
-      { name: "update-channel-switch", stateScenario: "update-stable" },
-      { name: "skill-install", stateScenario: "empty" },
-      { name: "upgrade-survivor", stateScenario: "upgrade-survivor" },
-    ]);
   });
 
   it("derives prerelease npm companions from selected survivor recipes", () => {

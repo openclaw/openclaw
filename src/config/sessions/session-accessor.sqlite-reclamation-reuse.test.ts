@@ -80,6 +80,15 @@ import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-
 const validation = vi.hoisted(() => ({
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
 }));
+vi.mock("node:diagnostics_channel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
+  const pressure = actual.channel(Symbol("reclamation-worker-pressure"));
+  return {
+    ...actual,
+    channel: (name: string | symbol) =>
+      name === "openclaw.memory.critical" ? pressure : actual.channel(name),
+  };
+});
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
@@ -192,7 +201,7 @@ test.each([
           if (!grant()) {
             throw new Error("Native reclamation fixture lost admission");
           }
-        }),
+        }, binding.attachment),
       });
     },
   };
@@ -653,6 +662,8 @@ test.each(["path", "root"] as const)(
 );
 
 test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+  const pressure = channel("openclaw.memory.critical");
+  expect(pressure.hasSubscribers).toBe(false);
   const fixtures = [createFixture(), createFixture()];
   const spawned = observeReclamationWorkers();
   const threads = fixtures.map(() => new Set<number>());
@@ -676,13 +687,33 @@ test("retains maintenance Workers across alternating databases and retires all i
   for (const fixture of fixtures) {
     expect(leasesFor(fixture)).toHaveLength(2);
   }
+  expect(pressure.hasSubscribers).toBe(true);
   const retired = Promise.all(spawned.map((worker) => once(worker, "exit")));
-  channel("openclaw.memory.critical").publish({});
+  pressure.publish({});
   await retired;
   await closeOpenClawAgentDatabasesAsync();
   for (const fixture of fixtures) {
     expect(leasesFor(fixture)).toHaveLength(0);
   }
+  await closeOpenClawStateDatabaseAsync();
+  expect(pressure.hasSubscribers).toBe(false);
+
+  const fixture = fixtures[0]!;
+  await runSqliteSessionReclamation({
+    forceInProcess: false,
+    plan: reclamation.createSessionMaintenanceStatisticsOperation({
+      ...fixture.options,
+      path: fixture.database.path,
+    }),
+  });
+  expect(spawned).toHaveLength(3);
+  expect(pressure.hasSubscribers).toBe(true);
+  const reopenedExit = once(spawned[2]!, "exit");
+  pressure.publish({});
+  await reopenedExit;
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  expect(pressure.hasSubscribers).toBe(false);
 });
 
 test("joins explicit Worker retirement before opening a different agent store", async () => {

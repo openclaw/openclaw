@@ -10,6 +10,7 @@ import {
   threadStartResult as nativeThreadStartResult,
 } from "./codex-app-server.test-fixtures.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   isJsonObject,
   isRpcResponse,
@@ -501,4 +502,60 @@ export function createCodexRuntimePlanFixture(): NonNullable<
       logDiagnostics: () => undefined,
     },
   } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+}
+
+export function createThreadRequestAttemptParams(params: {
+  provider: string;
+  authProfileId?: string;
+  authProfileType?: "oauth" | "api_key";
+  authProfileProvider?: string;
+  authProfileProviders?: Record<string, string>;
+  runtimeExternalProfileIds?: string[];
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  images?: EmbeddedRunAttemptParams["images"];
+  modelId?: string;
+}): EmbeddedRunAttemptParams {
+  const authProfileProviders =
+    params.authProfileProviders ??
+    (params.authProfileId
+      ? { [params.authProfileId]: params.authProfileProvider ?? "openai" }
+      : {});
+  const authProfileType = params.authProfileType ?? "oauth";
+  return {
+    hostCapabilities: createCodexTestHostCapabilities(),
+    provider: params.provider,
+    modelId: params.modelId ?? "gpt-5.4",
+    prompt: "test prompt",
+    authProfileId: params.authProfileId,
+    ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
+    ...(params.bootstrapContextRunKind
+      ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
+      : {}),
+    ...(params.images ? { images: params.images } : {}),
+    authProfileStore: {
+      version: 1,
+      profiles: Object.fromEntries(
+        Object.entries(authProfileProviders).map(([profileId, provider]) => [
+          profileId,
+          authProfileType === "api_key"
+            ? {
+                type: "api_key" as const,
+                provider,
+                key: "sk-test",
+              }
+            : {
+                type: "oauth" as const,
+                provider,
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
+        ]),
+      ),
+      ...(params.runtimeExternalProfileIds
+        ? { runtimeExternalProfileIds: params.runtimeExternalProfileIds }
+        : {}),
+    },
+  } as EmbeddedRunAttemptParams;
 }

@@ -144,7 +144,9 @@ describe("check-max-lines-ratchet", () => {
       },
     );
     expect(result.status, result.stderr).toBe(status);
-    expect(result.stderr).toBe(stderr);
+    // TypeScript 7.0.2 can emit this standalone line while closing its native parser.
+    // Remove after upgrading past https://github.com/microsoft/TypeScript/pull/64276.
+    expect(result.stderr.replace(/^context canceled\n/m, "")).toBe(stderr);
     expect(result.stdout).toBe(
       mode === "max-lines failure first"
         ? ""

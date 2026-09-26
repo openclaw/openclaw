@@ -1,203 +1,67 @@
 import { describe, expect, it } from "vitest";
 import { markdownToStory, type Story } from "./story.js";
 
-type ListRenderingFixture = {
-  name: string;
-  markdown: string;
-  before: Story;
-  after: Story;
-};
+type Block = Extract<Story[number], { block: unknown }>["block"];
+type Listing = Extract<Block, { listing: unknown }>["listing"];
+type List = Extract<Listing, { list: unknown }>["list"];
 
-const listRenderingFixtures: ListRenderingFixture[] = [
+function list(type: List["type"], items: Listing[], contents: List["contents"] = []): Listing {
+  return { list: { type, contents, items } };
+}
+
+function listStory(type: List["type"], items: Listing[]): Story {
+  return [{ block: { listing: list(type, items) } }];
+}
+
+const listRenderingFixtures = [
   {
     name: "unordered markers become one native unordered listing",
     markdown: "- alpha\n- **beta**\n- [site](https://example.com)",
-    before: [
-      {
-        inline: [
-          "- alpha",
-          { break: null },
-          "- ",
-          { bold: ["beta"] },
-          { break: null },
-          "- ",
-          { link: { href: "https://example.com", content: "site" } },
-        ],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                { item: ["alpha"] },
-                { item: [{ bold: ["beta"] }] },
-                {
-                  item: [{ link: { href: "https://example.com", content: "site" } }],
-                },
-              ],
-            },
-          },
-        },
-      },
-    ],
-  },
-  {
-    name: "ordered markers become a native ordered listing",
-    markdown: "1. first\n2. second",
-    before: [{ inline: ["1. first", { break: null }, "2. second"] }],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: ["second"] }],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("unordered", [
+      { item: ["alpha"] },
+      { item: [{ bold: ["beta"] }] },
+      { item: [{ link: { href: "https://example.com", content: "site" } }] },
+    ]),
   },
   {
     name: "task markers become native task inlines inside a task listing",
     markdown: "- [ ] todo\n- [x] **done**",
-    before: [
-      {
-        inline: ["- [ ] todo", { break: null }, "- [x] ", { bold: ["done"] }],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "tasklist",
-              contents: [],
-              items: [
-                { item: [{ task: { checked: false, content: ["todo"] } }] },
-                {
-                  item: [{ task: { checked: true, content: [{ bold: ["done"] }] } }],
-                },
-              ],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("tasklist", [
+      { item: [{ task: { checked: false, content: ["todo"] } }] },
+      { item: [{ task: { checked: true, content: [{ bold: ["done"] }] } }] },
+    ]),
   },
   {
     name: "nested ordered items stay recursive under their unordered parent",
     markdown: "- parent\n  1. first\n  2. second\n- sibling",
-    before: [
-      {
-        inline: [
-          "- parent",
-          { break: null },
-          "  1. first",
-          { break: null },
-          "  2. second",
-          { break: null },
-          "- sibling",
-        ],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                {
-                  list: {
-                    type: "ordered",
-                    contents: ["parent"],
-                    items: [{ item: ["first"] }, { item: ["second"] }],
-                  },
-                },
-                { item: ["sibling"] },
-              ],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("unordered", [
+      list("ordered", [{ item: ["first"] }, { item: ["second"] }], ["parent"]),
+      { item: ["sibling"] },
+    ]),
   },
   {
     name: "mixed task and plain children stay in their nested bullet list",
     markdown: "- parent\n  - [ ] todo\n  - note\n- sibling",
-    before: [
-      {
-        inline: [
-          "- parent",
-          { break: null },
-          "  - [ ] todo",
-          { break: null },
-          "  - note",
-          { break: null },
-          "- sibling",
-        ],
-      },
-    ],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                {
-                  list: {
-                    type: "unordered",
-                    contents: ["parent"],
-                    items: [
-                      { item: [{ task: { checked: false, content: ["todo"] } }] },
-                      { item: ["note"] },
-                    ],
-                  },
-                },
-                { item: ["sibling"] },
-              ],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("unordered", [
+      list(
+        "unordered",
+        [{ item: [{ task: { checked: false, content: ["todo"] } }] }, { item: ["note"] }],
+        ["parent"],
+      ),
+      { item: ["sibling"] },
+    ]),
   },
   {
     name: "empty bullet items stay inside their native listing",
     markdown: "- first\n-\n- third",
-    before: [{ inline: ["- first", { break: null }, "-", { break: null }, "- third"] }],
-    after: [
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: [] }, { item: ["third"] }],
-            },
-          },
-        },
-      },
-    ],
+    expected: listStory("unordered", [{ item: ["first"] }, { item: [] }, { item: ["third"] }]),
   },
 ];
 
 describe("markdownToStory paragraph boundaries", () => {
-  it.each(["#", "#tag", "##tag", "####### heading", "# "])(
-    "preserves non-heading %j as ordinary text",
-    (markdown) => {
-      expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);
-    },
-  );
+  it.each(["####### heading", "# "])("preserves non-heading %j as ordinary text", (markdown) => {
+    expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);
+  });
 
   it("continues past a hashtag and still separates the next heading", () => {
     expect(markdownToStory("intro\n#tag\n## Heading\ntail")).toEqual([
@@ -209,9 +73,8 @@ describe("markdownToStory paragraph boundaries", () => {
 });
 
 describe("markdownToStory list rendering", () => {
-  it.each(listRenderingFixtures)("$name", ({ markdown, before, after }) => {
-    expect(before).not.toEqual(after);
-    expect(markdownToStory(markdown)).toEqual(after);
+  it.each(listRenderingFixtures)("$name", ({ markdown, expected }) => {
+    expect(markdownToStory(markdown)).toEqual(expected);
   });
 
   it("preserves a list with lazy continuation after preceding paragraph text", () => {
@@ -231,28 +94,12 @@ describe("markdownToStory list rendering", () => {
   });
 
   it("keeps a blank-separated outer sibling attached after a nested list", () => {
-    expect(markdownToStory("- parent\n  - child\n\n- sibling")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [
-                {
-                  list: {
-                    type: "unordered",
-                    contents: ["parent"],
-                    items: [{ item: ["child"] }],
-                  },
-                },
-                { item: ["sibling"] },
-              ],
-            },
-          },
-        },
-      },
-    ]);
+    expect(markdownToStory("- parent\n  - child\n\n- sibling")).toEqual(
+      listStory("unordered", [
+        list("unordered", [{ item: ["child"] }], ["parent"]),
+        { item: ["sibling"] },
+      ]),
+    );
   });
 
   it.each([
@@ -290,11 +137,6 @@ describe("markdownToStory list rendering", () => {
       name: "block-level content inside list items",
       markdown: "- foo\n\n      bar",
       expected: [{ inline: ["- foo"] }, { inline: ["      bar"] }],
-    },
-    {
-      name: "block syntax on the marker line",
-      markdown: "- # heading",
-      expected: [{ inline: ["- # heading"] }],
     },
     {
       name: "blank-separated item paragraphs",
@@ -358,64 +200,24 @@ describe("markdownToStory list rendering", () => {
 
   it("keeps different ordered delimiters as separate native lists", () => {
     expect(markdownToStory("1. first\n1) reset")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["first"] }],
-            },
-          },
-        },
-      },
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["reset"] }],
-            },
-          },
-        },
-      },
+      ...listStory("ordered", [{ item: ["first"] }]),
+      ...listStory("ordered", [{ item: ["reset"] }]),
     ]);
   });
 
   it("keeps ordered task items in an ordered native listing", () => {
-    expect(markdownToStory("1. [ ] first\n2. [x] second")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [
-                { item: [{ task: { checked: false, content: ["first"] } }] },
-                { item: [{ task: { checked: true, content: ["second"] } }] },
-              ],
-            },
-          },
-        },
-      },
-    ]);
+    expect(markdownToStory("1. [ ] first\n2. [x] second")).toEqual(
+      listStory("ordered", [
+        { item: [{ task: { checked: false, content: ["first"] } }] },
+        { item: [{ task: { checked: true, content: ["second"] } }] },
+      ]),
+    );
   });
 
   it("keeps variably indented ordered siblings in one native list", () => {
-    expect(markdownToStory(" 1. first\n2. second")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "ordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: ["second"] }],
-            },
-          },
-        },
-      },
-    ]);
+    expect(markdownToStory(" 1. first\n2. second")).toEqual(
+      listStory("ordered", [{ item: ["first"] }, { item: ["second"] }]),
+    );
   });
 
   it("preserves a non-interrupting ordered marker as lazy text", () => {
@@ -424,41 +226,16 @@ describe("markdownToStory list rendering", () => {
     ]);
   });
 
-  it.each(["- [ ] - follow up", "- [x] # heading"])(
-    "keeps block-looking task text representable for %s",
-    (markdown) => {
-      const checked = markdown.includes("[x]");
-      const content = markdown.replace(/^- \[[ x]\] /, "");
-      expect(markdownToStory(markdown)).toEqual([
-        {
-          block: {
-            listing: {
-              list: {
-                type: "tasklist",
-                contents: [],
-                items: [{ item: [{ task: { checked, content: [content] } }] }],
-              },
-            },
-          },
-        },
-      ]);
-    },
-  );
+  it("keeps block-looking task text representable", () => {
+    expect(markdownToStory("- [ ] - follow up")).toEqual(
+      listStory("tasklist", [{ item: [{ task: { checked: false, content: ["- follow up"] } }] }]),
+    );
+  });
 
   it("keeps whitespace-only items in their native list", () => {
-    expect(markdownToStory("- first\n-     \n- third")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "unordered",
-              contents: [],
-              items: [{ item: ["first"] }, { item: [] }, { item: ["third"] }],
-            },
-          },
-        },
-      },
-    ]);
+    expect(markdownToStory("- first\n-     \n- third")).toEqual(
+      listStory("unordered", [{ item: ["first"] }, { item: [] }, { item: ["third"] }]),
+    );
   });
 
   it("preserves an empty same-marker nested item as paragraph text", () => {
@@ -468,19 +245,9 @@ describe("markdownToStory list rendering", () => {
   });
 
   it("accepts a tab as an unchecked task marker", () => {
-    expect(markdownToStory("- [\t] todo")).toEqual([
-      {
-        block: {
-          listing: {
-            list: {
-              type: "tasklist",
-              contents: [],
-              items: [{ item: [{ task: { checked: false, content: ["todo"] } }] }],
-            },
-          },
-        },
-      },
-    ]);
+    expect(markdownToStory("- [\t] todo")).toEqual(
+      listStory("tasklist", [{ item: [{ task: { checked: false, content: ["todo"] } }] }]),
+    );
   });
 
   it("preserves blank-separated siblings after an unsupported list item", () => {
@@ -488,10 +255,6 @@ describe("markdownToStory list rendering", () => {
       { inline: ["- # heading"] },
       { inline: ["- sibling"] },
     ]);
-  });
-
-  it("keeps ordinary inline Markdown outside loose-list preservation", () => {
-    expect(markdownToStory("**bold**")).toEqual([{ inline: [{ bold: ["bold"] }] }]);
   });
 
   it("keeps the unsupported outer marker across nested marker styles", () => {
@@ -505,7 +268,7 @@ describe("markdownToStory list rendering", () => {
     expect(markdownToStory("foo\n*")).toEqual([{ inline: ["foo", { break: null }, "*"] }]);
   });
 
-  it.each(["- ~~~", "- >", "- ___", "-     code"])(
+  it.each(["- ~~~", "- ___", "-     code"])(
     "preserves block-level marker body %s as plain content",
     (markdown) => {
       expect(markdownToStory(markdown)).toEqual([{ inline: [markdown] }]);

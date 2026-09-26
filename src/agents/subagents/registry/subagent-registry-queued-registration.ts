@@ -9,6 +9,10 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import {
+  hasPendingSubagentRetirementPublication,
+  waitForSubagentRetirementPublication,
+} from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import { waitForQueuedSubagentClaim } from "./subagent-registry-queued-registration-wait.js";
 import { createQueuedRegistrationSettlement } from "./subagent-registry-queued-settlement.js";
@@ -155,12 +159,14 @@ export function registerRequiredQueuedSubagent(params: {
   params.retainOwnership?.(
     Object.freeze({
       waitForClaim,
+      waitForRetirementPublication: () => waitForSubagentRetirementPublication(entry),
       canLaunch: () => registrationAcknowledged && ownsQueuedIntent(),
       canCleanupSession: () =>
         !persistenceUncertain &&
         !recoveryPending &&
         !settlementPending &&
         !pendingClaim() &&
+        !hasPendingSubagentRetirementPublication(entry) &&
         registryCurrent() &&
         ownsSession(),
       canAcceptLaunch: () =>

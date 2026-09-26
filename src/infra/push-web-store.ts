@@ -190,13 +190,6 @@ export function hasBoundWebPushSubscriptions(stateDir?: string) {
   });
 }
 
-export function listBoundWebPushSubscriptions(stateDir?: string) {
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.listBoundWebPushSubscriptions",
-    input: undefined,
-  });
-}
-
 export function prepareWebPushApprovalDeliveries(
   params: WebPushWorkerOperations["webPush.prepareWebPushApprovalDeliveries"]["input"] & {
     stateDir?: string;

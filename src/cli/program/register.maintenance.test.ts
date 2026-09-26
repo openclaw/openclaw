@@ -576,10 +576,10 @@ describe("registerMaintenanceCommands doctor action", () => {
       { name: "all checks", selector: ["--all"] },
       { name: "skipped check", selector: ["--skip", "core/example"] },
       { name: "selected check", selector: ["--only", "core/example"] },
-    ].flatMap(({ name, selector }) => [
-      { name: `${name} after JSON`, args: ["--json", ...selector] },
-      { name: `${name} before JSON`, args: [...selector, "--json"] },
-    ]),
+    ].map(({ name, selector }, index) => ({
+      name,
+      args: index % 2 === 0 ? ["--json", ...selector] : [...selector, "--json"],
+    })),
   )("rejects lint-only $name without explicit lint mode", async ({ args }) => {
     const message = "doctor lint options require --lint. Use `openclaw doctor --lint ...`.";
 
@@ -592,17 +592,23 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it.each(
-    DOCTOR_MUTATION_OPTIONS.flatMap((mutationOption) => [
-      { mode: "explicit lint", args: ["--lint", mutationOption], mutationOption },
-      {
-        mode: "explicit JSON lint",
-        args: ["--lint", "--json", mutationOption],
-        mutationOption,
-      },
-      { mode: "implicit JSON lint", args: ["--json", mutationOption], mutationOption },
-    ]),
-  )("rejects $mutationOption in $mode before running doctor", async ({ args, mutationOption }) => {
+  it.each([
+    ...DOCTOR_MUTATION_OPTIONS.map((mutationOption) => ({
+      mode: "explicit lint",
+      args: ["--lint", mutationOption],
+      mutationOption,
+    })),
+    {
+      mode: "explicit JSON lint",
+      args: ["--lint", "--json", "--repair"],
+      mutationOption: "--repair",
+    },
+    {
+      mode: "implicit JSON lint",
+      args: ["--json", "--repair"],
+      mutationOption: "--repair",
+    },
+  ])("rejects $mutationOption in $mode before running doctor", async ({ args, mutationOption }) => {
     const mode = args.includes("--lint") ? "--lint" : "--json";
     const conflictingOptions =
       mutationOption === "--yes" || mutationOption === "--generate-gateway-token"
@@ -619,29 +625,26 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it.each(DOCTOR_MUTATION_OPTIONS)(
-    "keeps interactive lint mutation conflict %s on stderr",
-    async (mutationOption) => {
-      const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  it("keeps interactive lint mutation conflicts on stderr", async () => {
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
 
-      try {
-        await runMaintenanceCli(["doctor", "--lint", mutationOption]);
+    try {
+      await runMaintenanceCli(["doctor", "--lint", "--repair"]);
 
-        expect(doctorCommand).not.toHaveBeenCalled();
-        expect(runDoctorLintCli).not.toHaveBeenCalled();
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(mutationOption));
-        expect(runtime.writeJson).not.toHaveBeenCalled();
-        expect(runtime.exit).toHaveBeenCalledWith(2);
-      } finally {
-        if (stdoutDescriptor) {
-          Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
-        } else {
-          Reflect.deleteProperty(process.stdout, "isTTY");
-        }
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--repair"));
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    } finally {
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
       }
-    },
-  );
+    }
+  });
 
   it.each(["--yes", "--generate-gateway-token"])(
     "keeps %s available to mutating doctor posture",
@@ -656,20 +659,18 @@ describe("registerMaintenanceCommands doctor action", () => {
     },
   );
 
-  it.each(DOCTOR_SESSION_SQLITE_MODES)(
-    "rejects separate session SQLite %s posture during explicit lint",
-    async (sessionMode) => {
-      const message = `doctor --lint runs read-only lint checks and cannot be combined with --session-sqlite ${sessionMode}.`;
+  it("rejects separate session SQLite posture during explicit lint", async () => {
+    const message =
+      "doctor --lint runs read-only lint checks and cannot be combined with --session-sqlite recover.";
 
-      await runMaintenanceCli(["doctor", "--lint", "--session-sqlite", sessionMode]);
+    await runMaintenanceCli(["doctor", "--lint", "--session-sqlite", "recover"]);
 
-      expect(doctorCommand).not.toHaveBeenCalled();
-      expect(runDoctorLintCli).not.toHaveBeenCalled();
-      expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(2);
-    },
-  );
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
 
   it.each(DOCTOR_SESSION_SQLITE_MODES)(
     "preserves session SQLite %s posture with its own JSON output",

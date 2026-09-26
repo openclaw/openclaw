@@ -22,6 +22,8 @@ export type SessionIdentityMutationTarget = {
 };
 
 export type SessionIdentityMutation = {
+  /** Physical source captured by the committing database owner. */
+  databaseIdentity: string | symbol;
   /** Resolved operation scope for bare keys; qualified keys retain their own agent. */
   agentId: string;
 } & (

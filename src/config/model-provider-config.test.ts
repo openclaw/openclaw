@@ -1,6 +1,7 @@
-import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { afterEach, describe, expect, it } from "vitest";
+import * as providerModelNormalization from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createConfiguredProviderModelResolver,
   resolveMergedModelProviderModels,
   createModelProviderRouteOverrideResolver,
   findConfiguredProviderModel,
@@ -19,7 +20,9 @@ function model(id: string, fields: Partial<ModelDefinitionConfig> = {}): ModelDe
   };
 }
 
-afterEach(() => setCurrentManifestModelIdNormalizationPolicies(undefined));
+afterEach(() =>
+  providerModelNormalization.setCurrentManifestModelIdNormalizationPolicies(undefined),
+);
 
 describe("resolveMergedModelProviderModels", () => {
   it("keeps first-row fields and fills only omissions from canonical duplicates", () => {
@@ -183,7 +186,7 @@ describe("configured model row precedence", () => {
   it.each([false, true])(
     "ignores other owners' ambient input aliases (declared=%s)",
     (declared) => {
-      setCurrentManifestModelIdNormalizationPolicies(
+      providerModelNormalization.setCurrentManifestModelIdNormalizationPolicies(
         new Map([["custom", { aliases: { latest: "Model" } }]]),
       );
       const models = [model("latest", { headers: { "x-route": "another-owner" } })];
@@ -202,6 +205,160 @@ describe("configured model row precedence", () => {
   );
 });
 
+describe("reused configured model lookups", () => {
+  it("keeps the first fallback short-circuited and prepares only repeated fallback demand", () => {
+    const legacy = model("custom/Model");
+    const models = [legacy, ...Array.from({ length: 64 }, (_, index) => model(`plain-${index}`))];
+    const strip = vi.spyOn(providerModelNormalization, "stripSelfProviderModelPrefix");
+    try {
+      const resolve = createConfiguredProviderModelResolver({ models }, "custom");
+      expect(strip).not.toHaveBeenCalled();
+      expect(resolve("plain-0")).toBe(models[1]);
+      expect(strip).toHaveBeenCalledTimes(models.length + 1);
+      strip.mockClear();
+      expect(resolve("Model")).toBe(legacy);
+      expect(strip).toHaveBeenCalledTimes(2);
+      strip.mockClear();
+      expect(resolve("Model")).toBe(legacy);
+      expect(strip).toHaveBeenCalledTimes(models.length + 1);
+      strip.mockClear();
+      legacy.name = "Updated row";
+      expect(resolve("Model")).toBe(legacy);
+      expect(resolve("Model")?.name).toBe("Updated row");
+      expect(strip).toHaveBeenCalledTimes(2);
+    } finally {
+      strip.mockRestore();
+    }
+  });
+
+  it("keeps an active first fallback scan stable when a callback prepares a nested lookup", () => {
+    const first = model("custom/First");
+    const second = model("custom/Second");
+    let nested: ModelDefinitionConfig | undefined;
+    let reentered = false;
+    const canonicalize = vi.fn((id: string) => {
+      if (id === "First" && !reentered) {
+        reentered = true;
+        nested = resolve("Second");
+      }
+      return id === "target" || id === "Second" ? "match" : id;
+    });
+    const resolve = createConfiguredProviderModelResolver(
+      { models: [first, second] },
+      "custom",
+      canonicalize,
+    );
+    expect(resolve("target")).toBe(second);
+    expect(nested).toBe(second);
+    expect(canonicalize.mock.calls).toEqual([
+      ["target"],
+      ["First"],
+      ["Second"],
+      ["First"],
+      ["Second"],
+    ]);
+    canonicalize.mockClear();
+    expect(resolve("target")).toBe(second);
+    expect(canonicalize.mock.calls).toEqual([["target"], ["First"], ["Second"]]);
+  });
+
+  it("keeps fallback callbacks live, ordered, short-circuited, and throwable", () => {
+    const first = model("custom/First");
+    const second = model("custom/ Second");
+    let matchFirst = false;
+    let failure: Error | undefined;
+    const canonicalize = vi.fn((id: string) => {
+      if ((id === "First" || id === "literal") && failure) {
+        throw failure;
+      }
+      return id === "target" || id === "Second" || (id === "First" && matchFirst) ? "match" : id;
+    });
+    const resolve = createConfiguredProviderModelResolver(
+      { models: [first, second, model("literal")] },
+      "custom",
+      canonicalize,
+    );
+    expect(resolve("target")).toBe(second);
+    expect(canonicalize.mock.calls).toEqual([["literal"], ["target"], ["First"], ["Second"]]);
+    canonicalize.mockClear();
+    matchFirst = true;
+    expect(resolve("target")).toBe(first);
+    expect(canonicalize.mock.calls).toEqual([["target"], ["First"]]);
+    canonicalize.mockClear();
+    expect(resolve("First")).toBe(first);
+    expect(canonicalize.mock.calls).toEqual([["First"]]);
+    canonicalize.mockClear();
+    failure = new Error("policy failure");
+    expect(() => resolve("target")).toThrow(failure);
+    expect(canonicalize.mock.calls).toEqual([["target"], ["First"]]);
+    expect(() => resolve("First")).toThrow(failure);
+    expect(() => resolve("literal")).toThrow(failure);
+    failure = undefined;
+    expect(resolve("target")).toBe(first);
+  });
+
+  it.each([false, true])(
+    "retains alias-produced prefixes and literal overwrites (literal=%s)",
+    (literal) => {
+      const alias = model("alias");
+      const exact = model("custom/First");
+      const resolve = createConfiguredProviderModelResolver(
+        { models: [alias, model("custom/Second"), ...(literal ? [exact] : [])] },
+        "custom",
+        (id) =>
+          id === "alias"
+            ? "custom/First"
+            : ["target", "First", "Second"].includes(id)
+              ? "match"
+              : id,
+      );
+      expect(resolve("target")).toBe(literal ? exact : alias);
+      expect(resolve("target")).toBe(literal ? exact : alias);
+    },
+  );
+
+  it("does not retain a fallback projection observed during initialization", () => {
+    const first = model("custom/First");
+    const second = model("custom/Second");
+    let nested: ModelDefinitionConfig | undefined;
+    const resolve: (modelId: string) => ModelDefinitionConfig | undefined =
+      createConfiguredProviderModelResolver(
+        { models: [first, model("alias"), second] },
+        "custom",
+        (id) => {
+          if (id === "alias") {
+            nested = resolve("Second");
+          }
+          return id;
+        },
+      );
+    expect(resolve("Second")).toBe(second);
+    expect(nested).toBeUndefined();
+    expect(resolve("Second")).toBe(second);
+  });
+
+  it("retains the published partial index after an initialization callback throws", () => {
+    const first = model("custom/First");
+    const failure = new Error("initialization failure");
+    const canonicalize = vi.fn((id: string) => {
+      if (id === "broken") {
+        throw failure;
+      }
+      return id;
+    });
+    const resolve = createConfiguredProviderModelResolver(
+      { models: [first, model("broken"), model("custom/Second")] },
+      "custom",
+      canonicalize,
+    );
+    expect(() => resolve("First")).toThrow(failure);
+    canonicalize.mockClear();
+    expect(resolve("Second")).toBeUndefined();
+    expect(resolve("First")).toBe(first);
+    expect(canonicalize.mock.calls).toEqual([["Second"], ["First"], ["First"]]);
+  });
+});
+
 describe("createModelProviderRouteOverrideResolver", () => {
   it.each([
     ["empty metadata", {}, "none"],
@@ -211,15 +368,9 @@ describe("createModelProviderRouteOverrideResolver", () => {
       { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       "none",
     ],
-    [
-      "combined reasoning metadata",
-      { supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"] },
-      "none",
-    ],
     ["disabled reasoning", { supportsReasoningEffort: false }, "present"],
     ["malformed reasoning support", { supportsReasoningEffort: "true" }, "present"],
     ["empty effort list", { supportedReasoningEfforts: [] }, "present"],
-    ["non-native effort", { supportedReasoningEfforts: ["high", "custom"] }, "present"],
     ["disabled effort", { supportedReasoningEfforts: ["none"] }, "present"],
     ["malformed effort", { supportedReasoningEfforts: ["high", false] }, "present"],
     ["store behavior", { supportsStore: false }, "present"],

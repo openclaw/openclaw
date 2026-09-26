@@ -12,6 +12,72 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("sends the next message from a recoverable failed worker without restarting the conversation", async () => {
+    const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const proofDir =
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+        ? createControlUiE2eArtifactDir("failed-worker-send-recovery")
+        : null;
+    const session = {
+      key: "agent:main:worker-continuation",
+      sessionId: "worker-continuation-session",
+      label: "Continue after worker recovery",
+      kind: "direct",
+      updatedAt: Date.now(),
+      placement: {
+        state: "failed",
+        generation: 2,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        stateChangedAtMs: 2,
+        environmentId: "worker-previous",
+        recoveryAction: "restart",
+        retryOnSend: true,
+        recoveryError: "The previous worker stopped after the Gateway restarted.",
+      },
+    } satisfies GatewaySessionRow;
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.send", "sessions.reclaim", "sessions.dispatch"],
+      historyMessages: [{ role: "assistant", content: "The last reply is still here." }],
+      sessionKey: session.key,
+      sessionInfo: session,
+      methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+      await page
+        .getByText(`Runner failed: ${session.placement.recoveryError}`, { exact: true })
+        .waitFor();
+      const composer = page.getByRole("textbox", { name: "Chat composer" });
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "failed-worker-composer.png") });
+      }
+      expect(await composer.isEnabled()).toBe(true);
+      expect(
+        await page.getByText("Restart this session to continue.", { exact: true }).count(),
+      ).toBe(0);
+
+      await composer.fill("Continue with the next step");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      expect(request.params).toMatchObject({
+        sessionKey: session.key,
+        message: "Continue with the next step",
+      });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(new URL(page.url()).pathname).toBe(
+        new URL(controlUiSessionUrl(suite.server.baseUrl, session.key)).pathname,
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("recovers a failed cloud session locally and clears its previous failure during restart", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();

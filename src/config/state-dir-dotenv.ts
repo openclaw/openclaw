@@ -1,13 +1,13 @@
 // Loads state-directory dotenv entries used by config and runtime startup.
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { parse as parseDotEnv } from "dotenv";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
@@ -123,16 +123,6 @@ export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDir
   }
 }
 
-/**
- * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
- * a filtered record of key-value pairs suitable for a managed service
- * environment source.
- */
-function readStateDirDotEnvVars(env: Record<string, string | undefined>): Record<string, string> {
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvFromStateDir(stateDir).entries;
-}
-
 /** Split view of durable gateway service env sources before precedence is applied. */
 type DurableServiceEnvVarSources = {
   stateDirDotEnvEnvironment: Record<string, string>;
@@ -145,7 +135,9 @@ export function collectDurableServiceEnvVarSources(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
 }): DurableServiceEnvVarSources {
-  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
+  const stateDirDotEnvEnvironment = readStateDirDotEnvFromStateDir(
+    resolveStateDir(params.env),
+  ).entries;
   const configEnvironment = collectConfigServiceEnvVars(params.config);
   return {
     stateDirDotEnvEnvironment,

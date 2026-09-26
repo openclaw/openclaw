@@ -50,35 +50,39 @@ describe("config writer policy-close ordering", () => {
     { method: "config.apply", policy: "token" },
     { method: "config.patch", policy: "origin" },
     { method: "config.apply", policy: "origin" },
+    { method: "config.patch", policy: "publicOrigin" },
   ] as const)(
     "acknowledges $method before closing its $policy-revoked writer",
     async ({ method, policy }) => {
       const token = "config-response-old-token";
       const nextToken = "config-response-new-token";
       const origin = "https://writer.example.test";
+      const nextOrigin = "https://retained.example.test";
+      const browserPolicy = policy !== "token";
       await state.writeConfig({
         gateway: {
           mode: "local",
           bind: "loopback",
           auth: { mode: "token", token },
-          controlUi: { enabled: false, allowedOrigins: [origin] },
+          controlUi: {
+            enabled: false,
+            ...(policy === "publicOrigin" ? {} : { allowedOrigins: [origin] }),
+          },
           reload: { mode: "hybrid" },
         },
         logging: { level: "silent", consoleLevel: "silent" },
         agents: { defaults: { workspace: state.workspaceDir } },
       });
       const port = await getFreePort();
-      server = await startGatewayServerCore(port, { controlUiEnabled: false });
+      server = await startGatewayServerCore(port, {
+        controlUiEnabled: false,
+        ...(policy === "publicOrigin" ? { bind: "lan" } : {}),
+      });
       await server.startupSettled;
       const held = createDeferredCore();
       const published = createDeferredCore<restartSentinel.RestartSentinelPayload>();
       const writeSentinel = restartSentinel.writeRestartSentinel;
-      vi.spyOn(restartSentinel, "writeRestartSentinel").mockImplementation(async (payload) => {
-        published.resolve(payload);
-        await held.promise;
-        return await writeSentinel(payload);
-      });
-      const connect = async (credential: string, browser = false) => {
+      const connect = async (credential: string, browser = false, browserOrigin = origin) => {
         const closed = createDeferredCore();
         const connected = createDeferredCore();
         let didClose = false;
@@ -88,7 +92,7 @@ describe("config writer policy-close ordering", () => {
           clientName: browser ? "openclaw-control-ui" : "gateway-client",
           clientVersion: "1.0.0",
           mode: browser ? "webchat" : "backend",
-          ...(browser ? { origin } : {}),
+          ...(browser ? { origin: browserOrigin } : {}),
           deviceIdentity: browser
             ? loadOrCreateDeviceIdentity({
                 path: state.path("browser-identity.sqlite"),
@@ -114,25 +118,43 @@ describe("config writer policy-close ordering", () => {
         await connected.promise;
         return { client, closed: closed.promise, didClose: () => didClose };
       };
+      if (policy === "publicOrigin") {
+        // Adding the public origin must supersede the runtime-only localhost seed.
+        const setup = await connect(token);
+        const snapshot = await setup.client.request<ConfigSnapshot>("config.get");
+        await setup.client.request("config.patch", {
+          baseHash: snapshot.hash,
+          raw: JSON.stringify({ gateway: { publicOrigin: origin } }),
+        });
+      }
+      vi.spyOn(restartSentinel, "writeRestartSentinel").mockImplementation(async (payload) => {
+        published.resolve(payload);
+        await held.promise;
+        return await writeSentinel(payload);
+      });
       try {
-        const writer = await connect(token, policy === "origin");
-        const peer = await connect(token, policy === "origin");
+        const writer = await connect(token, browserPolicy);
+        const peer = await connect(token, browserPolicy);
         const before = await writer.client.request<ConfigSnapshot>("config.get");
         const change =
           policy === "token"
             ? { gateway: { auth: { token: nextToken } } }
-            : { gateway: { controlUi: { allowedOrigins: ["https://retained.example.test"] } } };
+            : policy === "publicOrigin"
+              ? { gateway: { publicOrigin: nextOrigin } }
+              : { gateway: { controlUi: { allowedOrigins: [nextOrigin] } } };
         const nextConfig = structuredClone(before.config);
         nextConfig.gateway = {
           ...nextConfig.gateway,
           ...(policy === "token"
             ? { auth: { ...nextConfig.gateway?.auth, token: nextToken } }
-            : {
-                controlUi: {
-                  ...nextConfig.gateway?.controlUi,
-                  allowedOrigins: ["https://retained.example.test"],
-                },
-              }),
+            : policy === "publicOrigin"
+              ? { publicOrigin: nextOrigin }
+              : {
+                  controlUi: {
+                    ...nextConfig.gateway?.controlUi,
+                    allowedOrigins: [nextOrigin],
+                  },
+                }),
         };
         const result = writer.client.request<ConfigAck>(method, {
           baseHash: before.hash,
@@ -162,7 +184,11 @@ describe("config writer policy-close ordering", () => {
         expect(response.hash).not.toBe(before.hash);
         await writer.closed;
         await expect(staleRead).rejects.toThrow();
-        const fresh = await connect(policy === "token" ? nextToken : token);
+        const fresh = await connect(
+          policy === "token" ? nextToken : token,
+          browserPolicy,
+          nextOrigin,
+        );
         expect((await fresh.client.request<ConfigSnapshot>("config.get")).hash).toBe(response.hash);
       } finally {
         held.resolve();

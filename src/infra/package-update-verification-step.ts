@@ -13,7 +13,7 @@ import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
 } from "./update-failure-facts.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function createPackageVerificationFailureStep(
   root: string,

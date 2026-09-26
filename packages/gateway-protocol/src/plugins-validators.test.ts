@@ -99,6 +99,7 @@ describe("plugin lifecycle protocol validators", () => {
     { source: "official", pluginId: "demo", version: "latest", pin: true },
   ])("accepts the CLI's $source install intent without caller trust metadata", (request) => {
     expect(validatePluginsInstallParams(request)).toBe(true);
+    expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
     for (const trust of [
       { trustedSourceLinkedOfficialInstall: true },
       { bundledOrigin: true },

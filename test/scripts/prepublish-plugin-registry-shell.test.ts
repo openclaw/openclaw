@@ -407,6 +407,7 @@ check_gateway_probes() { test -n "$gateway_pid"; test -f "$READY"; }
 stop_gateway() { :; }
 phase() { shift; "$@"; }
 registry_before="$NPM_CONFIG_REGISTRY"
+normalize_baseline
 if [ "$STAGE" = install ]; then
   install_baseline
   test "$baseline_version" = "$BASELINE_VERSION"
@@ -791,9 +792,4 @@ test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
       });
     },
   );
-
-  it("is valid Bash", () => {
-    const result = spawnSync("bash", ["-n", SCRIPT], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-  });
 });

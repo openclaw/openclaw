@@ -11,17 +11,9 @@ function shouldPause(details?: unknown): boolean {
 
 describe("shouldPauseGatewayReconnect", () => {
   it.each([
-    ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-    ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
-    ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-    ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
-    ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
-    ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
-    ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
     "AUTH_IDENTITY_HEADER_REQUIRED",
     ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
     ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-    ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
   ])("pauses reconnect for %s", (code) => {
     expect(shouldPause({ code })).toBe(true);

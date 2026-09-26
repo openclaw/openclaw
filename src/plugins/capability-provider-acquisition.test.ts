@@ -64,11 +64,11 @@ it.each([{ custody: "borrowed" }, { custody: "owned" }] as const)(
             session: { ...session, title: "Captured by the plugin" },
           });
           expect(() => acquired.assertOpen()).not.toThrow();
+          instance.reserveReplacement()();
           if (custody === "owned") {
-            // Release even an unexpected successful reservation during mutation proof.
-            expect(() => instance.reserveReplacement()()).toThrow("still has active retained work");
+            expect(instance.retainedWorkCount).toBeGreaterThan(0);
           } else {
-            expect(() => instance.reserveReplacement()()).not.toThrow();
+            expect(instance.retainedWorkCount).toBe(0);
             expect(provider).toBe(registry.transcriptSourceProviders[0]!.provider);
             expect(getPluginRegistryLifetime(registry)).toBeUndefined();
             markPluginRegistryActive(registry);
@@ -77,7 +77,7 @@ it.each([{ custody: "borrowed" }, { custody: "owned" }] as const)(
             );
           }
           await acquired.release();
-          expect(() => instance.reserveReplacement()()).not.toThrow();
+          expect(instance.retainedWorkCount).toBe(0);
         } finally {
           await acquired.release();
         }

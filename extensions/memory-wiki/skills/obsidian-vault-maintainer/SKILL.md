@@ -10,4 +10,4 @@ Use this skill when the memory-wiki vault render mode is `obsidian` or the user 
 - Prefer `[[Wikilinks]]`, stable filenames, and frontmatter that works with Obsidian dashboards and Dataview-style queries.
 - Keep generated sections deterministic so Obsidian users can safely add handwritten notes around them.
 - If the official Obsidian CLI is enabled, probe it before depending on it. Do not assume the app is installed, running, or configured.
-- Avoid destructive renames unless you also have a link-repair plan.
+- Pair renames with link repair.

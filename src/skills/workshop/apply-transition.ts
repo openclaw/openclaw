@@ -37,54 +37,18 @@ import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   type SkillProposalActionInput,
   type SkillProposalApplyResult,
-  type SkillProposalEvaluateInput,
   type SkillProposalEvaluateResult,
   type SkillProposalEvent,
-  type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalRollback,
-  type SkillProposalStatus,
   type SkillProposalSupportFile,
 } from "./types.js";
 
-type SkillProposalApplyOutcome =
-  | "apply_failed"
-  | "apply_succeeded"
-  | "scan_failed"
-  | "target_changed";
-
-const SKILL_PROPOSAL_APPLY_TRANSITIONS: Readonly<
-  Record<SkillProposalStatus, Partial<Record<SkillProposalApplyOutcome, SkillProposalStatus>>>
-> = {
-  pending: {
-    apply_failed: "pending",
-    apply_succeeded: "applied",
-    scan_failed: "quarantined",
-    target_changed: "stale",
-  },
-  applied: {},
-  rejected: {},
-  quarantined: {},
-  stale: {},
-};
-
 export type SkillProposalApplyTransitionDependencies = {
-  assertExpectedRevisionHash: (actual: string, expected?: string) => void;
-  evaluateSkillProposal: (
-    input: SkillProposalEvaluateInput,
-    store?: SkillWorkshopStoreOptions,
-  ) => Promise<SkillProposalEvaluateResult>;
+  assertExpectedRevisionHash: typeof import("./service-evaluation.js").assertExpectedRevisionHash;
+  evaluateSkillProposal: typeof import("./service-evaluation.js").evaluateSkillProposal;
   isCreateTargetConflict: (error: unknown) => boolean;
-  readRequiredProposal: (
-    proposalId: string,
-    env: NodeJS.ProcessEnv | undefined,
-    agentId: string | undefined,
-    readOptions: {
-      config: OpenClawConfig;
-      reconcile?: boolean;
-      store?: SkillWorkshopStoreOptions;
-    },
-  ) => Promise<SkillProposalReadResult>;
+  readRequiredProposal: typeof import("./service-query.js").readRequiredProposal;
 };
 
 export type SkillProposalTransitionInput = Pick<
@@ -100,13 +64,6 @@ class SkillProposalLifecycleError extends Error {
   ) {
     super(message);
   }
-}
-
-function resolveSkillProposalApplyTransition(
-  status: SkillProposalStatus,
-  outcome: SkillProposalApplyOutcome,
-): SkillProposalStatus | null {
-  return SKILL_PROPOSAL_APPLY_TRANSITIONS[status][outcome] ?? null;
 }
 
 export async function applySkillProposalTransition(
@@ -294,7 +251,7 @@ export async function applySkillProposalTransition(
       const now = new Date().toISOString();
       const applied: SkillProposalRecord = {
         ...record,
-        status: requiredApplyStatus("apply_succeeded"),
+        status: "applied",
         updatedAt: now,
         appliedAt: now,
         statusReason: normalizeOptionalString(input.reason),
@@ -318,22 +275,10 @@ export async function applySkillProposalTransition(
           store: lockedStore,
           operationLabel: "skill-workshop.apply.commit",
         });
-      } catch (error) {
-        const recoveredEvent = await recoverAfterApplyCommitFailure({
-          error,
-          store: lockedStore,
-          expected: record,
-          applied,
-          event: eventInput,
-          mutation,
-        });
-        if (!recoveredEvent) {
-          throw error;
+        if (commit.state === "conflict") {
+          throw new Error("Skill proposal changed before apply status commit.");
         }
-        commit = { state: "committed" as const, event: recoveredEvent };
-      }
-      if (commit.state === "conflict") {
-        const error = new Error("Skill proposal changed before apply status commit.");
+      } catch (error) {
         const recoveredEvent = await recoverAfterApplyCommitFailure({
           error,
           store: lockedStore,
@@ -414,7 +359,13 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
   currentContent: string | null;
 }): Promise<void> {
   const { record, file, currentContent } = params;
-  if (file.targetExisted === false && currentContent !== null) {
+  const changed =
+    file.targetExisted === false
+      ? currentContent !== null
+      : file.targetExisted === true &&
+        (currentContent === null ? undefined : hashSkillProposalContent(currentContent)) !==
+          file.targetContentHash;
+  if (changed) {
     await markSkillProposalStale({
       store: params.store,
       record,
@@ -422,19 +373,6 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
       message: "Target support file changed after proposal creation; proposal marked stale.",
       input: params.input,
     });
-  }
-  if (file.targetExisted === true) {
-    const currentHash =
-      currentContent === null ? undefined : hashSkillProposalContent(currentContent);
-    if (currentHash !== file.targetContentHash) {
-      await markSkillProposalStale({
-        store: params.store,
-        record,
-        reason: `Target support file changed after proposal creation: ${file.path}`,
-        message: "Target support file changed after proposal creation; proposal marked stale.",
-        input: params.input,
-      });
-    }
   }
 }
 
@@ -447,7 +385,7 @@ export async function transitionPendingSkillProposalToStale(params: {
   const now = new Date().toISOString();
   const stale: SkillProposalRecord = {
     ...params.record,
-    status: requiredApplyStatus("target_changed"),
+    status: "stale",
     updatedAt: now,
     staleAt: now,
     statusReason: params.reason,
@@ -483,31 +421,6 @@ export async function markSkillProposalStale(params: {
   throw new SkillProposalLifecycleError(params.message, transition.record, transition.event);
 }
 
-function createSkillProposalRollback(params: {
-  proposalId: string;
-  targetSkillFile: string;
-  action: "create" | "update";
-  previousContent?: string;
-  supportFiles?: SkillProposalRollback["supportFiles"];
-}): SkillProposalRollback {
-  return {
-    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-    proposalId: params.proposalId,
-    writtenAt: new Date().toISOString(),
-    targetSkillFile: params.targetSkillFile,
-    action: params.action,
-    ...(params.previousContent !== undefined
-      ? {
-          previousContent: params.previousContent,
-          previousContentHash: hashSkillProposalContent(params.previousContent),
-        }
-      : {}),
-    ...(params.supportFiles && params.supportFiles.length > 0
-      ? { supportFiles: params.supportFiles }
-      : {}),
-  };
-}
-
 async function quarantineSkillProposalAfterScan(params: {
   store: SkillWorkshopStoreOptions;
   input: SkillProposalActionInput;
@@ -517,7 +430,7 @@ async function quarantineSkillProposalAfterScan(params: {
   const now = new Date().toISOString();
   const updated: SkillProposalRecord = {
     ...params.record,
-    status: requiredApplyStatus("scan_failed"),
+    status: "quarantined",
     updatedAt: now,
     quarantinedAt: now,
     scan: { ...params.scan, state: "quarantined" },
@@ -586,12 +499,17 @@ function createSkillProposalRollbackFromMutation(
   record: SkillProposalRecord,
   mutation: PreparedWorkspaceSkillMutation,
 ): SkillProposalRollback {
-  return createSkillProposalRollback({
+  return {
+    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
     proposalId: record.id,
+    writtenAt: new Date().toISOString(),
     targetSkillFile: record.target.skillFile,
     action: record.kind,
     ...(mutation.skillFile.previousContent !== null
-      ? { previousContent: mutation.skillFile.previousContent }
+      ? {
+          previousContent: mutation.skillFile.previousContent,
+          previousContentHash: hashSkillProposalContent(mutation.skillFile.previousContent),
+        }
       : {}),
     ...(mutation.supportFiles.length > 0
       ? {
@@ -607,7 +525,7 @@ function createSkillProposalRollbackFromMutation(
           ),
         }
       : {}),
-  });
+  };
 }
 
 async function recoverAfterApplyCommitFailure(params: {
@@ -632,7 +550,6 @@ async function recoverAfterApplyCommitFailure(params: {
       cause: params.error,
     });
   }
-  requiredApplyStatus("apply_failed");
   const stillApplied = await isWorkspaceSkillMutationApplied(params.mutation).catch(() => false);
   if (!stillApplied) {
     return null;
@@ -660,14 +577,6 @@ async function recoverAfterApplyCommitFailure(params: {
     store: params.store,
   }).catch(() => false);
   return null;
-}
-
-function requiredApplyStatus(outcome: SkillProposalApplyOutcome): SkillProposalStatus {
-  const status = resolveSkillProposalApplyTransition("pending", outcome);
-  if (!status) {
-    throw new Error(`Invalid pending Skill Workshop apply transition: ${outcome}`);
-  }
-  return status;
 }
 
 function storeOptions(

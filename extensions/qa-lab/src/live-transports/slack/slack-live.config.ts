@@ -42,18 +42,10 @@ export function resolveSlackQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): 
 }
 
 export function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeEnv {
-  const parsed = slackQaCredentialPayloadSchema.parse(payload);
-  const runtimeEnv = {
-    channelId: parsed.channelId,
-    driverBotToken: parsed.driverBotToken,
-    sutBotToken: parsed.sutBotToken,
-    sutAppToken: parsed.sutAppToken,
-  };
-  return validateSlackQaRuntimeEnv(runtimeEnv, "Slack credential payload");
-}
-
-export function asPlainRecord(value: unknown): Record<string, unknown> {
-  return asNonArrayRecord(value);
+  return validateSlackQaRuntimeEnv(
+    slackQaCredentialPayloadSchema.parse(payload),
+    "Slack credential payload",
+  );
 }
 
 type SlackQaPostMessageAttempt = {
@@ -69,14 +61,14 @@ export function countSlackNativeDataBlocks(value: unknown) {
     return 0;
   }
   return value.filter((block) => {
-    const type = asPlainRecord(block).type;
+    const type = asNonArrayRecord(block).type;
     return type === "data_table" || type === "data_visualization";
   }).length;
 }
 
 function readSlackApiFailureCode(error: unknown) {
-  const record = asPlainRecord(error);
-  const data = asPlainRecord(record.data);
+  const record = asNonArrayRecord(error);
+  const data = asNonArrayRecord(record.data);
   const code = data.error ?? record.error;
   return typeof code === "string" && /^[a-z0-9_]{1,64}$/u.test(code) ? code : undefined;
 }
@@ -135,8 +127,8 @@ export function buildSlackQaConfig(
   ]);
   const approvalOverrides = params.overrides?.approvals;
   const codexEntry = baseCfg.plugins?.entries?.codex;
-  const codexEntryConfig = asPlainRecord(codexEntry?.config);
-  const codexAppServerConfig = asPlainRecord(codexEntryConfig.appServer);
+  const codexEntryConfig = asNonArrayRecord(codexEntry?.config);
+  const codexAppServerConfig = asNonArrayRecord(codexEntryConfig.appServer);
   const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   const codexAgentDefaults =
     codexApprovalConfig && primaryModel

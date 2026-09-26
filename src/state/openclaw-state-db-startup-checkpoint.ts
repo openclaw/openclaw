@@ -168,16 +168,31 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
           }
           return callback(db);
         };
-        // Inspection and conditional claim must see the same integrity-proven generation.
-        // A deferred snapshot lets WAL writers proceed during verification. A changed
-        // snapshot cannot upgrade to a writer, so no proof crosses an intervening commit.
-        return options.atomic
-          ? runSqliteDeferredTransactionSync(db, operate, {
-              busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-              databaseLabel: pathname,
-              operationLabel: "state.startup-checkpoint.inspect-and-claim",
-            })
-          : operate();
+        // Native bootstrap can rebuild checkpoint tables as STRICT. Foreign keys
+        // must be disabled before the enclosing inspection transaction begins.
+        const restoreForeignKeys =
+          options.atomic === true &&
+          isUninitializedNativeStartupDatabase(db) &&
+          Number(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys) === 1;
+        if (restoreForeignKeys) {
+          db.exec("PRAGMA foreign_keys = OFF;");
+        }
+        try {
+          // Inspection and conditional claim must see the same integrity-proven generation.
+          // A deferred snapshot lets WAL writers proceed during verification. A changed
+          // snapshot cannot upgrade to a writer, so no proof crosses an intervening commit.
+          return options.atomic
+            ? runSqliteDeferredTransactionSync(db, operate, {
+                busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+                databaseLabel: pathname,
+                operationLabel: "state.startup-checkpoint.inspect-and-claim",
+              })
+            : operate();
+        } finally {
+          if (restoreForeignKeys && db.isOpen) {
+            db.exec("PRAGMA foreign_keys = ON;");
+          }
+        }
       } finally {
         db.close();
         ensureOpenClawStatePermissions(pathname, env);

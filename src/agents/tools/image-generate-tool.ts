@@ -18,6 +18,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readToolStringParam,
+  type AnyAgentTool,
 } from "./common.js";
 import {
   createImageGenerateDuplicateGuardResult,
@@ -44,12 +45,10 @@ import {
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
-  resolveRemoteMediaSsrfPolicy,
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -345,7 +344,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
           explicitModelConfig,
         }) => {
           const imageGenerationProviders = acquired.providers;
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
 
           const imageInputs = normalizeMediaReferenceInputs({
             args: params,

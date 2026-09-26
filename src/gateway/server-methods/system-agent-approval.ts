@@ -213,6 +213,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       ): Promise<Awaited<ReturnType<DelegatedProposalResolver>> | undefined> => {
         if (
           proposal.operation.kind !== "config-set" &&
+          proposal.operation.kind !== "config-unset" &&
           proposal.operation.kind !== "config-set-ref"
         ) {
           return undefined;
@@ -321,6 +322,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           event: resolvedEvent,
         });
         params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
+        void params.context
+          .forwardSystemAgentApprovalResolved?.(resolvedEvent)
+          .catch((error: unknown) => {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat resolution failed: ${String(error)}`,
+            );
+          });
       };
       void handlePendingApprovalRequest({
         manager,
@@ -331,7 +339,20 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         requestEvent,
         twoPhase: true,
         approvalKind: "system-agent",
-        deliverRequest: () => false,
+        // Native cards own their channels; the forwarder answers every other
+        // requesting chat with a `/approve` fallback, so the user can decide in chat.
+        deliverRequest: async () => {
+          try {
+            return (
+              (await params.context.forwardSystemAgentApprovalRequest?.(requestEvent)) ?? false
+            );
+          } catch (error) {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat delivery failed: ${String(error)}`,
+            );
+            return false;
+          }
+        },
         keepPendingWithoutRoute: true,
         requireDeliveryRoute: false,
         afterDecision: async (decision) => {

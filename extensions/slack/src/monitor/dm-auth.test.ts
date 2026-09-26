@@ -5,7 +5,8 @@ import { authorizeSlackDirectMessage } from "./dm-auth.js";
 
 const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./conversation.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
   upsertChannelPairingRequest: upsertChannelPairingRequestMock,
 }));
 

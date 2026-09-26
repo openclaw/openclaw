@@ -587,7 +587,7 @@ describe("private subagent completion processing receipts", () => {
           throw new Error("continuation child finished before execution started");
         }),
       ]);
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: descendantRunId,
         childSessionKey,
         requesterSessionKey: sessionKey,

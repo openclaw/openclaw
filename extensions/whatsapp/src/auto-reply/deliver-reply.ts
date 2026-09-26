@@ -33,7 +33,7 @@ import {
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
-import { markdownToWhatsAppChunks } from "../text-runtime.js";
+import { markdownToWhatsAppChunks } from "../targets-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide } from "./util.js";
 

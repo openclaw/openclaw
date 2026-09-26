@@ -181,6 +181,7 @@ export function createSessionRowPlacementProjection(
         ? snapshot.environments.get(placement.environmentId)
         : undefined,
       workspaceResultReconciling: snapshot.workspaceResultReconcilingSessionIds.has(id),
+      workspaceRecoveryPending: snapshot.workspaceRecoveryPendingSessionIds.has(id),
     };
   };
   const missing = (ids: readonly string[]) =>

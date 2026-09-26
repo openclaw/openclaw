@@ -73,6 +73,7 @@ function claimFixture() {
     canRetireReservation: () => true,
     settleFailedLaunch: settle,
     waitForClaim: () => (claimed ? gate.promise : undefined),
+    waitForRetirementPublication: () => undefined,
   };
   return {
     scope,

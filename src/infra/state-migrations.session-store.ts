@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -42,7 +43,6 @@ import {
 } from "./deferred-plugin-session-sources.js";
 import { readFirstLineSync } from "./first-line-read.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { isWithinDir } from "./path-safety.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
   existsDir,

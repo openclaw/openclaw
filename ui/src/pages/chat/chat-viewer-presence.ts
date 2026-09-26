@@ -9,7 +9,12 @@ export class ChatViewerPresenceController {
 
   constructor(private readonly owner: object) {}
 
-  sync(gateway: ApplicationGateway | undefined, layout: ChatSplitLayout, narrow: boolean) {
+  sync(
+    gateway: ApplicationGateway | undefined,
+    layout: ChatSplitLayout,
+    narrow: boolean,
+    unboundPaneIds: ReadonlySet<string>,
+  ) {
     const nextGateway = gateway && typeof gateway.subscribe === "function" ? gateway : null;
     if (this.gateway && this.gateway !== nextGateway) {
       sessionViewerPresenceForGateway(this.gateway).unwatch(this.owner);
@@ -18,7 +23,9 @@ export class ChatViewerPresenceController {
     if (nextGateway) {
       sessionViewerPresenceForGateway(nextGateway).watch(
         this.owner,
-        visiblePanesOf(layout, narrow).map((pane) => pane.sessionKey),
+        visiblePanesOf(layout, narrow)
+          .filter((pane) => !unboundPaneIds.has(pane.id))
+          .map((pane) => pane.sessionKey),
       );
     }
   }

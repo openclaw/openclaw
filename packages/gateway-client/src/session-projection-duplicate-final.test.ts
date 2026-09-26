@@ -81,10 +81,13 @@ describe("session projection final-answer dedup", () => {
     expect(state.messages).toContain(later);
   });
 
-  it.each(["history-first", "durable-second"] as const)(
+  it.each(["constructor-first", "history-first", "durable-second"] as const)(
     "restores a %s inferred final across repeated contradictory snapshots",
     (order) => {
-      let state = createSessionProjection(scope, order === "history-first" ? [saved] : []);
+      let state = createSessionProjection(scope, order === "constructor-first" ? [saved] : []);
+      if (order === "history-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved], scope);
+      }
       state = reduceSessionProjection(state, terminalEvent());
       state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
       if (order === "durable-second") {
@@ -108,15 +111,6 @@ describe("session projection final-answer dedup", () => {
     state = reduceSessionProjection(state, terminalEvent());
     state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
     state = reconcileSessionProjectionSnapshot(state, [saved], scope);
-
-    expect(state.messages).toHaveLength(1);
-  });
-
-  it("reconciles a toolUse-persisted final with the live final (history first)", () => {
-    let state = createSessionProjection(scope);
-    state = reconcileSessionProjectionSnapshot(state, [saved], scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
 
     expect(state.messages).toHaveLength(1);
   });
@@ -169,57 +163,36 @@ describe("session projection final-answer dedup", () => {
     expect(state.messages).toHaveLength(2);
   });
 
-  it("retains the live terminal when a later same-run row contradicts the toolUse inference", () => {
-    const laterToolRow = {
-      role: "assistant" as const,
-      content: [
-        { type: "text" as const, text: "Checking another file." },
-        {
-          type: "toolCall" as const,
-          id: "read-2",
-          name: "read",
-          arguments: { path: "src/index.ts" },
-        },
-      ],
-      stopReason: "toolUse" as const,
-      __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
-    };
-    let state = createSessionProjection(scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-    state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+  it.each(["live-first", "history-first"] as const)(
+    "retains the live terminal with contradictory history (%s)",
+    (order) => {
+      const laterToolRow = {
+        role: "assistant" as const,
+        content: [
+          { type: "text" as const, text: "Checking another file." },
+          {
+            type: "toolCall" as const,
+            id: "read-2",
+            name: "read",
+            arguments: { path: "src/index.ts" },
+          },
+        ],
+        stopReason: "toolUse" as const,
+        __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
+      };
+      let state = createSessionProjection(scope);
+      if (order === "history-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+      }
+      state = reduceSessionProjection(state, terminalEvent());
+      state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+      if (order === "live-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+      }
 
-    // The run continued past the toolUse-persisted row (a later tool row
-    // exists), so the live terminal must stay instead of being inferred away:
-    // saved row + later tool row + live terminal all remain.
-    expect(state.messages).toHaveLength(3);
-    expect(state.messages).toContain(live);
-  });
-
-  it("retains the live terminal when contradicting history loads before the live delivery", () => {
-    const laterToolRow = {
-      role: "assistant" as const,
-      content: [
-        { type: "text" as const, text: "Checking another file." },
-        {
-          type: "toolCall" as const,
-          id: "read-2",
-          name: "read",
-          arguments: { path: "src/index.ts" },
-        },
-      ],
-      stopReason: "toolUse" as const,
-      __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
-    };
-    let state = createSessionProjection(scope);
-    state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-
-    // History-first: the same position rule applies on the live adoption
-    // path — the run continued past the persisted row, so the live terminal
-    // is inserted rather than absorbed.
-    expect(state.messages).toHaveLength(3);
-    expect(state.messages).toContain(live);
-  });
+      // A later same-run tool row disproves the earlier row's final-answer inference.
+      expect(state.messages).toHaveLength(3);
+      expect(state.messages).toContain(live);
+    },
+  );
 });

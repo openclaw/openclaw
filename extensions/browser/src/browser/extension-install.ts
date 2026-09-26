@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   assertCurrentNativeHostLaunchContext,
   assertExpectedNativeHostProfile,
@@ -198,12 +199,7 @@ export async function installChromeExtensionBootstrap(params: {
   }
   const waitMs = normalizeExtensionInstallWaitMs(params.waitMs);
   const now = deps.now ?? Date.now;
-  const sleep =
-    deps.sleep ??
-    ((ms: number) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const wait = deps.sleep ?? sleep;
   const deadline = now() + waitMs;
   let discovery = await discoverChromeExtensionIds({
     approvedDirs: approvedPaths,
@@ -221,7 +217,7 @@ export async function installChromeExtensionBootstrap(params: {
       announcedWait = true;
     }
     params.signal?.throwIfAborted();
-    await sleep(Math.min(500, Math.max(1, deadline - now())));
+    await wait(Math.min(500, Math.max(1, deadline - now())));
     params.signal?.throwIfAborted();
     discovery = await discoverChromeExtensionIds({
       approvedDirs: approvedPaths,

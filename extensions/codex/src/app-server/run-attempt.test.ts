@@ -22,8 +22,7 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
@@ -34,11 +33,8 @@ import {
 } from "./attempt-context.js";
 import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
-import {
-  buildCodexWorkspaceBootstrapContext,
-  getCodexWorkspaceMemoryToolNames,
-} from "./attempt-workspace-context.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
+import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import {
@@ -77,6 +73,7 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import * as attemptTurnState from "./run-attempt-turn-state.js";
@@ -177,7 +174,6 @@ const testing = {
   filterCodexDynamicTools,
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
-  withCodexStartupTimeout,
 };
 
 function startOrResumeThread(
@@ -193,28 +189,6 @@ function startOrResumeThread(
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
-}
-
-function openSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timer = setTimeout(() => {
-      socket.close();
-      reject(new Error("timed out opening WebSocket"));
-    }, 1_000);
-    const rejectBeforeOpen = (error: Error) => {
-      clearTimeout(timer);
-      reject(error);
-    };
-    socket.once("open", () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-    socket.once("error", rejectBeforeOpen);
-    socket.once("close", () => {
-      rejectBeforeOpen(new Error("WebSocket closed before open"));
-    });
-  });
 }
 
 function expectResumeRequest(
@@ -328,14 +302,13 @@ async function buildCodexTurnContextForTest(
     signal: new AbortController().signal,
   });
   const dynamicTools = toolBridge.availableSpecs;
-  const memoryToolNames = getCodexWorkspaceMemoryToolNames(dynamicTools);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionAgentId,
-    memoryToolNames,
+    tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
@@ -826,44 +799,6 @@ async function expectRetainedSuccessfulThread(client: CodexAppServerClient, thre
   ).resolves.toBe(true);
 }
 
-async function createSandboxReleaseFixture(
-  handleRequest: (method: string, params?: unknown) => unknown,
-) {
-  const params = createRunParams();
-  params.disableTools = false;
-  params.runtimePlan = createCodexRuntimePlanFixture();
-  const appServer = {
-    ...createThreadLifecycleAppServerOptions(),
-    sandbox: "danger-full-access" as const,
-  };
-  const sandbox = createSandboxContext({
-    runShellCommand: async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }),
-  });
-  const request = vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    return handleRequest(method, requestParams);
-  });
-  const client = { ...mockClientRuntimeMethods(), request };
-  const environment = await ensureCodexSandboxExecServerEnvironment({
-    client: client as never,
-    sandbox,
-    appServerStartOptions: appServer.start,
-  });
-  if (!environment) {
-    throw new Error("expected sandbox exec-server environment");
-  }
-  return { appServer, client, environment, params, request, sandbox };
-}
-
 async function startFastAutoProgressTest(
   options: {
     fastModeAuto?: boolean;
@@ -1314,118 +1249,6 @@ describe("runCodexAppServerAttempt", () => {
       await releaseCodexSandboxExecServerEnvironment(sandbox as never);
     }
   });
-  it("closes the sandbox exec-server release path used by turn/start failure cleanup", async () => {
-    const { appServer, client, environment, params, request, sandbox } =
-      await createSandboxReleaseFixture((method) => {
-        if (method === "environment/add") {
-          return {};
-        }
-        if (method === "thread/start") {
-          return threadStartResult();
-        }
-        if (method === "turn/start") {
-          throw new Error("turn start failed");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-    try {
-      const environmentSelection = [environment];
-      const thread = await startOrResumeThread({
-        client: client as never,
-        params,
-        cwd: environment.cwd,
-        dynamicTools: [createNamedDynamicTool("message")] as never,
-        appServer: appServer as never,
-        nativeCodeModeEnabled: true,
-        nativeCodeModeOnlyEnabled: false,
-        userMcpServersEnabled: false,
-        environmentSelection,
-      });
-      const turnParams = buildTurnStartParams(params, {
-        threadId: thread.threadId,
-        cwd: environment.cwd,
-        appServer: appServer as never,
-        sandboxPolicy: { type: "externalSandbox", networkAccess: "enabled" },
-        environmentSelection,
-      });
-      await expect(
-        client.request("turn/start", turnParams).catch(async (error: unknown) => {
-          await releaseCodexSandboxExecServerEnvironment(sandbox);
-          throw error;
-        }),
-      ).rejects.toThrow("turn start failed");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
-
-  it("closes the sandbox exec-server release path used by context-engine retry setup cleanup", async () => {
-    const { appServer, client, environment, params, request, sandbox } =
-      await createSandboxReleaseFixture((method) => {
-        if (method === "environment/add") {
-          return {};
-        }
-        if (method === "thread/start") {
-          throw new Error("retry setup failed");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-    try {
-      const environmentSelection = [environment];
-      await expect(
-        startOrResumeThread({
-          client: client as never,
-          params,
-          cwd: environment.cwd,
-          dynamicTools: [createNamedDynamicTool("message")] as never,
-          appServer: appServer as never,
-          nativeCodeModeEnabled: true,
-          nativeCodeModeOnlyEnabled: false,
-          userMcpServersEnabled: false,
-          environmentSelection,
-        }).catch(async (error: unknown) => {
-          await releaseCodexSandboxExecServerEnvironment(sandbox);
-          throw error;
-        }),
-      ).rejects.toThrow("retry setup failed");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
-  it("closes the sandbox exec-server release path used by startup timeout cleanup", async () => {
-    const { request, sandbox } = await createSandboxReleaseFixture((method) => {
-      if (method === "environment/add") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    try {
-      await expect(
-        testing.withCodexStartupTimeout({
-          timeoutMs: 5,
-          signal: new AbortController().signal,
-          onTimeout: async () => {
-            await releaseCodexSandboxExecServerEnvironment(sandbox);
-          },
-          operation: async () => new Promise<never>(() => {}),
-        }),
-      ).rejects.toThrow("codex app-server startup timed out");
-      const environmentAdd = request.mock.calls.find(([method]) => method === "environment/add");
-      const environmentAddParams = environmentAdd?.[1] as { execServerUrl?: string } | undefined;
-      expect(environmentAddParams?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/);
-      await expect(openSocket(environmentAddParams!.execServerUrl!)).rejects.toThrow();
-    } finally {
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  });
 
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -1611,7 +1434,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding.mcpServersFingerprint).toBeUndefined();
     expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
   });
-  it("passes OpenClaw skills as turn collaboration developer instructions", async () => {
+  it("passes OpenClaw skills independently of model-owned collaboration instructions", async () => {
     const llmInput = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
@@ -1646,7 +1469,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string };
-    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
+    expect(threadStartParams.developerInstructions).toContain(params.skillsSnapshot.prompt);
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
@@ -1658,8 +1481,8 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("## OpenClaw Skills");
-    expect(collaborationInstructions).toContain("<available_skills>");
+    expect(collaborationInstructions).not.toContain("## OpenClaw Skills");
+    expect(collaborationInstructions).not.toContain("<available_skills>");
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).not.toContain("## OpenClaw Skills");
     expect(inputText).not.toContain("<available_skills>");
@@ -3981,6 +3804,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).toContain("continue from there");
   });
 
+  registerCodexMemoryInstructionTests();
+
   it("routes AGENTS.md natively and MEMORY.md through tools", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
@@ -5253,7 +5078,7 @@ describe("runCodexAppServerAttempt", () => {
             errors: [],
           },
         ],
-      } satisfies v2.SkillsListResponse;
+      } satisfies import("./protocol-control-plane.js").CodexSkillsListResponse;
     });
     params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
 
@@ -5996,25 +5821,6 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("keeps extended history enabled when resuming a bound Codex thread", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    expectResumeRequest(requests, {
-      threadId: "thread-existing",
-      model: "gpt-5.4-codex",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "danger-full-access",
-    });
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-  });
   it("sends the current recorded sender on successive turns of one resumed Codex thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -6573,27 +6379,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
-  it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
-      pluginConfig: {
-        appServer: {
-          approvalPolicy: "on-request",
-          sandbox: "danger-full-access",
-          serviceTier: "priority",
-        },
-      },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.serviceTier).toBe("priority");
-    const turnRequest = requests.find((request) => request.method === "turn/start");
-    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnRequestParams?.serviceTier).toBe("priority");
-  });
   it("uses human approval instead of Guardian for auto exec on custom model providers", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
@@ -6866,10 +6651,8 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
   });
-  it("fails before client startup when a successor generation hides a private supervision binding", async () => {
+  it("rejects subscription sharing on a supervised session before native client startup", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionKey = "agent:main:supervised-stale-generation";
-    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
     await writeExistingBinding(sessionFile, workspaceDir, {
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-source",
@@ -6878,19 +6661,16 @@ describe("runCodexAppServerAttempt", () => {
       preserveNativeModel: true,
       conversationSourceTransferComplete: true,
     });
-    const storePath = path.join(tempDir, "sessions.json");
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "session-current",
-        updatedAt: Date.now(),
-      },
-    });
     const params = createParams(sessionFile, workspaceDir);
-    params.sessionId = "session-current";
-    params.sessionKey = sessionKey;
-    params.config = { session: { store: storePath } };
+    const runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePlan = {
+      ...runtimePlan,
+      auth: {
+        ...runtimePlan.auth,
+        selectedAuthMode: "oauth",
+        selectedAuthFlow: "chatgpt-token-sharing",
+      },
+    };
     const clientFactory = vi.fn(async () => {
       throw new Error("client must not start");
     });
@@ -6899,120 +6679,9 @@ describe("runCodexAppServerAttempt", () => {
         pluginConfig: { supervision: { enabled: true } },
         clientFactory,
       }),
-    ).rejects.toMatchObject({
-      name: "AgentHarnessSessionSupersededError",
-      message: "Codex session generation is no longer current: session-current",
-    });
+    ).rejects.toThrow("detach from native supervision first");
     expect(clientFactory).not.toHaveBeenCalled();
-    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-      connectionScope: "supervision",
-    });
   });
-
-  it.each(["default", "config", "target"] as const)(
-    "starts sequential ephemeral generations with the %s session store",
-    async (storeSelection) => {
-      const { sessionFile, workspaceDir } = createRunPaths();
-      const sessionKey = "agent:main:ephemeral-helper";
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "ephemeral-state"));
-      const storePath = path.join(tempDir, "ephemeral-sessions.json");
-      let generation = 0;
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "thread/start") {
-          generation += 1;
-          return threadStartResult(`thread-ephemeral-${generation}`);
-        }
-        if (method === "turn/start") {
-          return turnStartResult(`turn-ephemeral-${generation}`);
-        }
-        return undefined;
-      });
-
-      for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
-        const params = createParams(sessionFile, workspaceDir);
-        params.sessionId = sessionId;
-        params.sessionKey = sessionKey;
-        if (storeSelection === "target") {
-          params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
-        } else if (storeSelection === "config") {
-          params.config = { ...params.config, session: { store: storePath } };
-        }
-
-        const run = runCodexAppServerAttempt(params);
-        let startupError: unknown;
-        void run.catch((error: unknown) => {
-          startupError = error;
-        });
-        const expectedGeneration = index + 1;
-        await vi.waitFor(() => {
-          if (startupError) {
-            throw startupError instanceof Error
-              ? startupError
-              : new Error("Codex attempt failed.", { cause: startupError });
-          }
-          expect(
-            harness.requests.filter((request) => request.method === "turn/start"),
-          ).toHaveLength(expectedGeneration);
-        }, fastWait);
-        const threadId = `thread-ephemeral-${expectedGeneration}`;
-        const turnId = `turn-ephemeral-${expectedGeneration}`;
-        await harness.completeTurn({ threadId, turnId });
-        await expect(run).resolves.toBeDefined();
-      }
-      expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(
-        2,
-      );
-    },
-  );
-
-  it.each(["default", "config", "target"] as const)(
-    "rejects a superseded generation in the %s session store",
-    async (storeSelection) => {
-      const { sessionFile, workspaceDir } = createRunPaths();
-      const sessionKey = "agent:main:durable-generation";
-      const durableSessionId = "session-durable-current";
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "durable-state"));
-      const storePath =
-        storeSelection === "default"
-          ? resolveStorePath(undefined, { agentId: "main" })
-          : path.join(tempDir, "durable-sessions.json");
-      registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-durable-current",
-        cwd: workspaceDir,
-      });
-      await upsertSessionEntry({
-        agentId: "main",
-        storePath,
-        sessionKey,
-        entry: { sessionId: durableSessionId, updatedAt: Date.now() },
-      });
-      const params = createParams(sessionFile, workspaceDir);
-      params.sessionId = "session-durable-stale";
-      params.sessionKey = sessionKey;
-      if (storeSelection === "target") {
-        params.sessionTarget = {
-          agentId: "main",
-          sessionId: params.sessionId,
-          sessionKey,
-          storePath,
-        };
-      } else if (storeSelection === "config") {
-        params.config = { ...params.config, session: { store: storePath } };
-      }
-      const clientFactory = vi.fn(async () => {
-        throw new Error("client must not start");
-      });
-
-      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
-        name: "AgentHarnessSessionSupersededError",
-        message: "Codex session generation is no longer current: session-durable-stale",
-      });
-      expect(clientFactory).not.toHaveBeenCalled();
-    },
-  );
 
   it("rejects a resumed provider mismatch before inference and preserves the binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -675,14 +675,6 @@ export function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
-export function stampConfigVersion(
-  cfg: OpenClawConfig,
-  version?: string,
-  previousConfig?: unknown,
-): OpenClawConfig {
-  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version, previousConfig);
-}
-
 export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
   json5: { parse: (value: string) => unknown };
@@ -697,7 +689,11 @@ export function resolveConfigSizeBaselineBytes(params: {
     return rawBytes;
   }
   const canonical = JSON.stringify(
-    stampConfigVersion(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
+    stampConfigWriteMetadata(
+      parsed.parsed as OpenClawConfig,
+      undefined,
+      params.lastTouchedVersionOverride,
+    ),
     null,
     2,
   )

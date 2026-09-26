@@ -37,6 +37,7 @@ import {
 import {
   ensureTaskRegistryReadyAsync,
   runTaskRegistryWorkerMutation,
+  tasks,
 } from "./task-registry-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
 import {
@@ -44,7 +45,7 @@ import {
   type TaskPersistenceReceipt,
   type TaskRecord,
 } from "./task-registry.types.js";
-import { captureTaskRunOwnerBinding } from "./task-run-owner.js";
+import { captureTaskRunOwnerBinding, getTaskRunOwner } from "./task-run-owner.js";
 
 const log = createSubsystemLogger("tasks/executor");
 type FlowStore = ReturnType<typeof getTaskFlowRegistryStore>;
@@ -163,6 +164,45 @@ function createTaskRunReceipt(
       await captureTaskRegistryReadFence(creation.context.admission);
       assertBindingCurrent();
       const bound = binding.bind(captureTaskPersistenceReceipt(readAcknowledged()));
+      const readCurrent = () => {
+        creation.assertStores();
+        const current = tasks.get(acknowledged.taskId);
+        if (
+          !current ||
+          getTaskRunOwner(current) !== bound.owner ||
+          !matchesTaskPersistenceReceipt(current, captureTaskPersistenceReceipt(readAcknowledged()))
+        ) {
+          throw new Error("Task creation receipt was replaced or removed.");
+        }
+        return current;
+      };
+      bound.owner.readCurrent = readCurrent;
+      bound.owner.resumeExecution = async (assertExecutionCurrent) => {
+        const assertOwned = () => {
+          readCurrent();
+          assertExecutionCurrent();
+        };
+        await captureTaskRegistryReadFence(creation.context.admission);
+        assertOwned();
+        const expectedTask = captureTaskPersistenceReceipt(readAcknowledged());
+        const result = await settleTaskRecordTransitionAsync(
+          creation,
+          {
+            type: "tasks.bindRunOwner",
+            input: {
+              taskId: expectedTask.taskId,
+              expectedTask,
+              params: { runId: expectedTask.runId, clearLastToolName: true },
+              now: Date.now(),
+            },
+          },
+          assertOwned,
+        );
+        assertOwned();
+        if (!result.publicationSettled || result.receipt?.task.status !== "running") {
+          throw new Error("Task successor activation did not settle.");
+        }
+      };
       return {
         owner: bound.owner,
         release() {

@@ -2,30 +2,16 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
-import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-  type OptionalCustomElement,
-} from "../app/lazy-custom-element.ts";
-import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { renderSettingsRow, renderSettingsSection } from "../components/settings-ui.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-
-const PLUGIN_MANAGER_DIALOG = {
-  tagName: "openclaw-plugin-manager-dialog",
-  get label() {
-    return t("pluginUi.customize");
-  },
-  loadModule: () => import("./control-ui-manager-dialog.ts"),
-} satisfies OptionalCustomElement;
+import { renderCustomPluginUiDisabled } from "./control-ui-disabled.ts";
 
 class ControlUiPluginManager extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
-  @state() private open = false;
-  private readonly dialogLoader = new LazyCustomElementRequestController(this, () => {
-    this.open = false;
-  });
+  @state() private reloading = false;
+  @state() private reloadError = "";
 
   constructor() {
     super();
@@ -35,56 +21,111 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
     );
   }
 
-  private get available(): boolean {
-    const runtime = this.context?.plugins;
-    return Boolean(
-      runtime &&
-      (runtime.registrations("replacements").length ||
-        runtime.errors.length ||
-        (runtime.hasPlugins && runtime.canReload)),
-    );
-  }
-
-  override willUpdate() {
-    this.dialogLoader.requestWhileActive(
-      PLUGIN_MANAGER_DIALOG,
-      this.isConnected && this.available && this.open,
-    );
-  }
-
-  override disconnectedCallback() {
-    this.dialogLoader.requestWhileActive(PLUGIN_MANAGER_DIALOG, false);
-    super.disconnectedCallback();
-  }
-
   override render() {
-    // The loader closes its modal after the registered element has rendered.
-    const showDialog = this.available && this.open && !this.dialogLoader.visibleState;
-    return html`${
-      this.available
-        ? html`<button
-              class="btn btn--sm"
-              type="button"
-              @click=${() => {
-                this.open = true;
-              }}
-            >
-              ${t("pluginUi.customize")}
-            </button>
-            ${renderLazyElementModal(this.dialogLoader)}`
-        : nothing
+    const runtime = this.context?.plugins;
+    if (!runtime) {
+      return nothing;
     }
-    ${
-      isOptionalElementDefined(PLUGIN_MANAGER_DIALOG)
-        ? html`<openclaw-plugin-manager-dialog
-            .runtime=${this.context?.plugins}
-            .open=${showDialog}
-            @modal-cancel=${() => {
-              this.open = false;
-            }}
-          ></openclaw-plugin-manager-dialog>`
-        : nothing
-    }`;
+    const replacements = runtime.registrations("replacements");
+    if (
+      !replacements.length &&
+      !runtime.errors.length &&
+      !(runtime.hasPlugins && runtime.canReload)
+    ) {
+      return nothing;
+    }
+    const surfaces = [...new Set(replacements.map((entry) => entry.value.surface))];
+    return renderSettingsSection(
+      { title: t("pluginUi.customize"), carapace: true },
+      html`
+        ${renderSettingsRow({
+          title: t("pluginUi.selectionScope"),
+          carapace: true,
+          stackedOnNarrow: true,
+          control: html`
+            ${
+              runtime.canReload
+                ? html`<button
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    type="button"
+                    ?disabled=${this.reloading}
+                    @click=${async () => {
+                      this.reloading = true;
+                      this.reloadError = "";
+                      try {
+                        await runtime.reload();
+                      } catch (error) {
+                        this.reloadError = error instanceof Error ? error.message : String(error);
+                      } finally {
+                        this.reloading = false;
+                      }
+                    }}
+                  >
+                    ${t("pluginUi.reload")}
+                  </button>`
+                : nothing
+            }
+            <button
+              class="btn btn--sm oc-action oc-action-secondary"
+              type="button"
+              @click=${() => void runtime.refresh()}
+            >
+              ${t("common.retry")}
+            </button>
+          `,
+        })}
+        ${surfaces.map((surface) =>
+          renderSettingsRow({
+            title: t(`pluginUi.surface.${surface}`),
+            carapace: true,
+            stackedOnNarrow: true,
+            control: html`<select
+              class="settings-select oc-select"
+              aria-label=${t(`pluginUi.surface.${surface}`)}
+              @change=${(event: Event) =>
+                runtime.selectReplacement(
+                  surface,
+                  // SAFETY: this handler is bound directly to the select element.
+                  (event.currentTarget as HTMLSelectElement).value || null,
+                )}
+            >
+              <option value="" .selected=${!runtime.selectedReplacement(surface)}>
+                ${t("pluginUi.builtin")}
+              </option>
+              ${replacements
+                .filter((entry) => entry.value.surface === surface)
+                .map(
+                  (entry) => html`<option
+                    value=${entry.key}
+                    .selected=${runtime.selectedReplacement(surface)?.key === entry.key}
+                  >
+                    ${entry.value.label} (${entry.pluginId})
+                  </option>`,
+                )}
+            </select>`,
+          }),
+        )}
+        ${runtime.errors.map((entry) => {
+          const disabled = renderCustomPluginUiDisabled(this.context, entry.pluginId);
+          return renderSettingsRow({
+            title: entry.pluginId,
+            carapace: true,
+            stacked: true,
+            role: disabled ? "status" : "alert",
+            control: disabled ?? html`<span>${entry.message}</span>`,
+          });
+        })}
+        ${
+          this.reloadError
+            ? renderSettingsRow({
+                title: this.reloadError,
+                role: "alert",
+                carapace: true,
+              })
+            : nothing
+        }
+      `,
+    );
   }
 }
 

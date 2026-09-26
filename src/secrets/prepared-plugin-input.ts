@@ -1,5 +1,6 @@
 import { getAuthoredConfigSecretRef } from "../config/resolution-facts.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { hasCurrentPluginInstanceAuthority } from "../plugins/plugin-instance-scope.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { isSecretOwnerAvailable } from "./runtime-degraded-state.js";
@@ -14,7 +15,10 @@ export function getPreparedPluginSecretInput(
   path: string,
 ): { value?: string; revision: number } {
   const revision = getActiveSecretsRuntimeSnapshotRevisionState();
-  if (getPluginRuntimeGatewayRequestScope()?.pluginId !== pluginId) {
+  if (
+    getPluginRuntimeGatewayRequestScope()?.pluginId !== pluginId ||
+    !hasCurrentPluginInstanceAuthority(pluginId)
+  ) {
     return { revision };
   }
   const snapshot = getActiveSecretsRuntimeConfigSnapshot();

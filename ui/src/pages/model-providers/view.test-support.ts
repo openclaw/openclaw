@@ -1,4 +1,5 @@
 import { nothing, render } from "lit";
+import { onTestFinished } from "vitest";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -92,9 +93,14 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
   };
 }
 
-export function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
+export function mount(
+  viewProps: ModelProvidersViewProps,
+  container = document.body.appendChild(document.createElement("div")),
+): HTMLDivElement {
+  onTestFinished(() => {
+    render(nothing, container);
+    container.remove();
+  });
   render(renderModelProviders(viewProps), container);
   return container;
 }

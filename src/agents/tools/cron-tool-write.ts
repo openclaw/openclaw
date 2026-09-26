@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 import {
+  assertInheritedCronToolCaptureReady,
   CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE,
   INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE,
   isCronCreatorToolCaptureComplete,
@@ -56,20 +57,11 @@ export function assertCronCreatorAuthorityResolutionAvailable(params: {
   }
 }
 
-async function prepareCronJobUpdateForGateway(params: {
-  id: string;
-  patch: Record<string, unknown>;
-  creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
-  creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
-  creatorAuthorityComplete: boolean;
-  resolveCreatorToolAuthority?: (options?: {
-    signal?: AbortSignal;
-  }) => Promise<CronCreatorToolAuthoritySnapshot>;
-  operationSignal?: AbortSignal;
-  creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
-  gatewayOpts: GatewayCallOptions;
-  callGateway: GatewayToolCaller;
-}): Promise<{
+async function prepareCronJobUpdateForGateway(
+  params: Parameters<typeof updateCronJobFromAgentTool>[0] & {
+    creatorAuthorityComplete: boolean;
+  },
+): Promise<{
   patch: Record<string, unknown>;
   expectedConfigRevision?: string;
   resolvedAuthority?: CronCreatorToolAuthoritySnapshot;
@@ -170,24 +162,18 @@ export async function updateCronJobFromAgentTool(params: {
         resolveCreatorToolAuthority === undefined &&
         params.creatorAuthorityUnavailableReason === undefined,
       resolveCreatorToolAuthority,
-      operationSignal: params.operationSignal,
     });
     if (callerIncludedPayloadPatch && !params.adminManagement) {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);
     }
-    const payload = isRecord(prepared.patch.payload) ? prepared.patch.payload : undefined;
-    const captureSource = prepared.resolvedAuthority
-      ? prepared.resolvedAuthority.provenance.source
-      : params.creatorToolAllowlistCaptureRef?.value?.source;
-    if (
-      payload?.toolsAllowIsDefault === true &&
-      (prepared.resolvedAuthority || params.creatorToolAllowlistCaptureRef) &&
-      captureSource !== "final-executable-surface"
-    ) {
-      throw new Error(INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE);
-    }
+    assertInheritedCronToolCaptureReady(
+      prepared.patch,
+      prepared.resolvedAuthority
+        ? { value: prepared.resolvedAuthority.provenance }
+        : params.creatorToolAllowlistCaptureRef,
+    );
     if (prepared.resolvedAuthority && !params.withCreatorAuthorityProvenance) {
       throw new Error(
         "fresh configured MCP cron authority requires an authenticated local agent run",

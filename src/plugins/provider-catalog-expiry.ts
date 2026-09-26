@@ -3,6 +3,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type CatalogExpiryCapture = {
   providers: Map<string, number>;
+  models: Map<string, Set<string>>;
   expiresAt?: number;
 };
 
@@ -13,8 +14,9 @@ const capture = resolveGlobalSingleton(
 
 export async function captureProviderCatalogExpiries<T>(load: () => Promise<T>) {
   const providers = new Map<string, number>();
-  const value = await capture.run({ providers }, load);
-  return { value, providerExpiries: providers };
+  const models = new Map<string, Set<string>>();
+  const value = await capture.run({ providers, models }, load);
+  return { value, providerExpiries: providers, providerModels: models };
 }
 
 export async function withProviderCatalogExpiry<T>(
@@ -25,7 +27,7 @@ export async function withProviderCatalogExpiry<T>(
   if (!parent) {
     return load();
   }
-  const current: CatalogExpiryCapture = { providers: parent.providers };
+  const current: CatalogExpiryCapture = { providers: parent.providers, models: parent.models };
   const value = await capture.run(current, load);
   if (current.expiresAt !== undefined) {
     for (const provider of providerIds(value)) {
@@ -34,6 +36,21 @@ export async function withProviderCatalogExpiry<T>(
     }
   }
   return value;
+}
+
+/** Record accepted hook identities, never static fallback or merged configured rows. */
+export function recordProviderCatalogModels(provider: string, modelIds: readonly string[]): void {
+  const current = capture.getStore();
+  if (!current) {
+    return;
+  }
+  const models = current.models.get(provider) ?? new Set<string>();
+  for (const id of modelIds) {
+    if (id.trim()) {
+      models.add(id.trim());
+    }
+  }
+  current.models.set(provider, models);
 }
 
 /** Carry the cache's original deadline; a cache hit must not extend inventory freshness. */

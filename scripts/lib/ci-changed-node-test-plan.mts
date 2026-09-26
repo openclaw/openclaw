@@ -1,6 +1,7 @@
 import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
+import { tuiPtyTestFiles } from "../../test/vitest/vitest.test-shards.mjs";
 import {
   isControlUiSourcePath,
   isPluginControlUiPath,
@@ -24,6 +25,7 @@ import {
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isWorkflowLintConfigPath,
+  listRunnableVitestConfigTargets,
   resolveControlUiTestConsumers,
   resolveAffectedTestsFromImportGraph,
   resolveDependencyTestConsumers,
@@ -46,6 +48,7 @@ import {
   RELEASE_ONLY_TOOLING_CONFIGS,
   isReleaseOnlyToolingTestFile,
   isRuntimeTestFileIncluded,
+  SOURCE_CHANNEL_TEST_POLICY,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
@@ -129,6 +132,8 @@ const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
+const TUI_PTY_NODE_TEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
+const TUI_PTY_ASSERTION_TEST = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
 const UI_NODE_TEST_CONFIGS = new Set([
   "test/vitest/vitest.ui.config.ts",
   "test/vitest/vitest.ui-isolated.config.ts",
@@ -334,6 +339,32 @@ function isIndependentlyCheckedDocumentation(changedPath: string, cwd: string) {
   return entry === undefined || entry.isFile();
 }
 
+export function resolveReleaseFastLaneScope(
+  changedPaths: readonly string[] | null,
+  options: CwdOptions = {},
+): { eligible: true } | { eligible: false; reason: string } {
+  if (!changedPaths?.length) {
+    return { eligible: false, reason: "missing changed paths" };
+  }
+  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
+  if (globalInput) {
+    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const outsideScope = changedPaths.find(
+    (file) =>
+      !file.startsWith(".github/workflows/") &&
+      !file.startsWith("scripts/") &&
+      !file.startsWith("test/scripts/") &&
+      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
+      file !== "docs/reference/RELEASING.md" &&
+      !isIndependentlyCheckedDocumentation(file, cwd),
+  );
+  return outsideScope === undefined
+    ? { eligible: true }
+    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
+}
+
 function resolvePreciseChangedTargets(
   changedPaths: string[],
   cwd: string,
@@ -462,10 +493,10 @@ function resolvePreciseChangedTargets(
 }
 
 function createChangedTargetShards(
-  targets: string[],
+  targets: NonNullable<ReturnType<typeof resolvePreciseChangedTargets>>,
   names: { checkName: string; shardName: string },
 ) {
-  const targetChunks: string[][] = [];
+  const targetChunks: (typeof targets)[] = [];
   for (let offset = 0; offset < targets.length; offset += CHANGED_NODE_TEST_TARGETS_PER_JOB) {
     targetChunks.push(targets.slice(offset, offset + CHANGED_NODE_TEST_TARGETS_PER_JOB));
   }
@@ -477,13 +508,17 @@ function createChangedTargetShards(
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `${names.shardName}${suffix}`,
-      targets: chunk,
+      targets: chunk.map(({ target }) => target),
     };
-    const pretestBuildMode = resolveVitestPretestBuildMode([{ includePatterns: chunk }]);
+    const pretestBuildMode = chunk.some(({ plans }) =>
+      plans.some((plan) => plan.config === E2E_VITEST_CONFIG),
+    )
+      ? "private-qa"
+      : resolveVitestPretestBuildMode([{ includePatterns: shard.targets }]);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
-    if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+    if (chunk.some(({ target }) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
     return shard;
@@ -764,9 +799,11 @@ export function createChangedNodeTestShards(
   options: CwdOptions &
     ChangedTargetValidation & {
       runnerBackend?: string;
+      releaseFastLane?: boolean;
       includeReleaseOnlyToolingShards?: boolean;
       includeReleaseOnlyRuntimeTests?: boolean;
       dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+      dedicatedBuildArtifacts?: boolean;
       dedicatedUiE2e?: boolean;
       dedicatedMaxLinesRatchet?: boolean;
     } = {},
@@ -817,7 +854,10 @@ export function createChangedNodeTestShards(
 
   // Packing changes and their policy guard need the complete compact plan on
   // Blacksmith while preserving hosted targeting and its registration footprint.
+  // The label accepts changed-row proof for planner policy edits; hourly main CI
+  // still runs the complete plan.
   if (
+    !options.releaseFastLane &&
     options.runnerBackend !== "github" &&
     changedPaths.some(
       (file) =>
@@ -894,12 +934,7 @@ export function createChangedNodeTestShards(
           policyTargets.length > 0,
       ),
   );
-  const policyTargets = [...new Set([...policyTargetsByPath.values()].flat())];
-  const completeOwnerTargets = new Set(
-    [...policyTargetsByPath.keys()].flatMap((changedPath) =>
-      resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true }),
-    ),
-  );
+  const policyTargets = new Set([...policyTargetsByPath.values()].flat());
   const regularPaths = resolutionPaths.filter(
     (changedPath) =>
       !documentationPaths.has(changedPath) &&
@@ -924,7 +959,16 @@ export function createChangedNodeTestShards(
     configInputs.length > 0 &&
     (!configInputs.every(isTestFileTarget) ||
       hasImportGraphConsumers(configInputs, cwd, graphOptions));
-  const configCandidates = inspectConfigConsumers ? [...resolveAutomaticNodeTestConfigs()] : [];
+  const configCandidates =
+    inspectConfigConsumers &&
+    hasImportGraphImpactOnTargets(
+      configInputs,
+      listRunnableVitestConfigTargets(),
+      cwd,
+      graphOptions,
+    )
+      ? [...resolveAutomaticNodeTestConfigs()]
+      : [];
   const affectedConfigs =
     configCandidates.length &&
     hasImportGraphImpactOnTargets(configInputs, configCandidates, cwd, graphOptions)
@@ -1051,6 +1095,10 @@ export function createChangedNodeTestShards(
       const configs = group.configs.filter(
         (config) =>
           configPaths.includes(config) &&
+          // Narrow PRs run source boundaries and the PTY assertion helper below;
+          // their full artifact descriptors must not suppress those targets.
+          (options.dedicatedBuildArtifacts !== false ||
+            (config !== BOUNDARY_NODE_TEST_CONFIG && config !== TUI_PTY_NODE_TEST_CONFIG)) &&
           !uiShards.some((uiShard) =>
             uiShard.groups.some((uiGroup) => uiGroup.configs.includes(config)),
           ),
@@ -1088,6 +1136,10 @@ export function createChangedNodeTestShards(
         runtimeOnly: true,
       }),
       ...configGuardTargets,
+      ...(options.dedicatedBuildArtifacts === false &&
+      configPaths.includes(TUI_PTY_NODE_TEST_CONFIG)
+        ? [TUI_PTY_ASSERTION_TEST]
+        : []),
       // Host consumers use the same exact-file owner as other precise targets;
       // a packed tooling neighbor is not part of the UI area contract.
       ...uiConsumers,
@@ -1105,6 +1157,9 @@ export function createChangedNodeTestShards(
   if (
     resolvedTargetPlans.length === 0 &&
     wholeOwnerShards.length === 0 &&
+    !(
+      options.dedicatedBuildArtifacts === false && configPaths.includes(BOUNDARY_NODE_TEST_CONFIG)
+    ) &&
     extensionFallbackRoots.length === 0 &&
     regularPaths.length > 0 &&
     changedPaths.every((file) => livePaths.includes(file) || documentationPaths.has(file))
@@ -1117,7 +1172,7 @@ export function createChangedNodeTestShards(
         changedPaths.includes(target) ||
         options.includeReleaseOnlyToolingShards !== false ||
         changedPaths.some(isToolingTestOwnerPath) ||
-        completeOwnerTargets.has(target) ||
+        policyTargets.has(target) ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>
@@ -1137,11 +1192,16 @@ export function createChangedNodeTestShards(
     changedPaths: livePaths,
     includeReleaseOnlyRuntimeTests: options.includeReleaseOnlyRuntimeTests,
   };
-  const changedBuildArtifacts = hasBuildArtifactAffectingChange(changedPaths);
+  const changedBuildArtifacts =
+    options.dedicatedBuildArtifacts !== false && hasBuildArtifactAffectingChange(changedPaths);
   const prTargetPlans: typeof targetPlans = [];
   for (const entry of targetPlans) {
     const { target, plans } = entry;
-    if (isCiProofTestFile(target) || !isRuntimeTestFileIncluded(target, runtimeSelection, cwd)) {
+    if (
+      isCiProofTestFile(target) ||
+      (options.dedicatedBuildArtifacts === false && tuiPtyTestFiles.includes(target)) ||
+      (!policyTargets.has(target) && !isRuntimeTestFileIncluded(target, runtimeSelection, cwd))
+    ) {
       continue;
     }
     const separateExecution =
@@ -1161,7 +1221,7 @@ export function createChangedNodeTestShards(
       plans.some((plan) => plan.config === resolveExtensionTestConfig(target));
     const uncoveredChannels =
       !changedBuildArtifacts &&
-      plans.every((plan) => plan.config === "test/vitest/vitest.channels.config.ts");
+      plans.every((plan) => plan.config === SOURCE_CHANNEL_TEST_POLICY.config);
     if (
       changedPaths.includes(target) ||
       path.resolve(cwd) !== process.cwd() ||
@@ -1184,16 +1244,22 @@ export function createChangedNodeTestShards(
   }
   const canonicalTargets = prTargetPlans
     .filter(({ target }) => !target.startsWith("extensions/"))
+    // The PTY artifact descriptor only admits process proofs. Its source assertion
+    // helper keeps the exact-file TUI config without requiring the built CLI.
+    .filter(
+      ({ target }) =>
+        options.dedicatedBuildArtifacts !== false || target !== TUI_PTY_ASSERTION_TEST,
+    )
     .filter(
       ({ plans }) =>
         plans.every((plan) => plan.includePatterns) &&
-        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
-          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))),
+          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
+        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
@@ -1203,7 +1269,8 @@ export function createChangedNodeTestShards(
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
           runnerBackend: options.runnerBackend,
           onFallback: options.onFallback,
-          ...runtimeSelection,
+          // These exact targets already passed deferral above, including explicit policy watches.
+          includeReleaseOnlyRuntimeTests: true,
         })
       : null
     : [];
@@ -1219,10 +1286,34 @@ export function createChangedNodeTestShards(
   );
   const boundaryShards =
     artifactBoundaryOwned || configBoundaryOwned ? [] : [createBoundaryShard()];
+  const channelTargets = new Set(
+    options.dedicatedBuildArtifacts === false
+      ? prTargetPlans
+          .filter(({ plans }) =>
+            plans.every((plan) => plan.config === SOURCE_CHANNEL_TEST_POLICY.config),
+          )
+          .map(({ target }) => target)
+      : [],
+  );
+  const channelShards: ChangedNodeTestShard[] =
+    !artifactBoundaryOwned && channelTargets.size > 0
+      ? [
+          {
+            checkName: "checks-node-changed-channels",
+            configs: [SOURCE_CHANNEL_TEST_POLICY.config],
+            includePatterns: [...channelTargets],
+            env: { ...SOURCE_CHANNEL_TEST_POLICY.env },
+            requiresDist: false,
+            runner: DEFAULT_NODE_TEST_RUNNER,
+            shardName: "changed-channels",
+          },
+        ]
+      : [];
   // CI supplies the suite owners it emits. Validate every changed path first,
   // then subtract covered plans; local runs and unselected owners keep their targets.
   const targets = prTargetPlans
     .filter(({ target }) => !canonicalTargets.includes(target))
+    .filter(({ target }) => !channelTargets.has(target))
     .filter(
       ({ target, plans }) =>
         !target.startsWith("extensions/") ||
@@ -1257,12 +1348,12 @@ export function createChangedNodeTestShards(
                 )))
           );
         }),
-    )
-    .map(({ target }) => target);
+    );
 
   const shards = [
     ...uiShards,
     ...configShards,
+    ...channelShards,
     ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
     ...packChangedExtensionConfigShards(
       createChangedExtensionConfigShardsForPaths(extensionFallbackPaths, cwd),
@@ -1294,7 +1385,7 @@ export function createChangedNodeTestShards(
     ),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(
-      targets.filter((target) => !isUiBrowserTestFile(target)),
+      targets.filter(({ target }) => !isUiBrowserTestFile(target)),
       {
         checkName: "checks-node-changed",
         shardName: "changed",

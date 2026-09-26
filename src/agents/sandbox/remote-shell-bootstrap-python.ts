@@ -1,4 +1,4 @@
-import { GUEST_FILESYSTEM_RENAME_NO_REPLACE_PYTHON } from "../../infra/guest-filesystem.js";
+import { GUEST_FILESYSTEM_RENAME_NO_REPLACE_PYTHON } from "@openclaw/fs-safe/guest";
 
 const REMOVE_OWNED_STAGE = [
   "def remove_owned_stage(staging):",

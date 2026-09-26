@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import "./sqlite-worker-managed-task-link.test-support.js";
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -26,11 +27,10 @@ import {
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.types.js";
 import { setDetachedTaskLifecycleRuntime } from "../tasks/task-runtime.test-helpers.js";
+import { forbidMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { emitAgentEvent } from "./agent-events.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
-import * as workerStore from "./sqlite-worker-store.js";
+import { interceptTaskWorkerCommands } from "./sqlite-worker-task.test-support.js";
 
 const {
   ownerKey,
@@ -40,6 +40,15 @@ const {
   holdTaskCreationCommand,
   holdTaskEventPublication,
 } = await import("./sqlite-worker-managed-task-link.test-support.js");
+
+const childInput = {
+  runtime: "acp",
+  runId,
+  childSessionKey,
+  task: "Child work",
+  status: "running",
+  notifyPolicy: "silent",
+} as const;
 
 function completeBacking() {
   return finalizeTaskRecordByRunId({
@@ -82,9 +91,7 @@ describe("registered async managed child linkage", () => {
     expect(linked.task.agentId).toBeUndefined();
     const store = getTaskRegistryStore();
     const withMutation = store.withMutation;
-    if (!withMutation) {
-      throw new Error("Expected native task writer admission");
-    }
+    assert(withMutation, "Expected native task writer admission");
     let custody = 0;
     configureTaskRegistryRuntime({
       store: {
@@ -141,32 +148,11 @@ describe("registered async managed child linkage", () => {
     });
     const commands = new Map<string, number>();
     const snapshots = vi.spyOn(getTaskRegistryStore(), "loadMutationSnapshotAsync");
-    const original = workerStore.runSqliteWorkerStoreOperation;
-    vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        store: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[2],
-        assertCurrent?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[3],
-        createAdmission?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[4],
-        requireStateLifecycle?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[5],
-      ) =>
-        original(
-          store,
-          (scope) =>
-            operation({
-              execute: (command, options) => {
-                const kind = String(command.type);
-                commands.set(kind, (commands.get(kind) ?? 0) + 1);
-                return scope.execute(command, options);
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission,
-          requireStateLifecycle,
-        ),
-    );
+    interceptTaskWorkerCommands((type, execute) => {
+      const kind = String(type);
+      commands.set(kind, (commands.get(kind) ?? 0) + 1);
+      return execute();
+    });
     const results = await Promise.all(
       Array.from({ length: count }, (_, index) =>
         managed.runTask({
@@ -193,17 +179,7 @@ describe("registered async managed child linkage", () => {
       goal: "Track external work",
     });
     await runtime.tasks.async.runs.bindSession({ sessionKey: ownerKey }).list();
-    const native = requireNodeSqlite();
-    for (const method of ["prepare", "exec"] as const) {
-      vi.spyOn(native.DatabaseSync.prototype, method).mockImplementation(() => {
-        throw new Error("Unexpected warmed main-thread SQLite");
-      });
-    }
-    for (const method of ["iterate", "get", "all", "run"] as const) {
-      vi.spyOn(native.StatementSync.prototype, method).mockImplementation(() => {
-        throw new Error("Unexpected warmed main-thread SQLite");
-      });
-    }
+    forbidMainThreadSql("Unexpected warmed main-thread SQLite");
     const result = await managed.runTask({
       flowId: flow.flowId,
       runtime: "subagent",
@@ -284,15 +260,7 @@ describe("registered async managed child linkage", () => {
       controllerId: "tests/terminal",
       goal: "Linked before completion",
     });
-    const input = {
-      runtime: "acp" as const,
-      runId,
-      childSessionKey,
-      task: "Child work",
-      status: "running" as const,
-      notifyPolicy: "silent" as const,
-    };
-    const linked = await managed.runTask({ ...input, flowId: before.flowId });
+    const linked = await managed.runTask({ ...childInput, flowId: before.flowId });
     expect(linked.created).toBe(true);
     if (!linked.created) {
       throw new Error(linked.reason);
@@ -302,14 +270,14 @@ describe("registered async managed child linkage", () => {
       controllerId: "tests/terminal",
       goal: "Completed before link",
     });
-    expect(await managed.runTask({ ...input, flowId: after.flowId })).toMatchObject({
+    expect(await managed.runTask({ ...childInput, flowId: after.flowId })).toMatchObject({
       created: false,
       reason: "Task backing ownership could not be verified.",
     });
     expect(listTasksForFlowId(after.flowId)).toEqual([]);
     expect(
       await managed.runTask({
-        ...input,
+        ...childInput,
         flowId: before.flowId,
         task: "Updated metadata",
         preferMetadata: true,
@@ -363,14 +331,9 @@ describe("registered async managed child linkage", () => {
       const onEvent = vi.fn<(event: TaskRegistryObserverEvent) => void>();
       configureTaskRegistryRuntime({ observers: { onEvent } });
       const pending = managed.runTask({
+        ...childInput,
         flowId: flow.flowId,
-        runtime: "acp",
-        runId,
-        childSessionKey,
-        task: "Child work",
-        status: "running",
         startedAt: 100,
-        notifyPolicy: "silent",
       });
       try {
         await held.ready;
@@ -477,13 +440,11 @@ describe("registered async managed child linkage", () => {
     const held = holdTaskCreationCommand("flows.runTask", "after commit");
     subagentRuns.set(physicalRunId, entry);
     const pending = managed.runTask({
+      ...childInput,
       flowId: flow.flowId,
       runtime: "subagent",
       runId: canonicalRunId,
       childSessionKey: child,
-      task: "Child work",
-      status: "running",
-      notifyPolicy: "silent",
     });
     try {
       await held.ready;
@@ -550,23 +511,13 @@ describe("registered async managed child linkage", () => {
       goal: "Current child",
     });
     const held = holdTaskCreationCommand("flows.runTask", "after commit");
-    const pending = managed.runTask({
-      flowId: flow.flowId,
-      runtime: "acp",
-      runId,
-      childSessionKey,
-      task: "Child work",
-      status: "running",
-      notifyPolicy: "silent",
-    });
+    const pending = managed.runTask({ ...childInput, flowId: flow.flowId });
     try {
       await held.ready;
       const stored = [...getTaskRegistryStore().loadSnapshot().tasks.values()].find(
         (task) => task.parentFlowId === flow.flowId,
       );
-      if (!stored) {
-        throw new Error("Expected committed managed link");
-      }
+      assert(stored, "Expected committed managed link");
       const currentBacking = {
         kind: "task_backing_instance",
         runtime: "acp",
@@ -609,15 +560,7 @@ describe("registered async managed child linkage", () => {
       goal: "Uncommitted link",
     });
     const held = holdTaskCreationCommand("flows.runTask", "before execution");
-    const pending = managed.runTask({
-      flowId: flow.flowId,
-      runtime: "acp",
-      runId,
-      childSessionKey,
-      task: "Child work",
-      status: "running",
-      notifyPolicy: "silent",
-    });
+    const pending = managed.runTask({ ...childInput, flowId: flow.flowId });
     try {
       await held.ready;
       emitAgentEvent({
@@ -651,23 +594,13 @@ describe("registered async managed child linkage", () => {
         goal: "Replaced link",
       });
       const held = holdTaskCreationCommand("flows.runTask", "after commit");
-      const pending = managed.runTask({
-        flowId: flow.flowId,
-        runtime: "acp",
-        runId,
-        childSessionKey,
-        task: "Child work",
-        status: "running",
-        notifyPolicy: "silent",
-      });
+      const pending = managed.runTask({ ...childInput, flowId: flow.flowId });
       try {
         await held.ready;
         const stored = [...getTaskRegistryStore().loadSnapshot().tasks.values()].find(
           (task) => task.parentFlowId === flow.flowId,
         );
-        if (!stored) {
-          throw new Error("Expected committed managed link");
-        }
+        assert(stored, "Expected committed managed link");
         const replaced = {
           ...stored,
           ...(replacement === "run binding"
@@ -768,7 +701,7 @@ describe("registered async managed child linkage", () => {
       if (eventTiming === "before metadata admission") {
         const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
         vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (admit) => {
+          (admit, attachment) => {
             let transactionCount = 0;
             return createAdmission((request, grant) => {
               if (
@@ -783,7 +716,7 @@ describe("registered async managed child linkage", () => {
                 }
               }
               admit(request, grant);
-            });
+            }, attachment);
           },
         );
       }

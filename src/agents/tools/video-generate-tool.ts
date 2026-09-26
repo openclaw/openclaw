@@ -15,7 +15,12 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readToolStringParam,
+  type AnyAgentTool,
+} from "./common.js";
 import {
   hasSnapshotCapabilityProviderAvailability,
   loadCapabilityMetadataSnapshot,
@@ -34,7 +39,6 @@ import {
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   resolveGenerateAction,
-  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import {
@@ -42,7 +46,6 @@ import {
   coerceToolModelConfig,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -378,7 +381,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           explicitModelConfig,
         }) => {
           const providers = acquired?.providers ?? preparedProviders;
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
 
           const filename = readToolStringParam(args, "filename");
           const size = readToolStringParam(args, "size");

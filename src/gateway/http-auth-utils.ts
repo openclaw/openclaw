@@ -49,6 +49,7 @@ import {
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
+  GatewayHttpRequestAuthorityError,
   type GatewayHttpRequestAuthOptions,
   type GatewayHttpRequestAuthority,
   type GatewayHttpResponseAuthority,
@@ -494,7 +495,7 @@ export async function authorizePluginGatewayHttpRequestOrReply(
       await revalidate();
       if (!authResult.ok || authResult.method !== "device-token") {
         sendUnauthorized(params.res);
-        throw new Error("Unauthorized");
+        throw new GatewayHttpRequestAuthorityError("Unauthorized");
       }
     };
   }

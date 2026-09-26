@@ -10,7 +10,6 @@ import type {
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
-  WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -22,8 +21,12 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
-import { renderModelAccountsSection } from "./model-accounts-section.ts";
+import {
+  renderModelAccountsSection,
+  type ModelAccountsSectionProps,
+} from "./model-accounts-section.ts";
 
 registerModelAccountsEnglish();
 
@@ -34,11 +37,6 @@ type AccountTarget = {
   canAdmin: boolean;
 };
 type AccountAction = "request" | "answer" | "cancel";
-type SignInChoice = {
-  providers: UsersAuthConnectCatalogResult["providers"];
-  provider: string;
-  method: string;
-};
 
 /** Model-account actions belong to the connection, not the profile editor's refresh cycle. */
 export class ModelAccounts extends OpenClawLightDomContentsElement {
@@ -57,8 +55,8 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
   @state() private notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | null =
     null;
   @state() private linkDraft = "";
-  @state() private signIn: SignInChoice | null = null;
-  @state() private connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null = null;
+  @state() private signIn: ModelAccountsSectionProps["signIn"] = null;
+  @state() private connectFlow: ModelAccountsSectionProps["connectFlow"] = null;
   @state() private stepValue: unknown;
   @state() private statusUnavailable = false;
 
@@ -66,6 +64,7 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
   private generation = 0;
   private inventoryRequest = 0;
   private unsubscribe: (() => void) | null = null;
+  private unsubscribeEvents: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   override connectedCallback() {
@@ -75,12 +74,19 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
       // Endpoint and person context stay visible even without an authorized account target.
       this.requestUpdate();
     });
+    this.unsubscribeEvents = this.context.gateway.subscribeEvents((event) => {
+      if (modelAuthEventInvalidates(event)) {
+        void this.loadAccounts();
+      }
+    });
     this.applySnapshot(this.context.gateway.snapshot);
   }
 
   override disconnectedCallback() {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.unsubscribeEvents?.();
+    this.unsubscribeEvents = null;
     this.generation += 1;
     this.target = null;
     this.stopPoll();

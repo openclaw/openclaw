@@ -29,20 +29,32 @@ export type TelegramThreadBindingManager = {
   getByConversationId: (conversationId: string) => TelegramThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => TelegramThreadBindingRecord[];
   listBindings: () => TelegramThreadBindingRecord[];
-  touchConversation: (conversationId: string, at?: number) => TelegramThreadBindingRecord | null;
+  touchConversation: (
+    conversationId: string,
+    at?: number,
+  ) => Promise<TelegramThreadBindingRecord | null>;
   unbindConversation: (params: {
     conversationId: string;
     reason?: string;
     sendFarewell?: boolean;
     throwOnPersistError?: boolean;
-  }) => TelegramThreadBindingRecord | null;
+  }) => Promise<TelegramThreadBindingRecord | null>;
   unbindBySessionKey: (params: {
     targetSessionKey: string;
     reason?: string;
     sendFarewell?: boolean;
     throwOnPersistError?: boolean;
-  }) => TelegramThreadBindingRecord[];
-  stop: () => void;
+  }) => Promise<TelegramThreadBindingRecord[]>;
+  updateBySessionKey: (
+    targetSessionKey: string,
+    update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord,
+  ) => Promise<TelegramThreadBindingRecord[]>;
+  /** Synchronous SDK compatibility only; bundled callers use queued mutations. */
+  updateConversationSync: (
+    conversationId: string,
+    update: (entry: TelegramThreadBindingRecord) => TelegramThreadBindingRecord | undefined,
+  ) => TelegramThreadBindingRecord | null;
+  stop: () => Promise<void>;
 };
 
 export function resolveStoredBindingKey(params: {
@@ -55,7 +67,7 @@ export function resolveStoredBindingKey(params: {
     .slice(0, 32);
 }
 
-function normalizeMetadataForStore(
+export function normalizeMetadataForStore(
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   if (!metadata) {

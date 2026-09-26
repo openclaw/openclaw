@@ -8,7 +8,10 @@ import type {
   ModelCatalogTieredCost,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -74,12 +77,9 @@ export async function buildSingleProviderApiKeyCatalog(params: {
     return null;
   }
 
-  const explicitProvider =
-    params.allowExplicitBaseUrl && params.ctx.config.models?.providers
-      ? Object.entries(params.ctx.config.models.providers).find(
-          ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === providerId,
-        )?.[1]
-      : undefined;
+  const explicitProvider = params.allowExplicitBaseUrl
+    ? findNormalizedProviderValue(params.ctx.config.models?.providers, providerId)
+    : undefined;
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
 
   return {

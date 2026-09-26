@@ -217,7 +217,7 @@ async function runHeartbeatOutcomeOperation(
                 },
               );
             try {
-              return await worker.run((scope) => scope.execute(command), assertQueuedCurrent);
+              return await worker.execute(command, assertQueuedCurrent);
             } finally {
               await worker.close();
             }

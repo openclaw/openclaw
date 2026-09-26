@@ -17,9 +17,9 @@ import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credential
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
-import { getExistingOpenClawStateSchemaPath } from "../state/openclaw-state-db-schema-policy.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
@@ -44,7 +44,7 @@ import {
   watchNodeHostParentStdin,
 } from "./launcher-client.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
-import { runStartupMigrations } from "./startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -150,11 +150,7 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  // Operator-approved startup is a second authorized entry point for Doctor-owned
-  // state migrators. Runtime invokes those owners here and never migrates inline.
-  if (!getExistingOpenClawStateSchemaPath()) {
-    await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
-  }
+  ensureNodeHostStateReady();
   const cfg = getRuntimeConfig();
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
@@ -456,14 +452,30 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.off("SIGTERM", onSigterm);
   };
   const stopClientAndMcp = async () => {
+    stopping = true;
     try {
       autoUpdateAbort.abort();
       // A failed lazy import was already reported by the hello handler; shutdown
       // still owns client and runtime cleanup.
       await autoUpdateStart?.catch(() => undefined);
       await autoUpdater?.stop();
-      client.stop();
-      await activeRuntime.close();
+      const failures: unknown[] = [];
+      try {
+        await client.stop();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await activeRuntime.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "node host shutdown cleanup failed");
+      }
     } finally {
       clearInterval(lifetimeInterval);
     }
@@ -478,7 +490,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       await stopClientAndMcp();
     } catch (error) {
       finalExitCode = 1;
-      writeStderrLine(`node host shutdown failed: ${String(error)}`);
+      writeStderrLine(`node host shutdown failed: ${formatErrorMessage(error)}`);
     } finally {
       removeSignalHandlers();
       process.exitCode = finalExitCode;

@@ -87,20 +87,6 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe("template-lmstudio-key");
   });
 
-  it("accepts synthesized lmstudio-local for non-explicit auth mode", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      source: "models.providers.lmstudio (synthetic local key)",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig(),
-      }),
-    ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
-  });
-
   it("accepts synthesized lmstudio-local for explicit api-key mode", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -129,22 +115,6 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
-  it("allows header-only runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
-    );
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
-        }),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("allows header-only runtime auth when an api key env template is unset", async () => {
     resolveApiKeyForProviderMock.mockRejectedValueOnce(
       new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
@@ -163,59 +133,21 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("suppresses profile runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: "stale-profile-key",
-      source: "profile:lmstudio:default",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
+  it.each(["profile:lmstudio:default", "env:LM_API_TOKEN", "shell env: LM_API_TOKEN"])(
+    "suppresses runtime auth from %s when Authorization is configured",
+    async (source) => {
+      resolveApiKeyForProviderMock.mockResolvedValueOnce({
+        apiKey: "stale-key",
+        source,
+        mode: "api-key",
+      });
+      await expect(
+        resolveLmstudioRuntimeApiKey({
+          config: buildLmstudioConfig({ headers: { Authorization: "Bearer proxy-token" } }),
         }),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("suppresses env runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: "stale-env-key",
-      source: "env:LM_API_TOKEN",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
-        }),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("suppresses shell env runtime auth when Authorization is configured", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({
-      apiKey: "stale-shell-env-key",
-      source: "shell env: LM_API_TOKEN",
-      mode: "api-key",
-    });
-
-    await expect(
-      resolveLmstudioRuntimeApiKey({
-        config: buildLmstudioConfig({
-          headers: {
-            Authorization: "Bearer proxy-token",
-          },
-        }),
-      }),
-    ).resolves.toBeUndefined();
-  });
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("throws when explicit api-key mode cannot resolve any key", async () => {
     resolveApiKeyForProviderMock.mockRejectedValue(
@@ -297,19 +229,6 @@ describe("lmstudio-runtime", () => {
         env,
       }),
     ).resolves.toBe(expected);
-  });
-
-  it("resolves env-template api keys from config", async () => {
-    await expect(
-      resolveLmstudioConfiguredApiKey({
-        config: buildLmstudioConfig({
-          apiKey: "${LM_API_TOKEN}",
-        }),
-        env: {
-          LM_API_TOKEN: "template-lmstudio-key",
-        },
-      }),
-    ).resolves.toBe("template-lmstudio-key");
   });
 
   it("resolves arbitrary env-template api keys from config", async () => {

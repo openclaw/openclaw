@@ -40,7 +40,7 @@ export function getEventStreamCompletion(stream: object): Promise<unknown> | und
 
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-  private queue: (T | undefined)[] = [];
+  protected queue: (T | undefined)[] = [];
   private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
   protected done = false;
@@ -148,6 +148,19 @@ export class AssistantMessageEventStream
   private activeThinkingBlocks?: Set<ThinkingContent>;
 
   override push(event: AssistantMessageEvent): void {
+    if (!this.done && event.type === "text_delta" && !event.partial) {
+      const previous = this.queue[this.queue.length - 1];
+      if (
+        previous?.type === "text_delta" &&
+        !previous.partial &&
+        previous.contentIndex === event.contentIndex
+      ) {
+        // Partialless deltas are appends. Only unread neighbors can merge;
+        // snapshots may replace text, and delivered events belong to the consumer.
+        this.queue[this.queue.length - 1] = { ...event, delta: previous.delta + event.delta };
+        return;
+      }
+    }
     if (event.type === "thinking_delta" || event.type === "thinking_end") {
       const block = event.partial.content[event.contentIndex];
       if (block?.type === "thinking") {

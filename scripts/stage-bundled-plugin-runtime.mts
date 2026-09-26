@@ -251,6 +251,8 @@ function isPathOrNestedPath(relativePath: string, nestedPath: string) {
 function shouldCopyRuntimeFile(relativePath: string) {
   return (
     isBundledSkillRuntimePath(relativePath) ||
+    // The overview reader requires regular package-owned files rather than staging links.
+    isPathOrNestedPath(relativePath, "README.md") ||
     isPathOrNestedPath(relativePath, "package.json") ||
     isPathOrNestedPath(relativePath, "openclaw.plugin.json") ||
     isPathOrNestedPath(relativePath, ".codex-plugin/plugin.json") ||

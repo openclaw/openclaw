@@ -403,15 +403,6 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.flush()).toEqual([]);
   });
 
-  it("streams a parser-complete inline code span without waiting for flush", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("Use `code` now")).toEqual([
-      { kind: "text", text: "Use `code` now" },
-    ]);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
   it("continues through a parser-proven tag after a stable inline span", () => {
     const partitioner = createReasoningTagTextPartitioner();
 

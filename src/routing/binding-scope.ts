@@ -40,12 +40,7 @@ export function normalizeRouteBindingRoles(value: string[] | null | undefined): 
 }
 
 export function normalizeRouteBindingChannelId(raw?: string | null): string | null {
-  const normalized = normalizeChatChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  const fallback = normalizeLowercaseStringOrEmpty(raw);
-  return fallback || null;
+  return normalizeChatChannelId(raw) || normalizeLowercaseStringOrEmpty(raw) || null;
 }
 
 // Convert a binding match into the same canonical ids used by session routing.

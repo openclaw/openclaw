@@ -14,9 +14,6 @@ import kotlinx.serialization.json.JsonPrimitive
 
 private const val DEFAULT_CONTACTS_LIMIT = 25
 
-/**
- * Normalized Android contact row returned through the contacts commands.
- */
 @Serializable
 internal data class ContactRecord(
   val identifier: String,
@@ -28,17 +25,11 @@ internal data class ContactRecord(
   val emails: List<String>,
 )
 
-/**
- * Parsed contacts.search request with bounded result count.
- */
 internal data class ContactsSearchRequest(
   val query: String?,
   val limit: Int,
 )
 
-/**
- * Parsed contacts.add request before ContentProviderOperation batching.
- */
 internal data class ContactsAddRequest(
   val givenName: String?,
   val familyName: String?,
@@ -48,9 +39,6 @@ internal data class ContactsAddRequest(
   val emails: List<String>,
 )
 
-/**
- * Injectable ContactsProvider facade for command tests and Android runtime access.
- */
 internal interface ContactsDataSource {
   fun hasReadPermission(context: Context): Boolean
 
@@ -216,8 +204,22 @@ private object SystemContactsDataSource : ContactsDataSource {
   ): ContactRecord {
     val nameRow = loadNameRow(resolver, contactId)
     val organization = loadOrganization(resolver, contactId)
-    val phones = loadPhones(resolver, contactId)
-    val emails = loadEmails(resolver, contactId)
+    val phones =
+      queryContactValues(
+        resolver = resolver,
+        contentUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+        valueColumn = ContactsContract.CommonDataKinds.Phone.NUMBER,
+        contactIdColumn = ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+        contactId = contactId,
+      )
+    val emails =
+      queryContactValues(
+        resolver = resolver,
+        contentUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+        valueColumn = ContactsContract.CommonDataKinds.Email.ADDRESS,
+        contactIdColumn = ContactsContract.CommonDataKinds.Email.CONTACT_ID,
+        contactId = contactId,
+      )
     val displayName =
       (nameRow.displayName ?: fallbackDisplayName).ifEmpty {
         listOfNotNull(nameRow.givenName, nameRow.familyName).joinToString(" ").ifEmpty {
@@ -292,30 +294,6 @@ private object SystemContactsDataSource : ContactsDataSource {
 
   private fun escapeLikePattern(pattern: String): String = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-  private fun loadPhones(
-    resolver: ContentResolver,
-    contactId: Long,
-  ): List<String> =
-    queryContactValues(
-      resolver = resolver,
-      contentUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-      valueColumn = ContactsContract.CommonDataKinds.Phone.NUMBER,
-      contactIdColumn = ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-      contactId = contactId,
-    )
-
-  private fun loadEmails(
-    resolver: ContentResolver,
-    contactId: Long,
-  ): List<String> =
-    queryContactValues(
-      resolver = resolver,
-      contentUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI,
-      valueColumn = ContactsContract.CommonDataKinds.Email.ADDRESS,
-      contactIdColumn = ContactsContract.CommonDataKinds.Email.CONTACT_ID,
-      contactId = contactId,
-    )
-
   private fun queryContactValues(
     resolver: ContentResolver,
     contentUri: android.net.Uri,
@@ -343,14 +321,10 @@ private object SystemContactsDataSource : ContactsDataSource {
   }
 }
 
-/**
- * Handles contacts.search and contacts.add gateway commands through Android ContactsProvider.
- */
 class ContactsHandler internal constructor(
   private val appContext: Context,
   private val dataSource: ContactsDataSource = SystemContactsDataSource,
 ) {
-  /** Searches contacts by optional display-name substring with bounded result count. */
   fun handleContactsSearch(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -375,7 +349,6 @@ class ContactsHandler internal constructor(
     }
   }
 
-  /** Adds a local contact after validating that at least one user-visible field is present. */
   fun handleContactsAdd(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasWritePermission(appContext)) {
       return GatewaySession.InvokeResult.error(

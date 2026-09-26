@@ -181,7 +181,8 @@ vi.mock("./update-command-plugins.js", () => ({
 }));
 
 // Process fixtures cover runtime generation with real lifecycle ownership.
-vi.mock("./update-command-runtime.js", () => ({
+vi.mock("./update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-runtime.js")>()),
   completeSourceUpdateRuntime: vi.fn(async () => {
     record("runtime-completion");
     return { changed: false };
@@ -217,6 +218,7 @@ import {
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 describe("update plugin lifecycle lease boundaries", () => {
   afterEach(() => {
@@ -230,6 +232,9 @@ describe("update plugin lifecycle lease boundaries", () => {
     // shared host path while real recovery admission is running.
     mocks.databasePath = path.join(dirs.make("update-lease-order-"), "state", "openclaw.sqlite");
     vi.clearAllMocks();
+    vi.mocked(updatePluginsAfterCoreUpdate).mockReset();
+    vi.mocked(completePostCorePluginUpdate).mockReset();
+    vi.mocked(continuePostCoreUpdateInFreshProcess).mockReset();
     mocks.verifyGateway
       .mockReset()
       .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });
@@ -434,6 +439,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
       );
       const maintenance = {
+        signal: new AbortController().signal,
         run: <T>(operation: () => T): T => operation(),
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
@@ -733,11 +739,20 @@ describe("update plugin lifecycle lease boundaries", () => {
     }
   });
 
-  it.each([undefined, "parent"])(
-    "resumes with completion owner %s before publishing",
-    async (owner) => {
+  it.each([
+    { owner: undefined, sourceRuntimePrepared: false },
+    { owner: "parent", sourceRuntimePrepared: false },
+    { owner: "parent", sourceRuntimePrepared: true },
+  ])(
+    "resumes with completion owner $owner before publishing (prepared=$sourceRuntimePrepared)",
+    async ({ owner, sourceRuntimePrepared }) => {
       vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(owner === "parent");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
+      const handoff = dirs.make("prepared-source-runtime-");
+      await fs.writeFile(
+        path.join(handoff, "handoff.json"),
+        JSON.stringify({ sourceRuntimePrepared }),
+      );
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoff, "plugins.json"));
       vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(async () => {
         record("publish-result");
       });
@@ -749,6 +764,9 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
 
       expectLifecycleBoundary(mocks.events, "handoff-records");
+      expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceRuntimePrepared }),
+      );
       expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
         mocks.events.indexOf("lease-enter:false"),
       );
@@ -786,6 +804,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       mocks.maintenance.mockImplementationOnce(async () => {
         record("park-service");
         return {
+          signal: new AbortController().signal,
           run: <T>(operation: () => T): T => operation(),
           releaseState: async () => {
             record("release-state");
@@ -964,6 +983,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     const warnings: string[] = [];
     const warning = "Gateway was already stopped before repair; run openclaw gateway start.";
     mocks.maintenance.mockResolvedValue({
+      signal: new AbortController().signal,
       run: <T>(operation: () => T): T => operation(),
       release: async () => {},
       releaseState: async () => {},

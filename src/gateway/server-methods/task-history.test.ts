@@ -9,32 +9,34 @@ import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
   patchSessionEntryCore,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { getSessionKysely } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../../shared/async-work-scope.test-support.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { retainOpenClawStateDatabase } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { markTaskTerminalById, recordTaskProgressByRunId } from "../../tasks/runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
 import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
-import {
-  createTaskFixture,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.test-support.js";
+import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
+import { withHistoryState } from "./task-history.test-support.js";
 import { identifiedClient, runTaskHandler } from "./tasks.test-helpers.js";
 
 type ReadTaskHistory = NonNullable<AgentHarness["taskHistory"]>["read"];
@@ -74,29 +76,6 @@ function createNativeTask(runId = "synthetic-child-1") {
   });
 }
 
-async function withHistoryState(run: () => Promise<void>) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const registry = captureActivePluginRegistrySnapshot();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    resetTaskRegistryForTests();
-    try {
-      await run();
-    } finally {
-      try {
-        await disposeSessionReadContexts();
-      } finally {
-        try {
-          // Release native borrowers before the registry's synchronous close.
-          await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-          resetTaskRegistryForTests({ persist: false });
-        } finally {
-          restoreActivePluginRegistrySnapshot(registry);
-        }
-      }
-    }
-  });
-}
-
 async function createRequester(actorId: string, incognito = false) {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: requesterSessionKey },
@@ -111,6 +90,25 @@ async function createRequester(actorId: string, incognito = false) {
 }
 
 describe("tasks.history", () => {
+  it("drains admitted history work before resetting its registry", async () => {
+    let released = false;
+    await withHistoryState(async () => {
+      const borrow = retainOpenClawStateDatabase(openOpenClawStateDatabase());
+      const signal = expectDefined(getAsyncWorkSignal(), "history fixture work owner");
+      void trackAsyncWork(async () => {
+        try {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        } finally {
+          borrow.release();
+          released = true;
+        }
+      });
+    });
+    expect(released).toBe(true);
+  });
+
   it.each(["progress", "history identity"] as const)(
     "checks current history while a committed %s result is held",
     async (change) => {
@@ -129,7 +127,7 @@ describe("tasks.history", () => {
         const pending = runTaskHandler("tasks.history", { taskId: task.taskId });
         const store = getTaskRegistryStore();
         // Detached results precede cleanup; the enclosing scope includes root release.
-        const scopeRuns = vi.spyOn(AsyncWorkScope.prototype, "run");
+        const scopeRuns = observeAsyncWorkScopeRuns();
         let mutation: Promise<unknown> | undefined;
         try {
           await entered.promise;
@@ -195,14 +193,17 @@ describe("tasks.history", () => {
           try {
             await pending;
             await mutation;
-            for (const result of scopeRuns.mock.results) {
+            for (const [index, result] of scopeRuns.mock.results.entries()) {
+              if (index < scopeRuns.startIndex) {
+                continue;
+              }
               expect(result.type).toBe("return");
               await result.value;
             }
             expect(getActiveGatewayRootWorkCount()).toBe(0);
             resetTaskFlowRegistryForTests({ persist: false });
           } finally {
-            scopeRuns.mockRestore();
+            scopeRuns[Symbol.dispose]();
           }
         }
       });
@@ -342,6 +343,389 @@ describe("tasks.history", () => {
       );
       expect(second.payload?.messages).toMatchObject([{ content: "First child message" }]);
       expect(second.payload?.nextCursor).toBeUndefined();
+      await upsertSessionEntryCore(scope, { sessionId: "next-child-generation", updatedAt: 2 });
+      const stale = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 2, cursor },
+        {},
+        null,
+        context,
+      );
+      expect(stale.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+      expect(stale.payload?.messages).toBeUndefined();
+    });
+  });
+
+  it("rejects a running read when the child finishes before its alias is reused", async () => {
+    await withHistoryState(async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:finishing-child",
+        sessionId: "finishing-physical",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const task = createTaskFixture("subagent", {
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        childSessionKey: scope.sessionKey,
+        agentId: "main",
+        runId: "finishing-run",
+        task: "Finishing child",
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const readEntry = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+      const heldRead = vi
+        .spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker")
+        .mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return readEntry(...args);
+        });
+      const pending = runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        null,
+        await createHistoryReadContext(),
+      );
+      try {
+        await withTestTimeout(entered.promise, 5_000, "History did not reach entry selection");
+        markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2 });
+        const successor = { ...scope, sessionId: "finished-successor" };
+        await upsertSessionEntryCore(successor, { sessionId: successor.sessionId, updatedAt: 3 });
+        await appendTranscriptMessage(successor, {
+          message: {
+            role: "assistant",
+            content: "Unrelated successor result",
+            __openclaw: { runId: "successor-run" },
+          },
+        });
+        release.resolve();
+        const result = await pending;
+        expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        expect(result.payload?.messages).toBeUndefined();
+      } finally {
+        release.resolve();
+        await pending;
+        heldRead.mockRestore();
+      }
+    });
+  });
+
+  it("does not serve a successor transcript for a completed child without an archive", async () => {
+    await withHistoryState(async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:reused-history-child",
+        sessionId: "original-history-child",
+      };
+      const runId = "original-history-run";
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: "Original result", __openclaw: { runId } },
+      });
+      const task = createTaskFixture("subagent", {
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        childSessionKey: scope.sessionKey,
+        agentId: "main",
+        runId,
+        task: "Original inspection",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2 });
+      const removed = await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+        archiveTranscript: false,
+        expectedSessionId: scope.sessionId,
+      });
+      expect(removed.deleted).toBe(true);
+      const successor = { ...scope, sessionId: "successor-history-child" };
+      await upsertSessionEntryCore(successor, { sessionId: successor.sessionId, updatedAt: 3 });
+      await appendTranscriptMessage(successor, {
+        message: {
+          role: "assistant",
+          content: "Unrelated successor result",
+          __openclaw: { runId: "successor-history-run" },
+        },
+      });
+      const result = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        null,
+        await createHistoryReadContext(),
+      );
+      expect(result.calls).toHaveLength(1);
+      expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+      expect(result.payload?.messages).toBeUndefined();
+    });
+  });
+
+  it.each(["overridden", "non-string"] as const)("rejects %s stored run metadata", async (kind) => {
+    await withHistoryState(async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:stored-run",
+        sessionId: "stored-run",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: "Another run's reply", __openclaw: { runId: "7" } },
+      });
+      // Preserve imported JSON bytes that object-based append APIs cannot represent.
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const db = getSessionKysely(database.db);
+          const row = expectDefined(
+            executeSqliteQueryTakeFirstSync(
+              database.db,
+              db
+                .selectFrom("transcript_events")
+                .select(["seq", "event_json"])
+                .where("session_id", "=", scope.sessionId)
+                .orderBy("seq", "desc")
+                .limit(1),
+            ),
+            "reply row",
+          );
+          const original = expectDefined(row.event_json, "small identity fixture");
+          const eventJson = original.replace(
+            '"runId":"7"',
+            kind === "overridden" ? '"runId":"7","runId":"new-run"' : '"runId":7',
+          );
+          expect(eventJson).not.toBe(original);
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("transcript_events")
+              .set({ event_json: eventJson, navigation_json: null })
+              .where("session_id", "=", scope.sessionId)
+              .where("seq", "=", row.seq),
+          );
+        },
+        { agentId: scope.agentId },
+      );
+      const task = createTaskFixture("subagent", {
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        childSessionKey: scope.sessionKey,
+        agentId: "main",
+        runId: "7",
+        task: "Older task",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2 });
+      const result = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        null,
+        await createHistoryReadContext(),
+      );
+      expect(result.calls).toHaveLength(1);
+      expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+    });
+  });
+
+  it.each(["escaped Unicode", "oversized body", "unsupported oversized Unicode"] as const)(
+    "reads a retained identity reply with %s",
+    async (kind) => {
+      await withHistoryState(async () => {
+        const scope = {
+          agentId: "main",
+          sessionKey: "agent:main:subagent:large-identity",
+          sessionId: "large-identity",
+        };
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        const content =
+          kind === "escaped Unicode"
+            ? "x".repeat(20 * 1024) + "\0tail"
+            : "x".repeat(9 * 1024 * 1024) +
+              (kind === "unsupported oversized Unicode" ? "\0tail" : "");
+        await appendTranscriptMessage(scope, {
+          message: { role: "assistant", content, __openclaw: { runId: "\u00a0large-run\u00a0" } },
+        });
+        const task = createTaskFixture("subagent", {
+          requesterSessionKey,
+          ownerKey: requesterSessionKey,
+          childSessionKey: scope.sessionKey,
+          agentId: "main",
+          runId: "large-run",
+          task: "Large retained reply",
+        });
+        markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2 });
+        const result = await runTaskHandler(
+          "tasks.history",
+          { taskId: task.taskId },
+          {},
+          null,
+          await createHistoryReadContext(),
+        );
+        if (kind === "unsupported oversized Unicode") {
+          expect(result.calls).toHaveLength(1);
+          expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+          return;
+        }
+        expect(result.calls[0]?.[0]).toBe(true);
+        expect(result.payload?.messages).toMatchObject([
+          {
+            role: "assistant",
+            content: expect.stringContaining("...(truncated)..."),
+            __openclaw: { truncated: true, reason: "display-cap" },
+          },
+        ]);
+      });
+    },
+  );
+
+  it("keeps an older completed run bound across alias replacement and pagination", async () => {
+    await withHistoryState(async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:kept-child",
+        sessionId: "kept-physical",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      for (const [runId, content] of [
+        ["kept-first", "Earlier reply"],
+        ["kept-second", "Later reply"],
+      ]) {
+        await appendTranscriptMessage(scope, {
+          message: { role: "assistant", content, __openclaw: { runId } },
+        });
+      }
+      const task = createTaskFixture("subagent", {
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        childSessionKey: scope.sessionKey,
+        agentId: "main",
+        runId: "kept-first",
+        task: "Earlier retained run",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2 });
+      const newerTask = createTaskFixture("subagent", {
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        childSessionKey: scope.sessionKey,
+        agentId: "main",
+        runId: "kept-second",
+        task: "Later retained run",
+      });
+      markTaskTerminalById({ taskId: newerTask.taskId, status: "succeeded", endedAt: 3 });
+      let replaced = false;
+      const context = await createHistoryReadContext({
+        readChatStartupProjection: async () => {
+          const successor = { ...scope, sessionId: "replacement-physical" };
+          await upsertSessionEntryCore(successor, { sessionId: successor.sessionId, updatedAt: 4 });
+          await appendTranscriptMessage(successor, {
+            message: { role: "assistant", content: "Unrelated replacement" },
+          });
+          replaced = true;
+          return undefined;
+        },
+      });
+      const first = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 1 },
+        {},
+        null,
+        context,
+      );
+      expect(first.calls[0]?.[0]).toBe(true);
+      expect(replaced).toBe(true);
+      expect(loadGatewaySessionEntryReadOnly(scope.sessionKey).entry?.sessionId).toBe(
+        "replacement-physical",
+      );
+      expect(first.payload?.messages).toMatchObject([{ content: "Later reply" }]);
+      const cursor = expectDefined(first.payload?.nextCursor, "retained transcript cursor");
+      const second = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 1, cursor },
+        {},
+        null,
+        await createHistoryReadContext(),
+      );
+      expect(second.calls[0]?.[0]).toBe(true);
+      expect(second.payload?.messages).toMatchObject([{ content: "Earlier reply" }]);
+      expect(second.payload?.nextCursor).toBeUndefined();
+      let preparingPublication = false;
+      let transcriptRetired = false;
+      const finalContext = await createHistoryReadContext({
+        readChatStartupProjection: async () => {
+          preparingPublication = true;
+          return undefined;
+        },
+      });
+      const rows = expectDefined(getSessionRowProjection(finalContext), "history row owner");
+      const prepareRows = rows.withPreparedExactRows.bind(rows);
+      const heldRows = vi
+        .spyOn(rows, "withPreparedExactRows")
+        .mockImplementation(async (...args) => {
+          if (preparingPublication && !transcriptRetired) {
+            await replaceTranscriptEvents(scope, []);
+            transcriptRetired = true;
+          }
+          return prepareRows(...args);
+        });
+      try {
+        const retired = await runTaskHandler(
+          "tasks.history",
+          { taskId: task.taskId, limit: 1, cursor },
+          {},
+          null,
+          finalContext,
+        );
+        expect(transcriptRetired).toBe(true);
+        expect(retired.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        expect(retired.payload?.messages).toBeUndefined();
+      } finally {
+        heldRows.mockRestore();
+      }
+    });
+  });
+
+  it("reads a retained failure receipt before the first assistant reply", async () => {
+    await withHistoryState(async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:kept-failure",
+        sessionId: "kept-failure",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
+      const runId = "kept-failed-run";
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await recordGatewaySessionRunFailure({
+        target: scope,
+        runId,
+        error: "Synthetic pre-reply failure",
+      });
+      const task = createTaskFixture("subagent", {
+        requesterSessionKey,
+        ownerKey: requesterSessionKey,
+        childSessionKey: scope.sessionKey,
+        agentId: "main",
+        runId,
+        task: "Failed retained run",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "failed", endedAt: 2 });
+      const result = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        null,
+        await createHistoryReadContext(),
+      );
+      expect(result.calls[0]?.[0]).toBe(true);
+      expect(result.payload?.messages).toMatchObject([
+        {
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content: "This turn ended before a reply: Synthetic pre-reply failure",
+          __openclaw: { runId },
+        },
+      ]);
     });
   });
 

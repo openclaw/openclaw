@@ -128,13 +128,42 @@ describe("buildGuardedModelFetch SSE readability", () => {
       expectedBody: 'data: {"ok": true}\ndata: \t',
     },
     {
+      name: "split CRLF delimiters",
+      body: "",
+      chunks: ['data: {"ok": true}\r', "\n\r", "\n"],
+      expectedBody: 'data: {"ok": true}\r\n\r\n',
+    },
+    {
+      name: "split CR-only delimiters after a keepalive",
+      body: "",
+      chunks: ["event: ping\r", '\rdata: {"ok": true}\r', "\r"],
+      expectedBody: 'data: {"ok": true}\r\r',
+    },
+    {
+      name: "split LF delimiter after a partial payload",
+      body: "",
+      chunks: ['data: {"ok"', ": true}\n", "\n"],
+      expectedBody: 'data: {"ok": true}\n\n',
+    },
+    {
       name: "blank EOF tail",
       body: "event: ping\ndata\ndata: \t\uFEFF\u00A0",
       expectedBody: "",
     },
-  ])("preserves SSE readability for $name", async ({ body, expectedBody }) => {
+  ])("preserves SSE readability for $name", async ({ body, chunks, expectedBody }) => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            const encoder = new TextEncoder();
+            for (const chunk of chunks ?? [body]) {
+              controller.enqueue(encoder.encode(chunk));
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });

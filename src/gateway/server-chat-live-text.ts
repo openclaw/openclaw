@@ -1,8 +1,6 @@
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 
-type BroadcastDelta = { deltaText: string; replace?: true };
-
 export function mergeAgentTextPayload(previous: unknown, next: unknown): AgentEventPayload {
   // SAFETY: this callback only merges the same typed agent producer and stream/item key.
   const payload = next as AgentEventPayload;
@@ -20,19 +18,4 @@ export function mergeChatTextPayload(previous: unknown, next: unknown): ChatEven
   const payload = next as Delta;
   // SAFETY: both values share the same chat-delta delivery key and buffering generation.
   return { ...payload, deltaText: `${(previous as Delta).deltaText}${payload.deltaText}` };
-}
-
-export function resolveBroadcastDelta(params: {
-  text: string;
-  previousBroadcastText: string | undefined;
-}): BroadcastDelta | undefined {
-  const previous = params.previousBroadcastText;
-  if (previous === undefined) {
-    return params.text ? { deltaText: params.text } : undefined;
-  }
-  if (!params.text.startsWith(previous)) {
-    return { deltaText: params.text, replace: true };
-  }
-  const deltaText = params.text.slice(previous.length);
-  return deltaText ? { deltaText } : undefined;
 }
