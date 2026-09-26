@@ -110,3 +110,53 @@ it.each(
     });
   },
 );
+
+// #156394: 9.4/9.5 updaters run the candidate's post-plugin readiness lint with
+// these markers and no advisory classification of their own. An installed
+// channel plugin that still reports open groups as critical must not block them.
+it.each([false, true])(
+  "keeps security errors advisory for a released post-plugin readiness driver (update: %s)",
+  async (update) => {
+    await withTempHomeConfig({}, async () => {
+      clearHealthChecksForTest();
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update ? "1" : "0");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", update ? "1" : "0");
+      vi.stubEnv("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "0");
+      const checkId = "core/doctor/security";
+      const finding = {
+        checkId,
+        severity: "error" as const,
+        requirement: "channels.whatsapp.groups.open",
+        message:
+          'WhatsApp security warning: WhatsApp groups: groupPolicy="open" allows any member.',
+      };
+      const checks = await contributions.resolveDoctorContributionHealthChecks();
+      const selected = checks.find((entry) => entry.id === checkId);
+      expect(selected).toBeDefined();
+      const resolve = vi
+        .spyOn(contributions, "resolveDoctorContributionHealthChecks")
+        .mockResolvedValue([{ ...selected!, detect: async () => [finding] }]);
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const exitCode = await runDoctorLintCli(createTestRuntime(), {
+          json: true,
+          severityMin: "error",
+          onlyIds: [checkId],
+        });
+        const output = String(stdout.mock.calls.at(-1)?.[0]);
+        expect(exitCode).toBe(update ? 0 : 1);
+        expect(parseReleasedDoctorLintReport(output)).toMatchObject(
+          update
+            ? { ok: true, findings: [], warnings: [{ ...finding, severity: "warning" }] }
+            : { ok: false, findings: [finding] },
+        );
+      } finally {
+        resolve.mockRestore();
+        clearHealthChecksForTest();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    });
+  },
+);
