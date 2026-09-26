@@ -345,6 +345,12 @@ The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
+Cleanup first tries to truncate the WAL without waiting for readers. If readers
+prevent truncation, a complete PASSIVE checkpoint is sufficient: every observed
+frame must have reached the main database, even if the WAL file remains allocated.
+Retained WAL bytes still count toward the physical budget. Successful cleanup
+logs one outcome with the before/after bytes and removal counts.
+
 An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.
 The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and

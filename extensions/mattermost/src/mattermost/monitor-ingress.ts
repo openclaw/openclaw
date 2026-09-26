@@ -1,4 +1,3 @@
-// Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
   createChannelIngressError,
   createChannelIngressMonitor,

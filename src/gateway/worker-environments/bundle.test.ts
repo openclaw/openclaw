@@ -40,6 +40,7 @@ async function writeFixture(
     "utf8",
   );
   for (const [artifactName, contents] of [
+    ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
     ["github-exec-launcher.mjs", "export const launcher = true;\n"],
     ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
     ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
@@ -137,6 +138,7 @@ describe("worker bundle producer", () => {
       expect(first.tarballSha256).toBe(createHash("sha256").update(compressed).digest("hex"));
       expect(first.tarballBytes).toBe(compressed.byteLength);
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
+        "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
         "service-child-group-anchor.mjs",
@@ -149,6 +151,7 @@ describe("worker bundle producer", () => {
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
       for (const [artifactName, expectedContents] of [
+        ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
         ["github-exec-launcher.mjs", "export const launcher = true;\n"],
         ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
         ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
@@ -185,6 +188,7 @@ describe("worker bundle producer", () => {
 
       let previousHash = first.bundleHash;
       for (const artifactName of [
+        "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
         "service-child-group-anchor.mjs",
@@ -605,6 +609,7 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "file-tool-planning.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
         "service-child-group-anchor.mjs",
@@ -618,6 +623,7 @@ describe("worker bundle producer", () => {
 
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
+      "file-tool-planning.worker.mjs",
       "github-exec-launcher.mjs",
       "image-processor.worker.mjs",
       "service-child-group-anchor.mjs",

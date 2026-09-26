@@ -502,7 +502,6 @@ extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2
 extensions/imessage/src/setup-core.ts	1
-extensions/imessage/src/shared.ts	1
 extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
 extensions/irc/src/inbound.ts	6
@@ -628,7 +627,7 @@ extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
-extensions/mattermost/src/channel.ts	8
+extensions/mattermost/src/channel.ts	6
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	8
 extensions/mattermost/src/mattermost/directory.ts	2
@@ -744,7 +743,7 @@ extensions/msteams/src/qa/adapter.runtime.ts	2
 extensions/msteams/src/qa/bot-framework-server.ts	3
 extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
-extensions/msteams/src/sdk-proactive.ts	7
+extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	7
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
@@ -933,7 +932,7 @@ extensions/qa-lab/src/runtime-tool-metadata.ts	5
 extensions/qa-lab/src/scenario-catalog.ts	1
 extensions/qa-lab/src/scenario-flow-runner.ts	5
 extensions/qa-lab/src/self-check-scenario.ts	2
-extensions/qa-lab/src/suite-launch.runtime.ts	2
+extensions/qa-lab/src/suite-launch.runtime.ts	1
 extensions/qa-lab/src/suite-planning.ts	2
 extensions/qa-lab/src/suite-run-standard.ts	1
 extensions/qa-lab/src/suite-runtime-agent-media.ts	3
@@ -982,7 +981,6 @@ extensions/signal/src/client.ts	4
 extensions/signal/src/monitor/event-handler.ts	1
 extensions/signal/src/probe.ts	1
 extensions/signal/src/send.ts	1
-extensions/signal/src/shared.ts	1
 extensions/signal/src/signal-ingress.ts	2
 extensions/slack/src/accounts.ts	6
 extensions/slack/src/action-runtime.ts	5
@@ -1196,8 +1194,7 @@ extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	3
 extensions/whatsapp/src/connection-owner.ts	1
-extensions/whatsapp/src/group-config-path.ts	4
-extensions/whatsapp/src/inbound-policy.ts	1
+extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	4
@@ -2793,7 +2790,7 @@ src/logging/config.ts	2
 src/logging/console.ts	5
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	11
+src/logging/diagnostic-stability-bundle.ts	9
 src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
@@ -2916,7 +2913,7 @@ src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store-registry.ts	1
 src/plugin-sdk/runtime-store.ts	2
-src/plugin-sdk/secret-ref-runtime.ts	3
+src/plugin-sdk/secret-ref-runtime.ts	2
 src/plugin-sdk/session-store-runtime-internal.ts	1
 src/plugin-sdk/session-store-runtime.ts	5
 src/plugin-sdk/session-transcript-runtime.ts	6

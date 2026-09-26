@@ -54,6 +54,23 @@ export function captureOpenClawStateReadContext(
   };
 }
 
+/** Read-only workers need resolved runtime facts, not the initialization environment. */
+export function captureOpenClawStateReadWorkerContext(
+  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+): OpenClawStateWorkerContext {
+  const source = options.env ?? process.env;
+  const env = process.platform === "win32" ? cloneEnvWithPlatformSemantics(source) : source;
+  const environment: OpenClawStateWorkerContext["environment"] = {
+    OPENCLAW_STATE_DIR: resolveStateDir(env),
+    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+  };
+  return {
+    ...captureOpenClawStateReadContext(options.path ?? resolveOpenClawStateSqlitePath(environment)),
+    environment,
+    coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
+  };
+}
+
 /** Resident readers retain their source and schema policy without re-admitting each publication. */
 export function prepareOpenClawStateReadSource(input: { path: string; env?: NodeJS.ProcessEnv }) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
@@ -124,18 +141,13 @@ export function captureOpenClawStateWorkerContext(
     initializationAgentPaths?: readonly string[];
   } = {},
 ): OpenClawStateWorkerContext {
-  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  const environment: OpenClawStateWorkerContext["environment"] = {
-    OPENCLAW_STATE_DIR: resolveStateDir(env),
-    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
-  };
+  const context = captureOpenClawStateReadWorkerContext(options);
   return {
-    ...captureOpenClawStateReadContext(options.path ?? resolveOpenClawStateSqlitePath(environment)),
-    environment,
+    ...context,
     initializationEnvironment: mergeProcessEnv([
-      env,
+      options.env ?? process.env,
       { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
-      environment,
+      context.environment,
     ]),
     ...(options.initializationAgentPaths
       ? {
@@ -144,6 +156,5 @@ export function captureOpenClawStateWorkerContext(
           ),
         }
       : {}),
-    coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
   };
 }

@@ -137,6 +137,8 @@ describe("sanitizeForPlainText", () => {
   it("strips unknown/remaining tags", () => {
     expect(sanitizeForPlainText('<span class="x">text</span>')).toBe("text");
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
+    expect(sanitizeForPlainText("<script>alert(1)</script>")).toBe("alert(1)");
+    expect(sanitizeForPlainText("<img src=x onerror=alert(1)>visible")).toBe("visible");
   });
 
   it("strips colon- and dot-qualified tags", () => {
@@ -307,6 +309,67 @@ describe("sanitizeForPlainText", () => {
     // `a < b` does not match `<tag>` pattern because there is no closing `>`
     // immediately after a tag-like sequence.
     expect(sanitizeForPlainText("a < b && c > d")).toBe("a < b && c > d");
+  });
+
+  it.each([
+    "Guard the retry loop: only retry while attempts<max and backoffMs>0, otherwise give up.",
+    "Set the threshold so that latency<budget. Then verify the p99 stays flat, confirm the alert fires, and only after that raise concurrency>4.",
+    "Use timeout<300 and n>0 for the probe.",
+    "a<b",
+    "x<3 && y>2",
+    "1<2>0",
+    "retry if attempts<3 and wait>5s",
+    "attempts<max and wait>5s",
+    "重试次数<max 且等待>5秒",
+    "🙂<limit and wait>5s",
+    "Set latency<budget. Then check:\n\n```\nif (a<b) { return c>d; }\n```\n\nand confirm concurrency>4 is safe.",
+  ])("preserves unspaced comparison prose in %s", (input) => {
+    expect(sanitizeForPlainText(input)).toBe(input);
+  });
+
+  it.each([10_000, 40_000])("bounds malformed comparison scanning with %i spaces", (size) => {
+    const input = `x<max${" ".repeat(size)}= and wait>5`;
+    const started = process.hrtime.bigint();
+    const sanitized = sanitizeForPlainText(input);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    expect(sanitized).toBe("x5");
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it.each([
+    ["checkbox-after-value", 'x^2 • <input type="checkbox" checked/>done', "x^2 • done"],
+    ["boolean-after-value", '<input type="checkbox" disabled/>todo', "todo"],
+    ["boolean-only", "<input disabled/>todo", "todo"],
+    ["boolean-first", '<input checked type="checkbox"/>done', "done"],
+    ["interleaved", '<input checked type="checkbox" disabled/>done', "done"],
+    ["autofocus-after-value", '<input type="text" autofocus/>ready', "ready"],
+    ["controls-after-value", '<video src="clip.mp4" controls/>play', "play"],
+    ["autoplay-after-value", '<audio src="clip.mp3" autoplay/>now', "now"],
+    ["bare-custom", "<span data-x>text</span>", "text"],
+    ["mixed-custom", "<div hidden data-id=1>text</div>", "\ntext\n"],
+    ["download", "<a href=x download>file</a>", "file"],
+    ["custom-element-boolean", "<custom-element hidden>text</custom-element>", "text"],
+    ["custom-element-bare", "<custom-element data-x>text</custom-element>", "text"],
+    ["custom-element-empty", "<my-widget hidden>", ""],
+    ["qualified-bare", "<vendor:note data-x>text</vendor:note>", "text"],
+    ["unpaired-dot-qualified-clause", "foo<vendor.note and wait>5", "foo5"],
+    ["adjacent-numeric", "foo<span data-x>5</span>", "foo5"],
+    ["paired-clause", "foo<span and wait>5</span>", "foo5"],
+    ["void-numeric", "foo<img hidden>5", "foo5"],
+    ["multiple-bare-numeric", "foo<input disabled checked>5", "foo5"],
+    ["unpaired-clause", "foo<span and wait>5", "foo5"],
+    ["uppercase-unpaired-clause", "foo<SPAN and wait>5", "foo5"],
+  ])("strips or converts tags with bare attributes (%s)", (_name, input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it.each([
+    ["range a<b-c>d", "range ad"],
+    ["attempts<max threshold>5s", "attempts5s"],
+    ["x<b and y>2", "x2"],
+  ])("retains existing stripping of ambiguous markup in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
   // --- mixed content ------------------------------------------------------
