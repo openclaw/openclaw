@@ -103,6 +103,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
   "src/gateway/server-methods/chat.abort-live-proof.test.ts",
   "src/gateway/server-methods/chat.oauth-refresh-cancel.integration.test.ts",
+  "src/gateway/server-methods/cron-creator-transports.integration.test.ts",
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.scheduled-policy-adoption.integration.test.ts",
