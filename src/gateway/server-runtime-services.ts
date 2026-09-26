@@ -90,11 +90,12 @@ export function startGatewayCronWithLogging(params: {
   );
 }
 
-/** Schedules post-ready maintenance and cancels/cleans handles if shutdown wins the race. */
+/** Schedules post-ready maintenance and cleans up if shutdown wins the race. */
 export function scheduleGatewayPostReadyMaintenance(params: {
+  scheduler: GatewayScheduler;
+  signal: AbortSignal;
   delayMs: number;
   isClosing: () => boolean;
-  onStarted?: () => void;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
   shouldStartCron: () => boolean;
@@ -105,46 +106,56 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   logCron: { error: (message: string) => void };
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
-}): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(() => {
-    params.onStarted?.();
-    if (params.isClosing()) {
-      return;
-    }
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      try {
-        if (!params.isClosing()) {
-          const maintenance = await params.startMaintenance();
-          if (params.isClosing()) {
-            // Maintenance can allocate intervals before shutdown is observed; clear them here
-            // instead of handing live timers to a closing gateway.
-            await clearGatewayMaintenanceHandles(maintenance);
-          } else if (maintenance) {
-            await params.applyMaintenance(maintenance);
+}): void {
+  params.scheduler.schedule({
+    id: "startup:maintenance",
+    delayMs: params.delayMs,
+    run: () => {
+      if (params.isClosing()) {
+        return undefined;
+      }
+      return runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          try {
+            if (!params.isClosing()) {
+              const maintenance = await params.startMaintenance();
+              if (params.isClosing()) {
+                // Startup may publish maintenance after shutdown has already fenced new work.
+                await clearGatewayMaintenanceHandles(maintenance);
+              } else if (maintenance) {
+                await params.applyMaintenance(maintenance);
+              }
+            }
+          } catch (err) {
+            params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
           }
+          if (!params.isClosing() && params.shouldStartCron()) {
+            params.markCronStartHandled();
+            startGatewayCronWithLogging({
+              cronState: params.cronState,
+              cronReconciliation: params.cronReconciliation,
+              reason: "startup",
+              config: params.cronConfig,
+              logCron: params.logCron,
+            });
+          }
+          if (!params.isClosing()) {
+            params.recordPostReadyMemory();
+          }
+        },
+        "runtime:maintenance",
+        params.signal,
+      ).catch((err: unknown) => {
+        const ownedCancellation =
+          params.signal.aborted &&
+          (err === params.signal.reason ||
+            (err instanceof Error && err.cause === params.signal.reason));
+        if (!ownedCancellation) {
+          params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`);
         }
-      } catch (err) {
-        params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
-      }
-      if (!params.isClosing() && params.shouldStartCron()) {
-        params.markCronStartHandled();
-        startGatewayCronWithLogging({
-          cronState: params.cronState,
-          cronReconciliation: params.cronReconciliation,
-          reason: "startup",
-          config: params.cronConfig,
-          logCron: params.logCron,
-        });
-      }
-      if (!params.isClosing()) {
-        params.recordPostReadyMemory();
-      }
-    }, "runtime:maintenance").catch((err: unknown) =>
-      params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`),
-    );
-  }, params.delayMs);
-  timer.unref?.();
-  return timer;
+      });
+    },
+  });
 }
 
 const RECOVERY_SHUTDOWN_STILL_PENDING_WARN_MS = 5_000;

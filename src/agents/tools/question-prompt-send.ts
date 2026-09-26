@@ -1,12 +1,4 @@
-/**
- * Publishes a question tool's prompt into the conversation it will be answered from.
- *
- * A question tool blocks its turn until a person answers, so the prompt has to reach
- * that conversation whichever harness is running the agent. Harnesses that run tools
- * through the embedded tool lifecycle publish it from their tool-start handler;
- * harnesses that dispatch tools themselves hand the tool this sender instead. Both
- * arrive here, so the prompt is identical either way.
- */
+/** Shared prompt delivery for embedded tool-start handlers and self-publishing harnesses. */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
