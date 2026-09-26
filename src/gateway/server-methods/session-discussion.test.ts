@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   loadSessionTarget: vi.fn(),
   maybeGenerateSessionTitle: vi.fn(),
   readSessionTitleFields: vi.fn(),
+  readSessionEntry:
+    vi.fn<
+      typeof import("../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
+    >(),
   resolveUtilityModelRefForAgent: vi.fn(),
   updateSessionEntry: vi.fn(),
 }));
@@ -28,13 +32,16 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.updateSessionEntry,
   loadSessionEntry: () => mocks.loadSessionTarget()?.entry,
 }));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: mocks.readSessionEntry,
+}));
 vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();
   mocks.maybeGenerateSessionTitle.mockImplementation(actual.maybeGenerateSessionTitle);
   return { ...actual, maybeGenerateSessionTitle: mocks.maybeGenerateSessionTitle };
 });
 vi.mock("../session-transcript-title-reader.js", () => ({
-  readSessionTitleFieldsFromTranscript: mocks.readSessionTitleFields,
+  readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
 vi.mock("./session-change-event.js", () => ({
   emitSessionsChanged: mocks.emitSessionsChanged,
@@ -99,10 +106,16 @@ describe("session discussion gateway methods", () => {
     mocks.loadSessionTarget.mockReset();
     mocks.maybeGenerateSessionTitle.mockClear();
     mocks.readSessionTitleFields.mockReset();
+    mocks.readSessionEntry
+      .mockReset()
+      .mockImplementation(async (_scope, assertCurrent, consume) => {
+        assertCurrent();
+        return await consume({ ok: true, value: mocks.loadSessionTarget()?.entry });
+      });
     mocks.resolveUtilityModelRefForAgent.mockReset();
     mocks.updateSessionEntry.mockReset();
     mocks.generateConversationLabelWithFallback.mockResolvedValue("Release Planning");
-    mocks.readSessionTitleFields.mockReturnValue({
+    mocks.readSessionTitleFields.mockResolvedValue({
       firstUserMessage: null,
       lastMessagePreview: null,
     });
@@ -199,7 +212,7 @@ describe("session discussion gateway methods", () => {
     const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
     let persistedEntry: SessionEntry | undefined;
     mockSession(entry);
-    mocks.readSessionTitleFields.mockReturnValue({
+    mocks.readSessionTitleFields.mockResolvedValue({
       firstUserMessage: "[Mon 2026-07-27 09:00 PDT] Plan the release",
       lastMessagePreview: null,
     });
@@ -236,7 +249,7 @@ describe("session discussion gateway methods", () => {
   it("attempts a title when system prompt state already exists", async () => {
     const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
     mockSession(entry);
-    mocks.readSessionTitleFields.mockReturnValue({
+    mocks.readSessionTitleFields.mockResolvedValue({
       firstUserMessage: "Plan the release",
       lastMessagePreview: null,
     });
@@ -261,7 +274,7 @@ describe("session discussion gateway methods", () => {
       storePath,
       target: { agentId: "main" },
     });
-    mocks.readSessionTitleFields.mockReturnValue({
+    mocks.readSessionTitleFields.mockResolvedValue({
       firstUserMessage: "Plan the release",
       lastMessagePreview: null,
     });
@@ -294,7 +307,7 @@ describe("session discussion gateway methods", () => {
   it("opens the discussion when title generation times out", async () => {
     vi.useFakeTimers();
     mockSession({ sessionId: "session-timeout", updatedAt: 1 });
-    mocks.readSessionTitleFields.mockReturnValue({
+    mocks.readSessionTitleFields.mockResolvedValue({
       firstUserMessage: "Plan the release",
       lastMessagePreview: null,
     });
