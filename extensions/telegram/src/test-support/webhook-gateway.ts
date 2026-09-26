@@ -23,7 +23,7 @@ export function webhookUrl(port: number, path: string): string {
 
 export function createTelegramWebhookTestGateway(options: {
   token: string;
-  queueScope: () => Pick<Parameters<StartWebhook>[0], "stateDir" | "accountId">;
+  queueScope: () => { stateDir: string; accountId: string };
 }) {
   let registry = createEmptyPluginRegistry();
   let production: StartWebhook;

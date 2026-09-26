@@ -149,7 +149,7 @@ type TelegramWebhookTarget = {
 const webhookState = createPluginRuntimeStore<{
   targets: Map<string, TelegramWebhookTarget[]>;
   rateLimiter: ReturnType<typeof createFixedWindowRateLimiter>;
-}>("Telegram webhook routes are not registered");
+}>({ key: "telegram:webhook", errorMessage: "Telegram webhook routes are not registered" });
 
 async function handleTelegramWebhook(
   webhookTargets: Map<string, TelegramWebhookTarget[]>,

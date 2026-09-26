@@ -22,6 +22,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -416,21 +417,33 @@ describe("startTelegramWebhook", () => {
     },
   );
 
-  it("routes shared paths by secret and rejects ambiguous accounts", async () => {
+  it("routes duplicate module copies by secret and rejects ambiguous accounts", async () => {
+    const [firstModule, secondModule] = await Promise.all([
+      importFreshModule<typeof import("./webhook.js")>(
+        import.meta.url,
+        "./webhook.js?scope=telegram-webhook-first",
+      ),
+      importFreshModule<typeof import("./webhook.js")>(
+        import.meta.url,
+        "./webhook.js?scope=telegram-webhook-second",
+      ),
+    ]);
+    expect(firstModule.startTelegramWebhook).not.toBe(secondModule.startTelegramWebhook);
     const statusA = vi.fn();
     const statusB = vi.fn();
     const base = {
       token: TELEGRAM_TOKEN,
       path: TELEGRAM_WEBHOOK_PATH,
       ...requireWebhookQueueScope(),
+      publicUrl: webhookUrl(getServerPort(gatewayServer), TELEGRAM_WEBHOOK_PATH),
     };
-    const first = await startTelegramWebhook({
+    const first = await firstModule.startTelegramWebhook({
       ...base,
       accountId: "first",
       secret: "first-secret",
       setStatus: statusA,
     });
-    const second = await startTelegramWebhook({
+    const second = await secondModule.startTelegramWebhook({
       ...base,
       accountId: "second",
       secret: "second-secret",
@@ -449,7 +462,7 @@ describe("startTelegramWebhook", () => {
       expect(accepted.status).toBe(200);
       expect(statusA).not.toHaveBeenCalled();
       expect(statusB).toHaveBeenCalled();
-      const ambiguous = await startTelegramWebhook({
+      const ambiguous = await secondModule.startTelegramWebhook({
         ...base,
         accountId: "ambiguous",
         secret: "second-secret",
@@ -2323,7 +2336,7 @@ describe("startTelegramWebhook", () => {
         token: TELEGRAM_TOKEN,
         secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
-        spoolDir: requireWebhookSpoolDir(),
+        ...requireWebhookQueueScope(),
         config: { gateway: { trustedProxies: [trustedProxy] } },
       };
       let first = await startTelegramWebhook({
