@@ -295,7 +295,9 @@ and one `owner.sqlite` token holding its native lifetime lease. Gateway
 metadata and its source captures retain the same process-local instance; a
 concurrent CLI process owns a separate instance. Releasing one capture cannot
 retire another capture or a still-running metadata owner.
-The shared cleanup timer does not retain the first command's invocation context.
+Gateway metadata supplies its scheduler for hourly cleanup; executable CLI
+commands own maintenance through their invocation scope. Capturing source alone
+does not create a timer. Cleanup does not retain the first command's invocation context.
 The managed `tmp/plugin-captures` subtree is excluded from source snapshots when
 the state directory is inside a plugin's source directory. Recovery can still
 load a preserved source package from within that subtree.
@@ -332,7 +334,7 @@ There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
 If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
-previously deleted captured files or recreate a missing coordinator directory.
+previously deleted captured files or recreate a missing ownership directory.
 
 Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and

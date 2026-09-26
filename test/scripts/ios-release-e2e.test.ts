@@ -425,6 +425,21 @@ describe("release qualification workflow authority", () => {
       expect(step.if).toBeUndefined();
       expect(step["continue-on-error"]).toBeUndefined();
     }
+    const recovery = steps.find(
+      (step: { name: string }) => step.name === "Retain release plan and notes",
+    );
+    for (const outcome of ["skipped", "success", "failure", "cancelled"] as const) {
+      expect(
+        evaluateWorkflowExpression(`\${{ ${recovery.if} }}`, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed: true,
+          steps: { [steps[upload].id]: { outputs: {}, outcome } },
+        }),
+      ).toBe(outcome !== "skipped");
+    }
+    expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
@@ -502,7 +517,12 @@ describe("native command adapter", () => {
     "different-xcode",
     "different-xcode-build",
     "invalid-xcode-output",
-    "wrong-runtime",
+    "different-runtime",
+    "newest-compatible-runtime",
+    "unavailable-runtime",
+    "unsupported-runtime-device",
+    "unsupported-runtime-architecture",
+    "non-ios-runtime",
     "cleanup-failure",
     "build-unjoined",
     "build-exit",
@@ -579,18 +599,62 @@ describe("native command adapter", () => {
                 : "Xcode 27.0\nBuild version 27A266a\n",
         );
       } else if (args.includes("runtimes")) {
+        const runtime = {
+          isAvailable: scenario !== "unavailable-runtime",
+          version: scenario === "different-runtime" ? "27.0" : "26.5",
+          identifier:
+            scenario === "different-runtime"
+              ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+              : scenario === "non-ios-runtime"
+                ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+                : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+          supportedArchitectures:
+            scenario === "unsupported-runtime-architecture" ? ["x86_64"] : ["arm64"],
+          supportedDeviceTypes: [
+            {
+              identifier:
+                scenario === "unsupported-runtime-device"
+                  ? "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"
+                  : "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+            },
+          ],
+        };
         stdout.write(
           JSON.stringify({
-            runtimes: [
-              {
-                isAvailable: true,
-                version: scenario === "wrong-runtime" ? "26.6" : "26.5",
-                identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
-              },
-            ],
+            runtimes:
+              scenario === "newest-compatible-runtime"
+                ? [
+                    {
+                      ...runtime,
+                      version: "26.9",
+                      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-9",
+                    },
+                    { ...runtime, version: "28.0", isAvailable: false },
+                    {
+                      ...runtime,
+                      version: "29.0",
+                      identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-29-0",
+                    },
+                    { ...runtime, version: "30.0", supportedDeviceTypes: [] },
+                    { ...runtime, version: "31.0", supportedArchitectures: ["x86_64"] },
+                    runtime,
+                    {
+                      ...runtime,
+                      version: "26.10",
+                      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-10",
+                    },
+                  ]
+                : [runtime],
           }),
         );
       } else if (args.includes("create")) {
+        expect(args.at(-1)).toBe(
+          scenario === "different-runtime"
+            ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+            : scenario === "newest-compatible-runtime"
+              ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+        );
         stdout.write(`11111111-2222-3333-4444-${String(++created).padStart(12, "0")}`);
       } else if (args.includes("build-for-testing")) {
         if (scenario === "build-unjoined") {
@@ -637,12 +701,20 @@ describe("native command adapter", () => {
       expect(readdirSync(temp)).toEqual([]);
       return;
     }
-    if (scenario === "wrong-runtime" || scenario === "invalid-xcode-output") {
+    if (
+      [
+        "unavailable-runtime",
+        "unsupported-runtime-device",
+        "unsupported-runtime-architecture",
+        "non-ios-runtime",
+        "invalid-xcode-output",
+      ].includes(scenario)
+    ) {
       await expect(admission).rejects.toMatchObject({
         diagnostic:
-          scenario === "wrong-runtime"
-            ? { operation: "simulator-runtime", code: "not-found" }
-            : { operation: "xcode-version", code: "failed" },
+          scenario === "invalid-xcode-output"
+            ? { operation: "xcode-version", code: "failed" }
+            : { operation: "simulator-runtime", code: "not-found" },
       });
       expect(
         nativeMocks.command.mock.calls.some(([{ args }]) => args.includes("build-for-testing")),
@@ -670,8 +742,18 @@ describe("native command adapter", () => {
           : scenario === "different-xcode-build"
             ? "27A000"
             : "27A266a",
-      runtime: "26.5",
-      runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      runtime:
+        scenario === "different-runtime"
+          ? "27.0"
+          : scenario === "newest-compatible-runtime"
+            ? "26.10"
+            : "26.5",
+      runtimeIdentifier:
+        scenario === "different-runtime"
+          ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+          : scenario === "newest-compatible-runtime"
+            ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+            : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });
     try {
       const report = await runTrials("stock", native.dependencies);

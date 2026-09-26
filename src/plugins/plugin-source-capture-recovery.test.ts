@@ -20,8 +20,8 @@ import {
   createPluginSourceCaptureRoot,
   retainPluginNativeCapturePath,
   retainPluginSourceCaptureInstance,
-  sweepPluginSourceCaptureDirectories,
 } from "./plugin-source-capture-directory.js";
+import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -53,7 +53,7 @@ it("recovers a removed captures directory without releasing a live instance", as
   const first = instance.createDirectory();
   const captures = path.dirname(first);
   const root = path.dirname(captures);
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   fs.rmSync(captures, { recursive: true });
   let worker: ReturnType<typeof createPluginSourceCaptureRoot> | undefined;
   try {
@@ -61,7 +61,7 @@ it("recovers a removed captures directory without releasing a live instance", as
     fs.writeFileSync(path.join(worker.directory, "source.js"), "recovered capture");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * hour);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(path.join(worker.directory, "source.js"), "utf8")).toBe(
       "recovered capture",
     );
@@ -102,7 +102,7 @@ it.each(["sync", "async"])(
     expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * hour);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(payload, "utf8")).toBe("retained native bytes");
     expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
   },
@@ -134,7 +134,7 @@ it("preserves native bytes published after an unlocked missing-directory observa
     }
   });
   try {
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(published).toBe(true);
     expect(fs.readFileSync(payload, "utf8")).toBe(
       "published while the producer still held its token",
@@ -152,7 +152,7 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
     mode === "async"
       ? createPluginSourceCaptureRoot(stateDir, "openclaw-model-catalog-")
       : undefined;
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   const directory = worker?.directory ?? instance!.createDirectory();
   const root = path.dirname(path.dirname(directory));
   const payload = path.join(directory, "source.js");
@@ -195,7 +195,7 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   }
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Date.now() + 2 * hour);
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.existsSync(root)).toBe(false);
 });
 
@@ -204,7 +204,7 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
   async (stage) => {
     const stateDir = temp.make("capture-recovery-allocation-");
     const instance = retainPluginSourceCaptureInstance(stateDir);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     const managed = path.join(stateDir, "tmp", "plugin-captures");
     const acquire = stagingToken.acquireSqliteStagingToken;
     const realpath = fs.realpathSync.bind(fs);
@@ -296,7 +296,7 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
     }
     await rename(from, to);
   });
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(old.filter((directory) => fs.existsSync(directory))).toHaveLength(0);
   expect(fs.existsSync(catalog)).toBe(false);
   for (const kept of [fresh, busy, tokened, unrelated, link]) {
@@ -313,7 +313,7 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
     [fresh, busy, tokened, link].map((file) => path.basename(file)).toSorted(),
   );
   probe.mockRestore();
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.existsSync(busy)).toBe(false);
   expect(retainedNames()).toEqual(
     [fresh, tokened, link].map((file) => path.basename(file)).toSorted(),
@@ -330,11 +330,11 @@ it("retries partial tokenless removal without exhausting directory name limits",
   const fault = vi.spyOn(fsPromises, "rm").mockRejectedValue(locked);
   for (let cycle = 0; cycle < 8; cycle++) {
     vi.setSystemTime(Date.now() + 2 * hour);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
   }
   fault.mockRestore();
   vi.setSystemTime(Date.now() + 2 * hour);
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.readdirSync(managed)).toEqual([]);
 });
 

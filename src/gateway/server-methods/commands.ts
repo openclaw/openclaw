@@ -11,8 +11,6 @@ import { buildCommandsListResult } from "./commands-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
-export { buildCommandsListResult };
-
 /** Gateway handler for enumerating available chat/native commands. */
 export const commandsHandlers: GatewayRequestHandlers = {
   "commands.list": defineValidatedGatewayMethod(

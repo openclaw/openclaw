@@ -8,14 +8,18 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import {
   createPluginSourceCaptureRoot,
   retainPluginSourceCaptureInstance,
-  sweepPluginSourceCaptureDirectories,
 } from "./plugin-source-capture-directory.js";
+import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -234,8 +238,7 @@ it("metadata boot preserves recent captures and legacy files with another produc
   const source = createSource();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const active = capturePluginGenerationArtifact(source);
-  // Finish standalone acquisition before a Gateway joins the same process later.
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   const old = await abandonCapture(stateDir, source);
   const recent = await abandonCapture(stateDir, source);
   age(old.instanceRoot);
@@ -245,9 +248,13 @@ it("metadata boot preserves recent captures and legacy files with another produc
   age(legacy);
   vi.stubEnv("TMPDIR", path.dirname(legacy));
 
-  const metadata = retainGatewayPluginMetadata();
+  const time = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const readDirectories = vi.spyOn(fsPromises, "readdir");
+  const metadata = retainGatewayPluginMetadata(scheduler);
   try {
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    expect(readDirectories).toHaveBeenCalled();
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.existsSync(old.instanceRoot)).toBe(false);
     expect(fs.readFileSync(active.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
       capturedSource,
@@ -256,10 +263,19 @@ it("metadata boot preserves recent captures and legacy files with another produc
     expect(fs.readFileSync(path.join(legacy, "sentinel"), "utf8")).toBe(
       "legacy files have no custody token",
     );
+    readDirectories.mockClear();
+    const later = capturePluginGenerationArtifact(source);
+    try {
+      await time.advanceBy(0);
+      expect(readDirectories).not.toHaveBeenCalled();
+    } finally {
+      later.dispose();
+    }
   } finally {
+    await scheduler.stop();
     await metadata.close();
     active.dispose();
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
   }
 }, 30_000);
 
@@ -275,9 +291,9 @@ it.each([
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
       age(child.instanceRoot);
-      const metadata = retainGatewayPluginMetadata();
+      const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
       try {
-        await sweepPluginSourceCaptureDirectories(stateDir);
+        await sweepPluginSourceCapturesForTest(stateDir);
         expect(await child.read()).toBe(capturedSource.trim());
         expect(fs.existsSync(child.captureRoot)).toBe(true);
         expect(fs.readFileSync(child.capturedFile, "utf8")).toBe(capturedSource);
@@ -286,11 +302,11 @@ it.each([
         if (legacy) {
           const recent = new Date();
           fs.utimesSync(child.instanceRoot, recent, recent);
-          await sweepPluginSourceCaptureDirectories(stateDir);
+          await sweepPluginSourceCapturesForTest(stateDir);
           expect(fs.readFileSync(child.capturedFile, "utf8")).toBe(capturedSource);
           age(child.instanceRoot);
         }
-        await sweepPluginSourceCaptureDirectories(stateDir);
+        await sweepPluginSourceCapturesForTest(stateDir);
         expect(fs.existsSync(child.instanceRoot)).toBe(false);
         expect(fs.existsSync(child.captureRoot)).toBe(false);
       } finally {
@@ -319,7 +335,7 @@ it.each(["payload", "instance"])(
       await remove(target, options);
     });
     try {
-      await sweepPluginSourceCaptureDirectories(stateDir);
+      await sweepPluginSourceCapturesForTest(stateDir);
       expect(fs.existsSync(path.join(orphan.instanceRoot, "owner.sqlite"))).toBe(true);
       if (stage === "payload") {
         expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
@@ -330,33 +346,44 @@ it.each(["payload", "instance"])(
       fault.mockRestore();
     }
     age(orphan.instanceRoot);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.existsSync(orphan.instanceRoot)).toBe(false);
   },
   30_000,
 );
 
-it("retries reclamation when a long-lived metadata owner's hourly scan reaches the grace period", async () => {
+it("keeps hourly reclamation on a live metadata owner when its siblings are closing", async () => {
   const stateDir = temp.make("plugin-capture-periodic-");
   const orphan = await abandonCapture(stateDir, createSource());
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-  const metadata = retainGatewayPluginMetadata();
+  const time = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const metadata = retainGatewayPluginMetadata(scheduler);
+  const fencedTime = createGatewaySchedulerClock();
+  const fencedScheduler = createTestGatewayScheduler(fencedTime.clock);
+  const fenced = retainGatewayPluginMetadata(fencedScheduler);
+  const siblingTime = createGatewaySchedulerClock();
+  const siblingScheduler = createTestGatewayScheduler(siblingTime.clock);
+  const sibling = retainGatewayPluginMetadata(siblingScheduler);
   try {
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(orphan.capturedFile, "utf8")).toBe(capturedSource);
-    await vi.advanceTimersByTimeAsync(2 * hour);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    fencedScheduler.beginClose();
+    await siblingScheduler.stop();
+    age(orphan.instanceRoot);
+    await time.advanceBy(2 * hour);
     expect(fs.existsSync(orphan.instanceRoot)).toBe(false);
+    await sibling.close();
   } finally {
+    await sibling.close();
+    await fenced.close();
     await metadata.close();
-    await sweepPluginSourceCaptureDirectories(stateDir);
-    vi.useRealTimers();
+    await sweepPluginSourceCapturesForTest(stateDir);
   }
 }, 30_000);
 
 it.each(["before command", "inside command"])(
-  "does not retain the first CLI context when the capture loader is imported %s",
+  "allocates captures without timers when the loader is imported %s",
   (importOrder) => {
     const stateDir = temp.make("plugin-capture-context-");
     const source = createSource();
@@ -418,7 +445,7 @@ it.each(["before command", "inside command"])(
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
     );
     expect(JSON.parse(result)).toEqual({
-      timers: [{ context: null, cli: false, referenced: false }],
+      timers: [],
       source: capturedSource,
     });
   },
@@ -428,11 +455,11 @@ it("retains live capture bytes until both metadata owners and the artifact relea
   const stateDir = temp.make("plugin-capture-shared-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const source = createSource();
-  const first = retainGatewayPluginMetadata();
+  const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
   let second: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
   let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
   try {
-    second = retainGatewayPluginMetadata();
+    second = retainGatewayPluginMetadata(createTestGatewayScheduler());
     artifact = capturePluginGenerationArtifact(source);
     const { instanceRoot } = capturePaths(
       stateDir,
@@ -440,7 +467,7 @@ it("retains live capture bytes until both metadata owners and the artifact relea
       artifact.resolve(path.join(source, "index.cjs")),
     );
     age(instanceRoot);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
       capturedSource,
     );
@@ -450,7 +477,7 @@ it("retains live capture bytes until both metadata owners and the artifact relea
       capturedSource,
     );
     await second.close();
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
       capturedSource,
     );
@@ -522,7 +549,7 @@ it.skipIf(process.platform === "win32").each([
     } finally {
       vi.restoreAllMocks();
       await instance.releaseAsync();
-      await sweepPluginSourceCaptureDirectories(stateDir);
+      await sweepPluginSourceCapturesForTest(stateDir);
     }
   },
 );
@@ -555,7 +582,7 @@ it.skipIf(process.platform === "win32").each(["directory", "token"] as const)(
       fs.rmSync(target, { recursive: true, force: true });
       fs.renameSync(parked, target);
       await instance.releaseAsync();
-      await sweepPluginSourceCaptureDirectories(stateDir);
+      await sweepPluginSourceCapturesForTest(stateDir);
     }
   },
 );
@@ -571,9 +598,9 @@ it("leaves explicit worker capture directories under their caller's custody", as
   );
   try {
     age(artifact.boundaryRoot);
-    const metadata = retainGatewayPluginMetadata();
+    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
     try {
-      await sweepPluginSourceCaptureDirectories(stateDir);
+      await sweepPluginSourceCapturesForTest(stateDir);
       expect(path.dirname(artifact.boundaryRoot)).toBe(workerRoot);
       expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
         capturedSource,
@@ -617,11 +644,11 @@ it("keeps metadata boot and source capture usable when the state directory canno
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   const source = createSource();
-  const metadata = retainGatewayPluginMetadata();
+  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
   let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
   let instanceRoot: string | undefined;
   try {
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     artifact = capturePluginGenerationArtifact(source);
     instanceRoot = path.dirname(path.dirname(artifact.boundaryRoot));
     expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
@@ -715,7 +742,7 @@ it.each(["malformed", "symlink", "hardlink", "sidecar-symlink", "captures-symlin
     age(instance);
     vi.spyOn(process, "emitWarning").mockImplementation(() => {});
 
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
 
     expect(fs.readdirSync(instance).toSorted()).toEqual(before);
     expect(fs.readFileSync(outsideFile, "utf8")).toBe("unrelated source");
@@ -749,18 +776,18 @@ it("summarizes inaccessible owner records with backoff while continuing cleanup 
     }
     return lstat(target, options);
   });
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(1);
   expect(String(warning.mock.calls[0]?.[0])).toContain("3 cleanup failure(s)");
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(1);
   vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(2);
   vi.setSystemTime(Date.now() + hour);
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(warning).toHaveBeenCalledTimes(2);
   fault.mockRestore();
-  await sweepPluginSourceCaptureDirectories(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
   expect(fs.readdirSync(root)).toEqual([]);
 });
