@@ -6,6 +6,8 @@ export type SafeBinProfile = {
   allowedValueFlags?: ReadonlySet<string>;
   allowedBooleanFlags?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
+  // Accept a standalone digits-only `-N` token as a count (`head -1`, `tail -20`).
+  allowNumericCount?: boolean;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
   knownLongFlagsSet?: ReadonlySet<string>;
@@ -23,6 +25,7 @@ export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixtu
 
 type BuiltinSafeBinProfileFixture = SafeBinProfileFixture & {
   allowedBooleanFlags?: readonly string[];
+  allowNumericCount?: boolean;
 };
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
@@ -94,6 +97,7 @@ function compileSafeBinProfile(fixture: BuiltinSafeBinProfileFixture): SafeBinPr
     allowedValueFlags,
     allowedBooleanFlags,
     deniedFlags,
+    allowNumericCount: fixture.allowNumericCount,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
     longFlagPrefixMap: buildLongFlagPrefixMap(knownLongFlags),
@@ -229,6 +233,7 @@ const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = 
   },
   head: {
     maxPositional: 0,
+    allowNumericCount: true,
     allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
     allowedBooleanFlags: [
       "--quiet",
@@ -242,6 +247,7 @@ const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = 
   },
   tail: {
     maxPositional: 0,
+    allowNumericCount: true,
     allowedValueFlags: [
       "--lines",
       "--bytes",

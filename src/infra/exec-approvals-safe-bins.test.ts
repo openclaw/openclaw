@@ -376,6 +376,21 @@ describe("exec approvals safe bins", () => {
     expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
   });
 
+  it("allows the -N count form of head and tail in a pipeline", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "cut -f 1 | head -1 | tail -5",
+      allowlist: [],
+      safeBins: normalizeSafeBins(["cut", "head", "tail"]),
+      cwd: "/tmp",
+      platform: process.platform,
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
   it("fails closed for semantic env wrappers in allowlist mode", async () => {
     if (process.platform === "win32") {
       return;

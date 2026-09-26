@@ -202,6 +202,29 @@ describe("exec safe bin policy boolean flags", () => {
     ).toBe(false);
   });
 
+  it("accepts the digits-only -N count form for head and tail", () => {
+    const head = expectDefined(SAFE_BIN_PROFILES.head, "SAFE_BIN_PROFILES.head test invariant");
+    const tail = expectDefined(SAFE_BIN_PROFILES.tail, "SAFE_BIN_PROFILES.tail test invariant");
+    expect(validateSafeBinArgv(["-1"], head)).toBe(true);
+    expect(validateSafeBinArgv(["-20"], head)).toBe(true);
+    expect(validateSafeBinArgv(["-q", "-5"], head)).toBe(true);
+    expect(validateSafeBinArgv(["-5"], tail)).toBe(true);
+  });
+
+  it("keeps the -N count form narrow", () => {
+    const head = expectDefined(SAFE_BIN_PROFILES.head, "SAFE_BIN_PROFILES.head test invariant");
+    const tail = expectDefined(SAFE_BIN_PROFILES.tail, "SAFE_BIN_PROFILES.tail test invariant");
+    const wc = expectDefined(SAFE_BIN_PROFILES.wc, "SAFE_BIN_PROFILES.wc test invariant");
+    // Still stdin-only: a count never frees a slot for a file operand.
+    expect(validateSafeBinArgv(["-1", "notes.txt"], head)).toBe(false);
+    // Clusters that mix a count with other letters stay fail-closed (tail -5f follows).
+    expect(validateSafeBinArgv(["-5f"], tail)).toBe(false);
+    expect(validateSafeBinArgv(["-1v"], head)).toBe(false);
+    expect(validateSafeBinArgv(["-1a"], head)).toBe(false);
+    // Only head and tail take it.
+    expect(validateSafeBinArgv(["-1"], wc)).toBe(false);
+  });
+
   it("keeps tail -fn 1 follow mode fail-closed", () => {
     expect(
       validateSafeBinArgv(
