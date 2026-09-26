@@ -46,19 +46,7 @@ public enum GatewayDeviceAuthPayload {
         // Managed gateways deployed before v3 metadata payload support still
         // verify v2 signatures. Swift connect signers temporarily omit signed
         // metadata until managed and supported self-managed gateways verify v3.
-        let scopeString = fields.scopes.joined(separator: ",")
-        let authToken = fields.token ?? ""
-        return [
-            "v2",
-            fields.deviceId,
-            fields.client.id,
-            fields.client.mode,
-            fields.role,
-            scopeString,
-            String(fields.signedAtMs),
-            authToken,
-            fields.nonce,
-        ].joined(separator: "|")
+        (["v2"] + self.components(fields)).joined(separator: "|")
     }
 
     public static func buildV3(
@@ -66,31 +54,28 @@ public enum GatewayDeviceAuthPayload {
         platform: String?,
         deviceFamily: String?) -> String
     {
-        let scopeString = fields.scopes.joined(separator: ",")
-        let authToken = fields.token ?? ""
-        let normalizedPlatform = self.normalizeMetadataField(platform)
-        let normalizedDeviceFamily = self.normalizeMetadataField(deviceFamily)
-        return [
-            "v3",
+        (["v3"] + self.components(fields) + [
+            self.normalizeMetadataField(platform),
+            self.normalizeMetadataField(deviceFamily),
+        ]).joined(separator: "|")
+    }
+
+    private static func components(_ fields: Fields) -> [String] {
+        [
             fields.deviceId,
             fields.client.id,
             fields.client.mode,
             fields.role,
-            scopeString,
+            fields.scopes.joined(separator: ","),
             String(fields.signedAtMs),
-            authToken,
+            fields.token ?? "",
             fields.nonce,
-            normalizedPlatform,
-            normalizedDeviceFamily,
-        ].joined(separator: "|")
+        ]
     }
 
     static func normalizeMetadataField(_ value: String?) -> String {
         guard let value else { return "" }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return ""
-        }
         // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin):
         // lowercase ASCII A-Z only for auth payload metadata fields.
         var output = String()

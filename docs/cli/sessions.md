@@ -145,6 +145,9 @@ openclaw sessions delete "agent:main:scratch-1" --dry-run
 openclaw sessions delete "agent:main:scratch-1" --yes --json
 ```
 
+Repeated keys are processed once, in first-occurrence order, after surrounding
+whitespace is removed. This also applies to `sessions archive`.
+
 <Warning>
   Delete is destructive. In an interactive terminal it asks once before
   deleting the valid keys. Non-interactive and `--json` deletion requires

@@ -32,6 +32,49 @@ vi.mock("../tasks/task-registry-state.js", () => ({
   assertTaskRegistryOwnerCurrent: vi.fn(),
 }));
 
+function makeTask(overrides: Partial<TaskRecord>): TaskRecord {
+  return {
+    taskId: "task-running",
+    runtime: "cli",
+    taskKind: IMAGE_GENERATION_TASK_KIND,
+    sourceId: "image_generate:openai",
+    requesterSessionKey: "agent:main",
+    ownerKey: "agent:main",
+    scopeKind: "session",
+    task: "running task",
+    status: "running",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "silent",
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+type RecentStart = Parameters<typeof recordRecentMediaGenerationTaskStartForSession>[0];
+
+function recordRecentImageStart(
+  params: Pick<RecentStart, "taskId" | "taskLabel"> & Partial<RecentStart>,
+) {
+  recordRecentMediaGenerationTaskStartForSession({
+    sessionKey: "agent:main",
+    taskKind: IMAGE_GENERATION_TASK_KIND,
+    sourcePrefix: "image_generate",
+    providerId: "xai",
+    progressSummary: "Generating image",
+    ...params,
+  });
+}
+
+beforeEach(() => {
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+  );
+  resetRecentMediaGenerationDuplicateGuardsForTests();
+});
+
 function expectActiveImageGenerationTask(
   task: Awaited<ReturnType<typeof findDuplicateGuardImageGenerationTaskForSession>>,
 ): NonNullable<Awaited<ReturnType<typeof findDuplicateGuardImageGenerationTaskForSession>>> {
@@ -43,47 +86,17 @@ function expectActiveImageGenerationTask(
 }
 
 describe("image generation task status", () => {
-  beforeEach(() => {
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-      taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
-    );
-    resetRecentMediaGenerationDuplicateGuardsForTests();
-  });
-
   it("prefers a running task over queued session siblings", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-queued",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:google",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "queued task",
         status: "queued",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      },
-      {
-        taskId: "task-running",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
-        task: "running task",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
+      }),
+      makeTask({
         progressSummary: "Generating image",
-      },
+      }),
     ]);
 
     const task = await findDuplicateGuardImageGenerationTaskForSession("agent:main");
@@ -104,34 +117,14 @@ describe("image generation task status", () => {
 
   it("can restrict active lookup to the matching image prompt", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-first",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "First diagram prompt",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      },
-      {
+      }),
+      makeTask({
         taskId: "task-second",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "Second diagram prompt",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      },
+      }),
     ]);
 
     expect(
@@ -152,36 +145,24 @@ describe("image generation task status", () => {
     // The request key ties a tool call to its persisted completion so the
     // model gets status guidance instead of starting the same image twice.
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-completed",
       runId: "run-completed",
       taskLabel: "recent prompt",
       requestKey: "image-request:a",
-      providerId: "xai",
-      progressSummary: "Generating image",
       nowMs: now - 20_000,
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-completed",
         runId: "run-completed",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "recent prompt",
         status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
-      },
+      }),
     ]);
 
     const task = await findDuplicateGuardImageGenerationTaskForSession("agent:main", {
@@ -202,38 +183,26 @@ describe("image generation task status", () => {
     // If completion delivery failed, suppressing a retry would strand the
     // requester without an image even though the provider task succeeded.
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-blocked-delivery",
       runId: "run-blocked-delivery",
       taskLabel: "recent prompt",
       requestKey: "image-request:blocked",
-      providerId: "xai",
-      progressSummary: "Generating image",
       nowMs: now - 20_000,
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-blocked-delivery",
         runId: "run-blocked-delivery",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "recent prompt",
         status: "succeeded",
         terminalOutcome: "blocked",
         terminalSummary: "Required completion delivery failed before reaching the requester.",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
-      },
+      }),
     ]);
 
     expect(
@@ -245,36 +214,24 @@ describe("image generation task status", () => {
 
   it("does not use a recent succeeded image task without a matching request key", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-completed",
       runId: "run-completed",
       taskLabel: "recent prompt",
       requestKey: "image-request:a",
-      providerId: "xai",
-      progressSummary: "Generating image",
       nowMs: now - 20_000,
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-completed",
         runId: "run-completed",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "recent prompt",
         status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated 1 image",
-      },
+      }),
     ]);
 
     expect(
@@ -288,15 +245,11 @@ describe("image generation task status", () => {
     // Multiple image requests can be active/recent in the same session; a new
     // request must not erase an older request key that can still match status.
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-first",
       runId: "run-first",
       taskLabel: "first prompt",
       requestKey: "image-request:first",
-      providerId: "xai",
       progressSummary: "Generating first image",
       nowMs: now - 30_000,
     });
@@ -305,53 +258,35 @@ describe("image generation task status", () => {
     const pending = findDuplicateGuardImageGenerationTaskForSession("agent:main", {
       requestKey: "image-request:other",
     });
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-second",
       runId: "run-second",
       taskLabel: "second prompt",
       requestKey: "image-request:second",
-      providerId: "xai",
       progressSummary: "Generating second image",
       nowMs: now - 20_000,
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-first",
         runId: "run-first",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "first prompt",
         status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 30_000,
         endedAt: now - 15_000,
         progressSummary: "Generated first image",
-      },
-      {
+      }),
+      makeTask({
         taskId: "task-second",
         runId: "run-second",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "second prompt",
         status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: "Generated second image",
-      },
+      }),
     ]);
 
     lookup.resolve(taskRuntimeInternalMocks.listTasksForOwnerKey("agent:main"));
@@ -393,27 +328,19 @@ describe("image generation task status", () => {
 
   it("prunes stale same-session recent starts when another image request starts", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-stale",
       runId: "run-stale",
       taskLabel: "stale prompt",
       requestKey: "image-request:stale",
-      providerId: "xai",
       progressSummary: "Generating stale image",
       nowMs: now - 3 * 60_000,
     });
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-fresh",
       runId: "run-fresh",
       taskLabel: "fresh prompt",
       requestKey: "image-request:fresh",
-      providerId: "xai",
       progressSummary: "Generating fresh image",
       nowMs: now,
     });
@@ -436,15 +363,11 @@ describe("image generation task status", () => {
 
   it("expires recent image starts after the canonical 120-second guard window", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-stale",
       runId: "run-stale",
       taskLabel: "stale prompt",
       requestKey: "image-request:stale",
-      providerId: "xai",
       progressSummary: "Generating stale image",
       nowMs: now - 2 * 60_000 - 1,
     });
@@ -458,15 +381,11 @@ describe("image generation task status", () => {
   });
 
   it("does not block a distinct prompt from a cached active recent start", async () => {
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-first",
       runId: "run-first",
       taskLabel: "first prompt",
       requestKey: "image-request:first",
-      providerId: "xai",
       progressSummary: "Generating first image",
     });
 
@@ -479,36 +398,24 @@ describe("image generation task status", () => {
 
   it("uses a recent persisted completion instead of pruning a stale recent-start cache", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-completed",
       runId: "run-completed",
       taskLabel: "recent prompt",
       requestKey: "image-request:stale",
-      providerId: "xai",
-      progressSummary: "Generating image",
       nowMs: now - 3 * 60_000,
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-completed",
         runId: "run-completed",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "recent prompt",
         status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 3 * 60_000,
         endedAt: now - 1_000,
         progressSummary: "Generated 1 image",
-      },
+      }),
     ]);
 
     const task = await findDuplicateGuardImageGenerationTaskForSession("agent:main", {
@@ -523,35 +430,23 @@ describe("image generation task status", () => {
 
   it("clears the recent-start cache when the persisted task has failed", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main",
-      taskKind: IMAGE_GENERATION_TASK_KIND,
-      sourcePrefix: "image_generate",
+    recordRecentImageStart({
       taskId: "task-failed",
       runId: "run-failed",
       taskLabel: "retryable prompt",
-      providerId: "xai",
-      progressSummary: "Generating image",
       nowMs: now - 5_000,
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-failed",
         runId: "run-failed",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:xai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "retryable prompt",
         status: "failed",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
         createdAt: now - 5_000,
         endedAt: now - 1_000,
         progressSummary: "Image generation failed",
-      },
+      }),
     ]);
 
     expect(await findDuplicateGuardImageGenerationTaskForSession("agent:main")).toBeUndefined();
@@ -559,22 +454,10 @@ describe("image generation task status", () => {
 
   it("builds prompt context for active session work", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
-        taskId: "task-running",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main",
+      makeTask({
         requesterAgentId: "main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
-        task: "running task",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
         progressSummary: "Generating image",
-      },
+      }),
     ]);
 
     const context = await buildMediaTaskRuntimeContext({
@@ -599,46 +482,21 @@ function expectActiveVideoGenerationTask(
 }
 
 describe("video generation task status", () => {
-  beforeEach(() => {
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-      taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
-    );
-    resetRecentMediaGenerationDuplicateGuardsForTests();
-  });
-
   it("recognizes active session-backed video generation tasks", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-1",
-        runtime: "cli",
         taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "make lobster video",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      },
-      {
+      }),
+      makeTask({
         taskId: "task-2",
         runtime: "cron",
         taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "make lobster video",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      },
+      }),
     ]);
 
     expect((await findActiveVideoGenerationTaskForSession("agent:main"))?.taskId).toBe("task-1");
@@ -648,35 +506,18 @@ describe("video generation task status", () => {
     // Running work should suppress duplicate generation even when older queued
     // siblings still exist for the same session owner.
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
+      makeTask({
         taskId: "task-queued",
-        runtime: "cli",
         taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:google",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
         task: "queued task",
         status: "queued",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      },
-      {
-        taskId: "task-running",
-        runtime: "cli",
+      }),
+      makeTask({
         taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
-        task: "running task",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
         progressSummary: "Generating video",
-      },
+      }),
     ]);
 
     const task = await findActiveVideoGenerationTaskForSession("agent:main");
@@ -697,22 +538,12 @@ describe("video generation task status", () => {
 
   it("builds prompt context for active session work", async () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
-      {
-        taskId: "task-running",
-        runtime: "cli",
+      makeTask({
         taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
-        requesterSessionKey: "agent:main",
         requesterAgentId: "main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
-        task: "running task",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
         progressSummary: "Generating video",
-      },
+      }),
     ]);
 
     const context = await buildMediaTaskRuntimeContext({

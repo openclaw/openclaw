@@ -122,15 +122,6 @@ function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRu
   return true;
 }
 
-function runningSessionInputDetails(runtime: RunningSessionRuntime) {
-  return {
-    stdinWritable: runtime.stdinWritable,
-    waitingForInput: runtime.waitingForInput,
-    idleMs: runtime.idleMs,
-    lastOutputAt: runtime.lastOutputAt,
-  };
-}
-
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
@@ -361,10 +352,7 @@ export function createProcessTool(
                     status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
                   }
-                : Object.assign(
-                    { pid: s.pid ?? undefined },
-                    runningSessionInputDetails(describeRunningSession(s)),
-                  ),
+                : Object.assign({ pid: s.pid ?? undefined }, describeRunningSession(s)),
             ),
           );
         const lines = sessions.map((s) => {
@@ -494,7 +482,7 @@ export function createProcessTool(
               sessionId: params.sessionId,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
-              ...runningSessionInputDetails(runtime),
+              ...runtime,
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             }),
             () => delivery.acknowledge(),
@@ -532,7 +520,7 @@ export function createProcessTool(
                   status: record.exited ? "completed" : "running",
                   sessionId: params.sessionId,
                   name: deriveSessionName(record.command),
-                  ...runningSessionInputDetails(runtime),
+                  ...runtime,
                 }
               : finishedSessionDetails(params.sessionId, record)),
             // Code Mode reads details, so preserve the requested page and its recovery hints.
@@ -625,7 +613,7 @@ export function createProcessTool(
           // action as a tool error and invite the model to retry it.
           return textResult(`Termination requested for session ${params.sessionId}.`, {
             status: "completed",
-            name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            name: deriveSessionName(scopedSession.command),
           });
         }
 
@@ -659,7 +647,7 @@ export function createProcessTool(
             // match the finished-session remove branch's success shape.
             return textResult(`Removed session ${params.sessionId} (termination requested).`, {
               status: "completed",
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(scopedSession.command),
             });
           }
           if (scopedFinished) {

@@ -135,7 +135,7 @@ data class GatewayModelProviderSummary(
   val usage: GatewayUsageProviderSummary? = null,
 ) {
   val hasApiKey: Boolean
-    get() = apiKeySource != null || profiles.any { it.type == "api_key" }
+    get() = apiKeySource != null || profiles.any { it.eligible && it.type == "api_key" }
 
   val canRemoveApiKey: Boolean
     get() = apiKeySource == "config" || profiles.any { it.type == "api_key" && it.logoutSupported }
@@ -146,6 +146,7 @@ data class GatewayModelProviderProfile(
   val type: String,
   val source: String? = null,
   val logoutSupported: Boolean = false,
+  val eligible: Boolean = true,
 )
 
 data class GatewayUsageBilling(
@@ -210,6 +211,7 @@ internal fun parseGatewayModelProviders(providers: JsonArray?): List<GatewayMode
             type = profile.getValue("type").jsonPrimitive.content,
             source = profile["source"]?.jsonPrimitive?.content,
             logoutSupported = profile["logoutSupported"]?.jsonPrimitive?.booleanOrNull == true,
+            eligible = profile in activeProfiles,
           )
         },
       apiKeySource = (row["apiKey"] as? JsonObject)?.get("source")?.jsonPrimitive?.content,

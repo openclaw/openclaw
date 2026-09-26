@@ -1,4 +1,3 @@
-// Elevenlabs helper module supports config compat behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,7 +42,7 @@ function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
 }
 
-function hasLegacyTalkFields(value: unknown): value is JsonRecord {
+export function hasLegacyTalkFields(value: unknown): value is JsonRecord {
   const talk = getRecord(value);
   if (!talk) {
     return false;
@@ -109,10 +108,6 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
     legacyFields[key] = nextTalk[key];
     delete nextTalk[key];
     movedKeys.push(key);
-  }
-
-  if (movedKeys.length === 0) {
-    return { config: raw, changes: [] };
   }
 
   mergeMissing(migratedProvider, legacyFields);

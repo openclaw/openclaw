@@ -32,6 +32,14 @@ function claudeBlockStop(index?: number) {
   });
 }
 
+function claudeTextDelta(text: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "text_delta", text },
+  });
+}
+
 function claudeThinkingDelta(thinking: string, index?: number | string) {
   return claudeStreamEvent({
     type: "content_block_delta",
@@ -74,25 +82,16 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
     parser.push(
-      [
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: {
-              type: "text_delta",
-              text: "<thinking>Private analysis.</thinking>Visible answer.",
-            },
-          },
-        }),
-        JSON.stringify({
+      joinJsonlFrames(
+        claudeMessageStart(),
+        claudeTextDelta("<thinking>Private analysis.</thinking>Visible answer."),
+        {
           type: "result",
           session_id: "session-tagged",
           result: "<thinking>Private analysis.</thinking>Visible answer.",
-        }),
+        },
         "",
-      ].join("\n"),
+      ),
     );
     parser.finish();
 
@@ -123,16 +122,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     { name: "quoted attribute", chunks: ['<thinking note="', "x>y", '">Private '] },
   ])("holds reasoning with a split $name until its close tag is complete", ({ chunks }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
-    const pushText = (text: string) =>
-      parser.push(
-        `${JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text },
-          },
-        })}\n`,
-      );
+    const pushText = (text: string) => parser.push(`${JSON.stringify(claudeTextDelta(text))}\n`);
 
     for (const chunk of chunks) {
       pushText(chunk);
@@ -156,15 +146,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const mixed = createClaudeTaggedReasoningHarness();
     const tagged = createClaudeTaggedReasoningHarness();
     const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
-      parser.push(
-        `${JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text },
-          },
-        })}\n`,
-      );
+      parser.push(`${JSON.stringify(claudeTextDelta(text))}\n`);
 
     pushText(visible.parser, "<div>Visible prefix <thi");
     expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
@@ -195,20 +177,16 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
     parser.push(
-      `${JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: {
-            type: "text_delta",
-            text: [
-              "<think>First.</think>",
-              "<reasoning>Second.</reasoning>",
-              "Answer with <think>literal</think> markup.",
-            ].join("\n"),
-          },
-        },
-      })}\n`,
+      joinJsonlFrames(
+        claudeTextDelta(
+          [
+            "<think>First.</think>",
+            "<reasoning>Second.</reasoning>",
+            "Answer with <think>literal</think> markup.",
+          ].join("\n"),
+        ),
+        "",
+      ),
     );
     parser.finish();
 
@@ -221,32 +199,12 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
     parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "Native analysis." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 1,
-            delta: {
-              type: "text_delta",
-              text: "<thinking>Native analysis.</thinking>Visible answer.",
-            },
-          },
-        }),
-        JSON.stringify({
-          type: "result",
-          result: "<thinking>Native analysis.</thinking>Visible answer.",
-        }),
+      joinJsonlFrames(
+        claudeThinkingDelta("Native analysis.", 0),
+        claudeTextDelta("<thinking>Native analysis.</thinking>Visible answer.", 1),
+        { type: "result", result: "<thinking>Native analysis.</thinking>Visible answer." },
         "",
-      ].join("\n"),
+      ),
     );
     parser.finish();
 
@@ -267,15 +225,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   ])("preserves $name on the visible path", ({ text }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
-    parser.push(
-      `${JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: { type: "text_delta", text },
-        },
-      })}\n`,
-    );
+    parser.push(joinJsonlFrames(claudeTextDelta(text), ""));
     parser.finish();
 
     expect(thinking).toEqual([]);
@@ -285,32 +235,17 @@ describe("createCliJsonlStreamingParser reasoning", () => {
 
   it("resets tagged reasoning across Claude tool-round assistant messages", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
-    const textEvent = (text: string) =>
-      JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: { type: "text_delta", text },
-        },
-      });
-
     parser.push(
-      [
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        textEvent("<think>First thought.</think>Before tool."),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        textEvent("<reasoning>Second thought.</reasoning>Final answer."),
-        JSON.stringify({ type: "result", result: "Final answer." }),
+      joinJsonlFrames(
+        claudeMessageStart(),
+        claudeTextDelta("<think>First thought.</think>Before tool."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "Read" }),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeMessageStart(),
+        claudeTextDelta("<reasoning>Second thought.</reasoning>Final answer."),
+        { type: "result", result: "Final answer." },
         "",
-      ].join("\n"),
+      ),
     );
     parser.finish();
 

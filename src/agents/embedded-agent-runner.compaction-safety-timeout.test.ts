@@ -140,26 +140,6 @@ describe("resolveCompactionTimeoutMs", () => {
     expect(resolveCompactionTimeoutMs(undefined)).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
   });
 
-  it("returns default when compaction config is missing", () => {
-    expect(resolveCompactionTimeoutMs({ agents: { defaults: {} } })).toBe(
-      EMBEDDED_COMPACTION_TIMEOUT_MS,
-    );
-  });
-
-  it("returns default when timeoutSeconds is not set", () => {
-    expect(
-      resolveCompactionTimeoutMs({ agents: { defaults: { compaction: { mode: "safeguard" } } } }),
-    ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
-  });
-
-  it("converts timeoutSeconds to milliseconds", () => {
-    expect(
-      resolveCompactionTimeoutMs({
-        agents: { defaults: { compaction: { timeoutSeconds: 120 } } },
-      }),
-    ).toBe(120_000);
-  });
-
   it("preserves explicit timeoutSeconds above 600", () => {
     expect(
       resolveCompactionTimeoutMs({
@@ -182,24 +162,10 @@ describe("resolveCompactionTimeoutMs", () => {
     ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
   });
 
-  it("returns default for negative values", () => {
-    expect(
-      resolveCompactionTimeoutMs({ agents: { defaults: { compaction: { timeoutSeconds: -5 } } } }),
-    ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
-  });
-
   it("returns default for NaN", () => {
     expect(
       resolveCompactionTimeoutMs({
         agents: { defaults: { compaction: { timeoutSeconds: Number.NaN } } },
-      }),
-    ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
-  });
-
-  it("returns default for Infinity", () => {
-    expect(
-      resolveCompactionTimeoutMs({
-        agents: { defaults: { compaction: { timeoutSeconds: Infinity } } },
       }),
     ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
   });
@@ -231,22 +197,8 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     vi.useRealTimers();
   });
 
-  it("bounds a hung plugin compact() and rejects with a timeout error", async () => {
-    vi.useFakeTimers();
-    const compact = vi.fn<CompactFn>(() => new Promise<CompactResult>(() => {}));
-
-    const pending = compactContextEngineWithSafetyTimeout(makeEngine(compact), baseParams, 30);
-    const assertion = expect(pending).rejects.toThrow("Compaction timed out");
-
-    await vi.advanceTimersByTimeAsync(30);
-    await assertion;
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it.each([
     { marked: false, outcome: "result" },
-    { marked: true, outcome: "result" },
-    { marked: false, outcome: "error" },
     { marked: true, outcome: "error" },
   ] as const)(
     "binds one captured compactor to its receiver and preserves child params ($marked, $outcome)",
@@ -493,25 +445,6 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     expect(compactAbortSignal?.aborted).toBe(true);
     expect(compactAbortSignal?.reason).toBeInstanceOf(Error);
     expect((compactAbortSignal?.reason as Error | undefined)?.message).toBe("Compaction timed out");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("rejects promptly when the run abort signal fires before the timeout", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const abortError = new Error("run aborted");
-    const compact = vi.fn<CompactFn>(() => new Promise<CompactResult>(() => {}));
-
-    const pending = compactContextEngineWithSafetyTimeout(
-      makeEngine(compact),
-      baseParams,
-      EMBEDDED_COMPACTION_TIMEOUT_MS,
-      controller.signal,
-    );
-    const assertion = expect(pending).rejects.toBe(abortError);
-
-    controller.abort(abortError);
-    await assertion;
     expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 // Install the shared module mocks before any source imports can load the runtime.
@@ -267,6 +268,7 @@ describe("worker placement move destination", () => {
           reconcileActive: vi.fn(),
         });
         createGatewayWorkerPlacementRuntime({
+          scheduler: createTestGatewayScheduler(),
           getCommittedRuntimeConfig: getRuntimeConfig,
           cancelSessionWork: vi.fn(async () => {}),
           placements: {

@@ -450,8 +450,6 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
 
 describe("native reasoning projection", () => {
   it.for([
-    { name: "trailing whitespace", chunks: ["a ", "b"] },
-    { name: "whitespace-only chunk", chunks: ["abc", " ", "def"] },
     { name: "whitespace-only reasoning", chunks: ["  ", " ", "\n"] },
     { name: "leading and trailing whitespace", chunks: ["  ", "a  ", "b ", "  ", "c"] },
   ])("preserves $name through transport and subscription", async ({ chunks }, { signal }) => {

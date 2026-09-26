@@ -2,7 +2,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { getLoadedChannelThreadingAdapter } from "../../channels/thread-addressing.js";
 import type { ReplyToMode } from "../../config/types.js";
@@ -72,26 +71,6 @@ function resolveConfiguredReplyToMode(
   return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
 
-/** Resolve reply-to mode using channel threading adapter override when present. */
-function resolveReplyToModeWithThreading(
-  cfg: OpenClawConfig,
-  threading: ChannelThreadingAdapter | undefined,
-  params: {
-    channel?: OriginatingChannelType;
-    accountId?: string | null;
-    chatType?: string | null;
-  } = {},
-): ReplyToMode {
-  const resolved = threading?.resolveReplyToMode?.({
-    cfg,
-    accountId: params.accountId,
-    chatType: params.chatType,
-  });
-  return (
-    resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType, params.accountId)
-  );
-}
-
 /** Resolve effective reply-to mode for a channel/account/chat tuple. */
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
@@ -105,11 +84,10 @@ export function resolveReplyToMode(
   }
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  return resolveReplyToModeWithThreading(cfg, threading, {
-    channel,
-    accountId: normalizedAccountId,
-    chatType,
-  });
+  return (
+    threading?.resolveReplyToMode?.({ cfg, accountId: normalizedAccountId, chatType }) ??
+    resolveConfiguredReplyToMode(cfg, channel, chatType, normalizedAccountId)
+  );
 }
 
 /** Resolve the account that routed reply delivery will use when none is explicit. */
@@ -186,11 +164,7 @@ function createReplyToModeFilter(
     }
     if (mode === "off") {
       const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      // Status notices must never be threaded when replyToMode=off — even
-      // if they carry explicit reply tags (replyToCurrent).  Honouring the
-      // explicit tag here would make status notices appear in-thread while
-      // normal assistant replies stay off-thread, contradicting the off-mode
-      // expectation.  Strip replyToId unconditionally for compaction payloads.
+      // Explicit tags cannot override off-mode for transient status notices.
       if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !isStatusNotice) {
         return payload;
       }
@@ -203,21 +177,14 @@ function createReplyToModeFilter(
     if (mode === "all") {
       return payload;
     }
-    if (isSingleUseReplyToMode(mode) && hasThreaded) {
-      // Status notices are transient messages that should always
-      // appear in-thread, even after the first assistant block has already
-      // consumed the "first" slot.  Let them keep their replyToId.
-      if (isStatusNotice) {
-        return payload;
+    // Status notices keep their target without consuming the first-reply slot.
+    if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
+      if (hasThreaded) {
+        return suppressReplyTarget(payload);
       }
-      return suppressReplyTarget(payload);
-    }
-    // Status notices are transient messages — they should be
-    // threaded (so they appear in-context), but they must not consume the
-    // "first" slot of the replyToMode=first|batched filter.  Skip advancing
-    // hasThreaded so the real assistant reply still gets replyToId.
-    if (isSingleUseReplyToMode(mode) && !isStatusNotice && !preview) {
-      hasThreaded = true;
+      if (!preview) {
+        hasThreaded = true;
+      }
     }
     return payload;
   };

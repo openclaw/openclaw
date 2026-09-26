@@ -1,7 +1,11 @@
 import type { ServerResponse } from "node:http";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import type { GatewayAuthResult } from "./auth.js";
-import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
+import {
+  prepareGatewayHttpErrorResponse,
+  sendGatewayAuthFailure,
+  sendJson,
+} from "./http-common.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -13,6 +17,9 @@ export function sendGatewayHttpAuthFailure(
 ): void {
   if (authResult.reason !== "operator_access_denied") {
     sendGatewayAuthFailure(res, authResult);
+    return;
+  }
+  if (!prepareGatewayHttpErrorResponse(res, "Forbidden")) {
     return;
   }
   sendJson(res, 403, {

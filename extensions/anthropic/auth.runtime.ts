@@ -18,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import * as claudeCliAuth from "./cli-auth-seam.js";
-import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
 const PROVIDER_ID = "anthropic";
@@ -223,9 +222,7 @@ export function buildAnthropicAuthDoctorHint(params: {
 export async function runAnthropicCliMigration(
   ctx: ProviderAuthContext,
 ): Promise<ProviderAuthResult> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus(
-    resolveAnthropicCliAuthProbe(ctx.env ?? process.env),
-  );
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
     throw new Error(
       [
@@ -242,9 +239,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus(
-    resolveAnthropicCliAuthProbe(process.env),
-  );
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus();
   if (authStatus.status !== "available") {
     const error =
       authStatus.status === "unreadable"
@@ -291,16 +286,4 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
       },
     },
   };
-}
-
-function resolveAnthropicCliAuthProbe(env: NodeJS.ProcessEnv): {
-  command: string;
-  env: NodeJS.ProcessEnv;
-} {
-  const backend = buildAnthropicCliBackend().config;
-  const probeEnv = { ...env, ...backend.env };
-  for (const name of backend.clearEnv ?? []) {
-    delete probeEnv[name];
-  }
-  return { command: backend.command, env: probeEnv };
 }

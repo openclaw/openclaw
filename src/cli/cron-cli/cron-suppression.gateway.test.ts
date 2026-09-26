@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../../cron/isolated-agent/delivery-dispatch.js";
+import { readCronRunHistoryPageForTests } from "../../cron/run-history.test-support.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
-import { readCronTaskRunHistoryPage } from "../../cron/task-run-history.js";
 import type { CronJob } from "../../cron/types.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
@@ -258,7 +258,7 @@ describe("cron CLI delivery suppression readback", () => {
               lastDeliveryStatus: deliveryStatus,
             });
             expect(persisted.state.lastDelivered).toBe(delivered);
-            const history = readCronTaskRunHistoryPage({
+            const history = readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
             });
@@ -332,7 +332,8 @@ describe("cron CLI delivery suppression readback", () => {
           }
           expect(events).toHaveLength(6);
           expect(
-            readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id }).total,
+            readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
+              .total,
           ).toBe(6);
         } finally {
           cron.stop();

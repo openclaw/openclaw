@@ -19,9 +19,7 @@ import type { RespondFn } from "./types.js";
 export function requestModelsList(params: {
   view: "default" | "configured" | "provider-config" | "all";
   agentId?: string;
-  respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
-  getRuntimeConfig?: () => OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
     agentId?: string;
     agentDir?: string;
@@ -37,9 +35,9 @@ export function requestModelsList(params: {
   catalogComplete?: boolean;
   preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
 }) {
-  const respond = params.respond ?? vi.fn();
+  const respond = vi.fn();
   const runtimeConfig = params.runtimeConfig ?? {};
-  const getRuntimeConfig = params.getRuntimeConfig ?? (() => runtimeConfig);
+  const getRuntimeConfig = () => runtimeConfig;
   const resolveOwnerFacts = () => {
     const config = getRuntimeConfig();
     const agentId = params.agentId ?? resolveDefaultAgentId(config);
@@ -81,12 +79,8 @@ export function requestModelsList(params: {
       if (!params.deferredAuth) {
         return snapshot;
       }
-      try {
-        published = { ...snapshot, ...(await params.deferredAuth) };
-        return published;
-      } catch {
-        return snapshot;
-      }
+      published = { ...snapshot, ...(await params.deferredAuth) };
+      return published;
     },
     readPrepared: async () => {
       if (published && published.config === getRuntimeConfig()) {

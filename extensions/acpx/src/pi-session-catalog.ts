@@ -1,4 +1,5 @@
 import process from "node:process";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -15,7 +16,6 @@ import {
   PI_SESSION_ID_PATTERN as SESSION_ID_PATTERN,
 } from "./pi-session-catalog-shared.js";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_SEARCH_LENGTH = 500;
 
@@ -79,7 +79,7 @@ function isoTimestamp(
   entry: Record<string, unknown>,
 ): string | undefined {
   const value =
-    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
+    parseDateFirstTimestampMs(message.timestamp) ?? parseDateFirstTimestampMs(entry.timestamp);
   if (value === undefined) {
     return undefined;
   }
@@ -208,10 +208,10 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
     const id = optionalPiString(entry.id, 256);
     const timestamp = optionalPiString(entry.timestamp, 128);
     const common = { ...(id ? { id } : {}), ...(timestamp ? { timestamp } : {}) };
-    if (entry.type === "compaction" && typeof entry.summary === "string") {
-      return [{ ...common, type: "other", text: entry.summary }];
-    }
-    if (entry.type === "branch_summary" && typeof entry.summary === "string") {
+    if (
+      (entry.type === "compaction" || entry.type === "branch_summary") &&
+      typeof entry.summary === "string"
+    ) {
       return [{ ...common, type: "other", text: entry.summary }];
     }
     if (entry.type === "custom_message" && entry.display === true) {

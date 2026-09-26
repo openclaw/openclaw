@@ -3629,6 +3629,7 @@ jobs:
             ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts \
             ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
             ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
@@ -5887,11 +5888,11 @@ jobs:
       - *platform_checkout_step
 
       - &select_xcode_step
-        name: Select Xcode 27
+        name: Select Xcode
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
-          select_xcode_toolchain 27.0
+          select_xcode_toolchain
 
       - name: Setup Node environment for Apple assets
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''

@@ -21,14 +21,10 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
-import {
-  buildAgentMainSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../../lib/sessions/session-key.ts";
+import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
-import { clearChatHistory } from "./chat-history-actions.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
@@ -238,7 +234,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
-      onReset: () => void clearChatHistory(state),
     });
     const setReply = (target: ChatProps["replyTarget"]) => {
       state.chatReplyTarget = target;
@@ -377,8 +372,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
-      onSessionKeyChange: (next) => void this.onPaneSessionChange?.(this.paneId, next),
-      thinkingLevel: state.chatThinkingLevel,
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
@@ -427,7 +420,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         : undefined,
       gatewayQuestionPrompts,
       asyncQuestionStorage:
-        !catalogKey && !suggestionViewer ? this.chatState.durableComposerScope : null,
+        !catalogKey && !suggestionViewer ? this.chatState.composerPersistence.durableScope : null,
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
@@ -651,12 +644,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
-      onClearHistory: sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,
       currentAgentId,
       ...chatProps,
-      onAgentChange: (agentId) =>
-        void this.onPaneSessionChange?.(this.paneId, buildAgentMainSessionKey({ agentId })),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,

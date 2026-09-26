@@ -16,6 +16,7 @@ import {
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
@@ -35,6 +36,7 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
+  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
@@ -50,6 +52,7 @@ import {
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
 import { isWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker-contract.js";
 import { executeWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker.js";
+import { startWorkerPlacementDispatchInWorker } from "../gateway/worker-environments/placement-dispatch-store.worker.js";
 import { isPlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import { executePlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
@@ -101,9 +104,11 @@ import {
   executeProjectRegistryCommand,
   isProjectRegistryCommand,
 } from "../projects/project-registry.worker.js";
+import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   isSkillUploadCommand,
   executeSkillUploadCommand,
@@ -150,7 +155,19 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
-export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
+const loadPluginIndexWriter = createLazyRuntimeModule(
+  () => import("../plugins/installed-plugin-index-store-write.js"),
+);
+let pluginIndexWriter: Awaited<ReturnType<typeof loadPluginIndexWriter>> | undefined;
+
+export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "plugins.metadata.sourceAdmission.publish" && !pluginIndexWriter) {
+    return loadPluginIndexWriter().then((loaded) => {
+      pluginIndexWriter = loaded;
+    });
+  }
+  return prepareCronStateWorkerCommand(type);
+}
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
@@ -185,6 +202,9 @@ export function executeSharedStateCommand(
   }
   if (isWorkerEnvironmentCommand(command)) {
     return executeWorkerEnvironmentCommand(command, open());
+  }
+  if (command.type === "workerPlacements.startDispatch") {
+    return startWorkerPlacementDispatchInWorker(command.input, open());
   }
   if (command.type === "audit.events.list") {
     return listAuditEventsInDatabase(open().db, command.input);
@@ -500,11 +520,24 @@ export function executeSharedStateCommand(
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
+  if (command.type === "workspace.replaceAttestation") {
+    return runOpenClawStateWriteTransaction((writer) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return result;
+    }, writeOptions);
+  }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
+  }
+  if (command.type === "secrets.writeForConfigRef") {
+    return writeSecretStoreEntryForConfigRefInDatabase(command.input, writeOptions, (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
   }
   if (conversationBindings.isWriteCommand(command)) {
     return conversationBindings.executeCommand(command, writeOptions);
@@ -579,6 +612,16 @@ export function executeSharedStateCommand(
       }
       throw error;
     }
+  }
+  if (command.type === "plugins.metadata.sourceAdmission.publish") {
+    if (!pluginIndexWriter) {
+      throw new Error("Plugin source admission writer is not prepared");
+    }
+    const { publishPluginSourceAdmissionInDatabase } = pluginIndexWriter;
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => publishPluginSourceAdmissionInDatabase(db, command.input),
+      writeOptions,
+    );
   }
   if (command.type === "subagents.persistChanges") {
     const { writeId, values, deleteRunIds } = command.input;

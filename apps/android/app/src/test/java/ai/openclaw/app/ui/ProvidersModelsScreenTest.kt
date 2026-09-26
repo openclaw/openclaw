@@ -47,6 +47,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
@@ -143,6 +144,41 @@ class ProvidersModelsScreenTest {
     }
     composeRule.onNodeWithText("Set up on computer").performScrollTo().assertIsDisplayed()
     composeRule.onAllNodesWithText("Connect Provider").assertCountEquals(0)
+  }
+
+  @Test
+  fun inactiveOrExcludedCredentialsRequireSetupButSavedKeysRemainRemovable() {
+    val providers = ReflectionHelpers.getField<MutableStateFlow<List<GatewayModelProviderSummary>>>(runtime, "_modelAuthProviders")
+    val models = ReflectionHelpers.getField<MutableStateFlow<List<GatewayModelSummary>>>(runtime, "_providerModelCatalog")
+    models.value = models.value.map { if (it.provider == "ollama") it.copy(available = false) else it }
+    show(dark = true)
+    composeRule.onNode(hasSetTextAction()).performTextReplacement("Ollama")
+
+    listOf(
+      """[{"provider":"ollama","displayName":"Ollama","status":"missing","profiles":[
+        {"profileId":"ollama:account","type":"oauth","reasonCode":"setup_inactive"},
+        {"profileId":"ollama:token","type":"token","reasonCode":"setup_inactive"},
+        {"profileId":"ollama:key","type":"api_key","source":"saved","logoutSupported":true,"reasonCode":"setup_inactive"}
+      ]}]""",
+      """[{"provider":"ollama","displayName":"Ollama","status":"missing","profileOrder":[],"profiles":[
+        {"profileId":"ollama:account","type":"oauth"},
+        {"profileId":"ollama:token","type":"token"},
+        {"profileId":"ollama:key","type":"api_key","source":"saved","logoutSupported":true}
+      ]}]""",
+    ).forEachIndexed { index, payload ->
+      composeRule.runOnIdle {
+        val provider = parseGatewayModelProviders(Json.parseToJsonElement(payload).jsonArray).single()
+        providers.value = providers.value.map { if (it.id == provider.id) provider else it }
+      }
+      scrollToSearch()
+      capture(if (index == 0) "providers-inactive-credentials-dark" else "providers-excluded-credentials-dark")
+      composeRule.onNodeWithText("Set up on computer").assertIsDisplayed()
+      composeRule.onNodeWithText("Not configured").assertIsDisplayed()
+      composeRule.onAllNodesWithText("Credentials configured").assertCountEquals(0)
+      composeRule.onAllNodesWithText("Test connection").assertCountEquals(0)
+      composeRule.onAllNodesWithText("Connect Provider").assertCountEquals(0)
+      composeRule.onNodeWithText("Remove key").performScrollTo().assertIsDisplayed()
+    }
   }
 
   @Test

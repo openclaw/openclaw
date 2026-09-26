@@ -481,7 +481,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       sessionId: REQUEST.sessionId,
       ownerEpoch: 1,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "handoff-worker",
       ownerEpoch: 1,
     });

@@ -17,11 +17,7 @@ import {
 import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  mergeHybridResults,
-  selectHybridSearchResults,
-  type HybridSearchResult,
-} from "./hybrid.js";
+import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import { projectHybridCandidates } from "./manager-hybrid-candidates.js";
@@ -574,15 +570,22 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           .slice(0, maxResults);
       }
 
-      const merged = await this.mergeHybridResults({
-        query: normalizedQuery,
-        vector: vectorResults,
-        keyword: keywordResults,
+      const merged = await mergeHybridResults({
+        ...projectHybridCandidates(normalizedQuery, vectorResults, keywordResults),
         vectorWeight: hybrid.vectorWeight,
         textWeight: hybrid.textWeight,
+        isNonTextMediaPath: (path) =>
+          classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
         mmr: hybrid.mmr,
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
+        workspaceDir: this.workspaceDir,
+        // Vector enrichment runs last, so its facts win for paths in both sets.
+        sessionSourceMtimes: this.loadSourceMtimes("sessions", [
+          ...keywordResults,
+          ...vectorResults,
+        ]),
+        memorySourceMtimes: this.loadSourceMtimes("memory", [...keywordResults, ...vectorResults]),
       });
       return selectHybridSearchResults({
         merged,
@@ -672,31 +675,5 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
     });
     return this.attachRecallMetadata(results, signal, sourceFilterList);
-  }
-
-  private mergeHybridResults(params: {
-    query: string;
-    vector: Array<MemoryRetrievalResult & { id: string }>;
-    keyword: KeywordSearchHit[];
-    vectorWeight: number;
-    textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
-    temporalDecay?: { enabled: boolean; halfLifeDays: number };
-    activeProjectKeys?: readonly string[];
-  }): Promise<HybridSearchResult<MemorySource>[]> {
-    return mergeHybridResults({
-      ...projectHybridCandidates(params.query, params.vector, params.keyword),
-      vectorWeight: params.vectorWeight,
-      textWeight: params.textWeight,
-      isNonTextMediaPath: (path) =>
-        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
-      mmr: params.mmr,
-      temporalDecay: params.temporalDecay,
-      activeProjectKeys: params.activeProjectKeys,
-      workspaceDir: this.workspaceDir,
-      // Vector enrichment runs last, so its facts win when a path occurs in both sets.
-      sessionSourceMtimes: this.loadSourceMtimes("sessions", [...params.keyword, ...params.vector]),
-      memorySourceMtimes: this.loadSourceMtimes("memory", [...params.keyword, ...params.vector]),
-    });
   }
 }

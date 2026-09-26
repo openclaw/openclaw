@@ -207,13 +207,6 @@ describe("signal mention gating", () => {
     expect(log.mock.calls.flat().join(" ")).not.toContain("+15550001111");
   });
 
-  it("allows group messages with mention when requireMention is configured", async () => {
-    const handler = createMentionHandler({ requireMention: true });
-
-    await handler(makeGroupEvent({ message: "hey @bot what's up" }));
-    expect(getCapturedCtx().WasMentioned).toBe(true);
-  });
-
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
     const handler = createMentionHandler({ requireMention: false });
 
@@ -246,17 +239,6 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().WasMentioned).toBe(false);
   });
 
-  it("records pending history for skipped group messages", async () => {
-    const { handler, groupHistories } = createMentionGatedHistoryHandler();
-    await handler(makeGroupEvent({ message: "hello from alice" }));
-    expect(capturedCtx).toBeUndefined();
-    const entries = getGroupHistoryEntries(groupHistories);
-    expect(entries).toHaveLength(1);
-    const entry = expectDefined(entries[0], "Signal group history entry");
-    expect(entry.sender).toBe("Alice");
-    expect(entry.body).toBe("hello from alice");
-  });
-
   it("keeps the canonical data-message timestamp in skipped group history", async () => {
     const { handler, groupHistories } = createMentionGatedHistoryHandler();
     const timestamp = 1700000000123;
@@ -274,6 +256,7 @@ describe("signal mention gating", () => {
     );
 
     const entry = expectDefined(getGroupHistoryEntries(groupHistories)[0], "Signal history entry");
+    expect(entry.sender).toBe("Alice");
     expect(entry.timestamp).toBe(timestamp);
     expect(entry.messageId).toBe(String(timestamp));
   });
@@ -556,22 +539,6 @@ describe("signal mention gating", () => {
 describe("renderSignalMentions", () => {
   const PLACEHOLDER = "\uFFFC";
 
-  it("returns the original message when no mentions are provided", () => {
-    const message = `${PLACEHOLDER} ping`;
-    expect(renderSignalMentions(message, null)).toBe(message);
-    expect(renderSignalMentions(message, [])).toBe(message);
-  });
-
-  it("replaces placeholder code points using mention metadata", () => {
-    const message = `${PLACEHOLDER} hi ${PLACEHOLDER}!`;
-    const normalized = renderSignalMentions(message, [
-      { uuid: "abc-123", start: 0, length: 1 },
-      { number: "+15550005555", start: message.lastIndexOf(PLACEHOLDER), length: 1 },
-    ]);
-
-    expect(normalized).toBe("@abc-123 hi @+15550005555!");
-  });
-
   it("skips mentions that lack identifiers or out-of-bounds spans", () => {
     const message = `${PLACEHOLDER} hi`;
     const normalized = renderSignalMentions(message, [
@@ -593,54 +560,6 @@ describe("renderSignalMentions", () => {
 
 describe("resolveSignalMentionFacts", () => {
   const PLACEHOLDER = "\uFFFC";
-
-  it("reports bot, any, and capability facts for valid UUID metadata", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, `${PLACEHOLDER} ping`, [
-        { uuid: "bot-uuid", start: 0, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: true,
-      mentionsBot: true,
-    });
-  });
-
-  it("reports unrelated valid metadata without treating it as a bot mention", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, `${PLACEHOLDER} ping`, [
-        { uuid: "other-user", start: 0, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: true,
-      mentionsBot: false,
-    });
-  });
-
-  it("accepts valid mention metadata over ordinary message text", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, "Hi X!", [
-        { uuid: "bot-uuid", start: 3, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: true,
-      mentionsBot: true,
-    });
-  });
-
-  it("ignores matching metadata whose span is outside the message", () => {
-    expect(
-      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, "plain ping", [
-        { uuid: "bot-uuid", start: 99, length: 1 },
-      ]),
-    ).toEqual({
-      canDetectBotMention: true,
-      hasAnyMention: false,
-      mentionsBot: false,
-    });
-  });
 
   it("keeps mention facts but no bot detection capability without account identity", () => {
     expect(

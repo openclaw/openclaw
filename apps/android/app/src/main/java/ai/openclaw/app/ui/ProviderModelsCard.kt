@@ -80,7 +80,7 @@ internal fun ProviderModelsCard(
   onProbe: () -> Unit,
   onRemoveKey: () -> Unit,
 ) {
-  val hasCredentials = row.auth?.let { it.hasApiKey || it.profiles.isNotEmpty() } == true
+  val hasCredentials = row.auth?.let { it.hasApiKey || it.profiles.any { profile -> profile.eligible } } == true
   val ready = catalogStatus == "ready" && row.modelCount > 0 && row.ready && row.auth?.status != "missing"
   val status =
     when {
@@ -190,9 +190,9 @@ private fun providerCredentialSummary(provider: GatewayModelProviderSummary?): S
   if (provider == null) return nativeString("Not configured")
   val parts =
     buildList {
-      val oauth = provider.profiles.count { it.type == "oauth" }
-      val tokens = provider.profiles.count { it.type == "token" }
-      val keys = provider.profiles.count { it.type == "api_key" }
+      val oauth = provider.profiles.count { it.eligible && it.type == "oauth" }
+      val tokens = provider.profiles.count { it.eligible && it.type == "token" }
+      val keys = provider.profiles.count { it.eligible && it.type == "api_key" }
       if (oauth > 0) add(nativeString("OAuth profiles: \$count", oauth))
       if (tokens > 0) add(nativeString("Token profiles: \$count", tokens))
       when (provider.apiKeySource) {

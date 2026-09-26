@@ -1,20 +1,21 @@
-// Googlechat plugin module implements channel.adapters behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type ChannelMessageSendTextContext,
-  type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAllowlistProviderOpenWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createChannelDirectoryAdapter,
   listResolvedDirectoryGroupEntriesFromMapKeys,
@@ -23,18 +24,9 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
-import {
-  type ResolvedGoogleChatAccount,
-  isGoogleChatUserTarget,
-  missingTargetError,
-  normalizeGoogleChatTarget,
-  PAIRING_APPROVED_MESSAGE,
-  resolveGoogleChatAccount,
-  resolveGoogleChatOutboundSpace,
-  type OpenClawConfig,
-} from "./channel.deps.runtime.js";
 import {
   formatGoogleChatTextChunks,
   GOOGLE_CHAT_FORMAT_PROFILE,
@@ -42,6 +34,11 @@ import {
 } from "./format.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { googleChatIngressIdentity } from "./ingress-identity.js";
+import {
+  isGoogleChatUserTarget,
+  normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSpace,
+} from "./targets.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -59,29 +56,6 @@ type GoogleChatTextSendContext = Pick<
   | "assertDirectAdapterHandoff"
   | "onPlatformSendDispatch"
 >;
-
-function createGoogleChatSendReceipt(params: {
-  messageId?: string;
-  chatId: string;
-  threadId?: string;
-  kind: MessageReceiptPartKind;
-}) {
-  const messageId = params.messageId?.trim();
-  return createMessageReceiptFromOutboundResults({
-    results: messageId
-      ? [
-          {
-            channel: "googlechat",
-            messageId,
-            chatId: params.chatId,
-            conversationId: params.chatId,
-          },
-        ]
-      : [],
-    threadId: params.threadId,
-    kind: params.kind,
-  });
-}
 
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
@@ -261,12 +235,21 @@ export const googlechatOutboundAdapter = {
         onPlatformSendDispatch,
       });
       const messageId = result?.messageName ?? "";
+      const receiptMessageId = messageId.trim();
       return {
         messageId,
         chatId: space,
-        receipt: createGoogleChatSendReceipt({
-          messageId,
-          chatId: space,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: receiptMessageId
+            ? [
+                {
+                  channel: "googlechat",
+                  messageId: receiptMessageId,
+                  chatId: space,
+                  conversationId: space,
+                },
+              ]
+            : [],
           threadId: result?.threadName ?? thread,
           kind: "text",
         }),

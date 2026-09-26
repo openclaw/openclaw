@@ -4,7 +4,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { buildManagedFlowCancellationPatch } from "./task-initial-flow.rules.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { listTasksForFlowId } from "./task-registry-query.js";
 import {
@@ -13,6 +13,7 @@ import {
   cloneTaskRecordForObserver,
 } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   withTaskRegistryMutation,
   syncFlowFromTaskAfterTaskMutation,
   bumpTaskRegistryRevision,

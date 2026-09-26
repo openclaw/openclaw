@@ -53,14 +53,14 @@ struct GatewayRegistryTestIsolation {
     init() {
         gatewayPersistenceTestSemaphore.wait()
         self.previousKeychain = Dictionary(uniqueKeysWithValues: Self.keychainAccounts.map { account in
-            (account, KeychainStore.loadString(service: Self.service, account: account))
+            (account, GenericPasswordKeychainStore.loadString(service: Self.service, account: account))
         })
         self.previousDefaults = Dictionary(uniqueKeysWithValues: Self.legacyDefaultsKeys.map { key in
             (key, UserDefaults.standard.object(forKey: key))
         })
         self.previousRelay = ShareGatewayRelaySettings.loadConfig()
         for account in Self.keychainAccounts {
-            _ = KeychainStore.delete(service: Self.service, account: account)
+            _ = GenericPasswordKeychainStore.delete(service: Self.service, account: account)
         }
         for key in Self.legacyDefaultsKeys {
             UserDefaults.standard.removeObject(forKey: key)
@@ -69,9 +69,9 @@ struct GatewayRegistryTestIsolation {
 
     func restore() {
         for (account, value) in self.previousKeychain {
-            _ = KeychainStore.delete(service: Self.service, account: account)
+            _ = GenericPasswordKeychainStore.delete(service: Self.service, account: account)
             if let value {
-                _ = KeychainStore.saveString(value, service: Self.service, account: account)
+                _ = GenericPasswordKeychainStore.saveString(value, service: Self.service, account: account)
             }
         }
         for (key, value) in self.previousDefaults {
@@ -1159,7 +1159,7 @@ private func waitUntil(
         #expect(credentials.token == "proven-relay-token")
         #expect(credentials.password == "proven-relay-password")
         #expect(!credentials.suppressStoredDeviceAuth)
-        #expect(KeychainStore.loadString(
+        #expect(GenericPasswordKeychainStore.loadString(
             service: gatewayService,
             account: "gateway-token.\(instanceID)") == nil)
 
@@ -1707,7 +1707,7 @@ private func waitUntil(
             tailnetDns: nil,
             gatewayPort: nil,
             tlsEnabled: true,
-            tlsFingerprintSha256: nil,
+            tlsFingerprintSha256: "untrusted-txt-fingerprint",
             cliPath: nil)
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
@@ -1724,9 +1724,12 @@ private func waitUntil(
             })
 
         #expect(await controller.connectWithDiagnostics(gateway) == nil)
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "exact-owner-fingerprint")
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
         await waitUntil(timeout: .seconds(1)) { appModel.activeGatewayConnectConfig != nil }
 
+        #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == "exact-owner-fingerprint")
+        #expect(appModel.activeGatewayConnectConfig?.tls?.allowTOFU == false)
         #expect(persistedOwnerBytes.withLock { $0 } == Array(stableID.utf8))
         #expect(appModel.activeGatewayConnectConfig.map { Array($0.stableID.utf8) } == Array(stableID.utf8))
         #expect(appModel.activeGatewayConnectConfig
@@ -2455,8 +2458,8 @@ private func waitUntil(
         let lastAccount = "lastDiscoveredStableID"
         let forgottenID = "bonjour|forgotten"
         let keptID = "bonjour|kept"
-        _ = KeychainStore.saveString(forgottenID, service: service, account: preferredAccount)
-        _ = KeychainStore.saveString(keptID, service: service, account: lastAccount)
+        _ = GenericPasswordKeychainStore.saveString(forgottenID, service: service, account: preferredAccount)
+        _ = GenericPasswordKeychainStore.saveString(keptID, service: service, account: lastAccount)
 
         await withUserDefaults([
             "gateway.preferredStableID": forgottenID,
@@ -2471,8 +2474,8 @@ private func waitUntil(
             let defaults = UserDefaults.standard
             #expect(defaults.object(forKey: "gateway.preferredStableID") == nil)
             #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == keptID)
-            #expect(KeychainStore.loadString(service: service, account: preferredAccount) == nil)
-            #expect(KeychainStore.loadString(service: service, account: lastAccount) == keptID)
+            #expect(GenericPasswordKeychainStore.loadString(service: service, account: preferredAccount) == nil)
+            #expect(GenericPasswordKeychainStore.loadString(service: service, account: lastAccount) == keptID)
         }
     }
 
@@ -2808,7 +2811,9 @@ private func waitUntil(
         appModel.applyGatewayConnectConfig(config)
         let previousOwnerID = appModel.chatViewModelOwnerID
         appModel._test_setGatewaySessionResetTask(Task {
-            for await _ in resetRelease.stream { return }
+            for await _ in resetRelease.stream {
+                return
+            }
         })
         let controller = GatewayConnectionController(
             appModel: appModel,

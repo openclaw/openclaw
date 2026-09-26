@@ -310,16 +310,9 @@ async function guardGatewayRunSelectedConfig(
     if (!snapshot) {
       return false;
     }
-    if (!snapshot.valid && params.opts.reset) {
-      // Invalid config source is untrusted. In particular, applying its env block could let an
-      // off-root $include self-authorize OPENCLAW_INCLUDE_ROOTS on the next read. Only explicit dev
-      // reset may proceed as the recovery path; ordinary startup skips mutation-capable bootstrap.
-      lastGuardedGatewayRunSnapshot = snapshot;
-      return true;
-    }
     if (!snapshot.valid) {
       // Invalid authored config cannot choose runtime environment. The config guard
-      // owns its detailed refusal and any explicitly selected Doctor recovery.
+      // owns refusal and recovery; dev reset must not apply the config it will delete.
       lastGuardedGatewayRunSnapshot = snapshot;
       return true;
     }

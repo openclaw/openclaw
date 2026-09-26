@@ -20,6 +20,18 @@ function contentText(content: unknown): string {
     : "";
 }
 
+export function readMockUserText(message: unknown): string | undefined {
+  if (!isRecord(message) || message.role !== "user") {
+    return undefined;
+  }
+  const text = contentText(message.content);
+  // Responses places this complete runtime carrier after the user request it belongs to.
+  return text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n") &&
+    text.endsWith("\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
+    ? undefined
+    : text;
+}
+
 /** Keep bounded purpose facts before the mock clips request bodies; never retain prompt excerpts. */
 export function summarizeMockInferenceRequest(body: unknown): MockInferenceFacts {
   const request = isRecord(body) ? body : {};
@@ -51,13 +63,8 @@ export function summarizeMockInferenceRequest(body: unknown): MockInferenceFacts
       continue;
     }
     if (item.role === "user") {
-      const text = contentText(item.content);
-      // Responses projects the runtime-context carrier as a user message after
-      // its owner. Skip only that complete wrapper, never a later ordinary user.
-      if (
-        text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n") &&
-        text.endsWith("\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-      ) {
+      const text = readMockUserText(item);
+      if (text === undefined) {
         continue;
       }
       marker = text.match(/benchmark (?:(warmup) )?(?:tool )?stream (\d+)\./u);

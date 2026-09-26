@@ -206,6 +206,17 @@ describe("SessionManager branch replacement", () => {
       expect.objectContaining({ id: user.messageId, type: "message" }),
       expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    expect(sessionManager.removeTrailingEntries((entry) => entry.id === assistant.messageId)).toBe(
+      1,
+    );
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
+      [
+        expect.objectContaining({ id: branchedSessionId, type: "session" }),
+        expect.objectContaining({ id: user.messageId, type: "message" }),
+      ],
+    );
   });
 
   it("does not publish a branch identity when transcript persistence fails", async () => {

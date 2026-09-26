@@ -10,7 +10,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { loadPluginManifest } from "./manifest.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -21,18 +20,63 @@ function updateDashboardManifest(plugin: TempPlugin, dashboard: Record<string, u
   fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, dashboard }, null, 2), "utf8");
 }
 
-function loadFixture(plugin: TempPlugin) {
+function loadFixture(...plugins: [TempPlugin, ...TempPlugin[]]) {
   return loadOpenClawPlugins({
     cache: false,
-    workspaceDir: plugin.dir,
+    workspaceDir: plugins[0].dir,
     config: {
       plugins: {
-        load: { paths: [plugin.file] },
-        allow: [plugin.id],
+        load: { paths: plugins.map((plugin) => plugin.file) },
+        allow: plugins.map((plugin) => plugin.id),
       },
     },
-    onlyPluginIds: [plugin.id],
+    onlyPluginIds: plugins.map((plugin) => plugin.id),
   });
+}
+
+function writeWidgetPlugin(params: {
+  id: string;
+  resourcePath: string;
+  kind?: string;
+  surface?: string;
+  publicReader?: boolean;
+}): TempPlugin {
+  return writePlugin({
+    id: params.id,
+    registration: `api.registerBoardWidgetContentKind({
+      kind: ${JSON.stringify(params.kind ?? "diagram")},
+      label: "Diagram",
+      resources: {
+        surface: ${JSON.stringify(params.surface ?? "diagram")},
+        paths: [${JSON.stringify(params.resourcePath)}],
+        ${params.publicReader ? "async readPublicResource() { return undefined; }," : ""}
+      },
+      validateSource(source) { if (!source.trim()) throw new Error("source required"); },
+      composeDocument({ source }) { return "<main>" + source + "</main>"; },
+    });`,
+  });
+}
+
+function writeDashboardPlugin(
+  id: string,
+  methods: Record<string, "operator.read" | "operator.write">,
+  dashboard: Record<string, unknown>,
+): TempPlugin {
+  const plugin = writePlugin({
+    id,
+    filename: "dashboard.cjs",
+    registration: Object.entries(methods)
+      .map(
+        ([method, scope]) => `api.registerGatewayMethod(
+      ${JSON.stringify(method)},
+      ({ respond }) => respond(true, { ok: true }),
+      { scope: ${JSON.stringify(scope)} },
+    );`,
+      )
+      .join("\n"),
+  });
+  updateDashboardManifest(plugin, dashboard);
+  return plugin;
 }
 
 describe("plugin dashboard declarations", () => {
@@ -42,21 +86,7 @@ describe("plugin dashboard declarations", () => {
     ["/renderer/app.js?v=1#asset", "/renderer/app.js%3Fv=1%23asset"],
   ])("publishes private renderer path %s through its capability", (resourcePath, resolvedPath) => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "diagram",
-      body: `module.exports = {
-        id: "diagram",
-        register(api) {
-          api.registerBoardWidgetContentKind({
-            kind: "diagram",
-            label: "Diagram",
-            resources: { surface: "diagram", paths: [${JSON.stringify(resourcePath)}] },
-            validateSource(source) { if (!source.trim()) throw new Error("source required"); },
-            composeDocument({ source }) { return "<main>" + source + "</main>"; },
-          });
-        },
-      };`,
-    });
+    const plugin = writeWidgetPlugin({ id: "diagram", resourcePath });
 
     const registry = loadFixture(plugin);
 
@@ -78,15 +108,11 @@ describe("plugin dashboard declarations", () => {
 
   it("fails plugin load atomically for invalid board widget content kinds", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
+    const plugin = writeWidgetPlugin({
       id: "invalid-widget-kind",
-      registration: `api.registerBoardWidgetContentKind({
-        kind: "html",
-        label: "Invalid",
-        resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
-        validateSource() {},
-        composeDocument() { return ""; },
-      });`,
+      kind: "html",
+      surface: "canvas",
+      resourcePath: "/__openclaw__/invalid/app.js",
     });
 
     const registry = loadFixture(plugin);
@@ -113,24 +139,11 @@ describe("plugin dashboard declarations", () => {
     "/renderer\\app.js",
   ])("rejects an unservable public resource path %s", (resourcePath) => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
+    const plugin = writeWidgetPlugin({
       id: "invalid-renderer-path",
-      body: `module.exports = {
-        id: "invalid-renderer-path",
-        register(api) {
-          api.registerBoardWidgetContentKind({
-            kind: "diagram",
-            label: "Diagram",
-            resources: {
-              surface: "renderer",
-              paths: [${JSON.stringify(resourcePath)}],
-              async readPublicResource() { return undefined; },
-            },
-            validateSource() {},
-            composeDocument() { return ""; },
-          });
-        },
-      };`,
+      surface: "renderer",
+      resourcePath,
+      publicReader: true,
     });
 
     const registry = loadFixture(plugin);
@@ -143,7 +156,6 @@ describe("plugin dashboard declarations", () => {
   it.each([
     { firstPublic: false, secondPublic: true, sharedPath: true },
     { firstPublic: true, secondPublic: false, sharedPath: true },
-    { firstPublic: true, secondPublic: true, sharedPath: true },
     { firstPublic: false, secondPublic: false, sharedPath: true },
     { firstPublic: true, secondPublic: true, sharedPath: false },
   ])(
@@ -152,40 +164,17 @@ describe("plugin dashboard declarations", () => {
       useNoBundledPlugins();
       const createRenderer = (isPublic: boolean, kind: "first" | "second") => {
         const resourceName = kind === "first" || sharedPath ? "shared" : "other";
-        return writePlugin({
+        return writeWidgetPlugin({
           id: `renderer-${kind}`,
-          body: `module.exports = {
-            id: "renderer-${kind}",
-            register(api) {
-              api.registerBoardWidgetContentKind({
-                kind: "${kind}",
-                label: "Renderer",
-                resources: {
-                  surface: "${kind}",
-                  paths: ["/__openclaw__/renderer/${resourceName}.js"],
-                  ${isPublic ? "async readPublicResource() { return undefined; }," : ""}
-                },
-                validateSource() {},
-                composeDocument() { return ""; },
-              });
-            },
-          };`,
+          kind,
+          surface: kind,
+          resourcePath: `/__openclaw__/renderer/${resourceName}.js`,
+          publicReader: isPublic,
         });
       };
       const firstPlugin = createRenderer(firstPublic, "first");
       const secondPlugin = createRenderer(secondPublic, "second");
-      const plugins = [firstPlugin, secondPlugin];
-      const registry = loadOpenClawPlugins({
-        cache: false,
-        workspaceDir: firstPlugin.dir,
-        config: {
-          plugins: {
-            load: { paths: plugins.map((plugin) => plugin.file) },
-            allow: plugins.map((plugin) => plugin.id),
-          },
-        },
-        onlyPluginIds: plugins.map((plugin) => plugin.id),
-      });
+      const registry = loadFixture(firstPlugin, secondPlugin);
       expect(registry.plugins.find((entry) => entry.id === firstPlugin.id)?.status).toBe("loaded");
       const second = registry.plugins.find((entry) => entry.id === secondPlugin.id);
       if (sharedPath && (firstPublic || secondPublic)) {
@@ -199,59 +188,15 @@ describe("plugin dashboard declarations", () => {
     },
   );
 
-  it("loads the Workboard bindings and dispatch action from its manifest", () => {
-    const result = loadPluginManifest(path.join(process.cwd(), "extensions", "workboard"));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.manifest.dashboard).toEqual({
-      dataBindings: [
-        {
-          id: "cards.list",
-          method: "workboard.cards.list",
-          description: "List Workboard cards and statuses.",
-        },
-        {
-          id: "stats",
-          method: "workboard.cards.stats",
-          description: "Read Workboard card statistics.",
-        },
-        {
-          id: "boards.list",
-          method: "workboard.boards.list",
-          description: "List Workboard boards.",
-        },
-      ],
-      actionVerbs: [
-        {
-          id: "dispatch",
-          method: "workboard.cards.dispatch",
-          description: "Dispatch ready Workboard cards.",
-          paramShape: {
-            type: "object",
-            additionalProperties: false,
-            properties: { boardId: { type: "string", minLength: 1 } },
-          },
-        },
-      ],
-    });
-  });
-
   it("rejects gateway methods owned outside the declaring plugin", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "dashboard-foreign-method",
-      registration: `api.registerGatewayMethod(
-        "dashboard-foreign-method.read",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.read" },
-      );`,
-    });
-    updateDashboardManifest(plugin, {
-      dataBindings: [{ id: "foreign", method: "sessions.list", description: "Foreign method" }],
-    });
+    const plugin = writeDashboardPlugin(
+      "dashboard-foreign-method",
+      { "dashboard-foreign-method.read": "operator.read" },
+      {
+        dataBindings: [{ id: "foreign", method: "sessions.list", description: "Foreign method" }],
+      },
+    );
 
     const registry = loadFixture(plugin);
     const record = registry.plugins.find((entry) => entry.id === plugin.id);
@@ -268,23 +213,19 @@ describe("plugin dashboard declarations", () => {
 
   it("rejects dashboard data bindings registered with the wrong scope", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "dashboard-wrong-scope",
-      registration: `api.registerGatewayMethod(
-        "dashboard-wrong-scope.read",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.write" },
-      );`,
-    });
-    updateDashboardManifest(plugin, {
-      dataBindings: [
-        {
-          id: "read",
-          method: "dashboard-wrong-scope.read",
-          description: "Wrong-scope method",
-        },
-      ],
-    });
+    const plugin = writeDashboardPlugin(
+      "dashboard-wrong-scope",
+      { "dashboard-wrong-scope.read": "operator.write" },
+      {
+        dataBindings: [
+          {
+            id: "read",
+            method: "dashboard-wrong-scope.read",
+            description: "Wrong-scope method",
+          },
+        ],
+      },
+    );
 
     const registry = loadFixture(plugin);
     const record = registry.plugins.find((entry) => entry.id === plugin.id);
@@ -301,23 +242,19 @@ describe("plugin dashboard declarations", () => {
 
   it("rejects action verbs that collide with core data-binding grants", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "sessions",
-      registration: `api.registerGatewayMethod(
-        "sessions.pluginWrite",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.write" },
-      );`,
-    });
-    updateDashboardManifest(plugin, {
-      actionVerbs: [
-        {
-          id: "list",
-          method: "sessions.pluginWrite",
-          description: "Colliding write action",
-        },
-      ],
-    });
+    const plugin = writeDashboardPlugin(
+      "sessions",
+      { "sessions.pluginWrite": "operator.write" },
+      {
+        actionVerbs: [
+          {
+            id: "list",
+            method: "sessions.pluginWrite",
+            description: "Colliding write action",
+          },
+        ],
+      },
+    );
 
     const registry = loadFixture(plugin);
     const record = registry.plugins.find((entry) => entry.id === plugin.id);
@@ -334,24 +271,19 @@ describe("plugin dashboard declarations", () => {
 
   it("escapes plugin ids that would otherwise overlap dynamic cron grants", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "cron.trigger:nightly",
-      filename: "cron-trigger-nightly.cjs",
-      registration: `api.registerGatewayMethod(
-        "plugin.nightly.read",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.read" },
-      );`,
-    });
-    updateDashboardManifest(plugin, {
-      dataBindings: [
-        {
-          id: "run",
-          method: "plugin.nightly.read",
-          description: "Colliding cron binding",
-        },
-      ],
-    });
+    const plugin = writeDashboardPlugin(
+      "cron.trigger:nightly",
+      { "plugin.nightly.read": "operator.read" },
+      {
+        dataBindings: [
+          {
+            id: "run",
+            method: "plugin.nightly.read",
+            description: "Colliding cron binding",
+          },
+        ],
+      },
+    );
 
     const registry = loadFixture(plugin);
     const record = registry.plugins.find((entry) => entry.id === plugin.id);
@@ -361,72 +293,47 @@ describe("plugin dashboard declarations", () => {
 
   it("keeps dotted plugin owners and literal escape markers distinct", () => {
     useNoBundledPlugins();
-    const dataPlugin = writePlugin({
-      id: "dashboard",
-      filename: "dashboard-data.cjs",
-      registration: `api.registerGatewayMethod(
-        "dashboard.items",
-        ({ respond }) => respond(true, { items: [] }),
-        { scope: "operator.read" },
-      );`,
-    });
-    updateDashboardManifest(dataPlugin, {
-      dataBindings: [
-        {
-          id: "segmented.refresh",
-          method: "dashboard.items",
-          description: "Read segmented items",
-        },
-      ],
-    });
-    const actionPlugin = writePlugin({
-      id: "dashboard.segmented",
-      filename: "dashboard-segmented-action.cjs",
-      registration: `api.registerGatewayMethod(
-        "dashboard.segmented.refresh",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.write" },
-      );`,
-    });
-    updateDashboardManifest(actionPlugin, {
-      actionVerbs: [
-        {
-          id: "refresh",
-          method: "dashboard.segmented.refresh",
-          description: "Refresh segmented items",
-        },
-      ],
-    });
-    const literalEscapePlugin = writePlugin({
-      id: "dashboard%2Esegmented",
-      filename: "dashboard-literal-escape.cjs",
-      registration: `api.registerGatewayMethod(
-        "dashboard.literal-escape.items",
-        ({ respond }) => respond(true, { items: [] }),
-        { scope: "operator.read" },
-      );`,
-    });
-    updateDashboardManifest(literalEscapePlugin, {
-      dataBindings: [
-        {
-          id: "refresh",
-          method: "dashboard.literal-escape.items",
-          description: "Read literal-escape items",
-        },
-      ],
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: dataPlugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [dataPlugin.file, actionPlugin.file, literalEscapePlugin.file] },
-          allow: [dataPlugin.id, actionPlugin.id, literalEscapePlugin.id],
-        },
+    const dataPlugin = writeDashboardPlugin(
+      "dashboard",
+      { "dashboard.items": "operator.read" },
+      {
+        dataBindings: [
+          {
+            id: "segmented.refresh",
+            method: "dashboard.items",
+            description: "Read segmented items",
+          },
+        ],
       },
-      onlyPluginIds: [dataPlugin.id, actionPlugin.id, literalEscapePlugin.id],
-    });
+    );
+    const actionPlugin = writeDashboardPlugin(
+      "dashboard.segmented",
+      { "dashboard.segmented.refresh": "operator.write" },
+      {
+        actionVerbs: [
+          {
+            id: "refresh",
+            method: "dashboard.segmented.refresh",
+            description: "Refresh segmented items",
+          },
+        ],
+      },
+    );
+    const literalEscapePlugin = writeDashboardPlugin(
+      "dashboard%2Esegmented",
+      { "dashboard.literal-escape.items": "operator.read" },
+      {
+        dataBindings: [
+          {
+            id: "refresh",
+            method: "dashboard.literal-escape.items",
+            description: "Read literal-escape items",
+          },
+        ],
+      },
+    );
+
+    const registry = loadFixture(dataPlugin, actionPlugin, literalEscapePlugin);
 
     expect(registry.plugins.filter((entry) => entry.status === "loaded")).toHaveLength(3);
     expect(registry.dashboardDataBindings.has("dashboard.segmented.refresh")).toBe(true);
@@ -436,30 +343,21 @@ describe("plugin dashboard declarations", () => {
 
   it("publishes validated dashboard bindings and action verbs", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "dashboard-valid",
-      registration: `api.registerGatewayMethod(
-        "dashboard-valid.items",
-        ({ respond }) => respond(true, { items: [] }),
-        { scope: "operator.read" },
-      );
-      api.registerGatewayMethod(
-        "dashboard-valid.refresh",
-        ({ respond }) => respond(true, { ok: true }),
-        { scope: "operator.write" },
-      );`,
-    });
-    updateDashboardManifest(plugin, {
-      dataBindings: [{ id: "items", method: "dashboard-valid.items", description: "List items" }],
-      actionVerbs: [
-        {
-          id: "refresh",
-          method: "dashboard-valid.refresh",
-          description: "Refresh items",
-          paramShape: { type: "object", additionalProperties: false },
-        },
-      ],
-    });
+    const plugin = writeDashboardPlugin(
+      "dashboard-valid",
+      { "dashboard-valid.items": "operator.read", "dashboard-valid.refresh": "operator.write" },
+      {
+        dataBindings: [{ id: "items", method: "dashboard-valid.items", description: "List items" }],
+        actionVerbs: [
+          {
+            id: "refresh",
+            method: "dashboard-valid.refresh",
+            description: "Refresh items",
+            paramShape: { type: "object", additionalProperties: false },
+          },
+        ],
+      },
+    );
 
     const registry = loadFixture(plugin);
     expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");

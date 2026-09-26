@@ -25,6 +25,7 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
@@ -474,11 +475,19 @@ describe("update status readiness outcome", () => {
     },
   );
 
-  it("keeps a real failure visible after a retained dry run", async () => {
+  it("keeps a managed-service refusal and its code visible after a retained dry run", async () => {
     const failed = createUpdateRun({ trigger: "cli" });
+    const failureFacts = [
+      { check: "managed-service-preflight", code: "inside-gateway-process-tree" },
+    ];
+    recordUpdateRunStep(failed.runId, {
+      step: "managed-service-preflight",
+      status: "failed",
+      failureFacts,
+    });
     const failure = finishUpdateRun(failed.runId, {
       status: "failed",
-      reason: "preflight-fetch",
+      reason: "managed-service-preflight",
     });
     const preview = createUpdateRun({ trigger: "cli", preview: true });
     finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
@@ -486,6 +495,9 @@ describe("update status readiness outcome", () => {
     await updateStatusCommand({ json: true });
 
     expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun.steps).toContainEqual(
+      expect.objectContaining({ failureFacts }),
+    );
     expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
   });
 

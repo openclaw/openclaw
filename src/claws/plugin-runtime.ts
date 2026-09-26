@@ -41,7 +41,7 @@ export async function runClawPluginBatch<T>(
     completed = result;
     // The callback has already completed its compensation. Capture final retained owners
     // before releasing the lease; the Gateway validates those facts again after the gap.
-    batch.prepare(lease);
+    await batch.prepare(lease);
     return result;
   }).catch((error: unknown) => {
     const committed = batch.hasCommitted;

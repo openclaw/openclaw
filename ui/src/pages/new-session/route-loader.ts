@@ -37,33 +37,22 @@ export async function load(
     groupCwd = group?.cwd ?? "";
     groupWorktree = group?.worktree === true;
   }
-  if (!requestedLocation.catalogId) {
-    return {
-      ...requestedLocation,
-      requestedAgentId,
-      groupStatus,
-      groupCwd,
-      groupWorktree,
-      groupCatalogGeneration,
-      groupDefaultsStatus,
-      model: requestedLocation.requestedModel ?? "",
-      catalogLabel: "",
-      startTerminal: false,
-    };
-  }
-  const unresolved = (agentId = ""): NewSessionRouteData => ({
+  const route: NewSessionRouteData = {
     ...requestedLocation,
-    agentId,
     requestedAgentId,
     groupStatus,
     groupCwd,
     groupWorktree,
     groupCatalogGeneration,
     groupDefaultsStatus,
-    model: "",
+    model: requestedLocation.catalogId ? "" : (requestedLocation.requestedModel ?? ""),
     catalogLabel: "",
     startTerminal: false,
-  });
+  };
+  if (!requestedLocation.catalogId) {
+    return route;
+  }
+  const unresolved = (agentId = ""): NewSessionRouteData => ({ ...route, agentId });
   const initialGateway = context.gateway.snapshot;
   const initialAgentsState = context.agents.state;
   if (
@@ -95,8 +84,7 @@ export async function load(
   }
   const agentsList = loadedAgentsList;
   const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
-  const gatewayDefaultId =
-    gateway.phase === "connected" && gateway.hello ? gateway.assistantAgentId : null;
+  const gatewayDefaultId = gateway.hello ? gateway.assistantAgentId : null;
   if (
     !agentsList &&
     requestedAgentId &&
@@ -115,7 +103,7 @@ export async function load(
       : resolveAgentId(undefined, [], fallbackAgentId)
     : "";
   const plain = unresolved(agentId);
-  if (gateway.phase !== "connected" || !gateway.client || !agentId) {
+  if (!agentId) {
     return plain;
   }
   const target = await resolveCreateTarget(gateway.client, requestedLocation.catalogId, agentId);

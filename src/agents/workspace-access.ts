@@ -131,11 +131,7 @@ export function registerAgentWorkspaceAccess(
     };
   const bridge: AgentWorkspaceAccess["bridge"] = {
     readFile: guardCall((params) => access.bridge.readFile(params)),
-    async writeFile(params) {
-      assertCurrent();
-      await access.bridge.writeFile(params);
-      assertCurrent();
-    },
+    writeFile: guardCall((params) => access.bridge.writeFile(params)),
     stat: guardCall((params) => access.bridge.stat(params)),
   };
   const createFileExclusive = access.bridge.createFileExclusive?.bind(access.bridge);
@@ -296,9 +292,8 @@ export function registerAgentWorkspaceAccess(
   }
   const applySkillRoot = access.applySkillRoot?.bind(access);
   if (applySkillRoot) {
-    boundAccess.applySkillRoot = async (params) => {
-      assertCurrent();
-      const result = await applySkillRoot({
+    boundAccess.applySkillRoot = guardCall((params) =>
+      applySkillRoot({
         ...params,
         beforeInstall: async (mode) => {
           assertCurrent();
@@ -306,18 +301,12 @@ export function registerAgentWorkspaceAccess(
           assertCurrent();
           return decision;
         },
-      });
-      assertCurrent();
-      return result;
-    };
+      }),
+    );
   }
   const recordSkillSourceInstall = access.recordSkillSourceInstall?.bind(access);
   if (recordSkillSourceInstall) {
-    boundAccess.recordSkillSourceInstall = async (params) => {
-      assertCurrent();
-      await recordSkillSourceInstall(params);
-      assertCurrent();
-    };
+    boundAccess.recordSkillSourceInstall = guardCall(recordSkillSourceInstall);
   }
   const clawHubSkills = access.clawHubSkills;
   if (clawHubSkills) {
@@ -325,9 +314,8 @@ export function registerAgentWorkspaceAccess(
       planClawHubSkillUninstall: guardCall((params) =>
         clawHubSkills.planClawHubSkillUninstall(params),
       ),
-      async applyClawHubSkillUninstall(plan, options) {
-        assertCurrent();
-        const result = await clawHubSkills.applyClawHubSkillUninstall(plan, {
+      applyClawHubSkillUninstall: guardCall((plan, options) =>
+        clawHubSkills.applyClawHubSkillUninstall(plan, {
           ...options,
           beforePersistentApply() {
             assertCurrent();
@@ -337,10 +325,8 @@ export function registerAgentWorkspaceAccess(
             assertCurrent();
             options.beforeRollback?.();
           },
-        });
-        assertCurrent();
-        return result;
-      },
+        }),
+      ),
       resolveClawHubSkillVerificationTarget: guardCall((params) =>
         clawHubSkills.resolveClawHubSkillVerificationTarget(params),
       ),
@@ -359,19 +345,15 @@ export function registerAgentWorkspaceAccess(
       preflightSkillOwnerState: guardCall((params) =>
         clawHubSkills.preflightSkillOwnerState(params),
       ),
-      async assertClawHubSkillInstallState(params) {
-        assertCurrent();
-        await clawHubSkills.assertClawHubSkillInstallState(params);
-        assertCurrent();
-      },
+      assertClawHubSkillInstallState: guardCall((params) =>
+        clawHubSkills.assertClawHubSkillInstallState(params),
+      ),
       readInstalledClawHubSkillFiles: guardCall((params) =>
         clawHubSkills.readInstalledClawHubSkillFiles(params),
       ),
-      async recordClawHubSkillInstall(params) {
-        assertCurrent();
-        await clawHubSkills.recordClawHubSkillInstall(params);
-        assertCurrent();
-      },
+      recordClawHubSkillInstall: guardCall((params) =>
+        clawHubSkills.recordClawHubSkillInstall(params),
+      ),
     });
   }
   binding.access = Object.freeze(boundAccess);

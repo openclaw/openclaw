@@ -73,8 +73,6 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
-  provider: string;
   agentId?: string;
   requesterProfileId?: string;
 }): {
@@ -192,7 +190,6 @@ export function resolveModelSelectionFromDirective(params: {
     const profileResolved = resolveProfileOverride({
       rawProfile,
       provider: modelSelection.provider,
-      cfg: params.cfg,
       agentDir: params.agentDir,
       requesterProfileId: params.requesterProfileId,
     });

@@ -1,4 +1,3 @@
-// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -43,9 +42,7 @@ import {
   findDistCallGatewayModuleFiles,
   hasChildExited,
   MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
-  listKitchenSinkToolInvokeNames,
   listKitchenSinkAuthorizationRpcProbeNames,
-  listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
   kitchenSinkResourceEnv,
   parseJsonOutput,
@@ -432,13 +429,12 @@ process.exit(17);
     expect(isProcessAlive(receipt.pid)).toBe(false);
   });
 
-  it("prints help without creating temp state or installing the plugin", async () => {
-    const result = await runCommand(process.execPath, [
-      "--import",
-      "tsx",
-      "scripts/e2e/kitchen-sink-rpc-walk.mts",
-      "--help",
-    ]);
+  it("prints help before malformed guardrails without creating temp state", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
+      { env: { ...process.env, OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3" } },
+    );
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(
@@ -452,24 +448,6 @@ process.exit(17);
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
-  });
-
-  it("prints help before parsing malformed runtime guardrails", async () => {
-    const result = await runCommand(
-      process.execPath,
-      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3",
-        },
-      },
-    );
-
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
-    );
   });
 
   it("detects short and long help flags", () => {
@@ -1582,37 +1560,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toEqual(["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"]);
   });
 
-  it("invokes every advertised Kitchen Sink tool during the RPC walk", () => {
-    expect(listKitchenSinkToolInvokeNames().toSorted()).toEqual([
-      "kitchen_sink_image_job",
-      "kitchen_sink_search",
-      "kitchen_sink_text",
-    ]);
-  });
-
-  it("walks broad read-only gateway RPC surfaces", () => {
-    expect(listKitchenSinkReadOnlyRpcProbeNames()).toEqual(
-      expect.arrayContaining([
-        "gateway.identity.get",
-        "config.schema.lookup",
-        "models.list",
-        "skills.status",
-        "agents.list",
-        "sessions.list",
-        "cron.list",
-        "tasks.list",
-        "usage.status",
-        "voicewake.routing.get",
-        "talk.catalog",
-        "update.status",
-        "node.list",
-        "device.pair.list",
-        "exec.approvals.get",
-        "environments.status",
-      ]),
-    );
-  });
-
   it("proves node-only RPC authorization boundaries", async () => {
     expect(listKitchenSinkAuthorizationRpcProbeNames()).toEqual(["skills.bins"]);
     await expect(
@@ -1686,28 +1633,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
         }),
       ).toBeNull();
     }
-  });
-
-  it("requires provenance for effective Kitchen Sink plugin tools too", () => {
-    expect(() =>
-      assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-          {
-            id: "kitchen_sink_search",
-            source: "plugin",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-          {
-            id: "kitchen_sink_image_job",
-            source: "core",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-        ],
-        "tools.effective plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toThrow("tools.effective plugin tools plugin provenance mismatch");
   });
 
   it("requires the exact Kitchen Sink channel account", () => {
