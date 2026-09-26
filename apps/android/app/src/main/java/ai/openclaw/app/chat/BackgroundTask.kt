@@ -39,7 +39,6 @@ data class BackgroundTask(
         "queued" -> BackgroundTaskDisplayStatus.Queued
         "running" -> BackgroundTaskDisplayStatus.Running
         "completed" -> BackgroundTaskDisplayStatus.Completed
-        "failed", "cancelled", "timed_out" -> BackgroundTaskDisplayStatus.Failed
         else -> BackgroundTaskDisplayStatus.Failed
       }
 

@@ -70,7 +70,8 @@ output_channels="$(printf '%s' "$output_channels" | tr '[:upper:]' '[:lower:]')"
   fail "converted output dimensions changed"
 [[ "$output_colorspace" == "srgb" ]] || fail "converted output is not sRGB"
 # Calculated image type describes pixel colors, not the JPEG's encoded channels.
-[[ "$output_channels" == "srgb" && "$output_depth" == "8" ]] ||
+# ImageMagick 7 appends total and metadata channel counts; ImageMagick 6 omits them.
+[[ "$output_channels" =~ ^srgb([[:blank:]]+3\.0)?$ && "$output_depth" == "8" ]] ||
   fail "converted output is not 8-bit RGB"
 [[ "$output_quality" =~ ^[0-9]+$ && "$output_quality" -ge 90 ]] ||
   fail "converted output quality is too low"

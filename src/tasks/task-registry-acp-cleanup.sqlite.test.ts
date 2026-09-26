@@ -15,6 +15,7 @@ import {
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAcpTaskBackingDetail } from "./task-backing-records.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
@@ -240,7 +241,6 @@ it.each([
             ]);
           } else if (change !== "none") {
             // A foreign writer publishes no session event; the close/read owners must observe it.
-            expect(sql.queries).toEqual([]);
             const field =
               change === "owner" || change === "owner and runtime identity"
                 ? "spawnedBy"
@@ -248,9 +248,15 @@ it.each([
                   ? "lifecycleRevision"
                   : "parentSessionKey";
             const value = change === "lifecycle" ? "replacement-lifecycle" : "agent:main:other";
-            updateForeignSessionEntry(storePath, sessionKey, field, value);
-            // Exclude only the synchronous fixture transaction while the runtime is held.
-            sql.queries.length = 0;
+            await runOpenClawAgentWriteAdmission(
+              { agentId: "main", path: storePath, env: state.env },
+              () => {
+                expect(sql.queries).toEqual([]);
+                updateForeignSessionEntry(storePath, sessionKey, field, value);
+                // Exclude only this synchronous fixture transaction, not work awaited for admission.
+                sql.queries.length = 0;
+              },
+            );
             const changed = await readAcpSessionEntryAsync({ cfg, agentId: "main", sessionKey });
             expect(changed?.storeReadFailed).not.toBe(true);
             expect(changed?.entry).toMatchObject({ sessionId: "original", [field]: value });
@@ -274,15 +280,20 @@ it.each([
         let current = await readAcpSessionEntryAsync({ cfg, agentId: "main", sessionKey });
         if (change === "lifecycle") {
           expect(current?.entry?.lifecycleRevision).toBe("replacement-lifecycle");
-          expect(sql.queries).toEqual([]);
           // Restore only the fixture's foreign fence to inspect whether cleanup deleted its metadata.
-          updateForeignSessionEntry(
-            storePath,
-            sessionKey,
-            "lifecycleRevision",
-            originalEntry!.lifecycleRevision!,
+          await runOpenClawAgentWriteAdmission(
+            { agentId: "main", path: storePath, env: state.env },
+            () => {
+              expect(sql.queries).toEqual([]);
+              updateForeignSessionEntry(
+                storePath,
+                sessionKey,
+                "lifecycleRevision",
+                originalEntry!.lifecycleRevision!,
+              );
+              sql.queries.length = 0;
+            },
           );
-          sql.queries.length = 0;
           current = await readAcpSessionEntryAsync({ cfg, agentId: "main", sessionKey });
         }
         expect(current?.acp).toEqual(eligible ? undefined : meta);
