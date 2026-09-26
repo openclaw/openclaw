@@ -41,6 +41,20 @@ batch closure before publishing runtime targets. Synchronous lease primitives an
 repeated source-cleanup reads remain unchanged migration work; this one-shot
 preparation does not replace their fresh authority checks.
 
+Registry refresh, Doctor repair, and legacy index import hold that same plugin
+lease before reading or deriving replacement rows. Startup acquires plugin
+ownership after startup ownership and rereads metadata after any waiting installer
+settles. A queued refresh therefore keeps the install records committed while it
+waited. Index formats, source cleanup guards, and update behavior are unchanged.
+
+Deferred plugin obligations are recorded through the shared-state writer while
+holding the plugin lifecycle lease. The worker rereads pending rows, checks the
+captured pending generation, and verifies the original lease at transaction and
+commit admission. Doctor awaits recording before rereading config or completing
+repair; post-session completion reacquires the plugin lease after repair hooks
+settle. This preserves migration warnings, input protection, stored rows, and
+update behavior without holding a SQL transaction across package or plugin work.
+
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and
@@ -296,6 +310,11 @@ share pages also use the worker facade. Read-only image discovery does not
 restore cold history, while ordinary reads retain their existing restoration
 owner. Process-held incognito data and native callback visitors retain their
 current owners. Schemas, stored bytes, retention, and update behavior are unchanged.
+
+History source discovery retries registry metadata reads up to twice when a
+concurrent agent registration invalidates them. Retries retain the captured
+state admission and source paths; changed lifetimes, physical sources, or
+discovered topology still reject stale reads.
 
 Exact message membership reads for managed attachments also use the history
 worker. The worker validates the entire visible JSON range on every lookup,

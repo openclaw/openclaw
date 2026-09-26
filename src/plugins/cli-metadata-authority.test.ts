@@ -52,7 +52,7 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
     if (kind === "install-state") {
       for (const id of ["alpha", "beta"]) {
         const installPath = path.join(root, id, ".openclaw", "extensions", id);
-        refreshPersistedInstalledPluginIndex({
+        await refreshPersistedInstalledPluginIndex({
           config: cfg,
           env,
           stateDir: path.join(root, id, "state"),

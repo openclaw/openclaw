@@ -7,7 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -310,7 +310,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     { consent: "missing", enabled: true, tracked: false, warns: false },
   ] as const)(
     "projects capability-consent diagnostics for $consent acceptance, enabled=$enabled, tracked=$tracked",
-    ({ consent, enabled, tracked, warns }) => {
+    async ({ consent, enabled, tracked, warns }) => {
       const tempRoot = makeTempDir();
       const stateDir = path.join(tempRoot, "state");
       const fixture = createGlobalPluginFixture(stateDir, "consent-demo");
@@ -344,7 +344,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
         env,
         installRecords: tracked ? { [fixture.pluginId]: installRecord } : {},
       });
-      writePersistedInstalledPluginIndexSync(index, { stateDir });
+      await writePersistedInstalledPluginIndex(index, { stateDir });
 
       for (const buildReport of [buildPluginRegistrySnapshotReport, buildPluginSnapshotReport]) {
         const diagnostics = buildReport({ config, env }).diagnostics.filter(
@@ -365,7 +365,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     },
   );
 
-  it("keeps recovered managed npm plugins visible when the persisted registry is stale", () => {
+  it("keeps recovered managed npm plugins visible when the persisted registry is stale", async () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
     const env = {
@@ -395,7 +395,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       installRecords: {},
     });
     expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
-    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+    await writePersistedInstalledPluginIndex(staleIndex, { stateDir });
 
     const report = buildPluginRegistrySnapshotReport({
       config,
@@ -424,7 +424,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     { state: "persisted", workspaceScope: "omitted" },
   ] as const)(
     "reuses prepared list metadata with $state registry and $workspaceScope workspace",
-    ({ state, workspaceScope }) => {
+    async ({ state, workspaceScope }) => {
       const tempRoot = fs.realpathSync(makeTempDir());
       const stateDir = path.join(tempRoot, "state");
       const workspaceDir = workspaceScope === "selected" ? tempRoot : undefined;
@@ -477,7 +477,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
             plugin.packageVersion = "0.0.0";
           }
         }
-        writePersistedInstalledPluginIndexSync(index, { stateDir });
+        await writePersistedInstalledPluginIndex(index, { stateDir });
       }
       const open = vi.spyOn(fs, "openSync");
       const report = buildPluginRegistrySnapshotReport({ config, env, workspaceDir });

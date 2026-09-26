@@ -7,7 +7,11 @@ import { build } from "esbuild";
 import { resolve as resolvePackageImport } from "import-meta-resolve";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -26,7 +30,6 @@ describe("Doctor artifact hash and loading agreement", () => {
       stdin: {
         contents: [
           'export { loadInstalledPluginIndex } from "./src/plugins/installed-plugin-index.ts";',
-          'export { writePersistedInstalledPluginIndexSync } from "./src/plugins/installed-plugin-index-store-write.ts";',
           'export { readPersistedInstalledPluginIndexSync } from "./src/plugins/installed-plugin-index-store.ts";',
           'export { loadPluginRegistrySnapshotWithMetadata } from "./src/plugins/plugin-registry-snapshot.ts";',
           'export { loadPluginMetadataSnapshot } from "./src/plugins/plugin-metadata-snapshot.ts";',
@@ -312,6 +315,7 @@ describe("Doctor artifact hash and loading agreement", () => {
               : "source",
       });
     });
+    const selectedIndexPath = path.join(root, "built-selected-index.json");
     const result = spawnNodeEvalSync(
       `
       import assert from "node:assert/strict";
@@ -346,7 +350,7 @@ describe("Doctor artifact hash and loading agreement", () => {
             assert.equal(sourceIndex.plugins[0]?.doctorContractHash, row.sourceHash);
             const repeated = owner.loadInstalledPluginIndex({ candidates: [candidate], config, env });
             assert.equal(repeated.plugins[0]?.doctorContractHash, row.expectedHash);
-            owner.writePersistedInstalledPluginIndexSync(index, { env });
+            fs.writeFileSync(${JSON.stringify(selectedIndexPath)}, JSON.stringify(index));
             const replacement = row.replacementBytes;
             fs.writeFileSync(path.join(row.root, row.expected), replacement);
             assert.equal(snapshot.index.plugins[0].doctorContractHash, row.expectedHash);
@@ -362,7 +366,29 @@ describe("Doctor artifact hash and loading agreement", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("doctor-artifacts:18");
     const replacementFixture = fixtures.find((row) => row.name === "built ESM");
-    expect(replacementFixture).toBeDefined();
+    if (!replacementFixture) {
+      throw new Error("missing built ESM replacement fixture");
+    }
+    const selectedIndex = parseInstalledPluginIndex(
+      JSON.parse(fs.readFileSync(selectedIndexPath, "utf8")),
+    );
+    if (!selectedIndex) {
+      throw new Error("invalid built-selected index fixture");
+    }
+    expect(selectedIndex.plugins[0]?.doctorContractHash).toBe(replacementFixture.expectedHash);
+    const env = {
+      HOME: replacementFixture.root,
+      OPENCLAW_STATE_DIR: path.join(replacementFixture.root, "state"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(replacementFixture.root, "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      OPENCLAW_VERSION: "2026.9.2",
+      VITEST: "true",
+    };
+    try {
+      await writePersistedInstalledPluginIndex(selectedIndex, { env });
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+    }
     // Compiled ESM changes take effect after restart, not by evicting require.cache.
     const restarted = spawnNodeEvalSync(
       `

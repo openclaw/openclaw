@@ -355,7 +355,7 @@ describe("plugin registry inspection", () => {
         entries: { main: { workspace: workspaceDir } },
       },
     };
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       config,

@@ -446,7 +446,7 @@ describe("update status readiness outcome", () => {
         registry: { latestVersion: "9999.0.0" },
       });
       const run = createUpdateRun({ trigger: "cli" });
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "sample",
@@ -579,7 +579,7 @@ describe("update status abandoned-run reporting", () => {
   it.each([true, false])(
     "reports unreadable pending migration status without losing availability (JSON: %s)",
     async (json) => {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "codex",
@@ -677,7 +677,7 @@ describe("update status abandoned-run reporting", () => {
         reason: "The configured plugin package is missing.",
         command: "openclaw plugins install @openclaw/codex",
       };
-      recordDeferredPluginMigrations({ pending: [pending] });
+      await recordDeferredPluginMigrations({ pending: [pending] });
       await updateStatusCommand({ json });
       if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
@@ -693,7 +693,7 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });
