@@ -106,8 +106,8 @@ export async function createMatrixDraftController(params: {
         }
       : undefined,
     cleanupUndelivered: true,
-    onFinalStarted: progressDraft.markFinalReplyStarted,
-    onFinalDelivered: progressDraft.markFinalReplyDelivered,
+    onFinalStarted: () => progressDraft.markFinalReplyStarted(),
+    onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
     onCleanupFailure: (err) =>
       logVerboseMessage(`matrix draft preview cleanup failed: ${String(err)}`),
   });
@@ -131,7 +131,7 @@ export async function createMatrixDraftController(params: {
           explanationFormat: payload.explanationFormat,
         });
       },
-      onApprovalEvent: progressDraft.pushApprovalEvent,
+      onApprovalEvent: (payload) => progressDraft.pushApprovalEvent(payload),
     };
   };
 
@@ -207,12 +207,12 @@ export async function createMatrixDraftController(params: {
   return {
     draftStream,
     previewLifecycle,
-    cancelProgressDraft: progressDraft.cancel,
+    cancelProgressDraft: () => progressDraft.cancel(),
     buildPreviewToolProgressReplyOptions,
     queueDraftBlockBoundary,
     advanceDraftBlockBoundary,
     resetDraftBlockOffsets,
-    beginAssistantMessage: progressDraft.beginAssistantMessage,
+    beginAssistantMessage: () => progressDraft.beginAssistantMessage(),
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
     beginDraftGeneration: () => {

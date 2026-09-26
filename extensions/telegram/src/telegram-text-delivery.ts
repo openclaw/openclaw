@@ -70,12 +70,10 @@ export function planTelegramTextDeliveryPages(
       const pages = splitTelegramRichBlocks(params.richMessage.blocks, { textLimit: maxChars }).map(
         (blocks, index) => {
           const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection });
-          const degradationReasons = index === 0 ? params.degradationReasons : undefined;
-          return {
-            ...plainPage(plan.plainText),
-            richMessage: plan.richMessage,
-            degradationReasons,
-          };
+          const page = plainPage(plan.plainText);
+          page.richMessage = plan.richMessage;
+          page.degradationReasons = index === 0 ? params.degradationReasons : undefined;
+          return page;
         },
       );
       if (pages.length === 0 && params.text.trim()) {
@@ -102,11 +100,12 @@ export function planTelegramTextDeliveryPages(
       return [plainPage(params.text)];
     }
     return splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
-      (chunk) => ({
-        ...plainPage(chunk.plainText),
-        richMessage: chunk.richMessage,
-        degradationReasons: chunk.degradationReasons,
-      }),
+      (chunk) => {
+        const page = plainPage(chunk.plainText);
+        page.richMessage = chunk.richMessage;
+        page.degradationReasons = chunk.degradationReasons;
+        return page;
+      },
     );
   }
   if (params.textMode === "plain") {
