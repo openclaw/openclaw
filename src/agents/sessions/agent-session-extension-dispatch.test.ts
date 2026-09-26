@@ -15,7 +15,11 @@ function streamAnswer(model: Model) {
   const stream = createAssistantMessageEventStream();
   const message = createAssistant(model, [{ type: "text", text: "abc" }]);
   stream.push({ type: "start", partial: { ...message, content: [] } });
-  stream.push({ type: "text_start", contentIndex: 0 });
+  stream.push({
+    type: "text_start",
+    contentIndex: 0,
+    partial: { ...message, content: [{ type: "text", text: "" }] },
+  });
   for (const delta of "abc") {
     stream.push({ type: "text_delta", contentIndex: 0, delta });
   }
