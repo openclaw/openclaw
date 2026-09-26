@@ -10,7 +10,7 @@ import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-conf
 import { readMockUserText } from "../e2e/lib/mock-inference-facts.js";
 import {
   gatewayEnv,
-  IOS_RELEASE_REPLY_FAILURE,
+  IOS_RELEASE_TEST_FAILURE_LOCATION,
   IOS_RELEASE_TESTS,
   MODEL_REF,
   OperationError,
@@ -57,16 +57,20 @@ export async function createNativeDependencies(options: {
       env?: NodeJS.ProcessEnv;
       timeoutMs?: number;
       cleanup?: boolean;
-      captureReplyFailure?: () => Promise<string[]>;
+      captureChatFailure?: () => Promise<string[]>;
     } = {},
   ) => {
     let stdout = "";
     let stderr = "";
     const started = performance.now();
     let failureContext: Promise<string[]> | undefined;
-    const observeReplyFailure = () => {
-      const capture = config.captureReplyFailure;
-      if (!failureContext && capture && IOS_RELEASE_REPLY_FAILURE.test(`${stdout}\n${stderr}`)) {
+    const observeChatFailure = () => {
+      const capture = config.captureChatFailure;
+      if (
+        !failureContext &&
+        capture &&
+        !`${stdout}\n${stderr}`.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION).next().done
+      ) {
         const timing = `failure-evidence-at-ms:${Math.round(performance.now() - started)}`;
         // Snapshot at the assertion, before XCTest's potentially lengthy teardown; always join below.
         failureContext = Promise.resolve()
@@ -91,11 +95,11 @@ export async function createNativeDependencies(options: {
         onReady(child) {
           child.stdout?.on("data", (chunk: Buffer) => {
             stdout = (stdout + chunk.toString()).slice(-16 * 1024 * 1024);
-            observeReplyFailure();
+            observeChatFailure();
           });
           child.stderr?.on("data", (chunk: Buffer) => {
             stderr = (stderr + chunk.toString()).slice(-4096);
-            observeReplyFailure();
+            observeChatFailure();
           });
         },
       });
@@ -426,95 +430,98 @@ export async function createNativeDependencies(options: {
                 {
                   env: testRunnerEnv(setupCode.trim()),
                   timeoutMs: 600_000,
-                  async captureReplyFailure() {
-                    const facts = new Set<string>();
-                    const logs = fixture.logs();
-                    for (const stage of ["start", "first_event", "completed", "error"]) {
-                      if (logs.includes(`[responses] ${stage} `)) {
-                        facts.add(`model-any-request-stage:${stage}`);
-                      }
-                    }
-                    const [requests, history] = await Promise.allSettled([
-                      readFile(requestLog, "utf8"),
-                      callGateway<unknown>({
-                        config: {},
-                        configPath: fixture.configPath,
-                        url: fixture.url,
-                        token: fixture.gatewayToken,
-                        ignoreEnvUrlOverride: true,
-                        deviceIdentity: null,
-                        sharedStateMode: "read-only",
-                        method: "chat.history",
-                        params: { sessionKey: "main", limit: 20, maxBytes: 50_000 },
-                        timeoutMs: 5_000,
-                        signal: options.signal,
-                      }),
-                    ]);
-                    try {
-                      if (requests.status !== "fulfilled") {
-                        throw new Error("request-log-unavailable");
-                      }
-                      const lastMarker = (text: string) =>
-                        [...text.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu)].at(
-                          -1,
-                        )?.[0];
-                      const markerStage = (marker: string | undefined) =>
-                        CHAT_MARKERS.find(([, prefix]) => marker?.startsWith(prefix))?.[0] ??
-                        "other";
-                      for (const line of requests.value.trim().split("\n").slice(-20)) {
-                        const request: unknown = JSON.parse(line);
-                        if (
-                          !isRecord(request) ||
-                          request.path !== "/v1/responses" ||
-                          typeof request.body !== "string"
-                        ) {
-                          continue;
-                        }
-                        const body: unknown = JSON.parse(request.body);
-                        if (!isRecord(body) || body.model !== "ios-e2e") {
-                          continue;
-                        }
-                        const input = Array.isArray(body.input) ? body.input : [];
-                        const user = input
-                          .map(readMockUserText)
-                          .findLast((text) => text !== undefined);
-                        const userMarker = lastMarker(user ?? "");
-                        const tailMarker = lastMarker(request.body);
-                        facts.add(`provider-latest-user:${markerStage(userMarker)}`);
-                        facts.add(`provider-body-tail:${markerStage(tailMarker)}`);
-                        facts.add(
-                          `provider-marker-match:${userMarker !== undefined && userMarker === tailMarker}`,
-                        );
-                      }
-                      facts.add("provider-evidence-read");
-                    } catch {
-                      facts.add("provider-evidence-unavailable");
-                    }
-                    if (
-                      history.status === "fulfilled" &&
-                      isRecord(history.value) &&
-                      Array.isArray(history.value.messages)
-                    ) {
-                      for (const message of history.value.messages) {
-                        if (
-                          !isRecord(message) ||
-                          (message.role !== "user" && message.role !== "assistant")
-                        ) {
-                          continue;
-                        }
-                        const content = JSON.stringify(message.content) ?? "";
-                        for (const [stage, marker] of CHAT_MARKERS) {
-                          if (content.includes(marker)) {
-                            facts.add(`history-${message.role}:${stage}`);
+                  captureChatFailure:
+                    test === IOS_RELEASE_TESTS[1]
+                      ? async () => {
+                          const facts = new Set<string>();
+                          const logs = fixture.logs();
+                          for (const stage of ["start", "first_event", "completed", "error"]) {
+                            if (logs.includes(`[responses] ${stage} `)) {
+                              facts.add(`model-any-request-stage:${stage}`);
+                            }
                           }
+                          const [requests, history] = await Promise.allSettled([
+                            readFile(requestLog, "utf8"),
+                            callGateway<unknown>({
+                              config: {},
+                              configPath: fixture.configPath,
+                              url: fixture.url,
+                              token: fixture.gatewayToken,
+                              ignoreEnvUrlOverride: true,
+                              deviceIdentity: null,
+                              sharedStateMode: "read-only",
+                              method: "chat.history",
+                              params: { sessionKey: "main", limit: 20, maxBytes: 50_000 },
+                              timeoutMs: 5_000,
+                              signal: options.signal,
+                            }),
+                          ]);
+                          try {
+                            if (requests.status !== "fulfilled") {
+                              throw new Error("request-log-unavailable");
+                            }
+                            const lastMarker = (text: string) =>
+                              [...text.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu)].at(
+                                -1,
+                              )?.[0];
+                            const markerStage = (marker: string | undefined) =>
+                              CHAT_MARKERS.find(([, prefix]) => marker?.startsWith(prefix))?.[0] ??
+                              "other";
+                            for (const line of requests.value.trim().split("\n").slice(-20)) {
+                              const request: unknown = JSON.parse(line);
+                              if (
+                                !isRecord(request) ||
+                                request.path !== "/v1/responses" ||
+                                typeof request.body !== "string"
+                              ) {
+                                continue;
+                              }
+                              const body: unknown = JSON.parse(request.body);
+                              if (!isRecord(body) || body.model !== "ios-e2e") {
+                                continue;
+                              }
+                              const input = Array.isArray(body.input) ? body.input : [];
+                              const user = input
+                                .map(readMockUserText)
+                                .findLast((text) => text !== undefined);
+                              const userMarker = lastMarker(user ?? "");
+                              const tailMarker = lastMarker(request.body);
+                              facts.add(`provider-latest-user:${markerStage(userMarker)}`);
+                              facts.add(`provider-body-tail:${markerStage(tailMarker)}`);
+                              facts.add(
+                                `provider-marker-match:${userMarker !== undefined && userMarker === tailMarker}`,
+                              );
+                            }
+                            facts.add("provider-evidence-read");
+                          } catch {
+                            facts.add("provider-evidence-unavailable");
+                          }
+                          if (
+                            history.status === "fulfilled" &&
+                            isRecord(history.value) &&
+                            Array.isArray(history.value.messages)
+                          ) {
+                            for (const message of history.value.messages) {
+                              if (
+                                !isRecord(message) ||
+                                (message.role !== "user" && message.role !== "assistant")
+                              ) {
+                                continue;
+                              }
+                              const content = JSON.stringify(message.content) ?? "";
+                              for (const [stage, marker] of CHAT_MARKERS) {
+                                if (content.includes(marker)) {
+                                  facts.add(`history-${message.role}:${stage}`);
+                                }
+                              }
+                            }
+                            facts.add("history-evidence-read");
+                          } else {
+                            facts.add("history-evidence-unavailable");
+                          }
+                          return [...facts];
                         }
-                      }
-                      facts.add("history-evidence-read");
-                    } else {
-                      facts.add("history-evidence-unavailable");
-                    }
-                    return [...facts];
-                  },
+                      : undefined,
                 },
               );
               if (mockFailed) {

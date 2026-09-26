@@ -537,6 +537,8 @@ describe("native command adapter", () => {
     "test-timeout-output",
     "reply-failure-evidence",
     "reply-failure-history-error",
+    "reply-failure-submission",
+    "reply-failure-source-only",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
@@ -734,9 +736,13 @@ describe("native command adapter", () => {
           args.includes(`-only-testing:${IOS_RELEASE_TESTS[1]}`)
         ) {
           nativeCommandActive = true;
+          const failureMessage =
+            scenario === "reply-failure-source-only"
+              ? ""
+              : `IOS_RELEASE_CHAT_FAILURE final ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true`;
           stdout.write(
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
-              "/private/checkout/OpenClawSnapshotUITests.swift:1911: error: private IOS_RELEASE_REPLY_MISSING final keyboard=true writing=false jump=true\n" +
+              `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
               "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (99 seconds).\n",
           );
           await Promise.resolve();
@@ -856,10 +862,17 @@ describe("native command adapter", () => {
         const context = report.trials[1]?.diagnostics[0]?.context;
         expect(context).toEqual(
           expect.arrayContaining([
-            "reply-stage:final",
-            "reply-keyboard:true",
-            "reply-writing:false",
-            "reply-jump:true",
+            ...(scenario === "reply-failure-source-only"
+              ? []
+              : [
+                  "chat-stage:final",
+                  `chat-checkpoint:${scenario === "reply-failure-submission" ? "submission" : "reply"}`,
+                  "chat-draft-retained:false",
+                  "chat-keyboard:true",
+                  "chat-reply-present:false",
+                  "chat-writing:false",
+                  "chat-jump:true",
+                ]),
             "provider-latest-user:final",
             "provider-body-tail:seed-0",
             "provider-marker-match:false",
@@ -888,7 +901,11 @@ describe("native command adapter", () => {
                 operation: "native-test",
                 code: "timeout",
                 errorCode: "ETIMEDOUT",
-                context: ["xctest-started", "xctest-failed", "xctest-line:1904"],
+                context: expect.arrayContaining([
+                  "xctest-started",
+                  "xctest-failed",
+                  "xctest-line:1904",
+                ]),
               },
             ],
           });

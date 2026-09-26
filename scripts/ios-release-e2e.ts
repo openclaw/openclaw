@@ -12,8 +12,10 @@ export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayChatRoundTripAndControlOverview",
 ] as const;
 export const MODEL_REF = "openai/ios-e2e";
-export const IOS_RELEASE_REPLY_FAILURE =
-  /IOS_RELEASE_REPLY_MISSING (seed-[0-2]|final) keyboard=(true|false) writing=(true|false) jump=(true|false)/u;
+export const IOS_RELEASE_CHAT_FAILURE =
+  /IOS_RELEASE_CHAT_FAILURE (seed-[0-2]|final) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false)/u;
+export const IOS_RELEASE_TEST_FAILURE_LOCATION =
+  /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 export const SAMPLE_INTERVAL_MS = 1_000;
 export const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
@@ -85,13 +87,16 @@ export class OperationError extends Error {
         .map(([, tag]) => tag),
     };
     if (operation === "native-test") {
-      const replyFailure = output.match(IOS_RELEASE_REPLY_FAILURE);
-      if (replyFailure) {
+      const chatFailure = output.match(IOS_RELEASE_CHAT_FAILURE);
+      if (chatFailure) {
         this.diagnostic.context.push(
-          `reply-stage:${replyFailure[1]}`,
-          `reply-keyboard:${replyFailure[2]}`,
-          `reply-writing:${replyFailure[3]}`,
-          `reply-jump:${replyFailure[4]}`,
+          `chat-stage:${chatFailure[1]}`,
+          `chat-checkpoint:${chatFailure[2]}`,
+          `chat-draft-retained:${chatFailure[3]}`,
+          `chat-keyboard:${chatFailure[4]}`,
+          `chat-reply-present:${chatFailure[5]}`,
+          `chat-writing:${chatFailure[6]}`,
+          `chat-jump:${chatFailure[7]}`,
         );
       }
       for (const status of ["started", "passed", "failed"] as const) {
@@ -105,11 +110,9 @@ export class OperationError extends Error {
         }
       }
       // Keep failure locations actionable without exporting assertion text, paths, or credentials.
-      const lines = [
-        ...output.matchAll(
-          /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu,
-        ),
-      ].map((match) => match[1]);
+      const lines = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
+        (match) => match[1],
+      );
       this.diagnostic.context.push(
         ...[...new Set(lines)].slice(0, 8).map((line) => `xctest-line:${line}`),
       );

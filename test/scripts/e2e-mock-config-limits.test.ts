@@ -680,6 +680,7 @@ describe("mock OpenAI response markers", () => {
   it("echoes dynamic OpenClaw E2E and update serving markers", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       const servingMarker = "update-verified-67a60fb5-203d-4d08-bfba-6f5a053af61b";
+      const servingPrompt = `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`;
       const cases = [
         ...["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"].map((marker) => ({
           marker,
@@ -687,7 +688,7 @@ describe("mock OpenAI response markers", () => {
         })),
         {
           marker: servingMarker,
-          prompt: `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`,
+          prompt: servingPrompt,
         },
       ];
       for (const { marker, prompt } of cases) {
@@ -703,6 +704,82 @@ describe("mock OpenAI response markers", () => {
 
         expect(response.status).toBe(200);
         expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
+      }
+
+      const currentMarker = "OPENCLAW_E2E_SEED_2_333";
+      const olderMarker = "OPENCLAW_E2E_SEED_1_222";
+      const toolMarker = "OPENCLAW_E2E_TOOL_RESULT";
+      const context = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nEarlier reply: ${olderMarker}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+      for (const route of ["responses", "chat/completions"] as const) {
+        for (const stream of [false, true]) {
+          const user = (text: string) => ({
+            role: "user",
+            content: stream
+              ? [{ type: route === "responses" ? "input_text" : "text", text }]
+              : text,
+          });
+          const current = user(`Reply exactly with ${currentMarker}.`);
+          const toolOutput =
+            route === "responses"
+              ? { type: "function_call_output", call_id: "fixture-call", output: toolMarker }
+              : { role: "tool", tool_call_id: "fixture-call", content: toolMarker };
+          const markerCases = [
+            { messages: [current, user(context)], marker: currentMarker },
+            {
+              messages: [
+                current,
+                user(`<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nEarlier reply: ${olderMarker}`),
+              ],
+              marker: olderMarker,
+            },
+            {
+              messages: [current, { role: "assistant", content: olderMarker }, user(context)],
+              marker: olderMarker,
+            },
+            { messages: [current, toolOutput, user(context)], marker: toolMarker },
+            {
+              messages: [user(servingPrompt), toolOutput, user(context)],
+              marker: servingMarker,
+            },
+          ];
+          for (const { messages, marker } of markerCases) {
+            const response = await fetch(`${baseUrl}/v1/${route}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                [route === "responses" ? "input" : "messages"]: messages,
+                stream,
+              }),
+            });
+            expect(response.status).toBe(200);
+            if (stream) {
+              const events = (await response.text())
+                .split("\n\n")
+                .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+                .map((line) => JSON.parse(line.slice(6)));
+              const text =
+                route === "responses"
+                  ? events.find((event) => event.type === "response.completed")?.response.output[0]
+                      .content[0].text
+                  : events.map((event) => event.choices?.[0]?.delta?.content ?? "").join("");
+              expect(text).toBe(marker);
+            } else {
+              const body = await response.json();
+              expect(
+                route === "responses"
+                  ? body.output?.[0]?.content?.[0]?.text
+                  : body.choices?.[0]?.message?.content,
+              ).toBe(marker);
+            }
+          }
+        }
+        const malformed = await fetch(`${baseUrl}/v1/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: `{"input":"${currentMarker}", broken`,
+        });
+        expect(malformed.status).toBe(200);
+        expect(await malformed.text()).toContain(currentMarker);
       }
     });
   });
