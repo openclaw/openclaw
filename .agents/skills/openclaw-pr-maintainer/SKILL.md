@@ -94,6 +94,23 @@ Reopen review for substantive changes or unresolved concerns, not a patch-identi
 rebase or a mechanical head change. Address real human/bot findings and explain
 rejected ones; bot scores and Rank-up lists do not create separate obligations.
 
+For user-visible runtime compatibility changes, scope that existing pass with
+`--max-priority P2` to include P1/P2 regressions, rather than relying on the
+shared helper's P0-only default. Use `--prompt-file` to state the prior accepted
+contract under unchanged settings and the intended change. Supply relevant
+unchanged producer, consumer, and sibling source as evidence through `--dataset`;
+the reviewer cannot inspect unchanged repository files from its empty sandbox.
+Follow [autoreview context and severity](../autoreview/SKILL.md#context-and-severity);
+evidence does not expand the selected Git target.
+
+Compare previously accepted inputs and fallback/recovery outcomes with the
+candidate, including silent-drop risks. Changed acceptance expectations under
+unchanged settings are behavior decisions for maintainer review, not mechanical
+test repairs. Record the affected paths, decisions, and observed outcomes in
+the existing `.local/review.json` `behavioralSweep.branches`, and missing proof
+in `tests.gaps`. Apply [test-audit](../test-audit/SKILL.md) when reviewing or
+changing tests; do not duplicate its policy or add another reviewer pass.
+
 Use the current PR template. Lead with the plain-language problem and concrete
 user impact; keep the explanation short and leave implementation inventories in
 the diff or optional details. Keep important risks, migrations, required actions,
