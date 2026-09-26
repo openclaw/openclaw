@@ -514,6 +514,7 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
   return html`
     <div
       class="cron-table ${props.canManage ? "" : "cron-table--read-only"}"
+      ?data-openclaw-presentation-pending=${!props.hasLoaded && !props.listError && !props.error}
       aria-busy=${tableBusy ? "true" : nothing}
     >
       <div class="cron-table__head">

@@ -500,7 +500,11 @@ function renderIdentityHeader(
 }
 
 function renderActivityLoading() {
-  return html`<section class="activity-feed__loading" aria-busy="true">
+  return html`<section
+    class="activity-feed__loading"
+    aria-busy="true"
+    data-openclaw-presentation-pending
+  >
     <span class="sr-only" role="status">${t("common.loading")}</span>
     <div class="activity-feed__sessions" aria-hidden="true">
       ${Array.from(

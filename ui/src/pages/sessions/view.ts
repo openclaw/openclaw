@@ -333,7 +333,7 @@ function renderSkeletonRows(columnCount: number) {
   return Array.from(
     { length: SKELETON_ROW_COUNT },
     (_, rowIndex) => html`
-      <tr class="session-skeleton-row" aria-hidden="true">
+      <tr class="session-skeleton-row" aria-hidden="true" data-openclaw-presentation-pending>
         ${Array.from({ length: columnCount }, (_cell, columnIndex) =>
           columnIndex === 0
             ? html`<td class="data-table-checkbox-col"></td>`

@@ -90,8 +90,17 @@ describe("bootstrapApplication", () => {
         await starting;
         expect(startGateway).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
         expect(changed).toHaveBeenCalledTimes(stopEarly ? 0 : 1);
-        // The shared Linux bridge must not receive a Mac-only action.
-        expect(postMessage).not.toHaveBeenCalled();
+        // The panel host receives its presentation state; the Gateway action bridge stays silent.
+        if (bridge === "panel" && !stopEarly) {
+          expect(postMessage).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "openclaw-presentation-state",
+              phase: "loading",
+            }),
+          );
+        } else {
+          expect(postMessage).not.toHaveBeenCalled();
+        }
         runtime.stop();
         if (!stopEarly) {
           expect(Reflect.get(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__")).toMatchObject({

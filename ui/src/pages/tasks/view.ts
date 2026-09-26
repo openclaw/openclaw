@@ -262,7 +262,10 @@ export function renderTasks(props: TasksProps) {
   const formatTimestamp = createMsFormatter();
   const { active, recent } = partitionTasks(props.tasks);
   return renderSettingsPage(
-    html`<div class="tasks-page-list">
+    html`<div
+      class="tasks-page-list"
+      ?data-openclaw-presentation-pending=${props.loading && props.tasks.length === 0 && !props.error}
+    >
       ${
         !props.connected
           ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`

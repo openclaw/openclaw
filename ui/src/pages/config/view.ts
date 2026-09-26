@@ -458,6 +458,7 @@ export function renderConfig(props: ConfigProps) {
     ${showLead ? lead : nothing}
     <div
       id="config-section-panel"
+      ?data-openclaw-presentation-pending=${props.connected && ((props.loading && !props.formValue) || props.schemaLoading)}
       class="config-content"
       role=${showSectionTabs ? "tabpanel" : "region"}
       aria-labelledby=${

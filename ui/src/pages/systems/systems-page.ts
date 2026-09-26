@@ -333,7 +333,9 @@ class SystemsPage extends OpenClawLightDomElement {
   override render() {
     const controller = this.routeData?.controller;
     if (!controller?.current) {
-      return html`<p class="systems-state" role="status">${t("systems.loading")}</p>`;
+      return html`<p class="systems-state" role="status" data-openclaw-presentation-pending>
+        ${t("systems.loading")}
+      </p>`;
     }
     const row = controller.selected;
     const canView = Boolean(
@@ -373,7 +375,11 @@ class SystemsPage extends OpenClawLightDomElement {
                     : "systems.noDesktopHint",
                 )
               : t("systems.accessHint");
-    return html`<section class="systems-workspace" aria-label=${t("systems.title")}>
+    return html`<section
+      class="systems-workspace"
+      aria-label=${t("systems.title")}
+      ?data-openclaw-presentation-pending=${controller.connected && controller.loading && !controller.inventory && !controller.error}
+    >
       <header class="systems-toolbar">
         <div class="systems-heading">
           <h1>${title}</h1>

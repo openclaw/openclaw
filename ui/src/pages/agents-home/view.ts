@@ -77,6 +77,7 @@ export function renderAgentsHome(props: AgentsHomeProps) {
         props.connected && props.loading && props.cards.length === 0
           ? html` <div
               role="status"
+              data-openclaw-presentation-pending
               aria-label=${t("agentsHome.loading")}
               class="agents-home__grid"
             >

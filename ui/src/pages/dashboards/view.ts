@@ -253,7 +253,11 @@ function renderDashboardList(
 }
 
 function renderDashboardGallerySkeleton() {
-  return html`<section class="dashboards-gallery" aria-busy="true">
+  return html`<section
+    class="dashboards-gallery"
+    aria-busy="true"
+    data-openclaw-presentation-pending
+  >
     <span class="sr-only" role="status">${t("common.loading")}</span>
     <div class="dashboards-loading" aria-hidden="true" inert>
       <div class="dashboards-toolbar">

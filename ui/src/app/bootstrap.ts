@@ -564,7 +564,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       if (nativeWindow.webkit?.messageHandlers || nativePanelBridge()) {
         steps.unshift(async () => {
           const { startNativeCapabilities } = await import("./native-startup.runtime.ts");
-          return startNativeCapabilities(gateway, startupLifecycle, (capabilities) => {
+          return startNativeCapabilities(context, startupLifecycle, (capabilities) => {
             nativeDeviceSettings = capabilities.deviceSettings;
             nativeNotifications = capabilities.notifications;
           });

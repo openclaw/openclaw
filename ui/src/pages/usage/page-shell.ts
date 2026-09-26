@@ -37,7 +37,7 @@ export function renderUsagePageShell(
 
 export function renderUsageLoadingStatus(label: unknown) {
   return html`
-    <span class="settings-status settings-status--accent">
+    <span class="settings-status settings-status--accent" data-openclaw-presentation-pending>
       <span class="usage-loading-spinner" aria-hidden="true"></span>
       ${label}
     </span>

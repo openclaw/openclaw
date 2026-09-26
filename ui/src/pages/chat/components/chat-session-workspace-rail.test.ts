@@ -12,6 +12,7 @@ import {
 function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): SessionWorkspaceProps {
   return {
     collapsed: false,
+    connected: true,
     sessionKey: "agent:main:workspace",
     list: null,
     loading: false,

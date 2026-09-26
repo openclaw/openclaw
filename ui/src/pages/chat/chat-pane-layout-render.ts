@@ -292,7 +292,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       const definition = panelDefinitions.find((entry) => entry.slot === slot);
       return slot === undefined
         ? nothing
-        : html`<div class="panel-embed-content side-panel__panel" data-panel-slot=${slot}>
+        : html`<div
+              class="panel-embed-content side-panel__panel"
+              data-panel-slot=${slot}
+              ?data-openclaw-presentation-pending=${!state.connected && this.context.gateway.snapshot.phase === "connected"}
+            >
               ${slot === "conversation" ? chat : definition ? renderEmbeddedSidebarPanel(definition, state.requestUpdate!) : nothing}
             </div>
             ${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}`;

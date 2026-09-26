@@ -238,6 +238,7 @@ function renderCatalogCard(
 function renderCatalogGridSkeleton(params: { label?: string; cards: number }): TemplateResult {
   return html`<div
     class="plugin-catalog-grid plugin-catalog-grid--skeleton"
+    data-openclaw-presentation-pending
     role="status"
     aria-busy="true"
     aria-label=${params.label ?? t("common.loading")}

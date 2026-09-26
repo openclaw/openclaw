@@ -516,10 +516,25 @@ precise bounds are unavailable. Callback events use a bounded wake channel into
 GPUI rather than polling. Native appearance updates WebKit/WebView2's preferred
 color scheme without changing the system setting.
 
-Debug builds log `webview_open` request and meaningful-paint timings. The proof
-probe waits for the connected destination, its rendered Settings controls or
-loaded Tasks state, and two display frames. Reading timing covers a fresh blank
-tab; an external site's network and rendering time remains site-dependent.
+Each visible surface keeps a theme-matched native loading placeholder until its
+document is ready. The Control UI reports typed, generation-scoped presentation
+state after route loaders and declared initial-content loaders finish; empty and
+error states are revealable. Navigation masks the previous document before the
+next route renders. Two drawable web frames precede reveal. Reading documents
+wait for load, fonts and two drawable frames; a blank reading tab keeps a native
+empty state instead of showing a white page. Third-party applications' later
+asynchronous updates remain owned by those sites.
+
+On macOS, a transparent native container lets WebKit finish rendering without
+displaying intermediate frames or intercepting clicks. Its bounds stay fixed
+during loading. Window activation remains with the app's window owner: it
+suppresses wry's constructor activation even in ordinary mode, and blocks
+application activation throughout `OPENCLAW_GPUI_BACKGROUND=1` runs. Native
+webviews keep their original WebKit class and observation state.
+
+`webview_open` diagnostics record request-to-reveal timing. Fully occluded windows
+may have drawing paused by macOS; background frame proof uses an unobscured
+window without activating it.
 
 | Platform | Support and storage |
 | --- | --- |

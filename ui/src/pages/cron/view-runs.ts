@@ -312,6 +312,7 @@ export function renderRunsSection(props: CronRunsSectionProps) {
                 role="status"
                 aria-live="polite"
                 data-test-id="cron-runs-loading"
+                data-openclaw-presentation-pending
               >
                 ${t("cron.list.loading")}
               </div>`

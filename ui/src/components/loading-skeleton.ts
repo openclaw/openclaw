@@ -3,7 +3,7 @@ import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 
 export function renderLoadingSkeleton() {
-  return html`<div class="loading-skeleton" aria-hidden="true">
+  return html`<div class="loading-skeleton" aria-hidden="true" data-openclaw-presentation-pending>
     <div class="loading-skeleton__header">
       <div class="skeleton loading-skeleton__avatar"></div>
       <div class="skeleton skeleton-line loading-skeleton__title"></div>

@@ -95,6 +95,7 @@ export function renderBackgroundTasksRail(
       id=${`${backgroundTasks.statusRowId}-rail`}
       class="chat-tasks-rail"
       aria-label=${t("chat.backgroundTasks.label")}
+      ?data-openclaw-presentation-pending=${backgroundTasks.connected && !loaded && !backgroundTasks.error}
     >
       ${
         options.embedded

@@ -8,6 +8,7 @@ pub mod panels;
 pub mod questions;
 pub mod sessions;
 pub mod tools;
+pub mod web_presentation;
 pub mod web_urls;
 pub mod webview_pool;
 

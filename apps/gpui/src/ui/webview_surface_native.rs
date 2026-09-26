@@ -3,6 +3,74 @@ use wry::{NewWindowResponse, PageLoadEvent, WebView, WebViewBuilder};
 
 use super::{Command, Events, SurfaceBounds, WebViewEvent, WebViewSpec, WebViewStore, is_web_url};
 
+#[cfg(target_os = "macos")]
+#[path = "webview_surface_macos.rs"]
+mod macos;
+
+#[cfg(target_os = "windows")]
+#[path = "webview_surface_windows.rs"]
+mod windows;
+
+#[derive(Default)]
+pub(super) struct PresentationMask {
+    #[cfg(target_os = "macos")]
+    view: Option<objc2::rc::Weak<wry::WryWebView>>,
+    #[cfg(target_os = "windows")]
+    view: Option<windows::Mask>,
+}
+
+impl PresentationMask {
+    pub fn attach(&mut self, view: &WebView) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            self.view = Some(objc2::rc::Weak::from_retained(&view.webview()));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.view = windows::Mask::attach(view);
+        }
+    }
+
+    pub fn hide(&self) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        if let Some(view) = self.view.as_ref().and_then(|view| view.load()) {
+            macos::hide(&view);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(view) = &self.view {
+            view.hide()?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn present(view: &WebView, render: bool, reveal: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::present(view, render, reveal);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::present(view, render, reveal)?;
+    }
+    Ok(())
+}
+
+pub(super) fn set_bounds(view: &WebView, bounds: SurfaceBounds) {
+    #[cfg(target_os = "macos")]
+    let _ = macos::set_bounds(view, bounds);
+    #[cfg(target_os = "windows")]
+    let _ = view.set_bounds(rect(bounds));
+}
+
+pub(super) fn detach(view: &WebView) {
+    #[cfg(target_os = "macos")]
+    macos::detach(view);
+    #[cfg(target_os = "windows")]
+    windows::detach(view);
+}
+
 pub(super) fn rect(bounds: SurfaceBounds) -> wry::Rect {
     wry::Rect {
         position: wry::dpi::LogicalPosition::new(bounds.x, bounds.y).into(),
@@ -21,7 +89,11 @@ pub(super) fn build(
     {
         // WebKit's identifier factory returns autoreleased store/configuration
         // references. Do not let GPUI's outer pool keep retired sessions in use.
-        objc2::rc::autoreleasepool(|_| build_view(spec, store, events, bounds, window))
+        objc2::rc::autoreleasepool(|_| {
+            crate::background::with_suppressed_activation(|| {
+                build_view(spec, store, events, bounds, window)
+            })
+        })
     }
     #[cfg(target_os = "windows")]
     build_view(spec, store, events, bounds, window)
@@ -73,18 +145,22 @@ fn build_view(
     if let Some(auth) = &spec.auth {
         builder = builder.with_initialization_script(auth.initialization_script()?);
     }
-    #[cfg(debug_assertions)]
-    {
-        builder = builder.with_initialization_script(include_str!("webview_timing.js"));
-        if let Some(script) = events.measurement(spec) {
-            builder = builder.with_initialization_script(script);
-        }
-    }
     let shortcut_nonce = uuid::Uuid::new_v4().to_string();
     builder = builder.with_initialization_script(SHORTCUT_SCRIPT.replace(
         "__GPUI_SHORTCUT_NONCE__",
         &serde_json::json!(shortcut_nonce).to_string(),
     ));
+    builder = builder.with_initialization_script(
+        include_str!("webview_presentation.js")
+            .replace(
+                "__GPUI_NONCE__",
+                &serde_json::json!(shortcut_nonce).to_string(),
+            )
+            .replace(
+                "__GPUI_CONTROL__",
+                if spec.auth.is_some() { "true" } else { "false" },
+            ),
+    );
     if spec.auth.is_some() {
         builder = builder.with_initialization_script(format!(
             r#"(() => {{
@@ -139,6 +215,9 @@ fn build_view(
     });
     let load_events = events.clone();
     builder = builder.with_on_page_load_handler(move |event, url| {
+        if matches!(event, PageLoadEvent::Started) {
+            load_events.document_committed(&url);
+        }
         if reading {
             load_events.set_ready(matches!(event, PageLoadEvent::Finished));
         } else if matches!(event, PageLoadEvent::Started) {
@@ -160,8 +239,12 @@ fn build_view(
     builder = builder.with_ipc_handler(move |request| {
         let source = request.uri().to_string();
         let trusted_control = auth.as_ref().is_some_and(|auth| auth.trusts(&source));
-        if !trusted_control && !(auth.is_none() && (is_web_url(&source) || source == "about:blank"))
-        {
+        let reading_document = (auth.is_none()
+            || auth
+                .as_ref()
+                .is_some_and(|auth| auth.access_session.is_some()))
+            && (is_web_url(&source) || source == "about:blank");
+        if !trusted_control && !reading_document && source != "about:blank" {
             return;
         }
         let body = request.body();
@@ -172,16 +255,97 @@ fn build_view(
             return;
         };
         match payload["type"].as_str() {
+            Some("gpui-route-ack")
+                if trusted_control
+                    && payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) =>
+            {
+                if let (Some(document), Some(url), Some(generation)) = (
+                    payload["document"].as_str(),
+                    payload["url"].as_str(),
+                    payload["generation"].as_u64(),
+                ) {
+                    ipc_events
+                        .presentation
+                        .borrow_mut()
+                        .acknowledge_route(document, url, generation);
+                }
+            }
+            Some("gpui-document-available")
+                if payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) =>
+            {
+                ipc_events.document_requested.set(true);
+                let _ = ipc_events.wake.try_send(());
+            }
+            Some("gpui-document") if payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) => {
+                if let (Some(document), Some(url), Some(navigation)) = (
+                    payload["document"].as_str(),
+                    payload["url"].as_str(),
+                    payload["navigation"].as_u64(),
+                ) && ipc_events
+                    .presentation
+                    .borrow_mut()
+                    .document(document, url, navigation)
+                {
+                    ipc_events.presentation_requested.set(true);
+                    let _ = ipc_events.wake.try_send(());
+                }
+            }
+            Some("openclaw-presentation-state")
+                if trusted_control
+                    && payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) =>
+            {
+                #[derive(serde::Deserialize)]
+                struct Signal {
+                    document: String,
+                    generation: u64,
+                    phase: String,
+                    pathname: String,
+                    search: String,
+                    hash: String,
+                    #[serde(rename = "viewportWidth")]
+                    viewport_width: f64,
+                    #[serde(rename = "viewportHeight")]
+                    viewport_height: f64,
+                }
+                if let Ok(signal) = serde_json::from_value::<Signal>(payload.clone())
+                    && matches!(signal.phase.as_str(), "loading" | "ready")
+                    && (signal.phase != "ready"
+                        || ipc_events
+                            .viewport_matches(signal.viewport_width, signal.viewport_height))
+                    && let Ok(mut url) = url::Url::parse(&source)
+                {
+                    url.set_path(&signal.pathname);
+                    url.set_query(signal.search.strip_prefix('?'));
+                    url.set_fragment(signal.hash.strip_prefix('#'));
+                    if auth.as_ref().is_some_and(|auth| auth.trusts(url.as_str())) {
+                        ipc_events.presentation(
+                            &signal.document,
+                            signal.generation,
+                            url.as_str(),
+                            signal.phase == "ready",
+                        );
+                    }
+                }
+            }
+            Some("gpui-reading-ready")
+                if payload["nonce"].as_str() == Some(shortcut_nonce.as_str())
+                    && (reading_document || source == "about:blank") =>
+            {
+                if let (Some(document), Some(url), Some(width), Some(height)) = (
+                    payload["document"].as_str(),
+                    payload["url"].as_str(),
+                    payload["viewportWidth"].as_f64(),
+                    payload["viewportHeight"].as_f64(),
+                ) && ipc_events.viewport_matches(width, height)
+                {
+                    ipc_events.presentation(document, 0, url, true);
+                }
+            }
             Some("gpui-ready")
                 if trusted_control
                     && payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) =>
             {
                 ipc_events.set_ready(payload["ready"].as_bool() == Some(true));
-            }
-            Some("gpui-painted") => {
-                if let Some(id) = payload["id"].as_str() {
-                    ipc_events.painted(id);
-                }
             }
             Some("gpui-history") if payload["nonce"].as_str() == Some(shortcut_nonce.as_str()) => {
                 ipc_events.history_changed()
@@ -227,6 +391,11 @@ fn build_view(
     });
     // Build blank first: cookies must reach the platform store before the first
     // Control UI document or its WebSocket/subresource requests start.
+    log::debug!(
+        "webview_create background={} control={} begin",
+        spec.background,
+        spec.auth.is_some()
+    );
     let view = builder
         .build_as_child(window)
         .map_err(|_| "Could not create the native webview")?;
@@ -250,6 +419,13 @@ fn build_view(
             .map_err(|_| "Could not transfer the Access session to the webview")?;
     }
     navigate(&view, spec)?;
+    #[cfg(target_os = "macos")]
+    macos::configure(&view)?;
+    #[cfg(target_os = "windows")]
+    windows::configure(&view)?;
+    events.mask.borrow_mut().attach(&view);
+    present(&view, true, false)?;
+    log::debug!("webview_create attached");
     Ok(view)
 }
 
@@ -268,6 +444,7 @@ pub(super) fn retire(view: WebView, visible: bool) -> super::WebViewRetirement {
             if visible {
                 let _ = view.focus_parent();
             }
+            detach(&view);
             drop(view);
             retired
         })
@@ -275,6 +452,7 @@ pub(super) fn retire(view: WebView, visible: bool) -> super::WebViewRetirement {
     #[cfg(target_os = "windows")]
     {
         let _ = visible;
+        detach(&view);
         drop(view);
         super::WebViewRetirement {}
     }
@@ -318,8 +496,12 @@ pub(super) fn navigate_control(view: &WebView, spec: &WebViewSpec) -> Result<(),
     // A handled event preserves the booted document, its Gateway socket and store.
     // Unknown routes retain the native host contract's ordinary URL navigation.
     view.evaluate_script(&format!(
-        "if (location.origin === {origin} && location.href !== {url}) {{ const event = new CustomEvent('openclaw:native-navigate', {{cancelable:true, detail:{detail}}}); if (window.dispatchEvent(event)) location.assign({url}); }}"
+        "if (location.origin === {origin}) {{ const event = new CustomEvent('openclaw:native-navigate', {{cancelable:true, detail:{detail}}}); if (location.href === {url} || !window.dispatchEvent(event)) {{ window.__OPENCLAW_GPUI_ROUTE_ACK__?.({url}); window.dispatchEvent(new Event('openclaw:native-presentation-request')); }} else location.assign({url}); }}"
     )).map_err(|_| "Could not navigate the Control UI".into())
+}
+
+pub(super) fn request_presentation(view: &WebView) {
+    let _ = view.evaluate_script("window.dispatchEvent(new Event('openclaw:native-presentation-request')); window.__OPENCLAW_GPUI_READING_FRAME__?.();");
 }
 
 fn external_scheme(value: &str) -> bool {

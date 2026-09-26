@@ -1,3 +1,4 @@
+mod background;
 mod gateway;
 mod gateway_windows;
 mod model;
@@ -139,6 +140,11 @@ fn main() {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
+            if let Err(error) = background::install() {
+                log::error!("Could not enforce application activation policy: {error}");
+                cx.quit();
+                return;
+            }
             gpui_kit::init(cx);
             ui::init_session_menu_shortcuts(cx);
             if let Err(error) = cx.text_system().add_fonts(vec![

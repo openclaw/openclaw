@@ -344,7 +344,11 @@ export function renderSessionWorkspaceRail(
     );
   };
   return html`
-    <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
+    <aside
+      class="chat-workspace-rail"
+      aria-label=${t("chat.workspaceFiles.label")}
+      ?data-openclaw-presentation-pending=${sessionWorkspace.connected && sessionWorkspace.list === null && !sessionWorkspace.error}
+    >
       ${
         options.embedded
           ? nothing

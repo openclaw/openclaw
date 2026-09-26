@@ -376,7 +376,12 @@ class PortalsPage extends OpenClawLightDomElement {
   private renderEmptyState() {
     const unsupported = !this.portalListSupported;
     return html`
-      <section class="portals-empty" role="status" aria-live="polite">
+      <section
+        class="portals-empty"
+        role="status"
+        aria-live="polite"
+        ?data-openclaw-presentation-pending=${this.loading && !this.loaded && !this.error}
+      >
         ${
           this.loading && !this.loaded
             ? html`<div class="portals-empty__title">${t("portalsPage.loading")}</div>`

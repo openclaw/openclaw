@@ -30,6 +30,7 @@ export function renderLazySettingsSidebar(
     return html`<section
       class=${props.presentation === "embed-list" ? "settings-embed-list" : "native-embed-header"}
       aria-busy=${failed ? "false" : "true"}
+      ?data-openclaw-presentation-pending=${!failed}
     >
       ${props.presentation === "embed-page" ? html`<button class="native-embed-header__back btn btn--ghost" type="button" @click=${props.onExit}>${t("common.back")}</button>` : nothing}
       <h1 class="page-title">
@@ -41,7 +42,11 @@ export function renderLazySettingsSidebar(
       ${failed ? html`<button class="btn" @click=${() => host.retrySettingsSidebarRenderer()}>${t("common.retry")}</button>` : nothing}
     </section>`;
   }
-  return html`<aside class="settings-sidebar" aria-busy=${failed ? nothing : "true"}>
+  return html`<aside
+    class="settings-sidebar"
+    aria-busy=${failed ? nothing : "true"}
+    ?data-openclaw-presentation-pending=${!failed}
+  >
     <header class="settings-sidebar__header" @mousedown=${beginNativeWindowDragFromTopInset}>
       <button type="button" class="settings-sidebar__back" @click=${props.onExit}>
         <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>

@@ -90,7 +90,9 @@ export function renderLinkReaderPanelContent(
     </div>`;
   }
   if (tab.view.status !== "ready") {
-    return html`<p class="lr-status" role="status">${t("linkReader.loadingPreview")}</p>`;
+    return html`<p class="lr-status" role="status" data-openclaw-presentation-pending>
+      ${t("linkReader.loadingPreview")}
+    </p>`;
   }
   return renderLinkReaderContent(tab.view.detail, target, tab.view.images?.load);
 }

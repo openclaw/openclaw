@@ -757,6 +757,7 @@ class CronPage extends OpenClawLightDomElement {
             }),
           onViewRunTranscript: (entry) => void this.runTranscript.open(entry),
         }),
+        { initialContentPending: Boolean(this.pendingRouteData?.jobId) },
       )}
     `;
   }
