@@ -484,7 +484,7 @@ describeLive("google plugin live", () => {
     expect(closeReasons).toEqual(["completed"]);
   }, 120_000);
 
-  it.each([undefined, "gemini-3.5-flash"])(
+  it.each([undefined, "gemini-3.6-flash"])(
     "runs Gemini web search with model %j",
     async (model) => {
       const provider = createGeminiWebSearchProvider();
@@ -520,7 +520,7 @@ describeLive("google plugin live", () => {
       }
 
       expect(result?.provider).toBe("gemini");
-      expect(result?.model).toBe(model ?? "gemini-3.6-flash");
+      expect(result?.model).toBe(model ?? "gemini-3.8-flash");
       expect(typeof result?.content).toBe("string");
       expect((result!.content as string).length).toBeGreaterThan(20);
       expect(Array.isArray(result?.citations)).toBe(true);
@@ -550,7 +550,7 @@ describeLive("google plugin live", () => {
       expect(process.env.GEMINI_API_KEY).toBeUndefined();
       expect(process.env.GOOGLE_API_KEY).toBeUndefined();
       expect(result?.provider).toBe("gemini");
-      expect(result?.model).toBe("gemini-3.6-flash");
+      expect(result?.model).toBe("gemini-3.8-flash");
       expect(typeof result?.content).toBe("string");
       expect((result!.content as string).length).toBeGreaterThan(20);
       expect(Array.isArray(result?.citations)).toBe(true);
