@@ -80,6 +80,10 @@ export async function waitForSignalToolResultIngressIdle() {
   );
 }
 
+export function getSignalToolResultIngressQueue() {
+  return signalToolResultIngressQueue;
+}
+
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
     waitForTransportReadyMock,
