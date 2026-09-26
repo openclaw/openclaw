@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
@@ -16,6 +17,24 @@ declare global {
       windowOpenCalls: string[];
     };
   }
+}
+
+/** The isolated external context starts cold: its first Control UI RPC batch can
+ *  queue behind the source page's gateway work under load, so the external ready
+ *  wait gets a longer state-based budget than the shared 10s helper. */
+async function waitForExternalGatewayReady(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const app = document.querySelector("openclaw-app") as
+        | (HTMLElement & {
+            runtime?: { context?: { gateway?: { snapshot?: { phase?: string } } } };
+          })
+        | null;
+      return app?.runtime?.context?.gateway?.snapshot?.phase === "connected";
+    },
+    undefined,
+    { timeout: 90_000 },
+  );
 }
 
 const gatewayToken = "session-menu-native-bridge-proof";
@@ -160,11 +179,17 @@ suite.define(() => {
             expect(posts).toEqual([expectedPost, expectedPost]);
 
             // Verify the handoff destination the way an external default browser
-            // receives it after NSWorkspace.open: load the exact posted URL in a
-            // fresh isolated browser context that shares no cookies, storage, or
-            // page state with the source page, and confirm the intended session
-            // route renders there. The gatewayUrl/token parameters stand in for
-            // the default browser already being signed in to this gateway.
+            // receives it after NSWorkspace.open: a fresh isolated browser
+            // context that shares no cookies, storage, or page state with the
+            // source page. The external browser must sign in explicitly first —
+            // the analog of a default browser that was previously paired — and
+            // only then navigates to the posted URL verbatim, with no gatewayUrl
+            // or credential parameters appended, so the rendered session must
+            // come from the handed-off URL plus the external browser's own
+            // independent sign-in state. A second, never-paired context below
+            // loads the same posted URL and must be stopped at the login gate:
+            // the handoff never grants the session to an unauthenticated
+            // browser; that browser reaches an explicit sign-in surface instead.
             const postedUrl = posts.at(-1)!.url;
             const externalContext = await suite.newBrowserContext({
               locale: "en-US",
@@ -173,10 +198,10 @@ suite.define(() => {
             });
             try {
               const externalPage = await externalContext.newPage();
-              const externalUrl = new URL(postedUrl);
-              externalUrl.searchParams.set("gatewayUrl", `ws://127.0.0.1:${owner.port}`);
-              externalUrl.hash = `token=${encodeURIComponent(gatewayToken)}`;
-              expect((await externalPage.goto(externalUrl.toString()))?.status()).toBe(200);
+              const signInUrl = new URL(expectedSessionUrl);
+              signInUrl.searchParams.set("gatewayUrl", `ws://127.0.0.1:${owner.port}`);
+              signInUrl.hash = `token=${encodeURIComponent(gatewayToken)}`;
+              expect((await externalPage.goto(signInUrl.toString()))?.status()).toBe(200);
               const externalConfirmation = externalPage.locator(
                 "openclaw-gateway-url-confirmation",
               );
@@ -184,7 +209,11 @@ suite.define(() => {
               await externalConfirmation
                 .getByRole("button", { name: `Switch to 127.0.0.1:${owner.port}`, exact: true })
                 .click();
-              await waitForControlUiGatewayReady(externalPage);
+              await waitForExternalGatewayReady(externalPage);
+
+              // Navigate to the posted URL verbatim: no credentials appended.
+              expect((await externalPage.goto(postedUrl))?.status()).toBe(200);
+              await waitForExternalGatewayReady(externalPage);
               const expectedDestination = new URL(postedUrl).pathname + new URL(postedUrl).search;
               await expect
                 .poll(
@@ -194,6 +223,26 @@ suite.define(() => {
               await externalPage.getByText(reply, { exact: true }).waitFor({ timeout: 15_000 });
             } finally {
               await suite.closeBrowserContext(externalContext);
+            }
+
+            // The unauthenticated-browser case: a never-paired default browser
+            // receiving the same posted URL verbatim does not see the session.
+            // It lands on the Control UI login gate — the explicit sign-in
+            // surface where the browser can pair with the gateway — and the
+            // session transcript never renders there.
+            const unpairedContext = await suite.newBrowserContext({
+              locale: "en-US",
+              viewport: { width: 1440, height: 900 },
+              serviceWorkers: "block",
+            });
+            try {
+              const unpairedPage = await unpairedContext.newPage();
+              expect((await unpairedPage.goto(postedUrl))?.status()).toBe(200);
+              const loginGate = unpairedPage.locator("openclaw-login-gate");
+              await loginGate.waitFor({ timeout: 30_000 });
+              expect(await unpairedPage.getByText(reply, { exact: true }).count()).toBe(0);
+            } finally {
+              await suite.closeBrowserContext(unpairedContext);
             }
           },
         );
