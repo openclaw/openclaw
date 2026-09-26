@@ -1,4 +1,5 @@
 import type { ReactionTypeEmoji } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
@@ -22,11 +23,7 @@ import {
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import {
-  firstDefined,
-  normalizeAllowFrom,
-  resolveTelegramEffectiveDmPolicy,
-} from "./bot-access.js";
+import { normalizeAllowFrom, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import {
   buildTelegramInboundContextPayload,
@@ -59,7 +56,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
-import { getTopicName, resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
+import { getTopicName, updateTopicName } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -179,15 +176,13 @@ export const buildTelegramMessageContext = async ({
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   let topicName: string | undefined;
   if (isForum && resolvedThreadId != null) {
-    const topicNameCacheScope = resolveTopicNameCacheScope(
-      await resolveTelegramMessageContextStorePath({
-        cfg,
-        agentId:
-          ownerAgentId?.trim() ||
-          resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
-        sessionRuntime,
-      }),
-    );
+    const topicNameCacheScope = await resolveTelegramMessageContextStorePath({
+      cfg,
+      agentId:
+        ownerAgentId?.trim() ||
+        resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
+      sessionRuntime,
+    });
     const ftCreated = msg.forum_topic_created;
     const ftEdited = msg.forum_topic_edited;
     const ftClosed = msg.forum_topic_closed;

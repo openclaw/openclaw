@@ -24,9 +24,6 @@ export function buildTelegramThreadingToolContext(params: {
   context: ChannelThreadingContext;
   hasRepliedRef?: { value: boolean };
 }): ChannelThreadingToolContext {
-  void params.cfg;
-  void params.accountId;
-
   return {
     currentChannelId: normalizeOptionalString(params.context.To),
     currentThreadTs: resolveTelegramToolContextThreadId(params.context),

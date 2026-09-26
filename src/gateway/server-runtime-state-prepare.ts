@@ -19,7 +19,7 @@ import {
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
@@ -351,9 +351,9 @@ export async function prepareGatewayKernelState(params: {
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const authRateLimiter = createAuthRateLimiter(rateLimitConfig);
+  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig);
   // Browser-origin attempts are throttled even when local CLI clients are exempt.
-  const browserAuthRateLimiter = createAuthRateLimiter({
+  const browserAuthRateLimiter = createGatewayAuthRateLimiter({
     ...rateLimitConfig,
     exemptLoopback: false,
   });
