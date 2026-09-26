@@ -245,16 +245,19 @@ These are intentionally guarded by the `ci-workflow-guards`,
   outage override remains intact. Budget three control-job registrations per eligible
   hybrid first attempt when optional hosted admission is closed, two when admitted,
   and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
-  The baseline-ratchet prerequisite also uses the existing 4-class on trusted
-  same-repository hybrid PR first attempts, automatic main runs, and admitted qualification dispatches. Nearby complete jobs measured 85–91s on
-  Blacksmith versus 148–173s hosted; the projected 57–88s admission saving needs
-  exact-head confirmation. Budget 6.07 added Blacksmith vCPU-minutes and one
-  hybrid registration per eligible run. This existing job is already in the
-  potential self-hosted union; keep the non-Node allowance and caps unchanged.
-  Hybrid retries, ordinary manual/frozen targets, untrusted contexts and the GitHub
-  override retain hosted routing. Preserve every ratchet and Node admission gate.
-  The same admission routes the existing `check-plan` prerequisite to the
-  4-class. Its 165–209s hosted wall delayed narrowed type/lint consumers; use
+  Selected PR baseline ratchets run inside preflight on its existing runner,
+  sharing one command body with the standalone adapter for other events.
+  Use the actual workflow event, not a release-gate's normalized PR scope.
+  Preserve exact merge-parent/base validation, every ratchet, cache trust,
+  and explicit step-outcome admission in Node and the final gate. Required
+  missing/skipped outcomes fail; job-count and hosted-budget inventories exclude
+  the removed PR job. Self-hosted ratchets also remove one registration; other lanes wait for
+  preflight's added setup/check time. Run 36263945802 projects 205s earlier Node
+  admission, 46s later sibling admission, and +6.8 class-vCPU-minutes; native
+  proof must establish the combined wall and cost. Non-PR ratchets retain their
+  existing runner, deadline, and release-gate merge-tree preparation.
+  The existing `check-plan` prerequisite keeps the 4-class on trusted same-repository
+  hybrid PR first attempts, automatic main runs, and admitted qualification dispatches. Its 165–209s hosted wall delayed narrowed type/lint consumers; use
   the unchanged 209s as a conservative 13.93-vCPU-minute added-cost bound until
   native proof measures it. This consumes one non-Node reserve slot and adds no
   jobs. Exact dependency restoration still requires an actual self-hosted runner
@@ -262,9 +265,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   automatic first attempt's Blacksmith routes. Keep compiler inventory
   completeness and the observer's exact count.
   This measured control-job offload is hybrid-only; RunsOn keeps its existing
-  hosted ratchet and check-plan routes, including qualification dispatches.
-  Trusted fork PRs also retain their existing hosted hybrid control routes;
-  the default Blacksmith baseline-ratchet policy remains unchanged.
+  hosted standalone ratchet and check-plan routes, including qualification dispatches.
+  Trusted fork PRs retain hosted hybrid check planning; their ratchets use the
+  preflight runner and preserve the existing cache trust restrictions.
   Optional compiler/check offloads reject observed hosted assignment waits at
   sixty seconds; the former three-minute cutoff exceeded the latency objective.
   API and job deadlines remain unchanged.

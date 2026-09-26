@@ -1693,13 +1693,29 @@ describe("ci workflow guards", () => {
     expect(manifest.status, manifest.output).toBe(0);
     expect(manifest.output).toContain("max-lines-guard:true");
     expect(manifest.outputs.run_baseline_ratchets).toBe("true");
-    const context = { preflightOutputs: manifest.outputs };
-    expect(runCiGateFixture(renderCiGateEnvironment(context)).status).toBe(0);
-    for (const result of ["failure", "skipped"]) {
+    expect(manifest.outputs.baseline_ratchets_in_preflight).toBe("true");
+    const gate = readCiWorkflow().jobs["ci-gate"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify selected CI lanes",
+    );
+    for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+      const context = {
+        eventName: "pull_request" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: { ...manifest.outputs, baseline_ratchets_result: result },
+      };
+      const env = Object.fromEntries(
+        ["PREFLIGHT_RATCHETS_SELECTED", "PREFLIGHT_RATCHETS_RESULT"].map((key) => [
+          key,
+          String(evaluateWorkflowExpression(gate.env[key], context)),
+        ]),
+      );
       expect(
-        runCiGateFixture(renderCiGateEnvironment(context, { "checks-baseline-ratchets": result }))
-          .status,
-      ).toBe(1);
+        runCiGateFixture(
+          renderCiGateEnvironment(context, { "checks-baseline-ratchets": "skipped" }),
+          env,
+        ).status,
+      ).toBe(result === "success" ? 0 : 1);
     }
   });
 
@@ -2395,7 +2411,7 @@ describe("ci workflow guards", () => {
         runAttempt: 1,
         runnerBackend: "hybrid" as const,
         ...overrides,
-        preflightOutputs: outputs,
+        preflightOutputs: { ...outputs, baseline_ratchets_result: "success" },
       };
       const evaluate = (value: unknown, matrix: Record<string, unknown> = {}) =>
         typeof value === "string" && value.startsWith("${{")
@@ -2499,7 +2515,7 @@ describe("ci workflow guards", () => {
       expect(actual).toContain("checks-baseline-ratchets");
       expect(actual).not.toContain("check-plan");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 3,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
@@ -6515,26 +6531,32 @@ describe("ci workflow guards", () => {
       false,
     );
     expect(ratchet.env.CHECKOUT_BASE_SHA).toBe("${{ needs.preflight.outputs.diff_base_revision }}");
-    for (const selected of ["true", "false"]) {
-      for (const result of ["success", "failure", "cancelled", "skipped"]) {
-        for (const nodeSelected of ["true", "false"]) {
-          for (const cancelled of [true, false]) {
-            const admitted = evaluateWorkflowExpression(nodeJob.if, {
-              eventName: "pull_request",
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              cancelled,
-              preflightOutputs: {
-                run_baseline_ratchets: selected,
-                run_checks_node_core_nondist: nodeSelected,
-              },
-              jobResults: { "checks-baseline-ratchets": result },
-            });
-            expect(admitted).toBe(
-              !cancelled &&
-                nodeSelected === "true" &&
-                (result === "success" || (selected === "false" && result === "skipped")),
-            );
+    for (const inPreflight of [true, false]) {
+      for (const selected of ["true", "false"]) {
+        const inline = inPreflight && selected === "true";
+        for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+          for (const nodeSelected of ["true", "false"]) {
+            for (const cancelled of [true, false]) {
+              const admitted = evaluateWorkflowExpression(nodeJob.if, {
+                eventName: "pull_request",
+                repository: "openclaw/openclaw",
+                runAttempt: 1,
+                cancelled,
+                preflightOutputs: {
+                  run_baseline_ratchets: selected,
+                  baseline_ratchets_in_preflight: String(inline),
+                  baseline_ratchets_result: result,
+                  run_checks_node_core_nondist: nodeSelected,
+                },
+                jobResults: { "checks-baseline-ratchets": inline ? "skipped" : result },
+              });
+              expect(admitted).toBe(
+                !cancelled &&
+                  nodeSelected === "true" &&
+                  (result === "success" ||
+                    (!inline && selected === "false" && result === "skipped")),
+              );
+            }
           }
         }
       }
@@ -6558,6 +6580,22 @@ describe("ci workflow guards", () => {
     const ratchetJob = workflow.jobs["checks-baseline-ratchets"];
     const ratchetRun = ratchetJob.steps.find(
       (step: WorkflowStep) => step.name === "Run baseline ratchets",
+    );
+    const inlineRatchet = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.id === "baseline_ratchets",
+    );
+    expect(inlineRatchet.run).toBe(ratchetRun.run);
+    expect(inlineRatchet.env).toEqual({
+      RATCHET_BASE_REF: "${{ steps.diff_base.outputs.sha }}",
+      RATCHET_PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+    });
+    expect(workflow.jobs.preflight.outputs.baseline_ratchets_result).toBe(
+      "${{ steps.baseline_ratchets.outcome }}",
+    );
+    expect(inlineRatchet).not.toHaveProperty("continue-on-error");
+    const preflightStepNames = workflow.jobs.preflight.steps.map((step: WorkflowStep) => step.name);
+    expect(preflightStepNames.indexOf("Setup preflight check dependencies")).toBeLessThan(
+      preflightStepNames.indexOf("Run baseline ratchets"),
     );
     const checkout = checksFastSteps.find((step: WorkflowStep) => step.name === "Checkout");
     const checksFastRun = checksFastSteps.find(
@@ -6681,6 +6719,7 @@ describe("ci workflow guards", () => {
     expect(fastOnly.status, fastOnly.output).toBe(0);
     expect(fastOnly.outputs.run_check).toBe("false");
     expect(fastOnly.outputs.run_checks_fast_core).toBe("true");
+    expect(fastOnly.outputs.baseline_ratchets_in_preflight).toBe("true");
     expect(
       JSON.parse(expectDefined(fastOnly.outputs.checks_fast_core_matrix, "fast-only checks matrix"))
         .include,
@@ -6705,6 +6744,7 @@ describe("ci workflow guards", () => {
       runnerProfile: "github",
     });
     expect(releaseGate.status, releaseGate.output).toBe(0);
+    expect(releaseGate.outputs.baseline_ratchets_in_preflight).toBe("false");
     expect(
       JSON.parse(
         expectDefined(releaseGate.outputs.checks_fast_core_matrix, "release-gate checks matrix"),
@@ -9644,7 +9684,7 @@ describe("ci workflow guards", () => {
         )
         .replace(/^\((.*)\)$/u, "$1")
         .replace(
-          /!cancelled\(\) && needs\.preflight\.result == 'success' && \(needs\.checks-baseline-ratchets\.result == 'success' \|\| \(needs\.preflight\.outputs\.run_baseline_ratchets == 'false' && needs\.checks-baseline-ratchets\.result == 'skipped'\)\) && /u,
+          /!cancelled\(\) && needs\.preflight\.result == 'success' && .* && (?=needs\.preflight\.outputs\.run_checks_node_core_nondist)/u,
           "",
         )
         .replace(

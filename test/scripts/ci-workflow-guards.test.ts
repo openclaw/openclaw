@@ -4993,7 +4993,7 @@ setImmediate(() => {
       if: expect.stringContaining("steps.manifest.outputs.run_node == 'true'"),
       with: {
         "cache-mode": "${{ steps.candidate_trust.outputs.cache_mode }}",
-        "dependency-cache": "true",
+        "dependency-cache": expect.stringContaining("runner.environment == 'self-hosted'"),
         "install-bun": "false",
       },
     });
@@ -5003,6 +5003,35 @@ setImmediate(() => {
     expect(preflightRestore?.step.if).toContain(
       '!contains(fromJSON(\'["hybrid","runson"]\'), vars.OPENCLAW_CI_RUNNER_BACKEND)',
     );
+    for (const runnerBackend of ["blacksmith", "hybrid", "runson", "github"] as const) {
+      for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
+        for (const runnerEnvironment of ["self-hosted", "github-hosted"] as const) {
+          const context = {
+            eventName: "pull_request" as const,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend,
+            runnerEnvironment,
+            headRepository,
+            steps: {
+              manifest: { outputs: { baseline_ratchets_in_preflight: "true", run_node: "true" } },
+            },
+          };
+          expect(evaluateWorkflowExpression(`\${{ ${preflightRestore?.step.if} }}`, context)).toBe(
+            true,
+          );
+          expect(
+            evaluateWorkflowExpression(preflightRestore?.step.with?.["dependency-cache"], context),
+          ).toBe(
+            runnerBackend !== "github" &&
+              runnerEnvironment === "self-hosted" &&
+              headRepository === "openclaw/openclaw"
+              ? "true"
+              : "false",
+          );
+        }
+      }
+    }
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
       "build-artifacts",

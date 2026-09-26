@@ -156,6 +156,23 @@ organization-wide usage.
 
 ## Ratchet admission before Node tests
 
+Selected ratchets now run inside preflight for actual `pull_request` events,
+using its exact merge tree and comparison base. The same command body remains
+in the standalone job for other events, including release-gate merge preparation.
+Node admission and the final gate require the recorded inline step outcome;
+a required skipped or missing result fails. Job counts and hosted-budget
+accounting exclude the removed PR job. Cache trust and runner routing stay unchanged.
+
+Run `36263945802` measured 169 seconds waiting for the ratchet runner, then
+31 seconds of checkout, 10 seconds of setup, and 36 seconds of checks.
+Reusing preflight projects Node admission at about +96 seconds instead of +301,
+while other preflight-dependent lanes start about 46 seconds later. At unchanged
+speeds, moving those 46 seconds onto the existing 16-class and removing the
+82-second 4-class job adds about 6.8 class-vCPU-minutes and removes one registration.
+These are projections: the whole PR wall and aggregate cost require native proof.
+
+The following measurements explain the earlier standalone routing policy.
+
 The five newest broad green PR runs at the September 26 sampling cutoff
 (`36208949888`, `36208857347`, `36208617238`, `36208552952`, and `36208291831`)
 spent 148–173 seconds in hosted `checks-fast-baseline-ratchets`. Checkout took

@@ -45,6 +45,7 @@ import {
 } from "../../scripts/lib/extension-test-plan.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import {
   buildVitestRunPlans,
   hasImportGraphConsumers,
@@ -2628,15 +2629,21 @@ describe("CI changed Node test plan", () => {
 
   it("packs measured native plugin envelopes without changing their one-file process lifetime", () => {
     const config = "test/vitest/vitest.extension-database-workers.config.ts";
-    const files = databaseWorkerExtensionTestFiles
-      .filter((file) => file.startsWith("extensions/telegram/"))
-      .slice(0, 18);
+    const files = Array.from(
+      { length: 18 },
+      (_, index) => `extensions/telegram/src/native-fixture-${index}.test.ts`,
+    );
     expect(files).toHaveLength(18);
     const ordinary = "extensions/telegram/src/ordinary-fixture.test.ts";
     const inventory = [...files, ordinary];
     try {
       vi.spyOn(changedExtensions, "listAvailableExtensionIds").mockReturnValue(["telegram"]);
       vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
+      const resolveConfig = extensionTestPlan.resolveExtensionTestConfig;
+      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
+        files.includes(target) ? config : resolveConfig(target),
+      );
+      vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
       const costs = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
       const before = createChangedExtensionFallbackShards([
         "scripts/lib/ci-changed-node-test-plan.mts",
@@ -2711,6 +2718,66 @@ describe("CI changed Node test plan", () => {
       expect(
         extensionTestPlan.estimateExtensionTestCost(config, selected.length, selected),
       ).toBeLessThan(192);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("fills native file budgets without subdividing exact measured envelopes", () => {
+    const config = "test/vitest/vitest.extension-database-workers.config.ts";
+    const files = Array.from(
+      { length: 36 },
+      (_, index) => `extensions/codex/src/native-fixture-${String(index).padStart(2, "0")}.test.ts`,
+    );
+    const ordinary = "extensions/codex/src/ordinary-fixture.test.ts";
+    const inventory = [...files, ordinary];
+    try {
+      vi.spyOn(changedExtensions, "listAvailableExtensionIds").mockReturnValue(["codex"]);
+      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
+      const resolveConfig = extensionTestPlan.resolveExtensionTestConfig;
+      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
+        files.includes(target) ? config : resolveConfig(target),
+      );
+      vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
+      const costs = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+      const create = () =>
+        createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]);
+      const unmeasured = create();
+      expect(unmeasured).toHaveLength(2);
+      expect(
+        fallbackGroups(unmeasured)
+          .flatMap((group) => group.includePatterns ?? [])
+          .toSorted(),
+      ).toEqual(inventory.toSorted());
+
+      const measuredFiles = files.slice(0, 12);
+      const measuredKey = extensionTestPlan.createExtensionTestTimingKey(config, measuredFiles)!;
+      costs.mockReturnValue({ [measuredKey]: 300 });
+      const measured = create();
+      const measuredJob = expectDefined(
+        measured.find((job) =>
+          fallbackGroups([job]).some((group) => group.includePatterns?.includes(measuredFiles[0]!)),
+        ),
+        "complete measured native envelope",
+      );
+      expect(fallbackGroups([measuredJob])).toHaveLength(1);
+      expect(measuredJob.includePatterns).toEqual(measuredFiles);
+      expect(measuredJob.predictedSeconds).toBe(300);
+      expect(measured).toHaveLength(3);
+      expect(
+        fallbackGroups(measured)
+          .flatMap((group) => group.includePatterns ?? [])
+          .toSorted(),
+      ).toEqual(inventory.toSorted());
+      for (const job of [...unmeasured, ...measured]) {
+        expect(job.planConcurrency).toBe(1);
+        expect(job.predictedSeconds).toBeLessThanOrEqual(300);
+        expect(
+          fallbackGroups([job])
+            .filter((group) => group.configs.includes(config))
+            .flatMap((group) => group.includePatterns ?? []).length,
+        ).toBeLessThanOrEqual(20);
+      }
     } finally {
       vi.restoreAllMocks();
     }
