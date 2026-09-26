@@ -463,12 +463,13 @@ export function listCronStandingGrants(
         .orderBy("operator_approval_standing_grants.grant_id", "desc")
         .limit(limit),
     ).rows;
-    return rows.map((row) => ({
-      ...projectCronStandingGrant(row),
-      cronJobName: row.cron_job_name ?? null,
-      revokedAtMs: row.revoked_at_ms,
-      revokedBy: row.revoked_by,
-    }));
+    return rows.map((row) =>
+      Object.assign(projectCronStandingGrant(row), {
+        cronJobName: row.cron_job_name ?? null,
+        revokedAtMs: row.revoked_at_ms,
+        revokedBy: row.revoked_by,
+      }),
+    );
   }, params.databaseOptions);
 }
 

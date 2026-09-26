@@ -479,7 +479,7 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
     get pending() {
       return recovery.pending;
     },
-    result: recovery.result,
+    result: recovery.result.bind(recovery),
   };
 }
 

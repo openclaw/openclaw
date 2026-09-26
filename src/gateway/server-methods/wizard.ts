@@ -91,7 +91,7 @@ function wizardSessionHandler<T extends { sessionId: string }>(
     session: WizardSession,
   ) => Promise<void>,
 ) {
-  return defineValidatedGatewayHandler(method, validate, (options) => {
+  return defineValidatedGatewayHandler(method, validate, async (options) => {
     const session = options.context.wizardSessions.get(options.params.sessionId);
     if (!session || !canAccessWizardSession(session, options.client)) {
       options.respond(
@@ -103,7 +103,7 @@ function wizardSessionHandler<T extends { sessionId: string }>(
       );
       return;
     }
-    return run(options, session);
+    await run(options, session);
   });
 }
 
