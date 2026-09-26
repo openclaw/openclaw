@@ -8,14 +8,6 @@ export type PluginsHubTab = "plugins" | "skills" | "skill-workshop";
 
 export const PLUGINS_HUB_PANEL_ID = "plugins-hub-panel";
 
-function pluginsHubTabs(): ReadonlyArray<HubTabOption<PluginsHubTab>> {
-  return [
-    { value: "plugins", label: t("tabs.plugins") },
-    { value: "skills", label: t("tabs.skills") },
-    { value: "skill-workshop", label: t("tabs.skillWorkshop") },
-  ];
-}
-
 export function renderPluginsHubTabs(props: {
   active: PluginsHubTab;
   onSelect: (tab: PluginsHubTab) => void;
@@ -23,7 +15,11 @@ export function renderPluginsHubTabs(props: {
   return renderHubTabs({
     id: "plugins",
     active: props.active,
-    tabs: pluginsHubTabs(),
+    tabs: [
+      { value: "plugins", label: t("tabs.plugins") },
+      { value: "skills", label: t("tabs.skills") },
+      { value: "skill-workshop", label: t("tabs.skillWorkshop") },
+    ] satisfies readonly HubTabOption<PluginsHubTab>[],
     ariaLabel: t("pluginsPage.hubTablistLabel"),
     panelId: PLUGINS_HUB_PANEL_ID,
     className: "plugins-tabs",

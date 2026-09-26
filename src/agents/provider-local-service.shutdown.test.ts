@@ -1,5 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -311,7 +312,6 @@ describe("provider local service shutdown", () => {
         if (!child) {
           throw new Error("Expected the owned child process");
         }
-        lease.release();
         // Hold the platform's authoritative completion fact while the child really exits.
         let restoreObservation: () => void;
         if (process.platform === "win32") {
@@ -340,12 +340,33 @@ describe("provider local service shutdown", () => {
           });
           restoreObservation = () => kill.mockRestore();
         }
+        const closed =
+          process.platform === "win32"
+            ? undefined
+            : once(child, "close", { signal: AbortSignal.timeout(5_000) });
         try {
-          await expect(stopManagedProviderLocalServices()).rejects.toThrow(
+          if (closed) {
+            vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          }
+          lease.release();
+          const stopped = stopManagedProviderLocalServices();
+          void stopped.catch(() => {});
+          if (closed) {
+            try {
+              // Native close must finish before advancing the withheld observation's deadlines.
+              await closed;
+            } finally {
+              await vi.runAllTimersAsync();
+            }
+          }
+          await expect(stopped).rejects.toThrow(
             `Local model service process tree ${originalPid} did not stop`,
           );
           expect(hasManagedProviderLocalServices()).toBe(true);
         } finally {
+          if (closed) {
+            vi.useRealTimers();
+          }
           restoreObservation();
         }
 

@@ -143,6 +143,10 @@ const workspaces = Object.fromEntries(
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
           : [
               TEST_ENTRY_GLOB,
+              // The plugin README documents this standalone fixture benchmark command.
+              ...(workspace === "extensions/team-reports"
+                ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
               // Core owner tests load this Telegram fixture through the bundled facade loader.

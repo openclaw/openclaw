@@ -33,6 +33,17 @@ const entries: RawCopyBaselineEntry[] = [
   },
 ];
 
+const localeMeta = {
+  generatedAt: "2026-05-13T00:00:00.000Z",
+  locale: "zh-CN",
+  model: "gpt-5.5",
+  provider: "openai",
+  sourceHash: "hash",
+  totalKeys: 3,
+  translatedKeys: 2,
+  workflow: 1,
+};
+
 describe("control-ui-i18n report helpers", () => {
   it.each(["--surface", "--locale", "--top"])("rejects option-shaped values for %s", (flag) => {
     expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
@@ -73,28 +84,14 @@ describe("control-ui-i18n report helpers", () => {
   });
 
   it("filters translation keys by surface token", () => {
-    expect(
-      filterTranslationKeysBySurface(
-        [
-          "agents.tabs.cronJobs",
-          "chat.composer.send",
-          "sessionsView.thinking",
-          "usage.common.emptyValue",
-        ],
-        "chat",
-      ),
-    ).toEqual(["chat.composer.send"]);
-    expect(
-      filterTranslationKeysBySurface(
-        [
-          "agents.tabs.cronJobs",
-          "chat.composer.send",
-          "sessionsView.thinking",
-          "usage.common.emptyValue",
-        ],
-        "sessions",
-      ),
-    ).toEqual(["sessionsView.thinking"]);
+    const keys = [
+      "agents.tabs.cronJobs",
+      "chat.composer.send",
+      "sessionsView.thinking",
+      "usage.common.emptyValue",
+    ];
+    expect(filterTranslationKeysBySurface(keys, "chat")).toEqual(["chat.composer.send"]);
+    expect(filterTranslationKeysBySurface(keys, "sessions")).toEqual(["sessionsView.thinking"]);
   });
 
   it("formats pasteable report text", () => {
@@ -103,14 +100,7 @@ describe("control-ui-i18n report helpers", () => {
         fallbackKeysInScope: ["actions.cancel"],
         meta: {
           fallbackKeys: ["actions.cancel"],
-          generatedAt: "2026-05-13T00:00:00.000Z",
-          locale: "zh-CN",
-          model: "gpt-5.5",
-          provider: "openai",
-          sourceHash: "hash",
-          totalKeys: 3,
-          translatedKeys: 2,
-          workflow: 1,
+          ...localeMeta,
         },
       },
       rawCopy: summarizeRawCopy(entries, 1),
@@ -146,14 +136,7 @@ describe("control-ui-i18n report helpers", () => {
         fallbackKeysInScope: [],
         meta: {
           fallbackKeys: ["usage.common.emptyValue"],
-          generatedAt: "2026-05-13T00:00:00.000Z",
-          locale: "zh-CN",
-          model: "gpt-5.5",
-          provider: "openai",
-          sourceHash: "hash",
-          totalKeys: 3,
-          translatedKeys: 2,
-          workflow: 1,
+          ...localeMeta,
         },
       },
       rawCopy: summarizeRawCopy(entries, 1),

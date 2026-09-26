@@ -25,6 +25,13 @@ function createHarness() {
     logger: { info: vi.fn(), error: vi.fn() },
   };
   const recovery = createHostThawRecovery(deps);
+  const elapse = (gapMs: number, cpuCoreRatio = 0) => {
+    nowMs += gapMs;
+    cpuUsage = {
+      user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
+      system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
+    };
+  };
   return {
     deps,
     setAdmissionClosed: (closed: boolean) => {
@@ -36,12 +43,9 @@ function createHarness() {
     setRestartReason: (reason: typeof restartReason) => {
       restartReason = reason;
     },
+    elapse,
     advance: async (gapMs: number, cpuCoreRatio = 0) => {
-      nowMs += gapMs;
-      cpuUsage = {
-        user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
-        system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
-      };
+      elapse(gapMs, cpuCoreRatio);
       await recovery.tick();
     },
   };
@@ -96,6 +100,26 @@ describe("host thaw recovery", () => {
       expectRecoveryCount(harness, 1);
     },
   );
+
+  it("excludes slow recovery work from later thaw samples", async () => {
+    const harness = createHarness();
+    const thawGap = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
+    harness.deps.refreshHealth
+      .mockImplementationOnce(async () => harness.elapse(HOST_THAW_MIN_FROZEN_MS))
+      .mockImplementationOnce(async () => harness.elapse(HOST_THAW_MIN_FROZEN_MS, 1));
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 1);
+
+    await harness.advance(TICK_INTERVAL_MS);
+    expectRecoveryCount(harness, 1);
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 2);
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 3);
+  });
 
   it("defers channel restart until active Gateway work settles", async () => {
     const harness = createHarness();
