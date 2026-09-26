@@ -210,9 +210,12 @@ describe("remote Crabbox AWS gate contract", () => {
       [
         "require_active_org_admin_for_crabbox_gate() { :; }",
         `read_crabbox_gate_pr_binding() { printf '%s\\n' '${base}'; }`,
-        "ci_dispatch() {",
+        `PR_HEAD=topic; LAST_VERIFIED_HEAD_SHA=${head}`,
+        "node() {",
         `  printf '%s\\n' '${JSON.stringify({
           actionsRunUrl: runUrl,
+          actionsRunAttempt: 1,
+          workflowSha: "c".repeat(40),
           backend: "crabbox",
           baseSha: base,
           headSha: head,
@@ -248,7 +251,8 @@ describe("remote Crabbox AWS gate contract", () => {
         [
           "require_active_org_admin_for_crabbox_gate() { :; }",
           `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
-          `ci_dispatch() { printf '%s\\n' '${JSON.stringify({
+          `PR_HEAD=topic; LAST_VERIFIED_HEAD_SHA=${"b".repeat(40)}`,
+          `node() { printf '%s\\n' '${JSON.stringify({
             actionsRunUrl: "https://github.com/openclaw/openclaw/actions/runs/99",
             backend: "crabbox",
             baseSha: "a".repeat(40),
