@@ -5,6 +5,8 @@ import { listAvailableManifestContractPlugins } from "../../plugins/manifest-con
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 
+export class UnknownModelCatalogProviderError extends Error {}
+
 type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
@@ -79,8 +81,8 @@ export function createModelsListProviderFilter(params: {
       ].map(normalizeProvider),
     );
     if (!knownProviders.has(providerFilter)) {
-      throw new Error(
-        "Unknown model catalog provider. Use a provider id from the installed plugins or configured providers.",
+      throw new UnknownModelCatalogProviderError(
+        `Unknown model catalog provider ${JSON.stringify(params.provider)}. Run openclaw models list --all to list models and their provider IDs.`,
       );
     }
   }
