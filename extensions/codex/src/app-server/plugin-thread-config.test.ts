@@ -8,8 +8,8 @@ import {
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
 import {
-  resolveOwnedAppApprovalOverrideKeys,
   resolveRecoverableCodexPluginConfigKeys,
+  toCodexPluginOwnedAccountApp,
 } from "./plugin-inventory.js";
 import {
   appInfo,
@@ -37,6 +37,18 @@ import type {
 } from "./protocol.js";
 
 type NativeConfigLayerName = NonNullable<CodexConfigReadResponse["origins"][string]>["name"];
+
+const approvalAppMetadata = {
+  id: "linear",
+  name: "linear",
+  description: null,
+  iconUrl: null,
+  iconUrlDark: null,
+  distributionChannel: null,
+  installUrl: null,
+  pluginDisplayNames: [],
+  toolSummaries: null,
+};
 
 describe("Codex plugin thread config", () => {
   beforeEach(() => {
@@ -167,37 +179,39 @@ describe("Codex plugin thread config", () => {
   });
 
   it("keeps approval checks conservative when tool metadata is absent", () => {
+    expect(toCodexPluginOwnedAccountApp(approvalAppMetadata, undefined)).not.toHaveProperty(
+      "approvalOverrideToolConfigKeys",
+    );
     expect(
-      resolveOwnedAppApprovalOverrideKeys({ name: "linear", toolSummaries: null }),
-    ).toStrictEqual({});
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({ name: "linear", toolSummaries: [] }),
-    ).toStrictEqual({ approvalOverrideToolConfigKeys: [] });
+      toCodexPluginOwnedAccountApp({ ...approvalAppMetadata, toolSummaries: [] }, undefined)
+        .approvalOverrideToolConfigKeys,
+    ).toStrictEqual([]);
   });
 
   it("retains disabled writable tools in the approval boundary", () => {
     expect(
-      resolveOwnedAppApprovalOverrideKeys({
-        name: "linear",
-        toolSummaries: [
-          {
-            name: "save_issue",
-            title: "Save issue",
-            description: "Create or update an issue.",
-            isEnabled: false,
-            disabledReason: "App policy",
-            isReadOnly: false,
-          },
-        ],
-      }),
-    ).toStrictEqual({
-      approvalOverrideToolConfigKeys: ["Save issue", "linear_save_issue", "save_issue"],
-    });
+      toCodexPluginOwnedAccountApp(
+        {
+          ...approvalAppMetadata,
+          toolSummaries: [
+            {
+              name: "save_issue",
+              title: "Save issue",
+              description: "Create or update an issue.",
+              isEnabled: false,
+              disabledReason: "App policy",
+              isReadOnly: false,
+            },
+          ],
+        },
+        undefined,
+      ).approvalOverrideToolConfigKeys,
+    ).toStrictEqual(["Save issue", "linear_save_issue", "save_issue"]);
   });
 
   it("preserves writable approval checks for keys shared with read-only tools", () => {
     const app = {
-      name: "linear",
+      ...approvalAppMetadata,
       toolSummaries: [
         {
           name: "fetch",
@@ -218,9 +232,9 @@ describe("Codex plugin thread config", () => {
       ],
     };
 
-    expect(resolveOwnedAppApprovalOverrideKeys(app)).toStrictEqual({
-      approvalOverrideToolConfigKeys: ["Save issue", "linear_fetch", "linear_linear_fetch"],
-    });
+    expect(
+      toCodexPluginOwnedAccountApp(app, undefined).approvalOverrideToolConfigKeys,
+    ).toStrictEqual(["Save issue", "linear_fetch", "linear_linear_fetch"]);
   });
 
   it.each([

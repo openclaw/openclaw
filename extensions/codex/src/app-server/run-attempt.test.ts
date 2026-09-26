@@ -65,6 +65,7 @@ import {
 } from "./plugin-app-cache-key.js";
 import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
+import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
@@ -5252,7 +5253,7 @@ describe("runCodexAppServerAttempt", () => {
             errors: [],
           },
         ],
-      } satisfies v2.SkillsListResponse;
+      } satisfies CodexSkillsListResponse;
     });
     params.explicitSkillSelections = [{ name: "release-command", path: skillPath }];
 

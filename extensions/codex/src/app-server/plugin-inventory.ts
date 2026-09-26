@@ -73,7 +73,7 @@ export type CodexPluginOwnedApp = {
 };
 
 /** Inventory record for one configured Codex plugin policy. */
-export type CodexPluginInventoryRecord = {
+type CodexPluginInventoryRecord = {
   policy: ResolvedCodexPluginPolicy;
   summary: v2.PluginSummary;
   detail?: v2.PluginDetail;
@@ -570,7 +570,7 @@ export function toCodexPluginOwnedAccountApp(
 }
 
 /** Returns current tool keys whose overrides could bypass the requested reviewer. */
-export function resolveOwnedAppApprovalOverrideKeys(
+function resolveOwnedAppApprovalOverrideKeys(
   app: Pick<CodexAppServerRequestResult<"app/read">["apps"][number], "name" | "toolSummaries">,
 ): Pick<CodexPluginOwnedApp, "approvalOverrideToolConfigKeys"> {
   if (!app.toolSummaries) {
