@@ -110,7 +110,7 @@ describe("session creation display titles", () => {
             .all(childKey),
         ).toEqual([]);
         expect(transcriptIds()).toEqual(
-          [...beforeIds, { session_id: winner.entry.sessionId }].sort((a, b) =>
+          [...beforeIds, { session_id: winner.entry.sessionId }].toSorted((a, b) =>
             String(a.session_id).localeCompare(String(b.session_id)),
           ),
         );

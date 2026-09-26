@@ -45,7 +45,6 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
@@ -75,6 +74,7 @@ export async function prepareSessionForkTranscript(params: ForkSessionFromParent
     storePath: resolved.path ?? params.storePath,
   };
   const hydration = prepareSessionTranscriptHydration(sourceScope);
+  const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
   const snapshot = await readRestoredSessionTranscript(sourceScope, hydration.read, {
     assertCurrent: params.commitGuard,
   });
