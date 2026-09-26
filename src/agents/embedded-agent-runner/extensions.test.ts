@@ -83,11 +83,35 @@ describe("buildEmbeddedExtensionFactories", () => {
         modelId: "summary",
         model: undefined,
       });
+      expect(getCompactionSafeguardRuntime(sessionManager)?.agentId).toBe("owner");
       expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationMode).toBe(
         ownerEnabled ? "shadow" : "off",
       );
     },
   );
+
+  it("dispatches under the resolved main owner when the session has no target", () => {
+    const sessionManager = {} as SessionManager;
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            experimental: { decisionAssistance: true },
+            decisionModel: "global-provider/global-model",
+            compaction: { mode: "safeguard", semanticCuration: { mode: "shadow" } },
+          },
+          entries: { main: { decisionModel: "owner-provider/owner-model" } },
+        },
+      },
+      sessionManager,
+      provider: "fixture",
+      modelId: "summary",
+      model: undefined,
+    });
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.semanticCurationMode).toBe("shadow");
+    expect(runtime?.agentId).toBe("main");
+  });
 
   it("uses the prepared context budget for safeguard sizing", () => {
     const sessionManager = {} as SessionManager;
