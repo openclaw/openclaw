@@ -90,6 +90,7 @@ describe("browser manage output", () => {
 
     const output = lastRuntimeLog();
     expect(output).toContain("transport: chrome-mcp");
+    expect(output).toContain("attachOnly: true");
     expect(output).toContain("headless: false (default)");
     expect(output).not.toContain("cdpPort:");
     expect(output).not.toContain("cdpUrl:");
@@ -357,6 +358,7 @@ describe("browser manage output", () => {
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "status"], { from: "user" });
 
+    expect(lastRuntimeLog()).toContain("attachOnly: false");
     expect(lastRuntimeLog()).toContain(
       "graphics: hardware; renderer ANGLE (Intel); backend (gl=angle,angle=metal)",
     );
