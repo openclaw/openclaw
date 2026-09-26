@@ -1,7 +1,7 @@
 // Tokenjuice tests cover index plugin behavior.
 import fs from "node:fs";
 import { createAgentToolResultMiddlewareRunner } from "openclaw/plugin-sdk/agent-harness";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { tokenjuiceFactory, createTokenjuiceOpenClawEmbeddedExtension } = vi.hoisted(() => {
@@ -18,6 +18,7 @@ vi.mock("./runtime-api.js", () => ({
 }));
 
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
 
 describe("tokenjuice plugin", () => {
@@ -27,33 +28,27 @@ describe("tokenjuice plugin", () => {
   });
 
   it("is opt-in by default", () => {
-    const manifest = JSON.parse(
+    const parsedManifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as { enabledByDefault?: unknown };
 
-    expect(manifest.enabledByDefault).toBeUndefined();
+    expect(parsedManifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers tokenjuice tool result middleware for OpenClaw and Codex runtimes", () => {
-    const registerAgentToolResultMiddleware = vi.fn();
-
-    plugin.register(
-      createTestPluginApi({
-        id: "tokenjuice",
-        name: "tokenjuice",
-        source: "test",
-        config: {},
-        pluginConfig: {},
-        runtime: {} as never,
-        registerAgentToolResultMiddleware,
-      }),
-    );
+  it("registers tokenjuice tool result middleware for OpenClaw, Codex, and Agents API runtimes", () => {
+    const captured = capturePluginRegistration({
+      id: "tokenjuice",
+      contracts: manifest.contracts,
+      register(api) {
+        plugin.register(api);
+      },
+    });
 
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
-    const registration = registerAgentToolResultMiddleware.mock.calls[0];
-    expect(typeof registration?.[0]).toBe("function");
-    expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
+    const registration = captured.agentToolResultMiddlewares[0];
+    expect(typeof registration?.handler).toBe("function");
+    expect(registration?.runtimes).toEqual(["openclaw", "codex", "agentsapi"]);
   });
 
   it("synthesises exec status when bash provides metadata-only details", async () => {

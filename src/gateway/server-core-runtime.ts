@@ -238,6 +238,7 @@ export async function startGatewayCoreRuntime(input: {
     ...runtimeSubscriptionUnsubs
   } = await startupTrace.measure("runtime.subscriptions", () =>
     startGatewayEventSubscriptions({
+      scheduler: runtime.scheduler,
       signal: runtime.connectionWork.signal,
       getSessionRowProjection: runtime.getSessionRowProjection,
       log,
@@ -297,6 +298,8 @@ export async function startGatewayCoreRuntime(input: {
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     forwardExecApprovalRequest,
+    forwardSystemAgentApprovalRequest,
+    forwardSystemAgentApprovalResolved,
     execApprovalIosPushDelivery,
     approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
@@ -535,6 +538,8 @@ export async function startGatewayCoreRuntime(input: {
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
     forwardExecApprovalRequest,
+    forwardSystemAgentApprovalRequest,
+    forwardSystemAgentApprovalResolved,
     execApprovalIosPushDelivery,
     approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,

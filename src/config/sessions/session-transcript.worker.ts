@@ -176,6 +176,25 @@ serveOwnedWorkerTasks(
           };
         });
       }
+      if (request.kind === "transcript-match") {
+        const { findTranscriptEventMatchingInDatabase } =
+          await import("./session-transcript-match.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly(
+            (database) => findTranscriptEventMatchingInDatabase(database, request.request),
+            {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
+            },
+          );
+          return {
+            kind: "transcript-match" as const,
+            result: opened.found ? opened.value : undefined,
+          };
+        });
+      }
       if (request.kind === "transcript-search") {
         const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");
@@ -328,6 +347,32 @@ serveOwnedWorkerTasks(
           return result.found
             ? result.value
             : { kind: "session-membership-facts" as const, facts: [] };
+        });
+      }
+      if (request.kind === "projection-status") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const {
+          hasSessionsNeedingTranscriptIndexReconcile,
+          hasOrphanedTranscriptIndexRows,
+          sessionTranscriptIndexNeedsReconcile,
+        } = await import("./session-transcript-index.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const result = withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              runSqliteDeferredTransactionSync(db, () =>
+                request.sessionId !== undefined
+                  ? sessionTranscriptIndexNeedsReconcile(db, request.sessionId)
+                  : hasSessionsNeedingTranscriptIndexReconcile(db) ||
+                    hasOrphanedTranscriptIndexRows(db),
+              ),
+            { ...request.database, env: request.env },
+          );
+          return result.found
+            ? result.value
+            : request.sessionId === undefined && result.reason === "schema-missing";
         });
       }
       if (request.kind === "session-members") {

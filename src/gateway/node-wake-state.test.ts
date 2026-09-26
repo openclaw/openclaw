@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NodeWakeAttempt } from "./node-wake-state-store.js";
 import {
   captureNodeWakeLifecycle,
   clearNodeWakeState,
@@ -7,7 +8,6 @@ import {
   releaseNodeWakeLifecycle,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
-  type NodeWakeAttempt,
 } from "./node-wake-state.js";
 import {
   getNodeWakeStateSnapshot,

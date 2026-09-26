@@ -70,7 +70,6 @@ import {
   getManagedBrowserMissingDisplayError,
   resolveManagedBrowserHeadlessMode,
   type ManagedBrowserHeadlessOptions,
-  type ManagedBrowserHeadlessSource,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
 } from "./config.js";
@@ -81,6 +80,7 @@ import {
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 const CHROME_SINGLETON_LOCK_PATHS = [

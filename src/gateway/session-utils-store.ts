@@ -37,12 +37,12 @@ import type { SessionEntryListScope } from "../config/sessions/session-accessor.
 import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
-import { loadExecApprovals } from "../infra/exec-approvals-store.js";
+import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
-import { AgentDatabaseRegistryChangedDuringDiscoveryError } from "../state/openclaw-agent-db-registry-listing.js";
+import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
 import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
@@ -266,7 +266,7 @@ export async function withGatewaySessionEntry<T>(
     try {
       return await read();
     } catch (error) {
-      if (!(error instanceof AgentDatabaseRegistryChangedDuringDiscoveryError) || attempt >= 2) {
+      if (!(error instanceof AgentDatabaseRegistryChangedError) || attempt >= 2) {
         throw error;
       }
     }
@@ -422,9 +422,11 @@ export async function listAgentsForGateway(
   scope: SessionScope;
   agents: GatewayAgentRow[];
 }> {
-  const basic = listGatewayAgentsBasic(cfg);
-  const provenanceRecords = await listAgentProvenance();
-  const execApprovals = loadExecApprovals();
+  const [basic, provenanceRecords, execApprovals] = await Promise.all([
+    listGatewayAgentsBasic(cfg),
+    listAgentProvenance(),
+    loadExecApprovalsReadOnlyAsync(),
+  ]);
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {

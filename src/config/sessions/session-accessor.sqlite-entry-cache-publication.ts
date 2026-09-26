@@ -10,13 +10,13 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
-import type { SessionEntryCacheDatabase } from "./session-accessor.sqlite-entry-cache-projection.js";
 import {
   publishTrackedCacheUpdate,
   sessionEntryCaches,
 } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   createSessionEntryCreationOperation,
+  type SessionEntryCacheDatabase,
   type SessionEntryCreationOperation,
   type SessionEntryPlaceholder,
   type SessionTranscriptInitializationPublication,
@@ -133,7 +133,7 @@ export function emitPreparedSessionSharingChange(
     agentId,
     storePath: database.path,
     sessionKey,
-    ...(facts ? { facts } : { factsInvalidated: true }),
+    ...(facts ? { facts, scope: "session-entry" as const } : { factsInvalidated: true }),
   };
   preparedSharingChanges.changes.set(change, receipt);
   sessionChanges.emit(change, database.db);
@@ -301,6 +301,7 @@ export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingE
     sessionId: entry.sessionId,
     updatedAt: entry.updatedAt,
     lifecycleRevision: entry.lifecycleRevision,
+    archivedAt: entry.archivedAt,
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
@@ -689,6 +690,7 @@ export function retainSessionEntryWorkerPublication(params: {
           storePath: params.storePath,
           sessionKey,
           factsInvalidated: true,
+          ...(receipt && !unknown ? { scope: "session-entry" as const } : {}),
         };
         if (receipt) {
           // A COMMIT receipt can survive unknown settlement without retaining creation custody.

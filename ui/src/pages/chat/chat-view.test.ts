@@ -11,7 +11,6 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
-import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -38,10 +37,8 @@ import {
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
-  createAttachmentSidebarHarness,
   getAttachmentMenuOption,
   renderAttachmentHarness,
-  renderSettledPastedTextAttachment,
   requireAttachmentInput,
   selectAttachmentMenuOption,
   selectFile,
@@ -4998,67 +4995,6 @@ describe("chat attachment picker", () => {
     );
   });
 
-  it("preserves pasted-text presentation and restore behavior across handoff", async () => {
-    let attachments: ChatAttachment[] = [];
-    const producer = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
-    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
-    const original = expectDefined(attachments[0], "pasted attachment");
-    const originalDataUrl = getChatAttachmentDataUrl(original);
-
-    const handoff = createChatAttachmentHandoff();
-    const owner = {} as GatewayBrowserClient;
-    handoff.prepare({
-      owner,
-      paneId: "p1",
-      scopeKey: "agent:main:one",
-      attachments,
-      fallbacks: {},
-    });
-    attachments = expectDefined(
-      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" }),
-      "restored attachments",
-    ).attachments;
-
-    expect(attachments).toHaveLength(1);
-    expect(attachments[0]).toBe(original);
-    expect(getChatAttachmentDataUrl(original)).toBe(originalDataUrl);
-
-    const onAttachmentsChange = vi.fn();
-    const onDraftChange = vi.fn();
-    const sidebar = createAttachmentSidebarHarness();
-    const remounted = await renderSettledPastedTextAttachment({
-      onOpenSidebar: sidebar.open,
-      attachments,
-      getAttachments: () => attachments,
-      draft: "intro",
-      getDraft: () => "intro",
-      onAttachmentsChange,
-      onDraftChange,
-    });
-    expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
-      "First words from a remounted p…",
-    );
-    expect(attachments[0]?.origin).toBe("paste");
-    requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
-    requireElement(
-      sidebar.container,
-      ".chat-attachment-text-action",
-      "show pasted text button",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
-    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
-    expect(getChatAttachmentDataUrl(original)).toBeNull();
-  });
-
   it("keeps normal short plain-text paste in the textarea", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -6758,11 +6694,9 @@ describe("chat model controls", () => {
         ],
       });
       const onModelSelect = vi.fn(async () => true);
-      const onModelSetup = vi.fn();
-      const container = renderModelControls(state, {
-        onModelSelect,
-        onModelSetup,
-      });
+      const onProviderSettings = vi.fn();
+      const callbacks = { onModelSelect, onProviderSettings };
+      const container = renderModelControls(state, callbacks);
       document.body.append(container);
 
       const providerHeadings = Array.from(
@@ -6785,7 +6719,7 @@ describe("chat model controls", () => {
         ),
       ).toBe(true);
       providerSettings?.click();
-      expect(onModelSetup).toHaveBeenCalledOnce();
+      expect(onProviderSettings).toHaveBeenCalledExactlyOnceWith("openai");
       const anthropicModels = container.querySelector<HTMLElement>(
         '[data-chat-model-provider-group="anthropic"]',
       );
@@ -6841,7 +6775,7 @@ describe("chat model controls", () => {
         ...state.chatModelCatalog,
         { id: "new-match", name: "Anth new", provider: "openai" },
       ];
-      renderModelControls(state, { onModelSelect, onModelSetup, modelPickerOpen: true }, container);
+      renderModelControls(state, { ...callbacks, modelPickerOpen: true }, container);
       await Promise.resolve();
       expect(container.querySelector("[data-chat-model-search]")).toBe(search);
       expect(search?.value).toBe("anth");

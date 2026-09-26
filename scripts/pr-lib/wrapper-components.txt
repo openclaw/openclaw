@@ -14,6 +14,7 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
@@ -135,6 +136,7 @@ scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
+scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
@@ -259,6 +261,7 @@ src/channels/chat-meta.ts
 src/channels/config-metadata.ts
 src/channels/config-presence.ts
 src/channels/ids.ts
+src/channels/message/ingress-queue-read-contract.ts
 src/channels/plugins/bootstrap-registry.ts
 src/channels/plugins/bundled-ids.ts
 src/channels/plugins/bundled-root.ts
@@ -638,11 +641,8 @@ src/infra/file-descriptor.ts
 src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
-src/infra/file-read.ts
 src/infra/fixed-window-rate-limit.ts
-src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
-src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
@@ -707,16 +707,12 @@ src/infra/openclaw-root.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
-src/infra/path-safety.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
 src/infra/private-mode.ts
-src/infra/private-temp-workspace.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
-src/infra/regular-file.ts
-src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -774,6 +770,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-source-handle.ts
+src/infra/sqlite-source-revision.ts
+src/infra/sqlite-source-revision.worker.ts
 src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
@@ -1034,6 +1032,7 @@ src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
+src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
@@ -1215,6 +1214,7 @@ src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/sandbox-workspace-paths.ts
+src/shared/settle-within.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
@@ -1250,6 +1250,7 @@ src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
+src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
@@ -1323,6 +1324,7 @@ src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
 src/state/session-metadata-unavailable-error.ts
 src/state/session-watch-cursor-provenance.ts
+src/test-utils/bun-process.ts
 src/utils.ts
 src/utils/boolean.ts
 src/utils/fetch-timeout.ts

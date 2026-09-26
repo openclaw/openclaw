@@ -703,7 +703,9 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
-  state.lastError = null;
+  if (state.configAutoSaveStatus !== "rejected") {
+    state.lastError = null;
+  }
   state.chatError = null;
   const publishFailure = async (error: string, path?: string | null) => {
     if (!isCurrent()) {

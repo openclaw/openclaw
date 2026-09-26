@@ -161,22 +161,32 @@
   -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
 }
 
-/* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared turn gap directly. Footer-bearing groups reserve that
-   gap in the footer row, which grows for wrapped metadata and touch controls
-   without subtracting an assumed footer height. */
+/* --chat-turn-gap is the only space between consecutive groups of any kind. */
 .chat-group {
   --chat-avatar-column: 36px;
   --chat-avatar-gap: 10px;
   --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 8px;
-  --chat-turn-gap: 28px;
+  --chat-turn-gap: 16px;
+  /* Every group ends in one footer row of this size, visible or not. */
+  --chat-footer-offset: 2px;
+  --chat-footer-row: 24px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
-  padding-bottom: var(--chat-turn-gap);
+  margin-block: 0 var(--chat-turn-gap);
   margin-inline: 4px 16px;
+}
+
+@media (hover: none),
+  (max-width: 768px),
+  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Touch targets grow up over their own group, never into the turn gap. */
+  .chat-group {
+    --chat-touch-target: 44px;
+    --chat-turn-gap: 12px;
+  }
 }
 
 /* Both sides share the content edge inside the trailing avatar gutter. */

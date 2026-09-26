@@ -15,6 +15,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -23,6 +24,7 @@ import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "./session-accessor.sqlite-archive-artifact.js";
+import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
@@ -86,11 +88,15 @@ function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[]
       typeof plan.archiveDirectory !== "string" ||
       typeof plan.databasePath !== "string" ||
       typeof plan.generation !== "string" ||
-      typeof plan.sessionId !== "string"
+      typeof plan.sessionId !== "string" ||
+      (plan.databaseIdentity !== undefined && typeof plan.databaseIdentity !== "string")
     ) {
       return undefined;
     }
     parsed.push({
+      ...(typeof plan.databaseIdentity === "string"
+        ? { databaseIdentity: plan.databaseIdentity }
+        : {}),
       agentId: plan.agentId,
       archiveDirectory: plan.archiveDirectory,
       databasePath: plan.databasePath,
@@ -374,6 +380,12 @@ export function publishTranscriptArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) => {
+        if (
+          plan.databaseIdentity !== undefined &&
+          readOpenClawAgentDatabaseIdentity(database).identity !== plan.databaseIdentity
+        ) {
+          throw new Error("SQLite archive publication database was replaced");
+        }
         const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
         return executeSqliteQuerySync(
           database.db,
@@ -454,7 +466,23 @@ async function runArchiveSession(
       throw new Error("SQLite archive Worker received an invalid operation identity");
     }
     let response: SqliteArchiveSessionResponse;
-    if (request.operation === "materialize") {
+    if (request.operation === "pending") {
+      response = {
+        type: "pending",
+        operationId,
+        settled: true,
+        results: request.plans.map((plan) => {
+          const opened = withFreshOpenClawAgentDatabaseReadOnly(
+            (database) =>
+              runSqliteDeferredTransactionSync(database.db, () =>
+                hasPendingSessionTranscriptArchives(database),
+              ),
+            { agentId: plan.agentId, path: plan.databasePath, env },
+          );
+          return opened.found && opened.value;
+        }),
+      };
+    } else if (request.operation === "materialize") {
       const plans = parseWorkerPlans(request);
       if (!plans) {
         throw new Error("SQLite transcript archive worker requires valid materialization data");

@@ -22,12 +22,12 @@ export {
 // Handoff admission uses the serving runtime; terminal writes load the installed runtime afresh.
 export {
   adoptUpdateRun,
-  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunDiagnostic,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
+export { finishDaemonUpdateRun as finishUpdateRun } from "./daemon-cli/update-run.js";
 
 export {
   createManagedUpdateRequesterAuthority,

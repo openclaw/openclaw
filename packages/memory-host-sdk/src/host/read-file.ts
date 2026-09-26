@@ -30,19 +30,6 @@ function memoryPathNotAllowed(): Error {
   });
 }
 
-/** Return true when a file vanished after path validation but before content read. */
-function isFileDisappearedDuringReadError(err: unknown): boolean {
-  return (
-    isFileMissingError(err) ||
-    Boolean(
-      err &&
-      typeof err === "object" &&
-      "code" in err &&
-      (err as { code?: unknown }).code === "path-mismatch",
-    )
-  );
-}
-
 /** Read a validated memory markdown file from workspace or configured extra paths. */
 export async function readMemoryFile(params: {
   workspaceDir: string;
@@ -99,7 +86,7 @@ export async function readMemoryFile(params: {
         throw new Error("path must be a regular file", { cause: err });
       }
       // Missing leaves return not_found; non-directory extra-path parents are not authorized.
-      if (code !== "ENOTDIR" && isFileDisappearedDuringReadError(err)) {
+      if (code !== "ENOTDIR" && (isFileMissingError(err) || code === "path-mismatch")) {
         return notFound();
       }
       throw err;

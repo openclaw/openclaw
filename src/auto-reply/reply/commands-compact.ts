@@ -190,6 +190,8 @@ export async function handleCompactCommand(
   if (unauthorized) {
     return unauthorized;
   }
+  const operatorAuthority = params.opts?.operatorAuthority;
+  operatorAuthority?.assertCurrent();
   const targetSessionEntry = params.commandInvocationSignal
     ? params.compactionSessionEntry
     : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
@@ -239,6 +241,7 @@ export async function handleCompactCommand(
   let expectedSession: InternalSessionEntry = targetSessionEntry;
   let compactionAccepted = false;
   const assertOwnerBeforeAcceptance = () => {
+    operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
       assertOwnerCurrent?.();
     }
@@ -307,6 +310,15 @@ export async function handleCompactCommand(
   });
   const replyOperation = params.opts?.replyOperation;
   replyOperation?.setPhase("preflight_compacting");
+  const assertActive = () => {
+    assertOwnerBeforeAcceptance();
+    params.opts?.abortSignal?.throwIfAborted();
+    params.commandInvocationSignal?.throwIfAborted();
+    const current = resolveCurrentEntry();
+    if (!current || current.activeWriterRunId !== expectedSession.activeWriterRunId) {
+      throw new Error("command session changed");
+    }
+  };
   const compaction = runtime.compactEmbeddedAgentSession(
     {
       abortSignal: params.opts?.abortSignal,
@@ -369,15 +381,8 @@ export async function handleCompactCommand(
       }),
     },
     {
-      assertActive: () => {
-        assertOwnerBeforeAcceptance();
-        params.opts?.abortSignal?.throwIfAborted();
-        params.commandInvocationSignal?.throwIfAborted();
-        const current = resolveCurrentEntry();
-        if (!current || current.activeWriterRunId !== expectedSession.activeWriterRunId) {
-          throw new Error("command session changed");
-        }
-      },
+      assertActive,
+      sourceAuthority: { assertActive, operatorAuthority },
       onCommitted: (accepted) => {
         compactionAccepted = true;
         // Update the expectation before identity observers run, not from public result metadata.

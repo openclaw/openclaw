@@ -12,6 +12,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -87,6 +88,19 @@ export async function persistChatDirectiveSessionEntry(params: {
   );
 }
 
+export function readChatDirectiveConfig(
+  state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey" | "storePath">,
+): OpenClawConfig {
+  return {
+    ...state.config,
+    session: {
+      ...(state.config.session as Record<string, unknown> | undefined),
+      mainKey: state.mainSessionKey,
+      store: state.storePath,
+    },
+  };
+}
+
 export function createChatDirectiveSuiteResources() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
@@ -121,13 +135,7 @@ export function createChatDirectiveSuiteResources() {
       const entry = persistedEntry
         ? { ...persistedEntry, sessionFile: state.transcriptPath }
         : undefined;
-      const cfg = {
-        ...state.config,
-        session: {
-          ...(state.config.session as Record<string, unknown> | undefined),
-          mainKey: state.mainSessionKey,
-        },
-      };
+      const cfg = readChatDirectiveConfig(state);
       let captured: CapturedSessionEntryReadSource | undefined;
       loadExactSessionEntryCandidates({
         readSource: { agentId: "main", path: state.storePath },

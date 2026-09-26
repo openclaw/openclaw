@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/value";
 import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import { UserChannelIdentitySchema } from "../../packages/gateway-protocol/src/schema/users.js";
+import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 
@@ -66,6 +67,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         input.command.type === "mcpOAuth.countPrincipals") &&
         typeof input.command.input === "string") ||
       isPluginBlobReadCommand(input.command) ||
+      isChannelIngressReadCommand(input.command) ||
       (input.command.type === "conversationBindings.inspect" &&
         isRecord(input.command.conversation) &&
         typeof input.command.conversation.channel === "string" &&
@@ -73,6 +75,12 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.conversation.conversationId === "string" &&
         (input.command.conversation.parentConversationId === undefined ||
           typeof input.command.conversation.parentConversationId === "string")) ||
+      (input.command.type === "cron.activeReceiptOwners" &&
+        typeof input.command.agentId === "string") ||
+      (input.command.type === "cron.jobNames" &&
+        (input.command.storePath === undefined || typeof input.command.storePath === "string") &&
+        Array.isArray(input.command.jobIds) &&
+        input.command.jobIds.every((id) => typeof id === "string")) ||
       (input.command.type === "cron.observeRunRecovery" &&
         typeof input.command.storeKey === "string" &&
         Array.isArray(input.command.proposals) &&
@@ -121,6 +129,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
         )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
+      (input.command.type === "agentDatabaseDeletion.snapshot" &&
+        (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
+      (input.command.type === "agentDeletionJournal.status" &&
+        typeof input.command.agentId === "string") ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||
       (input.command.type === "workerEnvironments.snapshot" &&
@@ -161,7 +173,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Array.isArray(input.command.profileIds) &&
         input.command.profileIds.every((profileId) => typeof profileId === "string")) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
-        Check(UserChannelIdentitySchema, input.command.identity)) ||
+        (Check(UserChannelIdentitySchema, input.command.identity) ||
+          (isRecord(input.command.identity) &&
+            typeof input.command.identity.authorizationId === "string" &&
+            isRecord(input.command.identity.policy)))) ||
       (input.command.type === "userProfiles.email.resolve" &&
         typeof input.command.email === "string") ||
       (input.command.type === "audit.run.inspect" &&
@@ -194,6 +209,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "fleet.list" ||
       (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
       input.command.type === "nodeHost.config" ||
+      input.command.type === "operator.channelPolicy" ||
       (input.command.type === "onboardingRecommendations.read" &&
         typeof input.command.configKey === "string") ||
       input.command.type === "sandboxRegistry.list" ||

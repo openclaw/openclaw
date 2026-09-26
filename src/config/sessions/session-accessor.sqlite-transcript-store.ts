@@ -262,10 +262,9 @@ export function scheduleTranscriptProjectionReconcile(
     return;
   }
   // Dirty state is durable: a missed post-commit kick is recovered by startup/search reconciliation.
-  deferOpenClawAgentPostCommitPublication(database, () =>
+  deferOpenClawAgentPostCommitPublication(database, (databaseOptions) =>
     startSessionTranscriptIndexReconcile({
-      agentId: database.agentId,
-      path: database.path,
+      ...databaseOptions,
       preferredSessionId: sessionId,
     }),
   );

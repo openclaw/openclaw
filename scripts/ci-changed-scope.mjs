@@ -3,6 +3,11 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
+import {
+  NATIVE_COOWNED_GENERATED_I18N_RE,
+  NATIVE_HARD_GENERATED_I18N_RE,
+  NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE,
+} from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
@@ -85,7 +90,7 @@ const MACOS_NATIVE_RE =
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.(?:mjs|py)))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -119,7 +124,7 @@ const WINDOWS_SCOPE_RE =
 const WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE =
   /^src\/infra\/advertised-lan-host(?:\.windows)?(?:\.test)?\.ts$/;
 const WINDOWS_SECRETREF_SCOPE_RE =
-  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:fs-safe|fs-safe-defaults|permissions)\.ts|src\/secrets\/(?:resolve|resolve-errors)\.ts|src\/security\/audit-fs\.ts)$/;
+  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:boundary-file-read|fs-safe)\.ts|src\/secrets\/(?:resolve|resolve-errors)\.ts|src\/security\/audit-fs\.ts)$/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
@@ -164,15 +169,6 @@ const CHROMIUM_UI_TEST_SCOPE_RE =
   /^(ui\/|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:shared\.config\.ts|ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-timings(?:-schema)?|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-locales))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
-// Android base resources are co-owned: source PRs edit their English content,
-// while the generator rewrites managed sections. Treat them as generated only
-// alongside a hard-generated artifact so neither ownership path blocks the other.
-const NATIVE_COOWNED_GENERATED_I18N_RE =
-  /^apps\/android\/app\/src\/main\/res\/values\/(?:assistant|strings)\.xml$/;
-const NATIVE_HARD_GENERATED_I18N_RE =
-  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/i18n\/NativeStringResources\.kt|apps\/android\/app\/src\/main\/res\/values-[^/]+\/(?:assistant|strings)\.xml|apps\/android\/app\/src\/thirdParty\/res\/values-[^/]+\/accessibility_strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings|apps\/ios\/(?:Sources|WatchApp|ShareExtension|ActivityWidget)\/[^/]+\.lproj\/InfoPlist\.strings)$/;
-const NATIVE_CANONICAL_V2_MIGRATION_GENERATED_RE =
-  /^(?:apps\/\.i18n\/native\/[^/]+\.json|apps\/android\/app\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml|apps\/ios\/Resources\/Localizable\.xcstrings|apps\/macos\/Sources\/OpenClaw\/Resources\/Localizable\.xcstrings)$/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
@@ -315,7 +311,7 @@ export function detectChangedScope(changedPaths) {
       WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path) ||
       WINDOWS_PROCESS_IDENTITY_SCOPE_RE.test(path) ||
-      /^scripts\/lib\/ci-windows-test-plan\.mts$|^test\/scripts\/ci-windows-test-plan\.test\.ts$/u.test(
+      /^scripts\/lib\/(?:ci-windows-test-plan|vitest-build-prerequisites)\.mts$|^test\/scripts\/ci-windows-test-plan\.test\.ts$/u.test(
         path,
       ) ||
       (!facts.isTestOnly &&

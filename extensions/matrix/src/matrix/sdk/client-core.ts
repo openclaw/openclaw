@@ -425,10 +425,11 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return uploaded.content_uri;
   }
 
-  async getEvent(roomId: string, eventId: string): Promise<Record<string, unknown>> {
-    const rawEvent = (await this.client.fetchRoomEvent(roomId, eventId)) as Record<string, unknown>;
+  async getEvent(roomId: string, eventId: string): Promise<MatrixRawEvent> {
+    const rawEvent = await this.client.fetchRoomEvent(roomId, eventId);
     if (rawEvent.type !== "m.room.encrypted") {
-      return rawEvent;
+      // SAFETY: This endpoint returns a complete room event despite the SDK Partial<IEvent> type.
+      return rawEvent as MatrixRawEvent;
     }
 
     const mapper = this.client.getEventMapper();

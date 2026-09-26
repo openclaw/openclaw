@@ -236,7 +236,10 @@ export type PreparedModelCatalogInventory = {
   key: string;
   pluginFingerprint: string;
   nativeSource: string;
-  providers: ReadonlyMap<string, { source: string; credentials: string; expiresAt?: number }>;
+  providers: ReadonlyMap<
+    string,
+    { source: string; credentials: string; expiresAt?: number; legacyRows?: ReadonlySet<string> }
+  >;
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 

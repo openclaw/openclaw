@@ -21,6 +21,7 @@ import type {
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { SqliteTrajectoryRuntimeAppend } from "../trajectory/runtime-store.sqlite.js";
+import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
@@ -44,6 +45,7 @@ export type AgentDatabaseExecutionOpen = {
   stateDatabasePath: string;
   environment: SqliteWorkerStateContext["environment"];
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
+  /** Captured before a creating request yields; absence is an identity too. */
   creatingIdentity?: DatabasePathIdentity;
 };
 
@@ -65,6 +67,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
     output: SessionTranscriptInitializationPublication;
   };
   "database.prepareWrite": { input: undefined; output: void };
+  "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit;
     output: SessionEntryReplacementCommitted;
@@ -90,7 +93,9 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
 /** A request owner composes its retained admission with the native owner's validation. */
 export type AgentDatabaseRequestExecutionSource = {
   assertCurrent(): void;
+  onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
+    attachment: { kind: "agent-execution"; startupJournal: boolean };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;
     assertCurrent(): void;

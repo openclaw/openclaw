@@ -116,6 +116,7 @@ import {
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
@@ -724,20 +725,14 @@ export async function performGatewaySessionReset(params: {
         : undefined;
     const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
     if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
-      };
+      return invalidSessionRequest(`Unknown agent id: ${requestedAgentId}`);
     }
     if (
       explicitAgentId &&
       parsedKey?.agentId &&
       normalizeAgentId(parsedKey.agentId) !== explicitAgentId
     ) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
+      return invalidSessionRequest("session key agent does not match agentId");
     }
     const target = resolveGatewaySessionStoreTarget({
       cfg,
@@ -810,18 +805,12 @@ export async function performGatewaySessionReset(params: {
     initialResetEntry,
   );
   if (missingHarnessSessionError) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
-    };
+    return invalidSessionRequest(missingHarnessSessionError);
   }
   // Reject before interrupting admitted work or firing reset hooks. The model lock is
   // session-id scoped, so rotating first would silently detach native harness ownership.
   if (isModelSelectionLocked(initialResetEntry)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
-    };
+    return invalidSessionRequest(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const workerPlacementContext =
     params.workerPlacementContext ??
@@ -860,10 +849,7 @@ export async function performGatewaySessionReset(params: {
     sessionId: normalizeOptionalString(initialResetEntry?.sessionId),
   });
   if (initialPlacementError) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementError.message),
-    };
+    return invalidSessionRequest(initialPlacementError.message);
   }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
@@ -1027,10 +1013,7 @@ export async function performGatewaySessionReset(params: {
         sessionId: normalizeOptionalString(entry?.sessionId),
       });
       if (placementRetirementError) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, placementRetirementError.message),
-        };
+        return invalidSessionRequest(placementRetirementError.message);
       }
       if (entry?.worktree?.id) {
         const record = managedWorktrees.findLiveById(entry.worktree.id);
@@ -1170,10 +1153,7 @@ export async function performGatewaySessionReset(params: {
 
       if (incognito) {
         if (!entry) {
-          return {
-            ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
-          };
+          return invalidSessionRequest(`unknown session: ${params.key}`);
         }
         await emitGatewayBeforeResetPluginHook({
           cfg,

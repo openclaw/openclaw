@@ -320,6 +320,11 @@ vi.mock("../../infra/update-install-status.js", () => ({
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
+  getUpdateEffectiveChannel: async () => "stable",
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateScheduleMock(),
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 

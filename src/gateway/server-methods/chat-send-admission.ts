@@ -13,6 +13,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveActiveReplyRunOwnerForSignal } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -28,7 +29,6 @@ import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import {
-  hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";

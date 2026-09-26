@@ -12,11 +12,11 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
 import { getSlackRuntime } from "../runtime.js";
 import {
   allowListMatches,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   resolveSlackUserAllowListForTeam,
 } from "./allow-list.js";
@@ -119,7 +119,7 @@ async function fetchSlackChannelMemberIds(
         limit: 999,
         ...(cursor ? { cursor } : {}),
       }),
-    collectPageItems: (response) => normalizeAllowListLower(response.members),
+    collectPageItems: (response) => normalizeStringEntriesLower(response.members),
   });
   return new Set(members);
 }
@@ -197,7 +197,7 @@ export async function authorizeSlackBotRoomMessage(params: {
   allowFromLower: string[];
   eventScope?: SlackEventScope;
 }): Promise<boolean> {
-  const channelUserAllowList = normalizeAllowListLower(params.channelUsers).filter(
+  const channelUserAllowList = normalizeStringEntriesLower(params.channelUsers).filter(
     (entry) => entry !== "*",
   );
   if (
@@ -277,7 +277,7 @@ export async function resolveSlackCommandIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   // MPIM ingress is group-shaped, but its sender policy is DM-owned. Callers
   // pass configured allowFrom without pairing-store approvals for this path.
   const groupAllowFrom = isGroupDm ? ownerAllowFrom : channelUsersConfigured ? channelUsers : [];
@@ -342,7 +342,7 @@ async function decideSlackSystemIngress(params: {
     teamId,
   });
   const channelUsersConfigured =
-    !isDirectMessage && !isGroupDm && normalizeAllowListLower(params.channelUsers).length > 0;
+    !isDirectMessage && !isGroupDm && normalizeStringEntriesLower(params.channelUsers).length > 0;
   const ownerAllowFrom =
     params.interactiveEvent && channelUsersConfigured
       ? ownerAllowFromLower.filter((entry) => entry !== "*")

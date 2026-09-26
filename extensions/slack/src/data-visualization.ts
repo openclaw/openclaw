@@ -216,30 +216,21 @@ function parseSlackDataVisualizationBlock(
   return normalizedBlock?.type === "chart" ? normalizedBlock : undefined;
 }
 
-/** Extract a deterministic accessible summary from a native Slack chart block. */
-export function renderSlackDataVisualizationFallbackText(value: unknown): string | undefined {
+/** Extract an accessible summary, escaping mrkdwn control tokens when requested. */
+export function renderSlackDataVisualizationFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
   const block = asOptionalRecord(value);
   if (block?.type !== "data_visualization") {
     return undefined;
   }
   const parsed = parseSlackDataVisualizationBlock(block);
   if (parsed) {
-    return renderMessagePresentationChartFallbackText(parsed);
+    return mrkdwnSafe
+      ? renderSlackMessagePresentationChartFallbackText(parsed)
+      : renderMessagePresentationChartFallbackText(parsed);
   }
-  return typeof block.title === "string" && block.title.trim() ? block.title.trim() : undefined;
-}
-
-/** Render a native chart as mrkdwn without activating raw data control tokens. */
-export function renderSlackDataVisualizationMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asOptionalRecord(value);
-  if (block?.type !== "data_visualization") {
-    return undefined;
-  }
-  const parsed = parseSlackDataVisualizationBlock(block);
-  if (parsed) {
-    return renderSlackMessagePresentationChartFallbackText(parsed);
-  }
-  return typeof block.title === "string" && block.title.trim()
-    ? escapeSlackMrkdwn(block.title.trim())
-    : undefined;
+  const title = typeof block.title === "string" ? block.title.trim() : "";
+  return title ? (mrkdwnSafe ? escapeSlackMrkdwn(title) : title) : undefined;
 }

@@ -332,6 +332,7 @@ In the Android app:
 
 - The app keeps its Gateway connection alive via a **foreground service** (persistent notification).
 - During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
+- After pairing, choose the phone permissions to enable. If the Gateway requires node approval, review the requested capabilities and tap **Approve access and continue** when offered. Setup finishes after the app verifies approval. Otherwise, follow the displayed Gateway approval commands, then tap **I have approved**.
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
@@ -415,15 +416,30 @@ openclaw gateway call node.list --params "{}"
 The draft has its own full-width row above the attachment and voice/send controls,
 so larger text and narrow screens do not squeeze it between buttons. The empty
 hint stays on one line; drafts show up to six lines and scroll when space is limited.
-The composer has narrower side gutters than the transcript, with readable draft
-text and 48dp action targets. Typography still follows system text scaling.
-Model and thinking controls sit together, opposite the microphone and primary
-action. The model name stays on one line and follows system text scaling;
-long names use a middle ellipsis to keep both ends visible. The full name remains
-in the model sheet and accessibility text. The thinking dial opens a menu without
-expanding the composer.
-Context usage is available in the model sheet and the model control's
-accessibility value, leaving more room for the model name in the toolbar.
+The composer has narrower side gutters than the transcript. **+**, model, and
+reasoning stay together on the left; the context ring, microphone, and Talk/send
+stay on the right in one row. Controls remain 48dp tall; very short views use
+narrower icon buttons to make room for **Details** while retaining an editable line.
+The placeholder and typed text share the same alignment.
+
+Open **+** for a compact icon list with Camera, Gallery, Files, Location, and
+Permissions. The Permissions row shows the current access mode. The
+context ring remains directly accessible on narrow screens and opens context
+usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
+permission to change session settings. A reported model-call total remains visible
+when no cost breakdown is available. Missing usage is shown as unknown.
+Tap the model name to open a compact menu above the composer, search by model or
+provider, and expand provider groups. The picker has no settings buttons. The Gateway's
+configured default is labeled on its model row. Selecting a named model pins that
+model to the session; **Default model** separately resets the override to follow the
+Gateway's current default.
+Pinned and recent models remain available. Long model names use a middle
+ellipsis, with the full name available in the picker. The effort dial opens its
+slider and Fast mode without expanding the composer. Dragging the slider previews
+the effort on the dial; releasing it applies the selection.
+
+With an empty draft and no active run, the trailing button starts Talk. Entering
+text changes it to Send; an active run with no draft shows Stop.
 During Talk, the live waveform replaces the microphone and remains tappable to
 end Talk. If a run is also active, a separate, softly tinted Stop button stays at
 the trailing edge to abort that run.
@@ -468,7 +484,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
-- To start continuous **Talk**, long-press the microphone and choose **Start Talk**.
+- To start continuous **Talk**, tap the trailing Talk button with an empty draft
+  and no active run. The microphone menu contains only dictation and voice notes.
   Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
 - Your selected agent stays bound to Talk and the main chat when the same Gateway
   reconnects, including while its agent list refreshes. Removing that agent falls

@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNativeSessionBindingLifecycle } from "./binding-lifecycle.js";
 import {
   bindingTestOptions,
   createBindingTestState,
   prepareBindingTestLease,
 } from "./binding.test-support.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("native session binding lifecycle", () => {
   it("deletes only the requested owner and restores it on transaction rollback", async () => {
@@ -83,12 +87,18 @@ describe("native session binding lifecycle", () => {
 
   it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
     const { state, values } = createBindingTestState();
-    const originalUpdate = state.update!.bind(state);
+    const withCurrent = state.withCurrent.bind(state);
     let startArchive: (() => void) | undefined;
-    state.update = (...args) => {
-      startArchive?.();
-      startArchive = undefined;
-      return originalUpdate(...args);
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          startArchive?.();
+          startArchive = undefined;
+          return await store.compareAndApply(...args);
+        },
+      };
     };
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
     let releaseArchive!: () => void;
@@ -131,5 +141,57 @@ describe("native session binding lifecycle", () => {
     await expect(archive).resolves.toBeUndefined();
     expect(values.get("first")).toEqual({ value: "updated" });
     expect(values.get("late")).toBeUndefined();
+  });
+
+  it("does not let a queued renewal recreate a committed deletion", async () => {
+    vi.useFakeTimers();
+    const { state, values } = createBindingTestState();
+    values.set("binding", { value: "original" });
+    const withCurrent = state.withCurrent.bind(state);
+    let holdRenewal = false;
+    let renewalPrepared = false;
+    let releaseRenewal!: () => void;
+    const released = new Promise<void>((resolve) => {
+      releaseRenewal = resolve;
+    });
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          if (holdRenewal) {
+            holdRenewal = false;
+            renewalPrepared = true;
+            await released;
+          }
+          return await store.compareAndApply(...args);
+        },
+      };
+    };
+    const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
+    try {
+      await lifecycle.withDeletion(
+        "binding",
+        {
+          prepareLease: prepareBindingTestLease,
+          assertCurrent() {},
+          assertRecordCurrent() {},
+        },
+        async (_record, mutation) => {
+          try {
+            holdRenewal = true;
+            await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
+            expect(renewalPrepared).toBe(true);
+            mutation.commit();
+            expect(values.has("binding")).toBe(false);
+          } finally {
+            releaseRenewal();
+          }
+        },
+      );
+      expect(values.has("binding")).toBe(false);
+    } finally {
+      releaseRenewal();
+    }
   });
 });

@@ -11,8 +11,9 @@ title: "Integrity, troubleshooting, and recovery"
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
-| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks after an update, unclean close, file replacement, or missing verification record                      |
-| Clean same-version agent reopen             | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
+| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks when neither current runtime proof nor a clean same-version restart receipt is available              |
+| Same-process agent reopen                   | Reuse current file-bound runtime proof without another integrity or quick check; recheck owner, version, schema, and canonical indexes          |
+| Clean same-version agent restart            | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
 | Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |
 | Gateway background verifier                 | Run the full scan about once daily and log results                                                                                              |
 | Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database                                                                                    |
@@ -27,8 +28,9 @@ the existing single shared-state lease owner; independent Gateways must not shar
 mutable agent databases across state directories.
 
 Within a live lifecycle, an admitted owner can still lend its revocable,
-file-bound runtime proof to another handle with a live lease in the same known
-process. This proof does not require the persisted restart receipt. Peer leases
+file-bound runtime proof to another handle when no foreign or unknown process
+holds a writer lease. This includes reopening after the last local lease closes.
+This proof does not require the persisted restart receipt. Peer leases
 with matching process ID and start time do not consume or block publication of
 that receipt; each handle retains its own lease until cleanup finishes.
 Explicit invalidation revokes shared runtime proof as well as durable metadata,
@@ -52,8 +54,9 @@ through its existing admission so later cleanup workers can reuse it without a
 host SQLite open. The host accepts it only for the admitted physical file and
 unchanged validation state; revocation during the open rejects the handoff.
 
-Cached opens, including later opens after startup, queue checks in the existing
-Gateway verifier. Background success is logged; only the full-check lease owner
+Opens borrowing a clean restart receipt queue checks in the existing Gateway
+verifier. Reopens borrowing current runtime proof do not queue another check.
+Background success is logged; only the full-check lease owner
 publishes verification metadata. Confirmed corruption uses the existing quarantine
 path and prevents the next open. Ordinary writes do not invalidate the file identity. Same-inode damage
 introduced after a clean close can therefore be detected after readiness by the
@@ -509,6 +512,13 @@ the underlying database error.
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
+
+Media migration uses the schema admission integrity check first. Healthy agent
+databases do not repeat that full-file scan inside an immediate repair transaction.
+A proven integrity failure still invokes Doctor's preserving index repair before
+retrying admission. Startup diagnostics label schema admission, index repair, and
+quarantine cleanup separately; stored data, schema versions, and update recovery
+semantics are unchanged.
 
 For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
 the supported repair. Doctor requires every `integrity_check` finding to name missing,

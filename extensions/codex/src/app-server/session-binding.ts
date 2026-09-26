@@ -12,6 +12,7 @@ import {
   reclaimNativeSessionGeneration,
   resolveNativeSessionBinding,
   type NativeSessionBindingLeaseOptions,
+  type NativeSessionBindingStateStore,
   type NativeSessionGenerationAdoptionResult,
   type NativeSessionGenerationOperations,
   type NativeSessionGenerationReclaimPlan,
@@ -150,11 +151,7 @@ type CodexAppServerBindingMutation =
       threadId?: string;
     };
 
-export type CodexSessionGenerationAdoptionResult = NativeSessionGenerationAdoptionResult;
-
 export type CodexSessionGenerationRetirementResult = "applied" | "absent" | "conflict";
-
-export type CodexSessionGenerationReclaimPlan = NativeSessionGenerationReclaimPlan;
 
 export function hashCodexAppServerBindingFingerprint(canonical: string): string {
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
@@ -255,10 +252,8 @@ export function createStoredCodexAppServerBinding(
     : undefined;
 }
 
-type BindingStateStore = Pick<
-  PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-  "deleteIf" | "entries" | "lookup" | "lookupMany" | "registerIfAbsent" | "update"
->;
+export type CodexBindingStateStore = NativeSessionBindingStateStore<StoredCodexAppServerBinding> &
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries" | "lookupMany">;
 
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
   return new Error(`Lost Codex binding lease: ${key}`, cause === undefined ? undefined : { cause });
@@ -287,12 +282,12 @@ export type CodexAppServerBindingStore = {
   ): Promise<boolean>;
   prepareSessionGenerationReclaim(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
-  ): Promise<CodexSessionGenerationReclaimPlan>;
+  ): Promise<NativeSessionGenerationReclaimPlan>;
   adoptSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
     assertCurrent?: () => void,
-  ): Promise<CodexSessionGenerationAdoptionResult>;
+  ): Promise<NativeSessionGenerationAdoptionResult>;
   resetSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
   ): Promise<CodexSessionGenerationRetirementResult>;
@@ -366,7 +361,7 @@ export async function resolveCodexSessionBinding(params: {
 
 /** Creates the single binding facade owned by the Codex plugin runtime. */
 export function createCodexAppServerBindingStore(
-  state: BindingStateStore,
+  state: CodexBindingStateStore,
 ): CodexAppServerBindingStore {
   const lifecycle = createNativeSessionBindingLifecycle<StoredCodexAppServerBinding>(state, {
     readRecord: readStoredCodexAppServerBinding,

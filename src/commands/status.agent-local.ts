@@ -48,7 +48,7 @@ export async function collectStatusLocalSnapshot(cfg: OpenClawConfig) {
       ),
     );
   }
-  const agentList = listGatewayAgentsBasic(cfg);
+  const agentList = await listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
   const sessionStores = await measureCliCommandStartup(

@@ -117,6 +117,15 @@ authorizes concurrent repair or discards recovery backups. Active migration
 writes, unreadable state, incomplete migrations, and unconfirmed subprocess
 cleanup retain their failure and recovery guidance.
 
+On Windows, `windows-task-inspection-failed` means OpenClaw could not query
+Task Scheduler to verify service absence. Check Task Scheduler availability and
+the service account's query permissions, then run `openclaw gateway status --deep`
+before retrying. Install failures and update reports include the safe failure
+category and, when available, a numeric errno, hexadecimal HRESULT, exit code, or timeout
+budget. These facts appear before the recovery guidance so bounded reports retain
+them. Preserve those facts when reporting the problem; task definitions and raw
+native output are excluded.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -330,6 +339,36 @@ cannot be restored; healthy plugins retain their available recovery snapshots.
 Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+### Database snapshots under continuous writes
+
+Older updaters can report that a database "did not stabilize after 10" attempts
+while the Gateway keeps writing. Current update schema inspection and rehearsal
+use a consistent SQLite online backup. Rehearsal progress records copied pages,
+bytes, and elapsed time in the update ledger.
+
+This cannot retrofit the installed 2026.9.5 driver. For that hop, stop the service
+through its service owner, run `openclaw update` from a separate terminal, then
+start the service. On a Linux user service, stop it with
+`systemctl --user stop openclaw-gateway.service`. If service shutdown itself
+hangs, treat that as a separate shutdown problem; do not start a second updater.
+
+### Snapshot parse errors from 2026.9.5 and 2026.9.6
+
+An update started from 2026.9.5 or 2026.9.6 can stop with a message such as
+`Update state snapshot failed (exit): Assigning to rvalue (308:4)`. The installed
+updater could not parse valid JavaScript that assigns to `import.meta.url` in a
+plugin's dependency, for example `@jsquash/png` or `@jsquash/avif`. The fix is in
+the target release, but the installed updater runs this check before the target
+starts. Disable the plugin for this one update:
+
+```bash
+openclaw plugins disable <id>
+openclaw update
+openclaw plugins enable <id>
+```
+
+Updates from the fixed release onward inspect these plugins normally.
 
 ### Large model-catalog temporary directories
 

@@ -27,8 +27,7 @@ jobs:
         github.event.workflow_run.head_branch == 'main' &&
         ((github.event.workflow_run.event == 'push' && vars.OPENCLAW_CI_ON_PUSH == 'true' &&
           github.event.workflow_run.actor.login != 'github-actions[bot]') ||
-         (github.event.workflow_run.event == 'workflow_dispatch' &&
-          startsWith(github.event.workflow_run.display_title, 'CI hourly-main-')))))
+         github.event.workflow_run.event == 'schedule')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -50,8 +49,7 @@ jobs:
             });
             const repository = `${context.repo.owner}/${context.repo.repo}`;
             const push = run.event === "push" && run.actor?.login !== "github-actions[bot]";
-            const hourly = run.event === "workflow_dispatch" &&
-              /^CI hourly-main-[1-9][0-9]*-[1-9][0-9]*$/.test(run.display_title);
+            const hourly = run.event === "schedule";
             if (run.id !== expected.id || !run.actor?.login ||
                 run.repository.full_name !== repository || run.head_repository.full_name !== repository ||
                 run.path !== ".github/workflows/ci.yml" || run.head_branch !== "main" ||
@@ -121,7 +119,7 @@ jobs:
           set -euo pipefail
 
           remote_main_file="$(mktemp "$RUNNER_TEMP/docs-agent-main.XXXXXX")"
-          trap 'rm -f -- "$remote_main_file" "$RUNNER_TEMP/docs-agent-runs.json"' EXIT
+          trap 'rm -f -- "$remote_main_file" "$RUNNER_TEMP/docs-agent-runs.json" "$RUNNER_TEMP/docs-agent-history.json"' EXIT
           python3 -I -S "$CI_GIT_OWNER" --policy - "$remote_main_file" <<'PYTHON'
           import os
           import subprocess
@@ -176,6 +174,32 @@ jobs:
             -f event=workflow_run \
             -f per_page=100 > "$runs_json"
 
+          # Workflow success includes denied verification and skipped writer gates.
+          # Read the exact attempt's writer/agent evidence before using its history.
+          history_json="$RUNNER_TEMP/docs-agent-history.json"
+          jq -c --argjson current_run_id "$GITHUB_RUN_ID" \
+            '.workflow_runs[]
+              | select(.id != $current_run_id)
+              | select(.conclusion != "cancelled" and .conclusion != "skipped")' "$runs_json" |
+            while IFS= read -r run; do
+              run_id="$(jq -r '.id' <<< "$run")"
+              run_attempt="$(jq -r '.run_attempt' <<< "$run")"
+              jobs="$(gh api --paginate --slurp \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/attempts/${run_attempt}/jobs?per_page=100")"
+              jq -n --argjson run "$run" --argjson pages "$jobs" '
+                [$pages[].jobs[] | select(.name == "update-docs")] as $writers
+                | select($writers | length == 1)
+                | $writers[0] as $writer
+                | [$writer.steps[]? | select(.name == "Run Codex docs agent")] as $reviews
+                | $run + {
+                    admitted: ($writer.status == "queued" or $writer.status == "in_progress" or
+                      any($reviews[]; .status == "completed" and .conclusion != "skipped")),
+                    reviewed: ($writer.conclusion == "success" and ($reviews | length == 1) and
+                      $reviews[0].status == "completed" and $reviews[0].conclusion == "success")
+                  }'
+            done | jq -s '{workflow_runs: .}' > "$history_json"
+          runs_json="$history_json"
+
           one_hour_ago="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
           recent_runs="$(
             jq -r \
@@ -184,7 +208,7 @@ jobs:
               '.workflow_runs[]
                 | select(.id != $current_run_id)
                 | select(.created_at >= $one_hour_ago)
-                | select(.conclusion != "cancelled" and .conclusion != "skipped")
+                | select(.admitted)
                 | [.id, .status, (.conclusion // ""), .created_at, .head_sha]
                 | @tsv' "$runs_json"
           )"
@@ -202,7 +226,7 @@ jobs:
               --arg remote_main "$remote_main" \
               '.workflow_runs[]
                 | select(.id != $current_run_id)
-                | select(.conclusion != "cancelled" and .conclusion != "skipped")
+                | select(.reviewed)
                 | .head_sha
                 | select(. != null and . != "")
                 | select(. != $remote_main)
@@ -254,7 +278,7 @@ jobs:
 
       - name: Run Codex docs agent
         if: steps.gate.outputs.run_agent == 'true'
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
         env:
           DOCS_AGENT_BASE_SHA: ${{ steps.gate.outputs.review_base_sha }}
           DOCS_AGENT_HEAD_SHA: ${{ steps.gate.outputs.review_head_sha }}
@@ -265,7 +289,6 @@ jobs:
           effort: medium
           sandbox: workspace-write
           safety-strategy: drop-sudo
-          codex-args: '["--full-auto"]'
 
       - name: Enforce existing-docs-only patch
         if: steps.gate.outputs.run_agent == 'true'

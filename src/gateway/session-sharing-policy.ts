@@ -14,7 +14,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
-import { AgentDatabaseRegistryChangedDuringDiscoveryError } from "../state/openclaw-agent-db-registry-listing.js";
+import { AgentDatabaseRegistryChangedError } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -152,7 +152,7 @@ export async function withSessionSharingTarget<T>(
     } catch (error) {
       if (
         !(error instanceof GatewaySessionFactsChangedDuringReadError) &&
-        !(error instanceof AgentDatabaseRegistryChangedDuringDiscoveryError)
+        !(error instanceof AgentDatabaseRegistryChangedError)
       ) {
         throw error;
       }

@@ -34,8 +34,7 @@ export function resolveConfiguredHttpTimeoutMs(creds: FeishuClientTimeoutConfig)
     }
   }
 
-  const fromConfig = creds.config?.httpTimeoutMs;
-  const timeout = fromConfig;
+  const timeout = creds.config?.httpTimeoutMs;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     return FEISHU_HTTP_TIMEOUT_MS;
   }

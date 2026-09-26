@@ -1,5 +1,5 @@
 /** Gateway-backed ACP session snapshots, controls, metadata, and usage updates. */
-import type { SessionInfo } from "@agentclientprotocol/sdk";
+import type { SessionInfo, SessionUpdate } from "@agentclientprotocol/sdk";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -84,58 +84,39 @@ export class AcpTranslatorSessionState {
     sessionSnapshot: SessionSnapshot,
     options: { includeControls: boolean; record: boolean; runId?: string },
   ): Promise<void> {
-    if (options.includeControls) {
-      await this.sessionUpdates.emit({
+    const emit = (update: SessionUpdate) =>
+      this.sessionUpdates.emit({
         sessionId: session.sessionId,
         sessionKey: session.sessionKey,
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
-        update: {
-          sessionUpdate: "current_mode_update",
-          currentModeId: sessionSnapshot.modes.currentModeId,
-        },
+        update,
       });
-      await this.sessionUpdates.emit({
-        sessionId: session.sessionId,
-        sessionKey: session.sessionKey,
-        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
-        runId: options.runId,
-        record: options.record,
-        update: {
-          sessionUpdate: "config_option_update",
-          configOptions: sessionSnapshot.configOptions,
-        },
+    if (options.includeControls) {
+      await emit({
+        sessionUpdate: "current_mode_update",
+        currentModeId: sessionSnapshot.modes.currentModeId,
+      });
+      await emit({
+        sessionUpdate: "config_option_update",
+        configOptions: sessionSnapshot.configOptions,
       });
     }
     if (sessionSnapshot.metadata) {
-      await this.sessionUpdates.emit({
-        sessionId: session.sessionId,
-        sessionKey: session.sessionKey,
-        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
-        runId: options.runId,
-        record: options.record,
-        update: {
-          sessionUpdate: "session_info_update",
-          ...sessionSnapshot.metadata,
-        },
+      await emit({
+        sessionUpdate: "session_info_update",
+        ...sessionSnapshot.metadata,
       });
     }
     if (sessionSnapshot.usage) {
-      await this.sessionUpdates.emit({
-        sessionId: session.sessionId,
-        sessionKey: session.sessionKey,
-        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
-        runId: options.runId,
-        record: options.record,
-        update: {
-          sessionUpdate: "usage_update",
-          used: sessionSnapshot.usage.used,
-          size: sessionSnapshot.usage.size,
-          _meta: {
-            source: "gateway-session-store",
-            approximate: true,
-          },
+      await emit({
+        sessionUpdate: "usage_update",
+        used: sessionSnapshot.usage.used,
+        size: sessionSnapshot.usage.size,
+        _meta: {
+          source: "gateway-session-store",
+          approximate: true,
         },
       });
     }
@@ -214,39 +195,6 @@ export class AcpTranslatorSessionState {
       search: sessionKey,
       includeDerivedTitles: true,
     });
-    const session = result.sessions.find((entry) => entry.key === sessionKey);
-    if (!session) {
-      return undefined;
-    }
-    return {
-      key: session.key,
-      kind: session.kind,
-      channel: session.channel,
-      parentSessionKey: session.parentSessionKey,
-      spawnedBy: session.spawnedBy,
-      spawnDepth: session.spawnDepth,
-      subagentRole: session.subagentRole,
-      subagentControlScope: session.subagentControlScope,
-      spawnedWorkspaceDir: session.spawnedWorkspaceDir,
-      spawnedCwd: session.spawnedCwd,
-      displayName: session.displayName,
-      label: session.label,
-      derivedTitle: session.derivedTitle,
-      updatedAt: session.updatedAt,
-      thinkingLevel: session.thinkingLevel,
-      thinkingLevels: session.thinkingLevels,
-      modelProvider: session.modelProvider,
-      model: session.model,
-      fastMode: session.fastMode,
-      effectiveFastMode: session.effectiveFastMode,
-      verboseLevel: session.verboseLevel,
-      traceLevel: session.traceLevel,
-      reasoningLevel: session.reasoningLevel,
-      responseUsage: session.responseUsage,
-      elevatedLevel: session.elevatedLevel,
-      totalTokens: session.totalTokens,
-      totalTokensFresh: session.totalTokensFresh,
-      contextTokens: session.contextTokens,
-    };
+    return result.sessions.find((entry) => entry.key === sessionKey);
   }
 }

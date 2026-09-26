@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -14,7 +15,6 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
@@ -70,10 +70,6 @@ async function removeDirectoryIfOwned(
   } catch {
     return false;
   }
-}
-
-async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Promise<boolean> {
-  return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
 }
 
 export async function createBackupArchivePublication(
@@ -174,7 +170,7 @@ export async function cleanupBackupArchivePublication(
       retainArchiveForCleanup(plan, receipt);
     }
   }
-  if (await removeStagingDirectoryIfOwned(plan)) {
+  if (await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity)) {
     await syncDirectoryIfSupported(plan.canonicalParentPath).catch(() => undefined);
     return;
   }
@@ -232,7 +228,7 @@ export async function publishPreparedBackupArchive(params: {
       retainArchiveForCleanup(plan, prepared);
       params.log?.(`Backup archiver preserved changed staging file ${prepared.archivePath}.`);
     }
-    if (!(await removeStagingDirectoryIfOwned(plan))) {
+    if (!(await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity))) {
       params.log?.(
         `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
       );
@@ -254,7 +250,7 @@ export async function publishPreparedBackupArchive(params: {
       if (!removePreparedBackupArchive(prepared)) {
         retainArchiveForCleanup(plan, prepared);
       }
-      await removeStagingDirectoryIfOwned(plan);
+      await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
     }
     throw error;
   }

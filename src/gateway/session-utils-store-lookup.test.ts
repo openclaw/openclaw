@@ -578,6 +578,14 @@ describe("retained exact row publications", () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const key = "agent:main:dashboard:incognito-retained";
       const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+      await withGatewaySessionStoreTarget(
+        { cfg, key, includeMembership: true },
+        (target, members, assertCurrent) => {
+          expect(target.store[key]).toBeUndefined();
+          expect(members.get(key)).toEqual([]);
+          expect(assertCurrent).not.toThrow();
+        },
+      );
       await replaceSessionEntry(
         { agentId: "main", sessionKey: key, storePath },
         { sessionId: "incognito-retained", updatedAt: 1, incognito: true },

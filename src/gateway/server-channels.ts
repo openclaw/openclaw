@@ -372,15 +372,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     );
     const channelOverride = channelConfig?.healthMonitor?.enabled;
 
-    if (typeof accountOverride === "boolean") {
-      return accountOverride;
-    }
-
-    if (typeof channelOverride === "boolean") {
-      return channelOverride;
-    }
-
-    return true;
+    return accountOverride ?? (typeof channelOverride === "boolean" ? channelOverride : true);
   };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
@@ -1479,8 +1471,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannels = async () => await startChannelsWithOptions();
-
   const recoverAutostartSuppression = async (): Promise<boolean> => {
     if (
       !autostartSuppression ||
@@ -1660,18 +1650,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return { channels, channelAccounts, reloadingChannels };
   };
 
-  const isManuallyStoppedFlag = (channelId: ChannelId, accountId: string): boolean => {
-    return manuallyStopped.has(restartKey(channelId, accountId));
-  };
-
-  const isAutoRestartScheduled = (channelId: ChannelId, accountId: string): boolean => {
-    return pendingAutoRestarts.has(restartKey(channelId, accountId));
-  };
-
-  const resetRestartAttempts = (channelId: ChannelId, accountId: string): void => {
-    restarts.delete(restartKey(channelId, accountId));
-  };
-
   return {
     getRuntimeSnapshot,
     pauseChannelStarts: (channelIds) =>
@@ -1679,7 +1657,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const plugin = getChannelPlugin(channelId);
         return plugin ? captureChannelSnapshot(plugin) : undefined;
       }),
-    startChannels,
+    startChannels: () => startChannelsWithOptions(),
     startChannel: startChannelInternal,
     stopChannel,
     releaseChannelRouteHandoffs,
@@ -1695,7 +1673,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     isAmbientAutostartSuppressed: (channelId) =>
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
-    isManuallyStopped: isManuallyStoppedFlag,
+    isManuallyStopped: (channelId, accountId) =>
+      manuallyStopped.has(restartKey(channelId, accountId)),
     hasCurrentAccountTask: (channelId, accountId) => {
       const store = channelStores.get(channelId);
       const lifetime = store?.lifetimes.get(accountId);
@@ -1728,8 +1707,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       );
       return matches.length === 1 ? matches[0] : undefined;
     },
-    isAutoRestartScheduled,
-    resetRestartAttempts,
+    isAutoRestartScheduled: (channelId, accountId) =>
+      pendingAutoRestarts.has(restartKey(channelId, accountId)),
+    resetRestartAttempts: (channelId, accountId) => {
+      restarts.delete(restartKey(channelId, accountId));
+    },
     isHealthMonitorEnabled,
   };
 }
