@@ -99,7 +99,11 @@ describe("chat.abort authorization", () => {
     for (const runId of [undefined, "run-1"]) {
       const cancelInferenceForSession = vi.fn(() => ["run-1"]);
       const context = createSingleAbortContext();
-      context.workerEnvironmentService = { cancelInferenceForSession } as never;
+      context.workerEnvironmentService = createWorkerInferenceCancellationService(
+        "main-session",
+        ["run-1"],
+        cancelInferenceForSession,
+      );
       const respond = await invokeAbort({
         context,
         ...(runId ? { runId } : {}),
@@ -874,14 +878,12 @@ describe("chat.abort queued-turn contract", () => {
 
   it("session abort cancels authorized queued turns before active runs", async () => {
     const queuedController = new AbortController();
-    const activeController = new AbortController();
+    const active = createActiveRun("main", {
+      owner: { connId: "conn-owner", deviceId: "dev-owner" },
+    });
+    const activeController = active.controller;
     const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        [
-          "active-1",
-          createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
-        ],
-      ]),
+      chatAbortControllers: new Map([["active-1", active]]),
       chatQueuedTurns: new Map([
         [
           "queued-1",
@@ -895,11 +897,6 @@ describe("chat.abort queued-turn contract", () => {
         ],
       ]),
     });
-    // replace active controller so we can observe abort
-    const active = context.chatAbortControllers.get("active-1");
-    if (active) {
-      (active as { controller: AbortController }).controller = activeController;
-    }
 
     const respond = await invokeAbort({
       context,
