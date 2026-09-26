@@ -110,17 +110,45 @@ count.
   `chat.title` snapshots for held rows with unchanged identity, archive,
   pin, owner, and parent facts and nondecreasing recency. Keyed `sessions.changed`
   and `session.message` publications also carry `ancestorSessions`, an array of
-  refreshed full rows for the affected navigation, control, requester, and swarm
-  ancestors. The projection walks existing parent references up to the roots,
+  full rows for the affected navigation, control, requester, and swarm ancestors,
+  and may carry `ancestorSessionRefs` for unchanged ancestor presentations already
+  delivered on that connection. References never appear inside `ancestorSessions`.
+  The projection walks existing parent references up to the roots,
   deduplicates physical row identities, and stops cycles. Each ancestor passes
   the same per-viewer visibility filter and presentation as `sessions.list`;
   invisible intermediates do not prevent delivery of visible ancestors above them.
-  The array contains at most 64 ancestors. If an ancestor cannot be resolved or the traversal exceeds that bound,
-  the field is omitted so clients retain authoritative refresh behavior. An empty
-  array certifies that there are no visible ancestors. This is an additive
-  protocol-v4 field; it does not change subscription scope or list membership.
-  Clients apply the child and held ancestor rows together, honoring each row's
-  identity and clock. In these complete snapshots, omitted optional row facts
+  The two arrays together contain at most 64 ancestors. If an ancestor cannot be
+  resolved or the traversal exceeds that bound, both fields are omitted so clients
+  retain authoritative refresh behavior. The presence of `ancestorSessions`
+  certifies complete visible ancestor coverage across both arrays; an empty array
+  certifies no visible ancestors only when `ancestorSessionRefs` is also absent or
+  empty. These are additive protocol-v4 fields; they do not change subscription
+  scope or list membership and require no capability negotiation.
+  Full ancestor rows carry an opaque `ancestorRevision`; each reference contains
+  `key`, `revision`, and `snapshotAt`, with `sessionId` and `agentId` when present
+  on the full row. Before adding the revision tag, the Gateway compares the exact
+  connection-specific presented row, excluding only `snapshotAt`. A reference
+  certifies that the presentation identified by `revision` remains unchanged.
+  Clients retain a referenced row only when they still hold that exact admitted
+  presentation with matching identity, then advance its clock without changing
+  its other facts. The Control UI binds the revision to the immutable admitted
+  row only after confirming that its facts match the full presented row. A list
+  replacement or local row change loses that proof, even if its sampling clock
+  happens to match. Missing rows, generation or revision mismatches, and uncertain
+  presentation ownership require the existing authoritative refresh path.
+  The Gateway bounds this per-connection record and sends full rows after first
+  delivery, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
+  session deletion invalidates remembered ancestors.
+  Older web clients ignore the additive reference field. Because `ancestorSessions`
+  contains full rows only, they cannot apply a reference as a partial row and erase
+  held fields. Missing ancestor snapshots cause their existing authoritative
+  `sessions.list` refresh. Bundled same-origin Control UI build admission prevents
+  version skew; custom roots, development UIs, and cross-origin clients can use
+  this correct but slower path. Native Apple and Android clients, the TUI, and
+  the SDK do not reconcile ancestor rows and retain their existing behavior.
+  Clients apply the child and held full ancestor rows together, honoring each row's
+  identity and clock. In full snapshots, omitted optional row facts
   clear previously held values, including child links, swarm summaries, and
   descendant-running flags. Non-null legacy top-level row fields do not fill
   omissions in a complete, viewer-filtered row. Explicit null clearing receipts

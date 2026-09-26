@@ -193,6 +193,8 @@ export {
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
   SessionBranchSchema,
+  SessionAncestorRefSchema,
+  SessionEventAncestorsSchema,
   SessionRowSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
