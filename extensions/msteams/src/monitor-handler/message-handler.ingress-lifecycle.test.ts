@@ -446,7 +446,7 @@ describe("Microsoft Teams drain claim ownership", () => {
         },
       ]) {
         try {
-          await cleanup();
+          await Promise.resolve(cleanup());
         } catch (error) {
           failures.push(error);
         }

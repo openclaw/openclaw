@@ -470,7 +470,7 @@ describe("signal reply session init conflict retry", () => {
         },
       ]) {
         try {
-          await cleanup();
+          await Promise.resolve(cleanup());
         } catch (error) {
           failures.push(error);
         }
