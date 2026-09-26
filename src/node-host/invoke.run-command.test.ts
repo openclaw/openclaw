@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildNodeShellCommand } from "../infra/node-shell.js";
 import * as processExec from "../process/exec.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { runCommand } from "./invoke-run-command.js";
 
 describe("runCommand", () => {
@@ -150,6 +152,86 @@ describe("runCommand", () => {
     );
     expect(result).toMatchObject({ exitCode: undefined, timedOut: false, success: false });
     expect(result.error).toMatch(/ENOENT|not found/i);
+  });
+
+  describe("Windows cmd.exe shell envelope", () => {
+    const shellCommand = 'claude -p "Quel est le rôle du dossier checks ?" --permission-mode plan';
+
+    async function captureLaunch(platform: NodeJS.Platform, argv: string[]) {
+      mockProcessPlatform(platform);
+      const launch = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        stdout: "",
+        stderr: "",
+      });
+      await runCommand(argv, undefined, undefined, undefined);
+      expect(launch).toHaveBeenCalledTimes(1);
+      const [launchedArgv, options] = launch.mock.calls[0] ?? [];
+      return { launchedArgv, options };
+    }
+
+    it("quotes the node shell command once and passes it verbatim", async () => {
+      const { launchedArgv, options } = await captureLaunch(
+        "win32",
+        buildNodeShellCommand(shellCommand, "win32"),
+      );
+      expect(launchedArgv).toEqual(["cmd.exe", "/d", "/s", "/c", `"${shellCommand}"`]);
+      expect(options).toMatchObject({ windowsVerbatimArguments: true });
+    });
+
+    it("recognizes an absolute cmd.exe path regardless of case", async () => {
+      const shell = "C:\\Windows\\System32\\CMD.EXE";
+      const { launchedArgv, options } = await captureLaunch("win32", [
+        shell,
+        "/d",
+        "/s",
+        "/c",
+        shellCommand,
+      ]);
+      expect(launchedArgv).toEqual([shell, "/d", "/s", "/c", `"${shellCommand}"`]);
+      expect(options).toMatchObject({ windowsVerbatimArguments: true });
+    });
+
+    it.each([
+      ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"]],
+      ["six elements", "win32", ["cmd.exe", "/d", "/s", "/c", shellCommand, "extra"]],
+      ["another program", "win32", ["powershell.exe", "/d", "/s", "/c", shellCommand]],
+      ["a bare cmd name", "win32", ["cmd", "/d", "/s", "/c", shellCommand]],
+      ["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"]],
+      ["uppercase switches", "win32", ["cmd.exe", "/D", "/S", "/C", shellCommand]],
+      ["another platform", "linux", ["cmd.exe", "/d", "/s", "/c", shellCommand]],
+    ] as const)("launches %s unchanged", async (_name, platform, argv) => {
+      const { launchedArgv, options } = await captureLaunch(platform, [...argv]);
+      expect(launchedArgv).toEqual(argv);
+      expect(options).not.toHaveProperty("windowsVerbatimArguments");
+    });
+
+    it.runIf(process.platform === "win32")(
+      "delivers a quoted argument with spaces and accents whole to the child",
+      async () => {
+        const source =
+          "process.stdout.write(encodeURIComponent(JSON.stringify(process.argv.slice(1))))";
+        const prompt = "Quel est le rôle du dossier checks ?";
+        const result = await runCommand(
+          buildNodeShellCommand(
+            `"${process.execPath}" -e "${source}" "${prompt}" --permission-mode plan`,
+            "win32",
+          ),
+          undefined,
+          undefined,
+          30_000,
+        );
+        expect(result).toMatchObject({ success: true, error: null });
+        expect(JSON.parse(decodeURIComponent(result.stdout))).toEqual([
+          prompt,
+          "--permission-mode",
+          "plan",
+        ]);
+      },
+    );
   });
 
   describe("working directory failures", () => {
