@@ -135,6 +135,32 @@ describe("Claude CLI command progress", () => {
       );
       expect(mcpEnd?.data).toMatchObject({ status: "completed", name: "exec" });
       expect(mcpEnd?.data.meta).toBeUndefined();
+
+      for (const [toolCallId, name] of [
+        ["mcp-generic-1", "mcp__openclaw__exec"],
+        ["mcp-gemini-1", "mcp_openclaw_exec"],
+      ]) {
+        handlers.emitCliToolUseStart({
+          toolCallId,
+          name,
+          kind: "tool_use",
+          args: { command: "requested command" },
+        });
+        handlers.emitCliToolResult({
+          toolCallId,
+          name,
+          isError: false,
+          result: "result with ambiguous execution",
+        });
+        const mcpTerminal = events.find(
+          (event) =>
+            event.stream === "item" &&
+            event.data.phase === "end" &&
+            event.data.toolCallId === toolCallId,
+        );
+        expect(mcpTerminal?.data).toMatchObject({ status: "completed", name: "exec" });
+        expect(mcpTerminal?.data.meta).toBeUndefined();
+      }
     } finally {
       dispose();
     }

@@ -216,7 +216,11 @@ export function createCliEventHandlers(params: {
         {
           args:
             executedArgs ??
-            (!tracked || startedCall?.kind !== "mcp_tool_use" ? startedArgs : undefined),
+            (startedCall?.kind === "tool_use" &&
+            resolveCliToolSource(event.name, startedCall.kind) === "core" &&
+            stripOpenClawMcpToolPrefix(event.name) === event.name
+              ? startedArgs
+              : undefined),
         },
       );
     }
