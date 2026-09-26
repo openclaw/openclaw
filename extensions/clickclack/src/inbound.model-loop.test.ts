@@ -2,6 +2,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleClickClackInbound } from "./inbound.js";
+import { publishInboundAccountConfig } from "./inbound.test-support.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -52,7 +53,7 @@ function createAccount(): ResolvedClickClackAccount {
     nativeProgress: false,
     commandMenu: true,
     discussions: { enabled: false, workspace: "wsp_model_loop", section: "Sessions" },
-    config: {},
+    config: { workspace: "wsp_model_loop" },
     requireMention: false,
     mentionPatterns: [],
     groups: {},
@@ -133,9 +134,12 @@ describe("ClickClack direct-model response prefix", () => {
 
     for (const testCase of cases) {
       sendClickClackTextMock.mockClear();
-      setClickClackRuntime(createRuntime());
+      const runtime = createRuntime();
+      const account = createAccount();
+      publishInboundAccountConfig(runtime, account, testCase.cfg);
+      setClickClackRuntime(runtime);
       await handleClickClackInbound({
-        account: createAccount(),
+        account,
         config: testCase.cfg,
         message: createMessage(),
       });
@@ -149,12 +153,13 @@ describe("ClickClack direct-model response prefix", () => {
   it("does not add a second prefix when the completion already opens with one", async () => {
     sendClickClackTextMock.mockClear();
     const runtime = createRuntime("[bot] service bot online");
+    const account = createAccount();
+    const config = { channels: { clickclack: { responsePrefix: "[bot]" } } };
+    publishInboundAccountConfig(runtime, account, config);
     setClickClackRuntime(runtime);
     await handleClickClackInbound({
-      account: createAccount(),
-      config: {
-        channels: { clickclack: { responsePrefix: "[bot]" } },
-      },
+      account,
+      config,
       message: createMessage(),
     });
     expect(sendClickClackTextMock.mock.calls[0]?.[0]?.text).toBe("[bot] service bot online");
@@ -170,6 +175,7 @@ describe("ClickClack direct-model bot loop protection", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const account = createAccount();
+    publishInboundAccountConfig(runtime, account);
     const message = {
       id: "msg_01arz3ndektsv4rrffq69g5fbx",
       workspace_id: "wsp_model_loop",
@@ -210,6 +216,7 @@ describe("ClickClack direct-model bot loop protection", () => {
     complete.mockRejectedValueOnce(new Error("transient model failure"));
     setClickClackRuntime(runtime);
     const account = createAccount();
+    publishInboundAccountConfig(runtime, account);
     const message = {
       id: "msg_01arz3ndektsv4rrffq69g5fbz",
       workspace_id: "wsp_model_loop",

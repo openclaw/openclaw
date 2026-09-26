@@ -76,24 +76,39 @@ export async function prepareTlonGroupAdmission(params: {
   const configuredThreadMention =
     resolveChannelAuthorization(cfg, channelNest, params.getSettings())
       .requireMentionInBotThreads ?? account.requireMentionInBotThreads;
+  const botParticipatedInThread = Boolean(
+    params.isThreadReply && parentId && params.hasParticipatedInThread(parentId),
+  );
+  // Participation can admit a reply before settings make bot-owned threads mention-only.
   const threadRootAuthor =
-    !mentioned && params.isThreadReply && parentId && configuredThreadMention !== undefined
+    !mentioned &&
+    params.isThreadReply &&
+    parentId &&
+    (configuredThreadMention !== undefined || botParticipatedInThread)
       ? await fetchThreadRootAuthor(params.api, channelNest, parentId, runtime)
       : null;
-  const authorization = resolveChannelAuthorization(cfg, channelNest, params.getSettings());
-  const mentionDecision = resolveTlonGroupMentionDecision({
-    cfg,
-    accountId: account.accountId,
-    wasMentioned: mentioned,
-    botParticipatedInThread: Boolean(
-      params.isThreadReply && parentId && params.hasParticipatedInThread(parentId),
-    ),
-    isBotOwnedThread: Boolean(threadRootAuthor && normalizeShip(threadRootAuthor) === botShipName),
-    requireMentionInBotThreads:
-      authorization.requireMentionInBotThreads ?? account.requireMentionInBotThreads,
-  });
+  const isBotOwnedThread = Boolean(
+    threadRootAuthor && normalizeShip(threadRootAuthor) === botShipName,
+  );
+  const resolveCurrentMentionDecision = () =>
+    resolveTlonGroupMentionDecision({
+      cfg,
+      accountId: account.accountId,
+      wasMentioned: mentioned,
+      botParticipatedInThread,
+      isBotOwnedThread,
+      requireMentionInBotThreads:
+        resolveChannelAuthorization(cfg, channelNest, params.getSettings())
+          .requireMentionInBotThreads ?? account.requireMentionInBotThreads,
+    });
+  const mentionDecision = resolveCurrentMentionDecision();
   if (mentionDecision.implicitMention && !mentioned && !mentionDecision.shouldSkip) {
     runtime.log?.(`[tlon] Responding to thread we participated in (no mention): ${parentId}`);
   }
-  return { ...authorization, mentionDecision, parentId };
+  return {
+    ...resolveChannelAuthorization(cfg, channelNest, params.getSettings()),
+    mentionDecision,
+    parentId,
+    isMentionAllowed: () => !resolveCurrentMentionDecision().shouldSkip,
+  };
 }
