@@ -37,7 +37,11 @@ export function registerSharedClientAuthRefreshTests() {
         refreshEntered.resolve();
         await releaseRefresh.promise;
         refreshSettled = true;
-        return { accessToken: "settled-access", chatgptAccountId: "settled-account" };
+        return {
+          accessToken: "settled-access",
+          chatgptAccountId: "settled-account",
+          chatgptPlanType: null,
+        };
       });
       harness.send({
         id: "retired-refresh",
