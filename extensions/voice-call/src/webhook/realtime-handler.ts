@@ -68,6 +68,11 @@ const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
 const ASSISTANT_SPEECH_TAIL_MS = 400;
 const PHANTOM_GUARD_MAX_AGE_MS = 15_000;
 const PHANTOM_GUARD_MIN_RMS = 0.035;
+// Near-end caller speech overlapping our own audio is louder than the echo that leaks back through
+// the line. Track the running echo level and only treat overlap audio that clearly exceeds it as
+// caller speech, so a sustained interruption still barges in while leaked playback does not.
+const ECHO_OVERLAP_MARGIN = 2.5;
+const ECHO_BASELINE_SMOOTHING = 0.3;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
@@ -1005,6 +1010,12 @@ export class RealtimeCallHandler {
     let lastLocalAudioAt = 0;
     let maxRecentInputRms = 0;
     let maxEchoInputRms = 0;
+    let echoBaselineRms = 0;
+    let echoBaselineSamples = 0;
+    const resetInputAccounting = () => {
+      maxRecentInputRms = 0;
+      maxEchoInputRms = 0;
+    };
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1140,42 +1151,12 @@ export class RealtimeCallHandler {
           return;
         }
         const turnId = harness.ensureTurn();
-        const eventType =
-          role === "assistant"
-            ? isFinal
-              ? "output.text.done"
-              : "output.text.delta"
-            : isFinal
-              ? "transcript.done"
-              : "transcript.delta";
-        const payload = role === "assistant" ? { text } : { role, text };
-        harness.emit({
-          type: eventType,
-          turnId,
-          payload,
-          final: isFinal,
-        });
+        // A final user transcript can be conjured entirely from assistant audio leaking back
+        // through the line. Decide before emitting anything: a suppressed phantom must never reach
+        // the Talk observer as committed caller input. The utterance is discarded only when no
+        // caller speech was seen for the whole guard window AND the loudest caller-side input since
+        // the last transcript was weak, so a genuinely loud caller is never dropped.
         if (role === "user" && isFinal) {
-          harness.emit({
-            type: "input.audio.committed",
-            turnId,
-            payload: { callId, providerCallId: callSid },
-            final: true,
-          });
-        }
-        if (!isFinal) {
-          if (role === "user" && text.trim()) {
-            const transcript = this.recordPartialUserTranscript(callId, userTranscriptOwner, text);
-            if (!transcript) {
-              return;
-            }
-            console.log(
-              `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${transcript.length}`,
-            );
-          }
-          return;
-        }
-        if (role === "user") {
           const state = this.getUserTranscriptState(callId, userTranscriptOwner);
           if (!state) {
             return;
@@ -1185,10 +1166,6 @@ export class RealtimeCallHandler {
             rawPartial: state.rawPartial,
             final: text,
           });
-          // A final user transcript can be conjured entirely from assistant audio leaking back
-          // through the line. Suppress it only when no caller audio was seen for the whole guard
-          // window AND the loudest input that arrived since the last transcript was weak, so a
-          // genuinely loud caller is never discarded on a stale clock.
           const localAudioAgeMs = lastLocalAudioAt === 0 ? null : Date.now() - lastLocalAudioAt;
           const staleLocalAudio =
             lastLocalAudioAt === 0 ||
@@ -1196,17 +1173,27 @@ export class RealtimeCallHandler {
           const weakInputAudio = maxRecentInputRms < PHANTOM_GUARD_MIN_RMS;
           if (staleLocalAudio && weakInputAudio) {
             console.warn(
-              `[voice-call] realtime phantom transcript suppressed callId=${callId} providerCallId=${callSid} chars=${text.trim().length} text=${JSON.stringify(text.trim().slice(0, 120))} maxRecentInputRms=${maxRecentInputRms.toFixed(4)} maxEchoInputRms=${maxEchoInputRms.toFixed(4)} lastLocalAudioAgeMs=${localAudioAgeMs === null ? "none" : localAudioAgeMs} staleLocalAudio=${staleLocalAudio} weakInputAudio=${weakInputAudio}`,
+              `[voice-call] realtime phantom transcript suppressed callId=${callId} providerCallId=${callSid} chars=${text.trim().length} maxRecentInputRms=${maxRecentInputRms.toFixed(4)} maxEchoInputRms=${maxEchoInputRms.toFixed(4)} lastLocalAudioAgeMs=${localAudioAgeMs === null ? "none" : localAudioAgeMs} staleLocalAudio=${staleLocalAudio} weakInputAudio=${weakInputAudio}`,
             );
-            maxRecentInputRms = 0;
-            maxEchoInputRms = 0;
+            resetInputAccounting();
             this.resetUserTranscriptState(callId, userTranscriptOwner);
             return;
           }
-          maxRecentInputRms = 0;
-          maxEchoInputRms = 0;
+          resetInputAccounting();
           this.clearPartialUserTranscript(callId, userTranscriptOwner);
           this.setRecentFinalUserTranscript(callId, userTranscriptOwner, transcript);
+          harness.emit({
+            type: "transcript.done",
+            turnId,
+            payload: { role, text },
+            final: true,
+          });
+          harness.emit({
+            type: "input.audio.committed",
+            turnId,
+            payload: { callId, providerCallId: callSid },
+            final: true,
+          });
           console.log(
             `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
           );
@@ -1246,6 +1233,25 @@ export class RealtimeCallHandler {
             });
           });
           void transcriptPersistence.catch(reportTranscriptFailure);
+          return;
+        }
+        const eventType = isFinal ? "output.text.done" : "output.text.delta";
+        harness.emit({
+          type: eventType,
+          turnId,
+          payload: { text },
+          final: isFinal,
+        });
+        if (!isFinal) {
+          if (role === "user" && text.trim()) {
+            const transcript = this.recordPartialUserTranscript(callId, userTranscriptOwner, text);
+            if (!transcript) {
+              return;
+            }
+            console.log(
+              `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${transcript.length}`,
+            );
+          }
           return;
         }
         transcriptPersistence = this.manager
@@ -1457,6 +1463,25 @@ export class RealtimeCallHandler {
       if (assistantAudioActive) {
         if (inputRms > maxEchoInputRms) {
           maxEchoInputRms = inputRms;
+        }
+        // Learn the leaked-playback floor from quiet corrected samples so a caller who talks over
+        // the assistant can be distinguished from the echo. Compare against the floor learned from
+        // the *previous* frames, then fold this frame in, so a loud frame cannot raise the very
+        // threshold it is being judged against. Anything well above the learned floor is genuine
+        // caller energy and must keep the phantom guard from suppressing the turn.
+        const learnedEchoFloor = echoBaselineRms;
+        if (inputRms > 0) {
+          echoBaselineSamples += 1;
+          echoBaselineRms =
+            echoBaselineSamples === 1
+              ? inputRms
+              : echoBaselineRms + (inputRms - echoBaselineRms) * ECHO_BASELINE_SMOOTHING;
+        }
+        if (echoBaselineSamples >= 4 && inputRms > learnedEchoFloor * ECHO_OVERLAP_MARGIN) {
+          if (inputRms > maxRecentInputRms) {
+            maxRecentInputRms = inputRms;
+          }
+          lastLocalAudioAt = Date.now();
         }
       } else if (inputRms > maxRecentInputRms) {
         maxRecentInputRms = inputRms;
