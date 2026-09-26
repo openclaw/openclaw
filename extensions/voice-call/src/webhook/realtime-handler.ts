@@ -903,6 +903,12 @@ export class RealtimeCallHandler {
       interruptProvider?: (audioPlaybackActive: boolean) => void,
       clearedAudioBytes = 0,
     ): void => {
+      if (greetingProtected()) {
+        console.log(
+          `[voice-call] realtime outbound audio kept by ${source} barge-in during greeting protection callId=${callId} providerCallId=${callSid} queuedBytes=${clearedAudioBytes} pending=${audioPacer.hasPendingAudio()}`,
+        );
+        return;
+      }
       const outputAudioActive = harness.talk.outputAudioActive;
       const pendingTelephonyAudio = audioPacer.hasPendingAudio();
       if (
@@ -994,6 +1000,126 @@ export class RealtimeCallHandler {
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
+    let lastAssistantAudioSentAt = 0;
+    // The opening greeting is generated once and queued as one large audio burst. A barge-in (the
+    // local speech gate, or a provider VAD interrupt) arriving while that burst is still queued
+    // wipes the whole greeting and cancels the turn, leaving the callee in silence. While this
+    // window is armed, outbound audio is never cleared and the greeting turn is never cancelled; it
+    // disarms once the greeting has played out (sustained quiet after the turn completes) or after a
+    // hard timeout, whichever comes first, so normal barge-in resumes afterwards.
+    const GREETING_PROTECTION_MAX_MS = 30_000;
+    // Bound the pre-audio wait separately: the window arms at provider readiness, before any
+    // greeting audio arrives. If the provider stalls or produces no audio, caller input must not be
+    // replaced by silence for the whole window - release it as soon as the greeting fails to start.
+    const GREETING_PROTECTION_AUDIO_WAIT_MS = 3_000;
+    const GREETING_PROTECTION_QUIET_MS = 900;
+    const GREETING_PROTECTION_POLL_MS = 100;
+    // After the greeting audio is fully queued we ask the carrier to confirm playout with a mark.
+    // The carrier interprets marks against what it has actually played, so this is the only signal
+    // that separates "final frame sent" from "tail audible to the caller". The grace bounds the
+    // wait for a carrier that never acknowledges, so protection cannot outlive a stalled carrier.
+    const GREETING_PROTECTION_MARK_GRACE_MS = 5_000;
+    const greetingWindow: {
+      armed: boolean;
+      disarmed: boolean;
+      audioStarted: boolean;
+      turnComplete: boolean;
+      callerAudioMuted: boolean;
+      completionMarkName?: string;
+      completionMarkQueuedAt: number;
+      timer?: ReturnType<typeof setInterval>;
+    } = {
+      armed: false,
+      disarmed: false,
+      audioStarted: false,
+      turnComplete: false,
+      callerAudioMuted: false,
+      completionMarkName: undefined,
+      completionMarkQueuedAt: 0,
+      timer: undefined,
+    };
+    let greetingCompletionMarkSequence = 0;
+    const disarmGreetingWindow = (reason: string): void => {
+      if (!greetingWindow.armed) {
+        return;
+      }
+      greetingWindow.armed = false;
+      greetingWindow.disarmed = true;
+      if (greetingWindow.timer) {
+        clearInterval(greetingWindow.timer);
+        greetingWindow.timer = undefined;
+      }
+      if (greetingWindow.completionMarkName) {
+        pendingMarkAcks.delete(greetingWindow.completionMarkName);
+        greetingWindow.completionMarkName = undefined;
+      }
+      console.log(
+        `[voice-call] realtime greeting protection disarmed callId=${callId} providerCallId=${callSid} reason=${reason}`,
+      );
+    };
+    const greetingProtected = (): boolean => greetingWindow.armed && !greetingWindow.disarmed;
+    // Ask the carrier to confirm that the greeting's tail has actually played. The mark is queued
+    // behind the greeting audio and echoed back once the carrier reaches it; only then do we disarm,
+    // so a barge-in cannot clear audio the caller has not heard yet.
+    const armGreetingCompletionMark = (): void => {
+      if (!greetingProtected() || greetingWindow.completionMarkName) {
+        return;
+      }
+      const markName = `openclaw-greeting-complete-${greetingCompletionMarkSequence++}`;
+      greetingWindow.completionMarkName = markName;
+      greetingWindow.completionMarkQueuedAt = Date.now();
+      pendingMarkAcks.set(markName, () => disarmGreetingWindow("carrier-confirmed"));
+      audioPacer.sendMark(markName);
+      console.log(
+        `[voice-call] realtime greeting protection awaiting carrier playout callId=${callId} providerCallId=${callSid} mark=${markName}`,
+      );
+    };
+    const armGreetingWindow = (): void => {
+      if (!initialGreetingInstructions || greetingWindow.armed || greetingWindow.disarmed) {
+        return;
+      }
+      greetingWindow.armed = true;
+      greetingWindow.disarmed = false;
+      greetingWindow.audioStarted = false;
+      greetingWindow.turnComplete = false;
+      greetingWindow.callerAudioMuted = false;
+      greetingWindow.completionMarkName = undefined;
+      greetingWindow.completionMarkQueuedAt = 0;
+      const startedAt = Date.now();
+      greetingWindow.timer = setInterval(() => {
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= GREETING_PROTECTION_MAX_MS) {
+          disarmGreetingWindow("timeout");
+          return;
+        }
+        if (!greetingWindow.audioStarted) {
+          if (elapsedMs >= GREETING_PROTECTION_AUDIO_WAIT_MS) {
+            disarmGreetingWindow("audio-stalled");
+          }
+          return;
+        }
+        if (!greetingWindow.turnComplete) {
+          return;
+        }
+        if (
+          audioPacer.hasPendingAudio() ||
+          Date.now() - lastAssistantAudioSentAt < GREETING_PROTECTION_QUIET_MS
+        ) {
+          return;
+        }
+        armGreetingCompletionMark();
+        if (
+          greetingWindow.completionMarkName &&
+          Date.now() - greetingWindow.completionMarkQueuedAt >= GREETING_PROTECTION_MARK_GRACE_MS
+        ) {
+          disarmGreetingWindow("mark-grace");
+        }
+      }, GREETING_PROTECTION_POLL_MS);
+      greetingWindow.timer.unref?.();
+      console.log(
+        `[voice-call] realtime greeting protection armed callId=${callId} providerCallId=${callSid} maxMs=${GREETING_PROTECTION_MAX_MS}`,
+      );
+    };
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1093,11 +1219,21 @@ export class RealtimeCallHandler {
         sendAudio: (muLaw, metadata) => {
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw, metadata);
+          lastAssistantAudioSentAt = Date.now();
+          if (greetingProtected()) {
+            greetingWindow.audioStarted = true;
+          }
         },
         // Telephony pacing knows what actually reached the line; the provider's
         // inbound media clock can run far ahead of playout.
         getPlaybackState: () => audioPacer.getPlaybackState(),
         clearAudio: (reason) => {
+          if (reason === "barge-in" && greetingProtected()) {
+            console.log(
+              `[voice-call] realtime outbound audio kept by provider barge-in during greeting protection callId=${callId} providerCallId=${callSid} pending=${audioPacer.hasPendingAudio()}`,
+            );
+            return;
+          }
           harness.flushOutput(() => {
             const clearedBytes = audioPacer.clearAudio();
             if (reason === "barge-in") {
@@ -1312,8 +1448,12 @@ export class RealtimeCallHandler {
         if (outcome.status === "failed" || outcome.status === "incomplete") {
           console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
+        if (greetingProtected() && outcome.status !== "failed") {
+          greetingWindow.turnComplete = true;
+        }
       },
       onReady: () => {
+        armGreetingWindow();
         harness.emit({
           type: "session.ready",
           payload: { callId, providerCallId: callSid },
@@ -1414,7 +1554,25 @@ export class RealtimeCallHandler {
       if (sessionClosed) {
         return;
       }
-      if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
+      if (
+        speechDetector.accept(
+          { rms: calculateMulawRms(audio), peak: 0 },
+          {
+            // Vetoing the trigger while the greeting is protected keeps the gate's loud-frame tally
+            // intact without entering its speaking state, so caller speech that continues past disarm
+            // re-triggers the local barge-in immediately instead of waiting for a fresh quiet gap.
+            onTrigger: () => {
+              if (greetingProtected()) {
+                console.log(
+                  `[voice-call] realtime local speech suppressed during greeting protection callId=${callId} providerCallId=${callSid}`,
+                );
+                return false;
+              }
+              return true;
+            },
+          },
+        )
+      ) {
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
@@ -1425,6 +1583,22 @@ export class RealtimeCallHandler {
         }
       }
       harness.recordInputAudio(audio);
+      // While the greeting-protection window is armed the caller's audio is not forwarded to the
+      // realtime provider - mu-law silence (0xFF) is sent instead so the input stream keeps its
+      // cadence. The provider otherwise takes a user turn from the callee's barge-in while the
+      // opening is still playing and answers that speech as if it were the reply to the question.
+      // Muting lasts only for the window; caller audio reaches the provider normally once it
+      // disarms.
+      if (greetingProtected()) {
+        if (!greetingWindow.callerAudioMuted) {
+          greetingWindow.callerAudioMuted = true;
+          console.log(
+            `[voice-call] realtime caller audio muted to provider during greeting protection callId=${callId} providerCallId=${callSid}`,
+          );
+        }
+        sendAudioToSession(Buffer.alloc(audio.length, 255));
+        return;
+      }
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);
@@ -1434,6 +1608,7 @@ export class RealtimeCallHandler {
         return sessionClosePromise ?? Promise.resolve();
       }
       sessionClosed = true;
+      disarmGreetingWindow("closed");
       this.cancelConsultSession(callId, session);
       audioPacer.close();
       sessionClosePromise = drainProviderClose(closeSession).finally(() => {
