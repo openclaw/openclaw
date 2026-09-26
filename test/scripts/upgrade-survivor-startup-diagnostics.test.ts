@@ -39,13 +39,18 @@ async function listen(handler: RequestListener) {
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
   return new Promise<{ status: number; stdout: string; stderr: string }>((resolve, reject) => {
-    execFile(command, args, { env, timeout: 15_000, maxBuffer: 256 * 1024 }, (error, stdout, stderr) => {
-      if (error && typeof error.code !== "number") {
-        reject(error);
-        return;
-      }
-      resolve({ status: typeof error?.code === "number" ? error.code : 0, stdout, stderr });
-    });
+    execFile(
+      command,
+      args,
+      { env, timeout: 15_000, maxBuffer: 256 * 1024 },
+      (error, stdout, stderr) => {
+        if (error && typeof error.code !== "number") {
+          reject(error);
+          return;
+        }
+        resolve({ status: typeof error?.code === "number" ? error.code : 0, stdout, stderr });
+      },
+    );
   });
 }
 
@@ -86,15 +91,9 @@ describe.skipIf(process.platform === "win32")("survivor startup failure diagnost
         prelude,
         `install_fixture_phases() {
   trap - DEBUG
-  eval "$(declare -f phase | sed '1s/phase/real_phase/')"
   eval "$(declare -f stop_gateway | sed '1s/stop_gateway/real_stop_gateway/')"
-  phase() {
-    if [ "$1" = gateway-start ]; then
-      real_phase "$@"
-    fi
-  }
   node() {
-    if [ "$1" = scripts/e2e/lib/upgrade-survivor/startup-diagnostics.mjs ]; then
+    if [ "\${1:-}" = scripts/e2e/lib/upgrade-survivor/startup-diagnostics.mjs ]; then
       command node "$1" "$FIXTURE_PORT"
     else
       command node "$@"
@@ -107,6 +106,8 @@ describe.skipIf(process.platform === "win32")("survivor startup failure diagnost
     fi
     real_stop_gateway
   }
+  phase gateway-start ensure_gateway_started
+  exit $?
 }
 trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
 `,
@@ -127,7 +128,9 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
       });
       expect(result.status, result.stderr).toBe(42);
       expect(fs.existsSync(path.join(artifacts, "gateway-startup-probes.json"))).toBe(true);
-      expect(fs.readFileSync(path.join(root, "cleanup-order"), "utf8")).toBe("captured-before-cleanup\n");
+      expect(fs.readFileSync(path.join(root, "cleanup-order"), "utf8")).toBe(
+        "captured-before-cleanup\n",
+      );
       expect(requests).toEqual(["/readyz", "/startupz"]);
       const destination = path.join(root, "public");
       publishDiagnostics(artifacts, destination, redactSensitiveText);
@@ -147,7 +150,9 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
           },
         },
       });
-      expect(JSON.parse(fs.readFileSync(path.join(artifacts, "summary.json"), "utf8"))).toMatchObject({
+      expect(
+        JSON.parse(fs.readFileSync(path.join(artifacts, "summary.json"), "utf8")),
+      ).toMatchObject({
         status: "failed",
         failure: { phase: "gateway-start" },
       });
