@@ -423,7 +423,12 @@ export function selectChatInputDisplay(
   };
 }
 
-/** A custody or consumption receipt retires only an uncommitted local user source. */
+/**
+ * A rendered custody row (page item) or a consumed receipt retires an uncommitted
+ * local user source. A `pending` receipt only confirms server custody: it neither
+ * renders a replacement row nor means the input joined the transcript, so it must
+ * not remove the optimistic bubble (otherwise the just-sent text can vanish).
+ */
 export function reconcileChatInputCustody(
   owner: ChatSessionProjectionOwner,
   page: ChatPendingInputsPage | undefined,
@@ -434,7 +439,24 @@ export function reconcileChatInputCustody(
       .map((item) => item.runId)
       .filter((runId) => typeof runId === "string"),
   );
-  retireChatSubmissionDisplay(owner, acceptedRunIds);
+  const pendingInitialRunId =
+    owner.chatSubmissions?.readInitial(
+      owner.sessionKey,
+      owner.client ?? owner,
+      owner.currentSessionId,
+    )?.pendingRunId ?? null;
+  const retiredRunIds = new Set(
+    [
+      ...(page?.items ?? []).map((item) => item.runId),
+      ...receipts
+        // A pending receipt only confirms server custody. It must not retire the
+        // foreground optimistic bubble (no durable backing yet), but a delivered
+        // source is already persisted in the outbox, so it can retire.
+        .filter((receipt) => receipt.state === "consumed" || receipt.runId !== pendingInitialRunId)
+        .map((receipt) => receipt.runId),
+    ].filter((runId): runId is string => typeof runId === "string"),
+  );
+  retireChatSubmissionDisplay(owner, retiredRunIds);
   return {
     acceptedRunIds,
     page: page ?? { items: [], total: 0 },
