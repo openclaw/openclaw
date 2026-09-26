@@ -5,7 +5,11 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
-import { resolveCodeModeSkills, type CodeModeSkillReader } from "../code-mode-skills.js";
+import {
+  resolveCodeModeSkills,
+  type CodeModeSkillCompanionReader,
+  type CodeModeSkillReader,
+} from "../code-mode-skills.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "../workspace-access.js";
@@ -119,6 +123,11 @@ export async function prepareEmbeddedSkills(params: {
     const sandbox = params.sandbox;
     const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled
       ? async ({ location, signal }) => {
+          if (location.startsWith("node://")) {
+            throw new Error(
+              `node-hosted skill relative reads require a node skill reader: ${JSON.stringify(location)}`,
+            );
+          }
           const bridge = sandbox.fsBridge;
           if (!bridge) {
             throw new Error("Sandbox filesystem bridge is unavailable for skill reads.");
@@ -146,6 +155,16 @@ export async function prepareEmbeddedSkills(params: {
           return await workspaceAccess.skillResources.readInstructions(location, { signal });
         }
       : undefined;
+    const workspaceSkillCompanionReader: CodeModeSkillCompanionReader | undefined =
+      workspaceAccess?.loadSkills && workspaceAccess.skillResources?.readCompanion
+        ? ({ skillFilePath, relativePath, sourceRootIdentity, signal }) =>
+            workspaceAccess.skillResources!.readCompanion!(
+              skillFilePath,
+              relativePath,
+              sourceRootIdentity,
+              { signal },
+            )
+        : undefined;
     const candidates = skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill);
     const codeModeSkills = params.includeCodeModeSkills
       ? resolveCodeModeSkills({
@@ -168,8 +187,12 @@ export async function prepareEmbeddedSkills(params: {
           (candidate?.fileHost !== "gateway" &&
             !skillsSnapshot?.librarySelections?.some((selection) => selection.name === skill.name))
         ) {
+          skill.source.fileHost = "workspace";
           skill.reader = ({ signal }) =>
             workspaceSkillReader({ location: skill.source.filePath, signal });
+          if (workspaceSkillCompanionReader) {
+            skill.companionReader = workspaceSkillCompanionReader;
+          }
         }
       }
     }

@@ -9,7 +9,7 @@ import {
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseSkillFrontmatter } from "./frontmatter.js";
-import type { Skill } from "./skill-contract.js";
+import type { Skill, SkillSourceRootIdentity } from "./skill-contract.js";
 import { materializeSkill } from "./skill-materializer.js";
 
 export type LoadedLocalSkill = {
@@ -29,6 +29,35 @@ export type LocalSkillLoadDiagnostic = {
   path: string;
   message: string;
 };
+
+function captureExactSkillRootIdentity(rootRealPath: string): SkillSourceRootIdentity | undefined {
+  try {
+    const stat = fs.statSync(rootRealPath, { bigint: true });
+    if (!stat.isDirectory() || stat.dev === 0n || stat.ino === 0n) {
+      return undefined;
+    }
+    return {
+      realPath: path.resolve(rootRealPath),
+      dev: stat.dev.toString(10),
+      ino: stat.ino.toString(10),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function sameSkillRootIdentity(
+  left: SkillSourceRootIdentity | undefined,
+  right: SkillSourceRootIdentity | undefined,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.realPath === right.realPath &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
+}
 
 // Read SKILL.md through the root boundary helper so symlinks cannot escape the skill root.
 function readSkillFileSync(params: {
@@ -88,6 +117,7 @@ export function loadSingleSkillDirectory(params: {
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
 }): LoadedLocalSkill | null {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
+  const sourceRootIdentity = captureExactSkillRootIdentity(params.rootRealPath);
   const raw = readSkillFileSync({
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
@@ -96,6 +126,18 @@ export function loadSingleSkillDirectory(params: {
     onDiagnostic: params.onDiagnostic,
   });
   if (raw === null) {
+    return null;
+  }
+  const sourceRootIdentityAfterRead = captureExactSkillRootIdentity(params.rootRealPath);
+  if (
+    sourceRootIdentity !== undefined &&
+    !sameSkillRootIdentity(sourceRootIdentity, sourceRootIdentityAfterRead)
+  ) {
+    params.onDiagnostic?.({
+      kind: "invalid",
+      path: skillFilePath,
+      message: "skill root identity changed while reading SKILL.md",
+    });
     return null;
   }
 
@@ -151,6 +193,7 @@ export function loadSingleSkillDirectory(params: {
       ...loaded.skill,
       filePath,
       baseDir,
+      ...(sourceRootIdentity ? { sourceRootIdentity } : {}),
       source: params.source,
       sourceInfo: { ...loaded.skill.sourceInfo, path: filePath, baseDir, source: params.source },
     },

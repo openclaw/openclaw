@@ -2,6 +2,14 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Skill contract types describe loaded skill metadata, sources, and prompt surfaces.
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
+export type SkillSourceRootIdentity = {
+  /** Canonical source-host directory selected while SKILL.md was read. */
+  realPath: string;
+  /** Decimal strings preserve native identity across JSON transports. */
+  dev: string;
+  ino: string;
+};
+
 export interface Skill {
   name: string;
   /** Human-readable title from the first Markdown H1, falling back to the identifier. */
@@ -21,6 +29,10 @@ export interface Skill {
   fileHost?: "gateway" | "workspace";
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
+  /** Host filesystem path retained when `filePath` is remapped to a sandbox container path. */
+  hostFilePath?: string;
+  /** Source-host directory identity captured with discovery; never model-visible authority. */
+  sourceRootIdentity?: SkillSourceRootIdentity;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.

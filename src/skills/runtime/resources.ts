@@ -38,6 +38,7 @@ import { shouldSyncSkillPath } from "../loading/skill-paths.js";
 import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
+import { readSkillCompanionAtSource } from "./skill-companion.js";
 
 const log = createSubsystemLogger("skills/resources");
 
@@ -104,6 +105,13 @@ export async function readSkillResourceFiles(
 
 const localSkillResourceReader: SkillResourceSourceReader = {
   readInstructions: (filePath, options) => fs.readFile(filePath, { ...options, encoding: "utf8" }),
+  readCompanion: (skillFilePath, relativePath, sourceRootIdentity, options) =>
+    readSkillCompanionAtSource({
+      skillFilePath,
+      relativePath,
+      sourceRootIdentity,
+      signal: options.signal,
+    }),
   resolveExplicitSkill: resolveExplicitSkillResource,
   readSkillFiles: readSkillResourceFiles,
 };

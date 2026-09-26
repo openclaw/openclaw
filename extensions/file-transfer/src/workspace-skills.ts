@@ -81,6 +81,8 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     // Resource identities already belong to the node that discovered the Skills.
     skillResources: {
       readInstructions: (filePath, { signal }) => call("readInstructions", { filePath }, signal),
+      readCompanion: (skillFilePath, relativePath, sourceRootIdentity, { signal }) =>
+        call("readCompanion", { skillFilePath, relativePath, sourceRootIdentity }, signal),
       resolveExplicitSkill: (selection) => call("resolveResource", selection),
       readSkillFiles: (skill, { allowMissingRoot }) =>
         call("readResources", { skill, allowMissingRoot }),

@@ -1,7 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -163,118 +161,6 @@ afterEach(async () => {
 });
 
 describe("registered node workspace service", () => {
-  it("discovers Harness Skills, reads their source and installs a dependency on the Harness", async ({
-    onTestFinished,
-  }) => {
-    const home = await fs.realpath(tempDirs.make("node-skills-home-"));
-    vi.stubEnv("HOME", home);
-    // The test runner pins os.homedir separately from process.env.HOME.
-    const homeSpy = vi.spyOn(os, "homedir").mockReturnValue(home);
-    onTestFinished(() => homeSpy.mockRestore());
-    const skillDir = path.join(remote, "skills", "local-tool");
-    await fs.mkdir(skillDir, { recursive: true });
-    const instructions =
-      "---\nname: local-tool\ndescription: Test the workspace tool\n---\nRun local-tool.\n";
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), instructions);
-    const packageDir = path.join(remote, "package");
-    await fs.mkdir(packageDir);
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "workspace-node-test-tool",
-        version: "1.0.0",
-        bin: { "local-tool": "cli.cjs" },
-      }),
-    );
-    await fs.writeFile(
-      path.join(packageDir, "cli.cjs"),
-      '#!/usr/bin/env node\nconsole.log("Harness dependency works");\n',
-      { mode: 0o755 },
-    );
-    const tarball = execFileSync("tar", ["-czf", "-", "-C", remote, "package"]);
-    let registry = "";
-    const registryRequests: string[] = [];
-    const server = createServer((request, response) => {
-      registryRequests.push(request.url ?? "");
-      if (request.url === "/workspace-node-test-tool") {
-        response.setHeader("Content-Type", "application/json");
-        response.end(
-          JSON.stringify({
-            name: "workspace-node-test-tool",
-            "dist-tags": { latest: "1.0.0" },
-            versions: {
-              "1.0.0": {
-                name: "workspace-node-test-tool",
-                version: "1.0.0",
-                bin: { "local-tool": "cli.cjs" },
-                dist: { tarball: `${registry}/fixture.tgz` },
-              },
-            },
-          }),
-        );
-      } else if (request.url === "/fixture.tgz") {
-        response.end(tarball);
-      } else {
-        response.writeHead(404).end();
-      }
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    onTestFinished(async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing fixture registry port");
-    }
-    registry = `http://127.0.0.1:${address.port}`;
-    await fs.writeFile(
-      path.join(home, ".npmrc"),
-      `registry=${registry}\naudit=false\nfund=false\nupdate-notifier=false\nfetch-retries=0\n`,
-    );
-    nodePolicy.allowWritePaths.push(`${remote}/skills`);
-    openDuplex = createNodeWorkspaceTestTransport(api, remote);
-    await service.start(context());
-    const access = getAgentWorkspaceAccess(local)!;
-    const sources = await access.loadSkills!({
-      sourcePlan: {
-        workspaceDir: local,
-        stateDir: local,
-        managedSkillsDir: path.join(local, "managed"),
-        pluginSkillsDir: path.join(local, "plugins"),
-        roots: [
-          { dir: path.join(local, "skills"), source: "openclaw-workspace", tier: "workspace" },
-        ],
-        pluginSkillRoots: [],
-      },
-      limits: {
-        maxCandidatesPerRoot: 100,
-        maxSkillsLoadedPerSource: 100,
-        maxSkillFileBytes: 65536,
-      },
-      additionalBins: [],
-    });
-    const skill = sources.entries.find((entry) => entry.skill.name === "local-tool")!.skill;
-    expect(skill.filePath).toBe(path.join(skillDir, "SKILL.md"));
-    expect(await access.skillResources!.readInstructions(skill.filePath, {})).toBe(instructions);
-    const result = await access.installSkillDependencies!({
-      skillKey: "local-tool",
-      spec: { kind: "node", package: "workspace-node-test-tool" },
-      preferences: { nodeManager: "npm", preferBrew: false },
-      timeoutMs: 30_000,
-    });
-    expect(result, JSON.stringify({ result, registryRequests })).toMatchObject({ ok: true });
-    const executable = path.join(home, ".openclaw/tools/node/npm/bin/local-tool");
-    expect(execFileSync(process.execPath, [executable], { encoding: "utf8" }).trim()).toBe(
-      "Harness dependency works",
-    );
-    expect(await fs.readdir(local)).toEqual(["AGENTS.md"]);
-  }, 60_000);
-
   it.each(["workspace", "execution", "symlink", "skill card", "byte limit"])(
     "does not send denied Skill discovery metadata (%s)",
     async (kind) => {

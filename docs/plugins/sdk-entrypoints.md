@@ -172,7 +172,15 @@ tracked in [Enterprise #241](https://github.com/openclaw/openclaw-enterprise/iss
 
 The optional `skillResources` provider handles Skill reads separately from Agent
 document access. Its `readInstructions` reads the selected instruction file for
-Code Mode; `readSkillFiles` supplies a bundle for worker delivery. Gateway-owned
+Code Mode; `readSkillFiles` supplies a bundle for worker delivery. The optional
+`readCompanion(skillFilePath, relativePath, sourceRootIdentity, options)` reads one
+relative file only when the provider can retain and revalidate the selected Skill
+root through the final source-host read. `sourceRootIdentity` is the canonical root
+path plus device and inode captured during discovery; it is host authority, not
+model input. Providers must reject an absolute or escaping relative path and reject
+a replaced root before returning bytes. If `readCompanion` is absent, companion
+reads for workspace-owned Skills fail closed while instruction and bundle reads
+remain available. Gateway-owned
 bundled, plugin, Library, Workshop and user-level sources keep their Gateway paths.
 Workspace-owned sources use the remote provider. Gateway preserves source precedence
 and uses existing resource delivery for workers. Discovery assigns file ownership; a provider cannot

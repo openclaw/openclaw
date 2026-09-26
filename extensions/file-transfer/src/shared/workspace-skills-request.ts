@@ -70,6 +70,34 @@ export function readWorkspaceSkillsRequest(input: unknown) {
     case "readInstructions":
       add(request.filePath);
       break;
+    case "readCompanion": {
+      const skillFilePath = request.skillFilePath;
+      const relativePath = request.relativePath;
+      const sourceRootIdentity = asOptionalRecord(request.sourceRootIdentity);
+      if (
+        typeof skillFilePath !== "string" ||
+        typeof relativePath !== "string" ||
+        !relativePath ||
+        path.posix.isAbsolute(relativePath) ||
+        relativePath.includes("\0") ||
+        containsParentRefSegment(relativePath) ||
+        relativePath.split("/").some((segment) => !segment || segment === ".") ||
+        typeof sourceRootIdentity?.realPath !== "string" ||
+        !path.posix.isAbsolute(sourceRootIdentity.realPath) ||
+        sourceRootIdentity.realPath.includes("\0") ||
+        containsParentRefSegment(sourceRootIdentity.realPath) ||
+        typeof sourceRootIdentity.dev !== "string" ||
+        !/^[1-9]\d{0,19}$/u.test(sourceRootIdentity.dev) ||
+        typeof sourceRootIdentity.ino !== "string" ||
+        !/^[1-9]\d{0,19}$/u.test(sourceRootIdentity.ino)
+      ) {
+        throw new Error("Invalid Skill companion path");
+      }
+      add(skillFilePath);
+      add(sourceRootIdentity.realPath);
+      add(path.posix.join(path.posix.dirname(skillFilePath), relativePath));
+      break;
+    }
     case "resolveResource": {
       const selectionPath = request.path;
       if (

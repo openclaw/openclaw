@@ -5,10 +5,13 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { readSkillResourceFiles } from "../../skills/runtime/resources.js";
+import { readSkillCompanionAtSource } from "../../skills/runtime/skill-companion.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
+import { applyCodeModeCatalog } from "../code-mode.js";
+import { createCodeModeHarness, pluginTool, runUntilCompleted } from "../code-mode.test-support.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
@@ -51,6 +54,8 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   ] as const) {
     await fs.mkdir(path.dirname(path.join(dir, relative)), { recursive: true });
     await fs.writeFile(path.join(dir, relative), header + body);
+    await fs.mkdir(path.join(dir, "skills/guide/refs"));
+    await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), `${body} support`);
   }
   await fs.mkdir(path.join(library, "skills/pinned"), { recursive: true });
   const libraryBody = "---\nname: pinned\ndescription: Pinned guide\n---\nGateway Library body";
@@ -79,24 +84,44 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   const readFile = vi.fn(async () => {
     throw new Error("Agent-document access does not grant Skill reads");
   });
+  const readInstructions = vi.fn((filePath: string, options: { signal?: AbortSignal }) => {
+    if (!filePath.startsWith(gateway + path.sep)) {
+      throw new Error("The host cannot read Gateway Library files");
+    }
+    return fs.readFile(path.join(host, path.relative(gateway, filePath)), {
+      encoding: "utf8",
+      signal: options.signal,
+    });
+  });
+  const readCompanion = vi.fn(
+    (
+      skillFilePath: string,
+      relativePath: string,
+      sourceRootIdentity: Parameters<typeof readSkillCompanionAtSource>[0]["sourceRootIdentity"],
+      options: { signal?: AbortSignal },
+    ) =>
+      readSkillCompanionAtSource({
+        skillFilePath: path.join(host, path.relative(gateway, skillFilePath)),
+        relativePath,
+        sourceRootIdentity,
+        signal: options.signal,
+      }),
+  );
   const skillResources = {
     resolveExplicitSkill: vi.fn(),
     readSkillFiles: vi.fn(),
-    readInstructions: (filePath: string, options: { signal?: AbortSignal }) => {
-      if (!filePath.startsWith(gateway + path.sep)) {
-        throw new Error("The host cannot read Gateway Library files");
-      }
-      return fs.readFile(path.join(host, path.relative(gateway, filePath)), {
-        encoding: "utf8",
-        signal: options.signal,
-      });
-    },
+    readInstructions,
+    readCompanion,
   };
   const release = registerAgentWorkspaceAccess(gateway, {
     bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
     skillResources,
     loadSkills: async () => ({
-      entries: loadWorkspaceSkills(gateway, { workspaceOnly: true }),
+      entries: loadWorkspaceSkills(host, { workspaceOnly: true }).map((entry) => {
+        entry.skill.filePath = path.join(gateway, path.relative(host, entry.skill.filePath));
+        entry.skill.baseDir = path.join(gateway, path.relative(host, entry.skill.baseDir));
+        return entry;
+      }),
       executionEntries: [],
       runtime: { platform: process.platform, bins: [] },
     }),
@@ -136,6 +161,19 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(prepared.codeModeSkills).toHaveLength(3);
     const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
     expect(await readCodeModeSkill(skill)).toBe(header + "current host body");
+    await expect(readCodeModeSkill(skill, undefined, "refs/support.txt")).resolves.toBe(
+      "current host body support",
+    );
+    expect(readCompanion).toHaveBeenLastCalledWith(
+      path.join(gateway, "skills/guide/SKILL.md"),
+      "refs/support.txt",
+      expect.objectContaining({
+        realPath: path.join(host, "skills/guide"),
+        dev: expect.any(String),
+        ino: expect.any(String),
+      }),
+      { signal: undefined },
+    );
     await fs.writeFile(path.join(host, relative), header + "edited host body");
     expect(await readCodeModeSkill(skill)).toBe(header + "edited host body");
     const pinned = prepared.codeModeSkills.find((entry) => entry.name === "pinned")!;
@@ -147,6 +185,102 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(readFile).not.toHaveBeenCalled();
     release();
     await expect(readCodeModeSkill(skill)).rejects.toThrow("Workspace access is stopped");
+    await expect(readCodeModeSkill(skill, undefined, "refs/support.txt")).rejects.toThrow(
+      "Workspace access is stopped",
+    );
+  } finally {
+    release();
+  }
+});
+
+it("fails closed when a workspace provider lacks companion reads", async () => {
+  const root = temps.make("code-mode-companion-unavailable-");
+  const gateway = path.join(root, "gateway");
+  const host = path.join(root, "host");
+  for (const [dir, body] of [
+    [gateway, "Gateway decoy"],
+    [host, "Workspace host"],
+  ] as const) {
+    await writeSkill({
+      dir: path.join(dir, "skills/guide"),
+      name: "guide",
+      description: "Test guide",
+      body,
+    });
+    await fs.mkdir(path.join(dir, "skills/guide/refs"));
+    await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), `${body} support`);
+  }
+  const readInstructions = vi.fn((filePath: string, options: { signal?: AbortSignal }) =>
+    fs.readFile(path.join(host, path.relative(gateway, filePath)), {
+      encoding: "utf8",
+      signal: options.signal,
+    }),
+  );
+  const release = registerAgentWorkspaceAccess(gateway, {
+    bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    skillResources: {
+      readInstructions,
+      resolveExplicitSkill: vi.fn(),
+      readSkillFiles: vi.fn(),
+    },
+    loadSkills: async () => ({
+      entries: loadWorkspaceSkills(host, { workspaceOnly: true }).map((entry) => {
+        entry.skill.filePath = path.join(gateway, path.relative(host, entry.skill.filePath));
+        entry.skill.baseDir = path.join(gateway, path.relative(host, entry.skill.baseDir));
+        return entry;
+      }),
+      executionEntries: [],
+      runtime: { platform: process.platform, bins: [] },
+    }),
+  });
+  try {
+    const snapshot = await buildSkillSnapshot(gateway, {
+      config: {
+        plugins: { enabled: false },
+        agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
+      },
+      agentId: "main",
+    });
+    const prepared = await prepareEmbeddedSkills({
+      attempt: { config: {}, skillsSnapshot: snapshot },
+      effectiveWorkspace: gateway,
+      sandbox: undefined,
+      sessionAgentId: "main",
+      includeCodeModeSkills: true,
+      applySkillEnvironment: false,
+    });
+    const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
+    expect(await readCodeModeSkill(skill)).toContain("Workspace host");
+
+    const { config, catalogRef, tools } = createCodeModeHarness({
+      codeModeSkills: prepared.codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills: prepared.codeModeSkills,
+    });
+    const details = await runUntilCompleted({
+      execTool: tools[0]!,
+      waitTool: tools[1]!,
+      code: `
+        try {
+          return await skills.read("guide", "refs/support.txt");
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      `,
+    });
+    expect(details).toMatchObject({ status: "completed" });
+    expect(details.value).toBe(
+      'workspace skill companion reads are unavailable: "refs/support.txt"',
+    );
+    expect(details.value).not.toContain("Gateway decoy");
+    expect(readInstructions).toHaveBeenCalledOnce();
   } finally {
     release();
   }
@@ -220,13 +354,30 @@ it.each([
     }
     await fs.writeFile(path.join(workspace, "local.txt"), "Local project file");
     await fs.writeFile(path.join(root, "outside.txt"), "Not admitted");
-    const selected = loadWorkspaceSkills(logical, { workspaceOnly: true })[0]!.skill;
+    const selectedAtHost = loadWorkspaceSkills(host, { workspaceOnly: true })[0]!.skill;
+    const selected = {
+      ...selectedAtHost,
+      filePath: path.join(logical, path.relative(host, selectedAtHost.filePath)),
+      baseDir: path.join(logical, path.relative(host, selectedAtHost.baseDir)),
+    };
     const gatewaySkill = loadWorkspaceSkills(library, { workspaceOnly: true })[0]!.skill;
     const skill = { ...selected, fileHost: "workspace" as const };
     const resources = {
       readInstructions: (filePath: string, options: { signal?: AbortSignal }) =>
         fs.readFile(path.join(host, path.relative(logical, filePath)), {
           encoding: "utf8",
+          signal: options.signal,
+        }),
+      readCompanion: (
+        skillFilePath: string,
+        relativePath: string,
+        sourceRootIdentity: Parameters<typeof readSkillCompanionAtSource>[0]["sourceRootIdentity"],
+        options: { signal?: AbortSignal },
+      ) =>
+        readSkillCompanionAtSource({
+          skillFilePath: path.join(host, path.relative(logical, skillFilePath)),
+          relativePath,
+          sourceRootIdentity,
           signal: options.signal,
         }),
       resolveExplicitSkill: vi.fn(),

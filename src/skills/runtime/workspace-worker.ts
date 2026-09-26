@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { applyExtractedSkillRoot } from "../lifecycle/archive-install.js";
 import type * as Status from "../lifecycle/clawhub-status.js";
 import type * as Store from "../lifecycle/clawhub-store.js";
 import type * as Uninstall from "../lifecycle/clawhub-uninstall.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.js";
+import { readSkillCompanionAtSource } from "./skill-companion.js";
 import {
   decodeSkillWorkerRequest,
   skillWorkerLines,
@@ -315,6 +317,35 @@ export async function serveWorkspaceSkills(options: {
         throw new Error("Skill instruction path is required");
       }
       await write(await fs.readFile(filePath, "utf8"));
+      return;
+    }
+    case "readCompanion": {
+      const { skillFilePath, relativePath, sourceRootIdentity } = decoded;
+      if (
+        typeof skillFilePath !== "string" ||
+        typeof relativePath !== "string" ||
+        !isRecord(sourceRootIdentity)
+      ) {
+        throw new Error("Skill companion path is required");
+      }
+      if (
+        typeof sourceRootIdentity.realPath !== "string" ||
+        typeof sourceRootIdentity.dev !== "string" ||
+        typeof sourceRootIdentity.ino !== "string"
+      ) {
+        throw new Error("Skill companion root identity is required");
+      }
+      await write(
+        await readSkillCompanionAtSource({
+          skillFilePath,
+          relativePath,
+          sourceRootIdentity: {
+            realPath: sourceRootIdentity.realPath,
+            dev: sourceRootIdentity.dev,
+            ino: sourceRootIdentity.ino,
+          },
+        }),
+      );
       return;
     }
     case "recordSource": {

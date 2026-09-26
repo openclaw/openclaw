@@ -163,10 +163,12 @@ describe("loadSkills", () => {
       ]);
 
       const diagnostics: LocalSkillLoadDiagnostic[] = [];
+      const rootRealPath = await fs.realpath(skillDir);
+      const rootStat = await fs.stat(rootRealPath, { bigint: true });
       const local = loadSingleSkillDirectory({
         skillDir,
         source: "workspace",
-        rootRealPath: await fs.realpath(skillDir),
+        rootRealPath,
         onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
       });
       expect(local?.skill).toEqual({
@@ -185,6 +187,11 @@ describe("loadSkills", () => {
           baseDir: skillDir,
         },
         disableModelInvocation: true,
+        sourceRootIdentity: {
+          realPath: rootRealPath,
+          dev: rootStat.dev.toString(),
+          ino: rootStat.ino.toString(),
+        },
       });
       expect(diagnostics).toEqual([]);
     },

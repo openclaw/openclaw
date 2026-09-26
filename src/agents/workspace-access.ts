@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { WorkspaceSkillLifecycle } from "../skills/lifecycle/workspace-types.js";
+import type { SkillSourceRootIdentity } from "../skills/loading/skill-contract.js";
 import type {
   WorkspaceSkillSourceRequest,
   WorkspaceSkillSources,
@@ -275,6 +276,7 @@ export function registerAgentWorkspaceAccess(
   }
   const skillResources = access.skillResources;
   if (skillResources) {
+    const readCompanion = skillResources.readCompanion?.bind(skillResources);
     boundAccess.skillResources = Object.freeze({
       async readInstructions(filePath, options) {
         assertCurrent();
@@ -284,6 +286,28 @@ export function registerAgentWorkspaceAccess(
         options.signal?.throwIfAborted();
         return result;
       },
+      ...(readCompanion
+        ? {
+            async readCompanion(
+              skillFilePath: string,
+              relativePath: string,
+              sourceRootIdentity: SkillSourceRootIdentity,
+              options: { signal?: AbortSignal },
+            ) {
+              assertCurrent();
+              options.signal?.throwIfAborted();
+              const result = await readCompanion(
+                skillFilePath,
+                relativePath,
+                sourceRootIdentity,
+                options,
+              );
+              assertCurrent();
+              options.signal?.throwIfAborted();
+              return result;
+            },
+          }
+        : {}),
       resolveExplicitSkill: guardCall((selection) =>
         skillResources.resolveExplicitSkill(selection),
       ),
