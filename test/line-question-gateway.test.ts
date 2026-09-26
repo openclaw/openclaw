@@ -13,7 +13,6 @@ import {
 } from "../src/plugin-sdk/channel-ingress-test-runtime.js";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createStartAccountContext } from "../src/plugin-sdk/test-helpers/start-account-context.js";
-import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { createDeferred } from "./helpers/promise.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -86,10 +85,9 @@ beforeEach(() => {
   boundary.upsertPairing.mockClear();
 });
 
-afterEach(async () => {
+afterEach(() => {
   vi.unstubAllGlobals();
   runtimeStore.clearRuntime();
-  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });

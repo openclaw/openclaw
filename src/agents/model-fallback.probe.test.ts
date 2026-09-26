@@ -20,7 +20,7 @@ function routingProvenance(
   stage: "initial" | "fallback",
   fallbackReason: FailoverReason | undefined,
 ) {
-  return { requestedProvider, requestedModel, stage, fallbackReason };
+  return { requestedProvider, requestedModel, stage, selectionChanged: false, fallbackReason };
 }
 
 // Mock auth-profile submodules before importing model-fallback so the module

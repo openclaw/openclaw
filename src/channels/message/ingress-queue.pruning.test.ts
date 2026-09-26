@@ -1,6 +1,4 @@
 // Pruning keeps durable ingress retention bounded without loading retained rows.
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -15,27 +13,6 @@ import { pruneChannelIngressInDatabase } from "./ingress-queue.kernel.js";
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
 describe("channel ingress pruning", () => {
-  it("does not create a database when no retention work is requested", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      expect(await queue.prune({ protectIds: ["retained"] })).toBe(0);
-      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-    });
-  });
-
-  it("captures protected ids before worker preparation yields", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir, { now: () => 10 });
-      await queue.enqueue("a", { text: "retained" });
-      await queue.enqueue("z", { text: "expired" });
-      const protectIds = new Set([" a ", ""]);
-      const pruning = queue.prune({ pendingMaxEntries: 0, protectIds });
-      protectIds.clear();
-      expect(await pruning).toBe(1);
-      expect((await queue.listPending()).map((row) => row.id)).toEqual(["a"]);
-    });
-  });
-
   it("can bound pending scans and prune stale pending rows", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;

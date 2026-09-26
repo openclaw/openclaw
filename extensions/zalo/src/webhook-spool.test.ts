@@ -359,7 +359,6 @@ describe("Zalo durable webhook ingress", () => {
     await withZaloWebhookTestQueue(async (queue) => {
       vi.useFakeTimers();
       const deferred = Promise.withResolvers<void>();
-      let adoptionTask: Promise<void> | undefined;
       let deferredLifecycle:
         | Parameters<Parameters<typeof createZaloWebhookIngress>[0]["deliver"]>[1]
         | undefined;
@@ -391,8 +390,7 @@ describe("Zalo durable webhook ingress", () => {
         if (!deferredLifecycle) {
           throw new Error("Zalo delivery did not expose its deferred lifecycle");
         }
-        adoptionTask = Promise.resolve().then(() => deferredLifecycle?.onAdopted());
-        await adoptionTask;
+        await deferredLifecycle.onAdopted();
         deferredLifecycle = undefined;
         await stopping;
         expect(stopped).toBe(true);
@@ -400,11 +398,8 @@ describe("Zalo durable webhook ingress", () => {
         expect(verdict.kind).toBe("completed");
       } finally {
         try {
-          if (deferredLifecycle) {
-            adoptionTask ??= Promise.resolve().then(() => deferredLifecycle?.onAdopted());
-          }
           try {
-            await adoptionTask;
+            await deferredLifecycle?.onAdopted();
           } finally {
             await ingress.stop();
           }

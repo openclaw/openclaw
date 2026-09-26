@@ -20,21 +20,14 @@ import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js"
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
-// Whole-request budget shared across a profile's linked emails. Lookups run
-// sequentially (see the resolution loop) so a secondary email's hash is only
-// disclosed to Gravatar after the earlier one is a definite miss; this deadline
-// bounds the total wait so an unreachable Gravatar cannot stall the held
-// connection by GRAVATAR_FETCH_TIMEOUT_MS × linked-email-count.
+// Bound the total wait across sequential linked-email lookups, not each lookup alone.
 const GRAVATAR_TOTAL_TIMEOUT_MS = 6_000;
 const GRAVATAR_CACHE_MAX_ENTRIES = 256;
 const GRAVATAR_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const GRAVATAR_HIT_TTL_MS = 24 * 60 * 60_000;
 const GRAVATAR_MISS_TTL_MS = 15 * 60_000;
 const MAX_GRAVATAR_BYTES = 1_000_000;
-// Bound the Gravatar fan-out per avatar request. Linked emails are primary-first
-// and resolved sequentially with short-circuit, so the cap only matters when
-// every earlier email misses; it stops a profile with many linked addresses from
-// probing an unbounded number of them against Gravatar.
+// Bound upstream disclosure when every earlier linked email misses.
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
@@ -257,8 +250,8 @@ function sendAvatar(
   req: IncomingMessage,
   res: ServerResponse,
   avatar: { bytes?: Uint8Array; byteLength: number; mime: string; etag: string },
-  cacheControl: string,
 ): void {
+  const cacheControl = "private, max-age=0, must-revalidate";
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
@@ -353,12 +346,7 @@ export async function handleUserProfileAvatarHttpRequest(
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
-        sendAvatar(
-          req,
-          res,
-          { ...uploaded, bytes: bytes?.bytes, etag },
-          "private, max-age=0, must-revalidate",
-        );
+        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag });
         return true;
       }
       // A legacy owner tombstone must never borrow the host photo after a merge.
@@ -371,16 +359,11 @@ export async function handleUserProfileAvatarHttpRequest(
         continue;
       }
       if (hostAvatar) {
-        sendAvatar(
-          req,
-          res,
-          {
-            ...hostAvatar,
-            byteLength: hostAvatar.bytes.byteLength,
-            etag: formatUserProfileAvatarEtag(hostAvatar.sha256, hostAvatar.mime),
-          },
-          "private, max-age=0, must-revalidate",
-        );
+        sendAvatar(req, res, {
+          ...hostAvatar,
+          byteLength: hostAvatar.bytes.byteLength,
+          etag: formatUserProfileAvatarEtag(hostAvatar.sha256, hostAvatar.mime),
+        });
         return true;
       }
       emails = prepared.emails;
@@ -429,12 +412,7 @@ export async function handleUserProfileAvatarHttpRequest(
       waiterSignal.throwIfAborted();
       authResult.assertCurrent();
       if (result.kind === "hit") {
-        sendAvatar(
-          req,
-          res,
-          { ...result, byteLength: result.bytes.byteLength },
-          "private, max-age=0, must-revalidate",
-        );
+        sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
       }
       transientFailure ||= result.kind === "error";

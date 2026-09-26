@@ -14,7 +14,6 @@ import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
@@ -124,27 +123,20 @@ describe("Nostr outbound relay failover", () => {
     }
     const busResults = await Promise.allSettled(stops.map((stop) => stop()));
     const relayResults = await Promise.allSettled(relays.map((entry) => entry.close()));
-    const failures = [...busResults, ...relayResults].flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
     try {
+      const failures = [...busResults, ...relayResults].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Nostr outbound cleanup failed");
+      }
       for (const entry of relays) {
         expect(entry.endpoints()).toEqual({ listening: false, connections: 0, clients: 0 });
         expect(entry.errors).toEqual([]);
       }
-    } catch (error) {
-      failures.push(error);
     } finally {
-      try {
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
-        await fs.rm(stateDir, { recursive: true, force: true });
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Nostr outbound cleanup failed");
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

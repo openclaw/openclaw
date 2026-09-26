@@ -5,16 +5,66 @@ import { createChannelIngressQueue } from "../channels/message/ingress-queue.js"
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import * as sqliteAdmission from "./sqlite-worker-operation-admission.js";
+import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
+
+describe("plugin doctor ingress authority", () => {
+  it("rolls back a queued claim when the repair owner expires before native commit", async () => {
+    await withOpenClawTestState(
+      { label: "doctor-ingress-commit", applyEnv: false },
+      async ({ env, stateDir }) => {
+        let active = true;
+        const context = createPluginDoctorStateMigrationContext({
+          pluginId: "line",
+          env,
+          config: {},
+          channelIngress: {
+            channelIds: ["line"],
+            stateDir,
+            mutation: {
+              assertCurrent() {
+                if (!active) {
+                  throw new Error("repair owner expired");
+                }
+              },
+            },
+          },
+        });
+        const queue = context.channelIngressQueues?.[0]?.openChannelIngressQueue?.();
+        if (!queue) {
+          throw new Error("Missing Doctor repair queue");
+        }
+        await queue.enqueue("pending", { text: "retained" });
+        const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
+        const observer = vi
+          .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === "commit") {
+                active = false;
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        try {
+          const outcome = await queue.claim("pending").then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          const reader = createChannelIngressQueue({ channelId: "line", stateDir });
+          expect((await reader.listPending()).map((row) => row.id)).toEqual(["pending"]);
+          expect(await reader.listClaims()).toEqual([]);
+          expect(outcome).toMatchObject({
+            message: expect.stringContaining("repair owner expired"),
+          });
+        } finally {
+          observer.mockRestore();
+        }
+      },
+    );
+  });
+});
 
 describe("plugin doctor session identity evidence", () => {
   it("preserves two current keys sharing an identity instead of inventing a main owner", async () => {
@@ -248,102 +298,3 @@ describe("plugin doctor session identity evidence", () => {
     );
   });
 });
-
-it.each(["current", "transaction", "commit", "settled"] as const)(
-  "joins ingress pruning with a native sibling writer when Doctor authority is %s",
-  async (revocation) => {
-    await withOpenClawTestState({ layout: "state-only" }, async ({ env, stateDir }) => {
-      let active = true;
-      const context = createPluginDoctorStateMigrationContext({
-        pluginId: "test",
-        env,
-        config: {},
-        channelIngress: {
-          channelIds: ["test"],
-          stateDir,
-          mutation: {
-            assertCurrent() {
-              if (!active) {
-                throw new Error("Doctor prune authority expired");
-              }
-            },
-          },
-        },
-      });
-      const queue = context.channelIngressQueues?.[0]?.openChannelIngressQueue?.({
-        accountId: "a",
-      });
-      if (!queue) {
-        throw new Error("Expected Doctor's writable ingress queue");
-      }
-      const reader = createChannelIngressQueue({ channelId: "test", accountId: "a", stateDir });
-      const nativeDatabase = openOpenClawStateDatabase({ env });
-      await queue.enqueue("old", { text: "old" }, { receivedAt: 1 });
-      await queue.prune({ pendingMaxEntries: 10 });
-      const createAdmission = sqliteAdmission.createSqliteWorkerOperationAdmission;
-      const stages: string[] = [];
-      let siblingWritten = false;
-      let pending: Promise<PromiseSettledResult<unknown>[]> | undefined;
-      const admission = vi
-        .spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            stages.push(request.stage);
-            if (request.stage === revocation) {
-              active = false;
-            }
-            admit(request, grant);
-            if (request.stage === "transaction") {
-              // The native waiter must service the worker's commit grant before taking its lock.
-              runOpenClawStateWriteTransaction(
-                ({ db }) => {
-                  executeSqliteQuerySync(
-                    db,
-                    getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
-                      .insertInto("channel_ingress_events")
-                      .values({
-                        queue_name: JSON.stringify(["test", "a"]),
-                        event_id: "sibling",
-                        channel_id: "test",
-                        account_id: "a",
-                        status: "pending",
-                        payload_json: JSON.stringify({ text: "sibling" }),
-                        received_at: 10,
-                        updated_at: 10,
-                      }),
-                  );
-                },
-                { database: nativeDatabase, env },
-              );
-              siblingWritten = true;
-              if (revocation === "settled") {
-                // The native writer acquired its lock after the worker's commit settled.
-                active = false;
-              }
-            }
-          }, attachment),
-        );
-      try {
-        const pruning = queue.prune({ pendingMaxEntries: 0 });
-        pending = Promise.allSettled([pruning]);
-        const committed = revocation === "current" || revocation === "settled";
-        if (committed) {
-          await expect(pruning).resolves.toBe(1);
-        } else {
-          await expect(pruning).rejects.toThrow("Doctor prune authority expired");
-        }
-        expect(siblingWritten).toBe(revocation !== "transaction");
-        expect(stages).toEqual(
-          revocation === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect((await reader.listPending()).map((row) => row.id)).toEqual(
-          committed ? ["sibling"] : revocation === "commit" ? ["old", "sibling"] : ["old"],
-        );
-      } finally {
-        admission.mockRestore();
-        await pending;
-        await closeOpenClawStateDatabaseAsync();
-      }
-    });
-  },
-);

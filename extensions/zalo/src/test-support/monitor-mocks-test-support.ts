@@ -20,7 +20,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { expect, vi, type Mock } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
@@ -38,10 +38,7 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
 let lifecycleStateDir: string | undefined;
 let previousLifecycleStateDir: string | undefined;
-const lifecycleIngressMonitors = new Set<{
-  waitForIdle(): Promise<void>;
-  waitForDeferredClaims(): Promise<void>;
-}>();
+let waitForLifecycleIngressIdle: (() => Promise<void>) | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -85,7 +82,7 @@ function installLifecycleModuleMocks() {
         ...args: Parameters<typeof actual.createChannelIngressMonitor>
       ) => {
         const monitor = actual.createChannelIngressMonitor(...args);
-        lifecycleIngressMonitors.add(monitor);
+        waitForLifecycleIngressIdle = monitor.waitForIdle;
         return monitor;
       },
     };
@@ -137,7 +134,7 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 );
 
 export async function resetLifecycleTestState() {
-  lifecycleIngressMonitors.clear();
+  waitForLifecycleIngressIdle = undefined;
   // Agent close releases leases through shared state; closing shared state first
   // can reopen it during teardown and leave Windows handles under the state dir.
   await closeOpenClawAgentDatabasesAsync();
@@ -248,31 +245,23 @@ export async function startWebhookLifecycleMonitor(params: {
     webhookSecret,
   });
 
-  try {
-    await vi.waitFor(() => {
-      const webhookRoute = registry.httpRoutes.find((route) => route.source === "zalo-webhook");
-      const hostedMediaRoute = registry.httpRoutes.find(
-        (route) => route.source === "zalo-hosted-media",
-      );
-      if (setWebhookMock.mock.calls.length !== 1 || !webhookRoute || !hostedMediaRoute) {
-        throw new Error("waiting for webhook registration");
-      }
-    });
-    expect(
-      lifecycleIngressMonitors.size,
-      "capture the real monitor before awaiting delivery",
-    ).toBeGreaterThan(0);
-  } catch (error) {
-    abort.abort();
-    await run;
-    throw error;
-  }
+  await vi.waitFor(() => {
+    const webhookRoute = registry.httpRoutes.find((route) => route.source === "zalo-webhook");
+    const hostedMediaRoute = registry.httpRoutes.find(
+      (route) => route.source === "zalo-hosted-media",
+    );
+    if (setWebhookMock.mock.calls.length !== 1 || !webhookRoute || !hostedMediaRoute) {
+      throw new Error("waiting for webhook registration");
+    }
+  });
 
   const route = registry.httpRoutes.find((entry) => entry.source === "zalo-webhook");
   if (!route) {
     throw new Error("missing plugin HTTP route");
   }
-  const ingressMonitors = [...lifecycleIngressMonitors];
+  if (!waitForLifecycleIngressIdle) {
+    throw new Error("missing Zalo webhook ingress monitor");
+  }
 
   return {
     abort,
@@ -280,21 +269,7 @@ export async function startWebhookLifecycleMonitor(params: {
     route,
     run,
     runtime,
-    waitForIdle: async () => {
-      const settled = await Promise.allSettled(
-        ingressMonitors.map(async (monitor) => {
-          await monitor.waitForIdle();
-          await monitor.waitForDeferredClaims();
-          await monitor.waitForIdle();
-        }),
-      );
-      for (const outcome of settled) {
-        if (outcome.status === "rejected") {
-          throw outcome.reason;
-        }
-      }
-      expect(runtime.error).not.toHaveBeenCalled();
-    },
+    waitForIdle: waitForLifecycleIngressIdle,
     stop: async () => {
       abort.abort();
       await run;

@@ -1,8 +1,3 @@
-/**
- * Read-only channel command default resolver.
- *
- * Reads native command/skill defaults from installed plugin manifests without loading plugins.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir, STATE_DIR } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

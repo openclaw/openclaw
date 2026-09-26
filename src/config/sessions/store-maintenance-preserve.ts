@@ -26,22 +26,15 @@ export function registerSessionMaintenancePreserveKeysProvider(
   };
 }
 
-function addSessionMaintenancePreserveKey(keys: Set<string>, value: string | undefined): void {
-  // Match how store keys are normalized in `normalizeStoreSessionKey`
-  // (trim + lowercase) so providers can register session keys in any
-  // case without missing matches during maintenance lookups.
-  const normalized = normalizeStoreSessionKey(value ?? "");
-  if (normalized) {
-    keys.add(normalized);
-  }
-}
-
 function addSessionMaintenancePreserveKeys(
   keys: Set<string>,
   values: Iterable<string | undefined> | undefined,
 ): void {
   for (const value of values ?? []) {
-    addSessionMaintenancePreserveKey(keys, value);
+    const normalized = normalizeStoreSessionKey(value ?? "");
+    if (normalized) {
+      keys.add(normalized);
+    }
   }
 }
 

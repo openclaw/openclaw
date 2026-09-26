@@ -5,6 +5,7 @@ import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
+  settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
   loadCachedLifecycleMonitorModule,
@@ -74,7 +75,7 @@ describe("Zalo pairing lifecycle", () => {
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await monitor.waitForIdle();
+          await settleAsyncWork();
         },
       );
 
@@ -135,7 +136,7 @@ describe("Zalo pairing lifecycle", () => {
           });
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await monitor.waitForIdle();
+          await settleAsyncWork();
         },
       );
 

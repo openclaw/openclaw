@@ -417,12 +417,9 @@ describe("TelegramPollingSession", () => {
   });
 
   afterEach(async () => {
-    try {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    } finally {
-      clearTelegramRuntime();
-    }
+    clearTelegramRuntime();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
   });
 
   it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
@@ -1909,7 +1906,6 @@ describe("TelegramPollingSession", () => {
       };
     });
 
-    let runPromise: Promise<void> | undefined;
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
@@ -1919,7 +1915,7 @@ describe("TelegramPollingSession", () => {
           drainIntervalMs: 10,
         },
       });
-      runPromise = session.runUntilAbort();
+      const runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(1));
 
       await writeSpooledTestUpdates(tempDir, [
@@ -1956,7 +1952,6 @@ describe("TelegramPollingSession", () => {
       stopSecondWorker?.();
       queueFactory.mockRestore();
       vi.useRealTimers();
-      await runPromise;
       await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1983,7 +1978,6 @@ describe("TelegramPollingSession", () => {
       }),
     }));
 
-    let runPromise: Promise<void> | undefined;
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
@@ -1995,7 +1989,7 @@ describe("TelegramPollingSession", () => {
         },
       });
 
-      runPromise = session.runUntilAbort();
+      const runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(1));
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);
@@ -2004,9 +1998,7 @@ describe("TelegramPollingSession", () => {
       expect(createWorker).toHaveBeenCalledTimes(1);
       expectLogExcludes(log, "isolated polling ingress failed");
     } finally {
-      abort.abort();
       vi.useRealTimers();
-      await runPromise;
       await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -2199,9 +2191,8 @@ describe("TelegramPollingSession", () => {
       },
     });
 
-    let runPromise: Promise<void> | undefined;
     try {
-      runPromise = session.runUntilAbort();
+      const runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(events).toEqual(["bot:42"]));
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -2219,7 +2210,6 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       worker.stop();
       vi.useRealTimers();
-      await runPromise;
       await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }

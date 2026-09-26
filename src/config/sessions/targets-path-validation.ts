@@ -6,6 +6,7 @@ import {
   LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
 } from "../../routing/session-key.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionStoreTarget } from "./targets-collision.js";
@@ -20,13 +21,7 @@ const NON_FATAL_DISCOVERY_ERROR_CODES = new Set([
 ]);
 
 export function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTarget[] {
-  const deduped = new Map<string, SessionStoreTarget>();
-  for (const target of targets) {
-    if (!deduped.has(target.storePath)) {
-      deduped.set(target.storePath, target);
-    }
-  }
-  return [...deduped.values()];
+  return dedupeByKey(targets, (target) => target.storePath);
 }
 
 export function shouldSkipDiscoveryError(err: unknown): boolean {
@@ -106,9 +101,6 @@ export function resolveValidatedDiscoveredStorePathSync(params: {
     }
   }
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-  if (!sqlitePath) {
-    return undefined;
-  }
   return resolveValidatedManagedFilePathSync({
     agentsRoot: params.agentsRoot,
     filePath: sqlitePath,

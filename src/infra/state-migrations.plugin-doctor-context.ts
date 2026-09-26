@@ -248,6 +248,7 @@ function buildChannelIngressQueueAccess(
     const open = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       openOptions: { accountId?: string } | undefined,
       access: "read-write" | "read-only",
+      assertCurrent?: () => void,
     ) =>
       createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
         {
@@ -256,7 +257,7 @@ function buildChannelIngressQueueAccess(
           stateDir,
           access,
         },
-        access === "read-write" && mutation ? () => mutation.assertCurrent() : undefined,
+        assertCurrent,
       );
     const access: PluginDoctorChannelIngressQueueAccess = {
       channelId,
@@ -270,7 +271,9 @@ function buildChannelIngressQueueAccess(
         listChannelIngressQueueAccountIdsReadOnly({ channelId, stateDir }),
     };
     if (mutation) {
-      access.openChannelIngressQueue = (openOptions) => open(openOptions, "read-write");
+      const assertCurrent = () => mutation.assertCurrent();
+      access.openChannelIngressQueue = (openOptions) =>
+        open(openOptions, "read-write", assertCurrent);
     }
     return access;
   });

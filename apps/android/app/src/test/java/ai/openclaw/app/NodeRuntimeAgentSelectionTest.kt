@@ -471,7 +471,7 @@ class NodeRuntimeAgentSelectionTest {
       runtime.selectChatAgent(" scout ")
 
       assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
-      assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+      assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
     } finally {
       closeNodeRuntimeTestFixture(runtime)
     }
@@ -490,7 +490,7 @@ class NodeRuntimeAgentSelectionTest {
         val refresh = withTimeout(2_000) { agentRefreshes.receive() }
         // Talk can start as soon as hello publishes connection readiness, before metadata returns.
         assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
-        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
 
         releaseList.complete(Unit)
         withTimeout(2_000) { refresh.join() }
@@ -517,7 +517,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseList.complete(Unit)
         withTimeout(2_000) { refresh.join() }
         assertEquals("ops", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
-        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
 
         val current = answerAgentList(runtime, "main", "scout", "ops")
         reconnectOperator(runtime)
@@ -540,7 +540,7 @@ class NodeRuntimeAgentSelectionTest {
         val withoutScout = answerAgentList(runtime, "main")
         reconnectOperator(runtime)
         awaitAgentRefresh(withoutScout)
-        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
         assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
 
         // The fallback forgets the removed choice instead of resurrecting it later.
@@ -566,7 +566,7 @@ class NodeRuntimeAgentSelectionTest {
 
         reconnectOperator(runtime)
         assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
-        assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -601,8 +601,8 @@ class NodeRuntimeAgentSelectionTest {
         }
         withTimeout(2_000) { loaded.await() }
 
-        assertEquals("selected-after-mount", runtime.chatSessionKey.value)
-        assertEquals("scout", runtime.chatSessionOwnerAgentId.value)
+        assertEquals("selected-after-mount", runtime.chat.sessionKey.value)
+        assertEquals("scout", runtime.chat.sessionOwnerAgentId.value)
       } finally {
         loader.join(2_000)
         closeNodeRuntimeTestFixture(runtime)
@@ -640,7 +640,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseResponse.complete(Unit)
 
         assertFalse(withTimeout(2_000) { continuation.await() })
-        assertEquals("agent:main:user", runtime.chatSessionKey.value)
+        assertEquals("agent:main:user", runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -712,7 +712,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseResponse.complete(Unit)
         withTimeout(2_000) { lookupJob.join() }
 
-        assertEquals("agent:scout:chosen", runtime.chatSessionKey.value)
+        assertEquals("agent:scout:chosen", runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -767,7 +767,7 @@ class NodeRuntimeAgentSelectionTest {
         }
         runtime.selectChatAgent("scout")
         val lookupJob = withTimeout(2_000) { lookupStarted.await() }
-        val mainSessionKey = runtime.chatSessionKey.value
+        val mainSessionKey = runtime.chat.sessionKey.value
         val entry =
           SessionCatalogEntry(
             catalogId = "codex",
@@ -783,11 +783,11 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { continueStarted.await() }
         releaseLookup.complete(Unit)
         withTimeout(2_000) { lookupJob.join() }
-        assertEquals(mainSessionKey, runtime.chatSessionKey.value)
+        assertEquals(mainSessionKey, runtime.chat.sessionKey.value)
 
         releaseContinue.complete(Unit)
         assertTrue(withTimeout(2_000) { continuation.await() })
-        assertEquals("agent:scout:catalog", runtime.chatSessionKey.value)
+        assertEquals("agent:scout:catalog", runtime.chat.sessionKey.value)
       } finally {
         releaseLookup.complete(Unit)
         releaseContinue.complete(Unit)
@@ -820,7 +820,7 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { lookupJob.join() }
 
         assertEquals("writer", resolveAgentIdFromMainSessionKey(writerMain))
-        assertEquals(writerMain, runtime.chatSessionKey.value)
+        assertEquals(writerMain, runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -891,7 +891,7 @@ class NodeRuntimeAgentSelectionTest {
         releaseResponse.complete(Unit)
         withTimeout(2_000) { lookupJob.join() }
 
-        assertEquals(scoutMain, runtime.chatSessionKey.value)
+        assertEquals(scoutMain, runtime.chat.sessionKey.value)
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -973,7 +973,7 @@ class NodeRuntimeAgentSelectionTest {
             assertEquals(JsonPrimitive("scout"), request["agentId"])
             assertEquals(JsonPrimitive(archiveSessionId), request["expectedSessionId"])
             assertEquals(JsonPrimitive(true), request["archived"])
-            assertEquals("session-$chosenKey", runtime.chatSessionId.value)
+            assertEquals("session-$chosenKey", runtime.chat.sessionId.value)
             description.set(RememberedSessionState.ArchivedAck)
             archiveRequested.complete(Unit)
             releaseArchive.await()
@@ -1057,15 +1057,15 @@ class NodeRuntimeAgentSelectionTest {
             started.await().join()
             // Main adoption can refresh the selected chat after the selector has finished.
             mainAdoption.await().join()
-            runtime.chatSessionId.first { it != null }
-            runtime.chatHistoryLoading.first { !it }
+            runtime.chat.sessionId.first { it != null }
+            runtime.chat.historyLoading.first { !it }
           }
 
           if (verifyDelayedAdoption) {
             val adoption = mainAdoption.await()
             started.await().join()
-            runtime.chatSessionId.first { it == "session-$chosenKey" }
-            runtime.chatHistoryLoading.first { !it }
+            runtime.chat.sessionId.first { it == "session-$chosenKey" }
+            runtime.chat.historyLoading.first { !it }
             assertFalse(adoption.isCompleted)
             // The old waits are already satisfied; run inline to prove adoption still blocks completion.
             val selection = async(start = CoroutineStart.UNDISPATCHED) { awaitSelection() }
@@ -1081,7 +1081,7 @@ class NodeRuntimeAgentSelectionTest {
       }
 
       selectAgentAndWait("scout", verifyDelayedAdoption = archiveAckOrder == ArchiveAckOrder.AfterDifferentArchivedIdentity)
-      assertEquals(chosenKey, runtime.chatSessionKey.value)
+      assertEquals(chosenKey, runtime.chat.sessionKey.value)
 
       runtime.switchChatSession(chosenKey, "scout")
       // More than one full page is newer; absence remains non-authoritative in every outcome.
@@ -1118,8 +1118,8 @@ class NodeRuntimeAgentSelectionTest {
               chosenSessionId.set("replacement-$chosenKey")
               chat.refresh()
               withTimeout(2_000) {
-                runtime.chatSessionId.first { it == chosenSessionId.get() }
-                runtime.chatHistoryLoading.first { !it }
+                runtime.chat.sessionId.first { it == chosenSessionId.get() }
+                runtime.chat.historyLoading.first { !it }
               }
               assertEquals(selectionGeneration, chat.selectionGeneration.value)
             }
@@ -1134,19 +1134,19 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
         if (archiveAckOrder != ArchiveAckOrder.Active) selectAgentAndWait("writer")
-        val selectedBeforeAck = runtime.chatSessionKey.value
+        val selectedBeforeAck = runtime.chat.sessionKey.value
         releaseArchive.complete(Unit)
         assertTrue(withTimeout(2_000) { archive.await() })
         if (archiveAckOrder == ArchiveAckOrder.Active) {
-          assertEquals("The acknowledged active archive must navigate away", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+          assertEquals("The acknowledged active archive must navigate away", runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
         } else {
-          assertEquals("Retiring an old owner's memory must not navigate", selectedBeforeAck, runtime.chatSessionKey.value)
+          assertEquals("Retiring an old owner's memory must not navigate", selectedBeforeAck, runtime.chat.sessionKey.value)
         }
       } else {
         description.set(describedState)
       }
-      if (resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value) != "writer") selectAgentAndWait("writer")
-      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value))
+      if (resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value) != "writer") selectAgentAndWait("writer")
+      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value))
       if (describedState == RememberedSessionState.ArchivedEvent) {
         val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
         chat.handleGatewayEvent(
@@ -1158,25 +1158,25 @@ class NodeRuntimeAgentSelectionTest {
 
       when (describedState) {
         RememberedSessionState.Active -> {
-          assertEquals("Explicitly selecting the already-visible chat must be remembered", chosenKey, runtime.chatSessionKey.value)
+          assertEquals("Explicitly selecting the already-visible chat must be remembered", chosenKey, runtime.chat.sessionKey.value)
         }
 
         RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent -> {
-          assertEquals("An archived session must not be restored", newestKey, runtime.chatSessionKey.value)
+          assertEquals("An archived session must not be restored", newestKey, runtime.chat.sessionKey.value)
         }
 
         RememberedSessionState.ArchivedAck -> {
           val expectedKey = if (preservesChoice) chosenKey else newestKey
-          assertEquals("The archive ACK may retire only its own remembered occurrence", expectedKey, runtime.chatSessionKey.value)
-          if (preservesChoice) assertEquals(chosenSessionId.get(), runtime.chatSessionId.value)
+          assertEquals("The archive ACK may retire only its own remembered occurrence", expectedKey, runtime.chat.sessionKey.value)
+          if (preservesChoice) assertEquals(chosenSessionId.get(), runtime.chat.sessionId.value)
         }
 
         RememberedSessionState.MissingIdentity, RememberedSessionState.Unavailable -> {
-          assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+          assertEquals("An unresolved selection must stay on the agent main chat", runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
           assertEquals(
             "An unresolved selection must show an action hint",
             "Could not restore the last chat. Select a chat from the sidebar.",
-            runtime.chatError.value,
+            runtime.chat.errorText.value,
           )
         }
       }
@@ -1188,9 +1188,9 @@ class NodeRuntimeAgentSelectionTest {
         selectAgentAndWait("writer")
         selectAgentAndWait("scout")
         if (describedState in setOf(RememberedSessionState.Archived, RememberedSessionState.ArchivedEvent, RememberedSessionState.ArchivedAck) && !preservesChoice) {
-          assertEquals("A retired preference must not return when its old session reappears", newestKey, runtime.chatSessionKey.value)
+          assertEquals("A retired preference must not return when its old session reappears", newestKey, runtime.chat.sessionKey.value)
         } else {
-          assertEquals("A later agent return must retry the remembered session", chosenKey, runtime.chatSessionKey.value)
+          assertEquals("A later agent return must retry the remembered session", chosenKey, runtime.chat.sessionKey.value)
         }
       }
     } finally {
@@ -1240,7 +1240,7 @@ class NodeRuntimeAgentSelectionTest {
           runtime.selectChatAgent("main")
         }
         val destinationJob = withTimeout(2_000) { requestStarted.await() }
-        val selectedKey = runtime.chatSessionKey.value
+        val selectedKey = runtime.chat.sessionKey.value
         val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
         val publicationLock = ReflectionHelpers.getField<Any>(chat, "gatewayScopeApplyLock")
         val newerSelection =
@@ -1279,7 +1279,7 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(2_000) { destinationJob.join() }
         withTimeout(2_000) { selectionFinished.await() }
 
-        assertEquals("The newer explicit session selection must win", selectedKey, runtime.chatSessionKey.value)
+        assertEquals("The newer explicit session selection must win", selectedKey, runtime.chat.sessionKey.value)
       } finally {
         releaseResponse.complete(Unit)
         selectionThread?.join(2_000)
@@ -1346,8 +1346,8 @@ class NodeRuntimeAgentSelectionTest {
         runtime.selectChatAgent("scout")
         val lookupJob = withTimeout(5_000) { lookupStarted.await() }
         withTimeout(5_000) {
-          runtime.chatSessionId.first { it != null }
-          runtime.chatHistoryLoading.first { !it }
+          runtime.chat.sessionId.first { it != null }
+          runtime.chat.historyLoading.first { !it }
         }
         val catalogCreation =
           if (catalogId == null) {
@@ -1366,12 +1366,12 @@ class NodeRuntimeAgentSelectionTest {
         } else {
           releaseCreate.complete(Unit)
           withTimeout(5_000) { createJob.join() }
-          assertEquals(createdKey, runtime.chatSessionKey.value)
+          assertEquals(createdKey, runtime.chat.sessionKey.value)
           releaseLookup.complete(Unit)
           withTimeout(5_000) { lookupJob.join() }
         }
 
-        assertEquals(createdKey, runtime.chatSessionKey.value)
+        assertEquals(createdKey, runtime.chat.sessionKey.value)
         catalogCreation?.let { assertTrue(it.await()) }
       } finally {
         releaseLookup.complete(Unit)
@@ -1451,10 +1451,10 @@ class NodeRuntimeAgentSelectionTest {
       withTimeout(5_000) { lookupJobs.receive().join() }
       runtime.switchChatSession(previousKey, "scout")
       withTimeout(5_000) {
-        runtime.chatSessionId.first { it != null }
-        runtime.chatHistoryLoading.first { !it }
+        runtime.chat.sessionId.first { it != null }
+        runtime.chat.historyLoading.first { !it }
       }
-      assertEquals(previousKey, runtime.chatSessionKey.value)
+      assertEquals(previousKey, runtime.chat.sessionKey.value)
 
       val catalogCreation =
         if (catalogId == null) {
@@ -1471,15 +1471,15 @@ class NodeRuntimeAgentSelectionTest {
         withTimeout(5_000) { createJob.join() }
         catalogCreation?.let { assertTrue(it.await()) }
       }
-      assertEquals(createdKey, runtime.chatSessionKey.value)
+      assertEquals(createdKey, runtime.chat.sessionKey.value)
 
       runtime.selectChatAgent("writer")
       withTimeout(5_000) { lookupJobs.receive().join() }
-      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chatSessionKey.value))
+      assertEquals("writer", resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value))
       runtime.selectChatAgent("scout")
       withTimeout(5_000) { lookupJobs.receive().join() }
 
-      assertEquals("Agent return must restore the newly selected chat", createdKey, runtime.chatSessionKey.value)
+      assertEquals("Agent return must restore the newly selected chat", createdKey, runtime.chat.sessionKey.value)
       releaseCreatedHistory.complete(Unit)
       withTimeout(5_000) { createJob.join() }
     } finally {

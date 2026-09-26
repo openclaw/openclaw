@@ -47,9 +47,10 @@ export function captureOpenAIRealtimeWsClose(
     code: unknown;
     reasonBuffer: unknown;
   },
-  captureWsEvent: OpenAIRealtimeHost["captureWsEvent"],
+  captureWsEventAsync: OpenAIRealtimeHost["captureWsEventAsync"],
 ): void {
-  captureWsEvent({
+  // Finalization retains capture failures; observe the Promise returned by the host view.
+  void captureWsEventAsync({
     url: params.url,
     direction: "local",
     kind: "ws-close",
@@ -63,7 +64,7 @@ export function captureOpenAIRealtimeWsClose(
           ? params.reasonBuffer.toString("utf8")
           : undefined,
     },
-  });
+  }).catch(() => {});
 }
 
 type OpenAIRealtimeClientSecretResult = {

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsArchiveCommand, sessionsDeleteCommand } from "./sessions-lifecycle.js";
 
@@ -615,63 +617,109 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("reports mixed valid and invalid keys in order and exits non-zero after continuing", async () => {
+  it.each([
+    ["archive", sessionsArchiveCommand],
+    ["delete", sessionsDeleteCommand],
+  ] as const)(
+    "%s continues past rejected lookups and reports mixed results in order",
+    async (operation, command) => {
+      onTestFinished(() => {
+        mocks.callGateway.mockReset();
+      });
+      mocks.callGateway
+        .mockResolvedValueOnce({ session: { key: "agent:main:first", sessionId: "session-1" } })
+        .mockRejectedValueOnce(
+          new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: 'malformed session key "agent:"',
+          }),
+        )
+        .mockResolvedValueOnce({ session: null })
+        .mockResolvedValueOnce({ session: { key: "agent:main:last", sessionId: "session-2" } })
+        .mockResolvedValueOnce({
+          ok: true,
+          key: "agent:main:first",
+          ...(operation === "archive"
+            ? { entry: { archivedAt: 123 } }
+            : { deleted: true, archived: ["/state/session-1.jsonl.deleted.123"] }),
+        })
+        .mockRejectedValueOnce(new Error("session is still active"));
+      const runtime = createNonExitingRuntimeEnv();
+
+      await command(
+        {
+          keys: ["agent:main:first", "agent:", "agent:main:missing", "agent:main:last"],
+          yes: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: `Session ${operation} did not complete for every requested key.`,
+          },
+          operation,
+          dryRun: false,
+          results: [
+            {
+              key: "agent:main:first",
+              ok: true,
+              status: operation === "archive" ? "archived" : "deleted",
+              ...(operation === "delete"
+                ? { archived: ["/state/session-1.jsonl.deleted.123"] }
+                : {}),
+            },
+            {
+              key: "agent:",
+              ok: false,
+              status: "failed",
+              error: 'malformed session key "agent:"',
+            },
+            {
+              key: "agent:main:missing",
+              ok: false,
+              status: "not_found",
+              error: expect.stringContaining("openclaw sessions list --json"),
+            },
+            {
+              key: "agent:main:last",
+              ok: false,
+              status: "failed",
+              error: "session is still active",
+            },
+          ],
+        },
+        2,
+      );
+      expect(mocks.callGateway).toHaveBeenCalledTimes(6);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each([
+    ["archive", sessionsArchiveCommand],
+    ["delete", sessionsDeleteCommand],
+  ] as const)("%s preserves command-wide CLI errors during lookup", async (_operation, command) => {
+    const error = new ExpectedCliError({
+      message: "Gateway connection requires authentication",
+      humanOutput: "Configure Gateway authentication before retrying.",
+      machineOutput: "Gateway authentication required",
+    });
     mocks.callGateway
       .mockResolvedValueOnce({ session: { key: "agent:main:first", sessionId: "session-1" } })
-      .mockResolvedValueOnce({ session: null })
-      .mockResolvedValueOnce({ session: { key: "agent:main:last", sessionId: "session-2" } })
-      .mockResolvedValueOnce({
-        ok: true,
-        key: "agent:main:first",
-        deleted: true,
-        archived: ["/state/session-1.jsonl.deleted.123"],
-      })
-      .mockRejectedValueOnce(new Error("session is still active"));
+      .mockRejectedValueOnce(error);
     const runtime = createNonExitingRuntimeEnv();
 
-    await sessionsDeleteCommand(
-      {
-        keys: ["agent:main:first", "agent:main:missing", "agent:main:last"],
-        yes: true,
-        json: true,
-      },
-      runtime,
-    );
+    await expect(
+      command({ keys: ["agent:main:first", "agent:main:last"], yes: true, json: true }, runtime),
+    ).rejects.toBe(error);
 
-    expect(mocks.callGateway).toHaveBeenCalledTimes(5);
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      {
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: "Session delete did not complete for every requested key.",
-        },
-        operation: "delete",
-        dryRun: false,
-        results: [
-          {
-            key: "agent:main:first",
-            ok: true,
-            status: "deleted",
-            archived: ["/state/session-1.jsonl.deleted.123"],
-          },
-          {
-            key: "agent:main:missing",
-            ok: false,
-            status: "not_found",
-            error: expect.stringContaining("openclaw sessions list --json"),
-          },
-          {
-            key: "agent:main:last",
-            ok: false,
-            status: "failed",
-            error: "session is still active",
-          },
-        ],
-      },
-      2,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("treats a delete race that reports deleted:false as not found", async () => {

@@ -17,38 +17,25 @@ import type {
   UserTurnMessagePersistenceParams,
 } from "./user-turn-transcript.types.js";
 
-// Select normalized text for persisted user turns.
 export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
   return normalizeOptionalString(value);
-}
-
-function resolveTranscriptMediaType(params: {
-  explicitType: string | undefined;
-  mediaPath: string | undefined;
-  mediaUrl: string | undefined;
-}): string | undefined {
-  return params.explicitType ?? mimeTypeFromFilePath(params.mediaPath ?? params.mediaUrl);
 }
 
 export function buildPersistedUserTurnMediaInputsFromFields(
   fields: PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
   const facts = fields ? (readPersistedMediaFacts(fields) ?? []) : [];
-  const normalizedMedia = facts.map((fact) => {
-    const rawPath = normalizeOptionalString(fact.path);
-    const mediaPath = rawPath
-      ? resolveTranscriptMediaPath(rawPath, normalizeOptionalString(fact.workspaceDir))
+  const normalizedMedia = facts.map<PersistedUserTurnMediaInput>((fact) => {
+    const mediaPath = fact.path
+      ? resolveTranscriptMediaPath(fact.path, fact.workspaceDir)
       : undefined;
-    const url = normalizeOptionalString(fact.url);
+    const url = fact.url;
     if (!mediaPath && !url) {
       return {};
     }
-    const contentType = resolveTranscriptMediaType({
-      explicitType: normalizeOptionalString(fact.contentType),
-      mediaPath,
-      mediaUrl: url,
-    });
-    const media: PersistedUserTurnMediaInput = { contentType };
+    const media: PersistedUserTurnMediaInput = {
+      contentType: fact.contentType ?? mimeTypeFromFilePath(mediaPath ?? url),
+    };
     if (mediaPath) {
       media.path = mediaPath;
     }
@@ -102,12 +89,8 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
-  // Storage is BARE (no timestamp prefix). The per-message timestamp is added
-  // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
-  // derived from each message's own `timestamp` field, so the current turn and
-  // every historical turn serialize identically on the wire. Persisting a stamp
-  // here would NOT match the bare-current arrival (the gateway no longer stamps
-  // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
+  // Keep stored content bare: normalizeMessagesForLlmBoundary stamps current and
+  // historical turns alike from their own timestamp (#3658).
   const openClawMeta = buildPersistedUserTurnMetadata(params, normalizedMedia);
   const message: PersistedUserTurnMessage = {
     role: "user",
@@ -118,8 +101,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(Object.keys(openClawMeta).length > 0 ? { __openclaw: openClawMeta } : {}),
   };
-  // SAFETY: Provenance attachment preserves the input message's user role and content.
-  return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
+  return applyInputProvenanceToUserMessage(message, params.provenance);
 }
 
 export function resolvePersistedUserTurnMessage(
@@ -175,19 +157,6 @@ export function buildLateResolvedMediaMessage(params: {
   };
 }
 
-function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
-  const marker = readOpenClawMessageMeta(message)?.beforeAgentRunBlocked;
-  return marker !== undefined;
-}
-
-function userMessageHasImageContent(message: AgentMessage): boolean {
-  return (
-    isUserMessage(message) &&
-    Array.isArray(message.content) &&
-    message.content.some((block) => asOptionalRecord(block)?.type === "image")
-  );
-}
-
 // Runtime messages may lack transcript metadata because channel adapters prepare
 // display text separately. Merge only safe user messages, never block markers.
 export function mergePreparedUserTurnMessageForRuntime(params: {
@@ -197,7 +166,7 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   if (
     !params.preparedMessage ||
     !isUserMessage(params.runtimeMessage) ||
-    isBeforeAgentRunBlockedMessage(params.runtimeMessage)
+    readOpenClawMessageMeta(params.runtimeMessage)?.beforeAgentRunBlocked !== undefined
   ) {
     return params.runtimeMessage;
   }
@@ -207,7 +176,8 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
     ...params.runtimeMessage,
     ...params.preparedMessage,
     ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
-    ...(userMessageHasImageContent(params.runtimeMessage)
+    ...(Array.isArray(params.runtimeMessage.content) &&
+    params.runtimeMessage.content.some((block) => asOptionalRecord(block)?.type === "image")
       ? { content: params.runtimeMessage.content }
       : {}),
   };

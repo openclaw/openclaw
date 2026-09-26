@@ -214,17 +214,14 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  clearTelegramRuntime();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
-  try {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  } finally {
-    vi.unstubAllEnvs();
-    clearTelegramRuntime();
-    webhookStateDir = undefined;
+  webhookStateDir = undefined;
+  if (stateDir) {
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 });
 

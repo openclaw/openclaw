@@ -6,7 +6,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrBus } from "./nostr-bus.js";
@@ -138,15 +137,12 @@ async function emitEvent(event: Record<string, unknown>) {
 let stateDir = "";
 let ingressQueue: ReturnType<typeof createChannelIngressQueueForTests<Record<string, unknown>>>;
 let ingressTasks: Promise<void>[] = [];
-const activeBuses = new Set<Awaited<ReturnType<typeof startNostrBus>>>();
 
-async function startTestNostrBus(options: Parameters<typeof startNostrBus>[0]) {
-  const bus = await startNostrBus({
+function startTestNostrBus(options: Parameters<typeof startNostrBus>[0]) {
+  return startNostrBus({
     ...options,
     trackIngressTask: (task) => ingressTasks.push(task),
   });
-  activeBuses.add(bus);
-  return bus;
 }
 
 describe("startNostrBus inbound guards", () => {
@@ -184,23 +180,9 @@ describe("startNostrBus inbound guards", () => {
   });
 
   afterEach(async () => {
-    const closed = await Promise.allSettled([...activeBuses].map((bus) => bus.close()));
-    const failures = closed.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    try {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    } catch (error) {
-      failures.push(error);
-    } finally {
-      activeBuses.clear();
-      mockState.handlers = [];
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Nostr inbound cleanup failed");
-    }
+    mockState.handlers = [];
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("subscribes to DMs with a single Nostr filter object", async () => {
@@ -419,17 +401,12 @@ describe("startNostrBus inbound guards", () => {
 
     const closing = bus.close();
 
-    try {
-      expect(mockState.subscriptionClose).toHaveBeenCalledWith("closed by caller");
-      expect(mockState.close).not.toHaveBeenCalled();
+    expect(mockState.subscriptionClose).toHaveBeenCalledWith("closed by caller");
+    expect(mockState.close).not.toHaveBeenCalled();
 
-      releaseClose();
-      await closing;
-      expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
-    } finally {
-      releaseClose();
-      await closing;
-    }
+    releaseClose();
+    await closing;
+    expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
   });
 
   it("checks sender authorization after verify and before decrypt", async () => {
@@ -541,14 +518,13 @@ describe("startNostrBus inbound guards", () => {
     const settled = vi.fn();
     void startup.then(settled, settled);
 
+    await pruneStarted;
+    await Promise.resolve();
     try {
-      await pruneStarted;
-      await Promise.resolve();
       expect(pruneActive).toBe(true);
       expect(settled).not.toHaveBeenCalled();
     } finally {
       releasePrune();
-      await Promise.allSettled([startup]);
     }
 
     await expect(startup).rejects.toThrow("state unavailable");
@@ -826,33 +802,30 @@ describe("startNostrBus inbound guards", () => {
       },
     });
 
-    try {
-      const handlers = mockState.handlers[0];
-      if (!handlers) {
-        throw new Error("missing subscription handlers");
-      }
-      void handlers.onevent(
-        createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }),
-      );
-      await vi.waitFor(() => expect(authorizeSender).toHaveBeenCalledTimes(1));
-      void handlers.onevent(
-        createEvent({
-          id: "allowed-during-pending-auth",
-          pubkey: `allowed${"b".repeat(57)}`,
-        }),
-      );
-      await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
-      resolveBlocked?.("block");
-      await Promise.all(ingressTasks.splice(0));
-
-      expect(authorizeSender).toHaveBeenCalledTimes(2);
-      expect(mockState.decrypt).toHaveBeenCalledTimes(1);
-      expect(onMessage).toHaveBeenCalledTimes(1);
-      expect(bus.getMetrics().eventsRejected.rateLimited).toBe(0);
-    } finally {
-      resolveBlocked?.("block");
-      await bus.close();
+    const handlers = mockState.handlers[0];
+    if (!handlers) {
+      throw new Error("missing subscription handlers");
     }
+    void handlers.onevent(
+      createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }),
+    );
+    await vi.waitFor(() => expect(authorizeSender).toHaveBeenCalledTimes(1));
+    void handlers.onevent(
+      createEvent({
+        id: "allowed-during-pending-auth",
+        pubkey: `allowed${"b".repeat(57)}`,
+      }),
+    );
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+    resolveBlocked?.("block");
+    await Promise.all(ingressTasks.splice(0));
+
+    expect(authorizeSender).toHaveBeenCalledTimes(2);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(bus.getMetrics().eventsRejected.rateLimited).toBe(0);
+
+    await bus.close();
   });
 
   it("rate limits repeated invalid signatures before authorization work fans out", async () => {

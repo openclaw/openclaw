@@ -30,10 +30,10 @@ The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packag
 
 | Tier | Files | Call expressions |
 | ---- | ----: | ---------------: |
-| T1   |   404 |             2007 |
+| T1   |   404 |             2009 |
 | T2   |    54 |              250 |
 | T3   |    24 |               97 |
-| W    |    63 |              189 |
+| W    |    63 |              187 |
 
 ## Profile priority and current cutover status
 
@@ -474,7 +474,7 @@ Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`
 | **src/trajectory** · `src/trajectory/runtime-store.sqlite.ts`                                                |         5/2/0/1/1 |         88 | Runtime/mixed candidate; main-thread reachability needs tracing          |
 | **src/transcripts** · `src/transcripts/store-export-jsonl.ts`                                                |         1/1/0/0/0 |         26 | Runtime/mixed candidate; main-thread reachability needs tracing          |
 | **src/transcripts** · `src/transcripts/store-read.ts`                                                        |         0/3/0/0/0 |        481 | Runtime/mixed candidate; main-thread reachability needs tracing          |
-| **src/transcripts** · `src/transcripts/store-sqlite-read.ts`                                                 |         5/4/0/0/0 |         37 | Runtime/mixed candidate; main-thread reachability needs tracing          |
+| **src/transcripts** · `src/transcripts/store-sqlite-read.ts`                                                 |         6/5/0/0/0 |         35 | Runtime/mixed candidate; main-thread reachability needs tracing          |
 | **src/transcripts** · `src/transcripts/store-sqlite-write.ts`                                                |         3/3/0/0/0 |         68 | Runtime/mixed candidate; main-thread reachability needs tracing          |
 | **src/transcripts** · `src/transcripts/store-sqlite.ts`                                                      |         3/5/0/0/0 |         67 | Runtime/mixed candidate; main-thread reachability needs tracing          |
 | **src/transcripts** · `src/transcripts/store-worker-write.ts`                                                |         0/0/1/0/0 |         45 | Runtime/mixed candidate; main-thread reachability needs tracing          |
@@ -565,7 +565,7 @@ Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`
 | **src/commands** · `src/commands/doctor/auth-alias-receipt.ts`                                    |         0/0/2/0/0 |        112 | CLI/Doctor/developer one-shot; reclassify if called by Gateway |
 | **src/commands** · `src/commands/doctor/cron/legacy-run-log-migration.ts`                         |         0/0/1/0/0 |         66 | CLI/Doctor/developer one-shot; reclassify if called by Gateway |
 | **src/commands** · `src/commands/doctor/cron/migration-ledger.ts`                                 |         1/1/0/0/0 |         22 | CLI/Doctor/developer one-shot; reclassify if called by Gateway |
-| **src/tui** · `src/tui/tui-last-session.kernel.ts`                                                |         1/0/0/0/0 |         19 | CLI/Doctor/developer one-shot; reclassify if called by Gateway |
+| **src/tui** · `src/tui/tui-last-session.ts`                                                       |         1/0/0/0/0 |        132 | CLI/Doctor/developer one-shot; reclassify if called by Gateway |
 
 ### W
 
@@ -575,7 +575,7 @@ Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`
 | **extensions/logbook** · `extensions/logbook/src/store.worker.ts`                                          |        10/7/0/0/0 |        272 | Worker implementation; keep SQL in this owner |
 | **extensions/memory-core** · `extensions/memory-core/src/memory/manager-search.worker.ts`                  |         1/0/0/0/1 |         85 | Worker implementation; keep SQL in this owner |
 | **extensions/qa-lab** · `extensions/qa-lab/src/execution-identity-storage-inspection.worker.ts`            |         0/2/0/0/0 |         24 | Worker implementation; keep SQL in this owner |
-| **extensions/team-reports** · `extensions/team-reports/src/store.worker.ts`                                |        17/5/0/0/0 |        127 | Worker implementation; keep SQL in this owner |
+| **extensions/team-reports** · `extensions/team-reports/src/store.worker.ts`                                |        14/5/0/0/0 |        140 | Worker implementation; keep SQL in this owner |
 | **src/agents** · `src/agents/mcp-oauth-store.worker.ts`                                                    |         5/0/1/0/0 |         73 | Worker implementation; keep SQL in this owner |
 | **src/agents/harness** · `src/agents/harness/native-hook-relay-store.worker.ts`                            |         0/0/1/0/0 |         26 | Worker implementation; keep SQL in this owner |
 | **src/agents/sandbox** · `src/agents/sandbox/registry-import.worker.ts`                                    |         0/0/1/0/0 |         15 | Worker implementation; keep SQL in this owner |
@@ -584,7 +584,7 @@ Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`
 | **src/agents/worktrees** · `src/agents/worktrees/registry-retirement.worker.ts`                            |         3/0/2/0/0 |         36 | Worker implementation; keep SQL in this owner |
 | **src/agents/worktrees** · `src/agents/worktrees/run-lease-store.worker.ts`                                |         0/0/1/0/0 |         15 | Worker implementation; keep SQL in this owner |
 | **src/channels** · `src/channels/message/ingress-queue-health.kernel.ts`                                   |         2/0/0/0/0 |         17 | Worker implementation; keep SQL in this owner |
-| **src/channels** · `src/channels/message/ingress-queue.kernel.ts`                                          |        22/1/0/0/0 |         40 | Worker implementation; keep SQL in this owner |
+| **src/channels** · `src/channels/message/ingress-queue.kernel.ts`                                          |        23/1/0/0/0 |         39 | Worker implementation; keep SQL in this owner |
 | **src/channels** · `src/channels/message/ingress-queue.worker.ts`                                          |         0/0/1/0/0 |         76 | Worker implementation; keep SQL in this owner |
 | **src/config/sessions** · `src/config/sessions/provider-review-store.worker.ts`                            |         0/0/0/1/0 |         18 | Worker implementation; keep SQL in this owner |
 | **src/config/sessions** · `src/config/sessions/session-accessor.sqlite-archive.worker.ts`                  |         1/0/0/0/0 |        389 | Worker implementation; keep SQL in this owner |
@@ -624,7 +624,7 @@ Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`
 | **src/skills/workshop** · `src/skills/workshop/store.worker.ts`                                            |         0/0/2/0/0 |         86 | Worker implementation; keep SQL in this owner |
 | **src/state** · `src/state/openclaw-agent-execution-cleanup.worker.ts`                                     |         0/0/1/0/0 |         16 | Worker implementation; keep SQL in this owner |
 | **src/state** · `src/state/openclaw-agent-execution.worker.ts`                                             |         0/0/0/4/0 |        384 | Worker implementation; keep SQL in this owner |
-| **src/state** · `src/state/openclaw-state-worker-runtime.ts`                                               |        0/0/11/0/0 |        348 | Worker implementation; keep SQL in this owner |
+| **src/state** · `src/state/openclaw-state-worker-runtime.ts`                                               |        0/0/11/0/0 |        360 | Worker implementation; keep SQL in this owner |
 | **src/state** · `src/state/user-channel-identities.worker.ts`                                              |         0/0/1/0/0 |         72 | Worker implementation; keep SQL in this owner |
 | **src/state** · `src/state/user-preferences.worker.ts`                                                     |         0/0/1/0/0 |         45 | Worker implementation; keep SQL in this owner |
 | **src/state** · `src/state/user-profiles.worker.ts`                                                        |         2/0/1/0/0 |         53 | Worker implementation; keep SQL in this owner |
