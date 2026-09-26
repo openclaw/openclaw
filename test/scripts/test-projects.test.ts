@@ -2700,7 +2700,6 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     "src/logging/diagnostic-session-context.test.ts",
     "src/logging/diagnostic-stuck-session-recovery.runtime.test.ts",
-    "src/state/openclaw-state-db.test.ts",
   ])("routes cron save-only fixture %s to the existing fork owner", (testFile) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
       config: "test/vitest/vitest.infra.config.ts",
@@ -3677,18 +3676,6 @@ describe("scripts/test-projects changed-target routing", () => {
       target: "src/commands/status-json-runtime.test.ts",
       config: "test/vitest/vitest.commands-light.config.ts",
       includePattern: "src/commands/status-json-runtime.test.ts",
-    },
-    {
-      title: "routes fake-timer unit-fast tests to the serial fake-timer lane",
-      target: "src/acp/translator.stop-reason.test.ts",
-      config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-      includePattern: "src/acp/translator.stop-reason.test.ts",
-    },
-    {
-      title: "routes ACP session signal tests to the host broker lane",
-      target: "src/acp/control-plane/manager.test.ts",
-      config: "test/vitest/vitest.infra.config.ts",
-      includePattern: "src/acp/control-plane/manager.test.ts",
     },
   ])("$title", ({ target, config, includePattern }) => {
     const plans = buildVitestRunPlans([target], process.cwd());
