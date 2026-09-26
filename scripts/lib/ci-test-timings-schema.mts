@@ -18,7 +18,14 @@ export function runtimePlacementTimingIdentity(
 }
 
 export type CiTestTimings = {
-  compactGroupSeconds: { blacksmith: Record<string, number>; github: Record<string, number> };
+  compactGroupSeconds: {
+    blacksmith: Record<string, number>;
+    github: Record<string, number>;
+    githubPullRequest?: {
+      groups: Record<string, { rawSeconds: number; workloadSeconds?: number }>;
+      sharedPreparationSeconds: number;
+    };
+  };
   runtimePlacementTimings: {
     blacksmith: RuntimePlacementTiming[];
     github: RuntimePlacementTiming[];
@@ -56,6 +63,29 @@ function isSecondsMap(value: unknown): value is Record<string, number> {
         typeof seconds === "number" &&
         Number.isSafeInteger(seconds) &&
         seconds > 0,
+    )
+  );
+}
+
+function isPullRequestTimings(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["groups", "sharedPreparationSeconds"]) &&
+    typeof value.sharedPreparationSeconds === "number" &&
+    Number.isSafeInteger(value.sharedPreparationSeconds) &&
+    value.sharedPreparationSeconds >= 0 &&
+    isRecord(value.groups) &&
+    Object.entries(value.groups).every(
+      ([key, group]) =>
+        key.length > 0 &&
+        isRecord(group) &&
+        hasExactKeys(group, [
+          "rawSeconds",
+          ...(Object.hasOwn(group, "workloadSeconds") ? ["workloadSeconds"] : []),
+        ]) &&
+        isSecondsMap(group) &&
+        group.rawSeconds !== undefined &&
+        (group.workloadSeconds === undefined || group.workloadSeconds <= group.rawSeconds),
     )
   );
 }
@@ -152,9 +182,15 @@ function isCiTestTimings(value: unknown): value is CiTestTimings {
     isSecondsMap(toolingFileSeconds.blacksmith) &&
     isSecondsMap(toolingFileSeconds.github) &&
     isRecord(compactGroupSeconds) &&
-    hasExactKeys(compactGroupSeconds, ["blacksmith", "github"]) &&
+    hasExactKeys(compactGroupSeconds, [
+      "blacksmith",
+      "github",
+      ...(Object.hasOwn(compactGroupSeconds, "githubPullRequest") ? ["githubPullRequest"] : []),
+    ]) &&
     isSecondsMap(compactGroupSeconds.blacksmith) &&
     isSecondsMap(compactGroupSeconds.github) &&
+    (!Object.hasOwn(compactGroupSeconds, "githubPullRequest") ||
+      isPullRequestTimings(compactGroupSeconds.githubPullRequest)) &&
     isRecord(runtimePlacementTimings) &&
     hasExactKeys(runtimePlacementTimings, ["blacksmith", "github"]) &&
     isRuntimePlacementTimings(runtimePlacementTimings.blacksmith) &&

@@ -36,7 +36,7 @@ export function commandFileSecondsFloor(
   runnerBackend: string | undefined,
 ): number {
   const scale =
-    runnerBackend === "github"
+    runnerBackend === "github" || runnerBackend === "github-pr"
       ? COMPACT_GITHUB_GROUP_SECONDS_SCALE
       : runnerBackend === "hybrid"
         ? COMPACT_HYBRID_GROUP_SECONDS_SCALE
@@ -53,9 +53,10 @@ export function estimateSerialCommandSeconds(
 ): number {
   const files = group.includePatterns ?? [];
   const selected = new Set(files);
-  const profile = runnerBackend === "github" ? "github" : "blacksmith";
+  const profile =
+    runnerBackend === "github" || runnerBackend === "github-pr" ? "github" : "blacksmith";
   const scale =
-    runnerBackend === "github"
+    runnerBackend === "github" || runnerBackend === "github-pr"
       ? COMPACT_GITHUB_GROUP_SECONDS_SCALE
       : runnerBackend === "hybrid"
         ? COMPACT_HYBRID_GROUP_SECONDS_SCALE
@@ -74,7 +75,7 @@ export function estimateSerialCommandSeconds(
     const fullSeconds = Math.max(
       parentSeconds({ shard_name: parent, includePatterns: originalFiles }),
       (readCompleteSplitGenerationSeconds(
-        readCompactGroupTimings(profile),
+        readCompactGroupTimings(profile, { pullRequest: runnerBackend === "github-pr" }),
         generation.selectorKey,
       ) ?? 0) * (runnerBackend === "hybrid" ? scale : 1),
     );
@@ -107,8 +108,13 @@ export function estimateLegacyCommandStripeSeconds(
   timingKey: string | undefined,
   runnerBackend: string | undefined,
 ): number {
-  const profile = runnerBackend === "github" ? "github" : "blacksmith";
-  const seconds = timingKey ? (readCompactGroupTimings(profile)[timingKey] ?? 0) : 0;
+  const profile =
+    runnerBackend === "github" || runnerBackend === "github-pr" ? "github" : "blacksmith";
+  const seconds = timingKey
+    ? (readCompactGroupTimings(profile, { pullRequest: runnerBackend === "github-pr" })[
+        timingKey
+      ] ?? 0)
+    : 0;
   return (
     (seconds * (runnerBackend === "hybrid" ? COMPACT_HYBRID_GROUP_SECONDS_SCALE : 1)) /
     Math.max(1, Math.min(2, files.length))
@@ -128,8 +134,13 @@ export function estimateCommandWorkerSeconds(
     COMMANDS_PARALLEL_TIMING_SUFFIX,
     `#file-parallel-${maxWorkers}`,
   );
-  const profile = runnerBackend === "github" ? "github" : "blacksmith";
-  const measured = timingKey ? (readCompactGroupTimings(profile)[timingKey] ?? 0) : 0;
+  const profile =
+    runnerBackend === "github" || runnerBackend === "github-pr" ? "github" : "blacksmith";
+  const measured = timingKey
+    ? (readCompactGroupTimings(profile, { pullRequest: runnerBackend === "github-pr" })[
+        timingKey
+      ] ?? 0)
+    : 0;
   return {
     timingKey,
     seconds: Math.max(

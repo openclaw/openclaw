@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
+import {
+  listWholeConfigFiles,
+  listWholeConfigSplitFiles,
+} from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
@@ -66,4 +69,89 @@ it("keeps hourly hosted tails parallel without losing tests or increasing worker
   expect(updateJobs).toHaveLength(1);
   expect(updateJobs[0]!.groups).toHaveLength(1);
   expect(updateJobs[0]!.groups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
+});
+
+it("keeps measured hosted PR rows bounded while preserving their complete file owners", () => {
+  vi.stubEnv("CI", "true");
+  vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "1");
+  const prOptions = {
+    ...options,
+    compactMode: "pull-request" as const,
+    runnerBackend: "github-pr",
+    includeReleaseOnlyToolingShards: true,
+    includeProofTests: false,
+  };
+  const owners = createNodeTestShards(prOptions);
+  const jobs = createNodeTestShardBundles(prOptions);
+  expect(jobs.length).toBeLessThanOrEqual(224);
+  expect(jobs.every((job) => job.planConcurrency === 1)).toBe(true);
+  expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(525);
+  expect(
+    jobs.filter((job) => job.groups.length > 1).every((job) => job.predictedSeconds! <= 375),
+  ).toBe(true);
+  for (const job of jobs.filter((entry) => entry.predictedSeconds! > 450)) {
+    expect(
+      job.pretestBuildMode !== undefined ||
+        (job.groups.length === 1 && job.groups[0]!.includePatterns?.length === 1),
+    ).toBe(true);
+  }
+
+  for (const name of [
+    "agentic-cli",
+    "agentic-cli-process",
+    "agentic-gateway-methods",
+    "agentic-control-plane-agent-chat",
+    "core-runtime-infra-storage-state",
+  ]) {
+    const owner = owners.find((entry) => entry.shardName === name)!;
+    const groups = jobs
+      .flatMap((job) => job.groups)
+      .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === name);
+    const expected = (owner.includePatterns ?? listWholeConfigFiles(name)!).filter((file) =>
+      isRuntimeTestFileIncluded(file, prOptions),
+    );
+    expect(groups.flatMap((group) => group.includePatterns!).toSorted(), name).toEqual(
+      expected.toSorted(),
+    );
+    for (const group of groups) {
+      expect(group.configs, name).toEqual(owner.configs);
+      expect(group.requiresDist, name).toBe(owner.requiresDist);
+      if (name === "core-runtime-infra-storage-state") {
+        expect(group.includePatterns!.length).toBeLessThanOrEqual(16);
+        expect(jobs.find((job) => job.groups.includes(group))!.groups).toHaveLength(1);
+      } else {
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, name).toBe("2");
+        if (name === "agentic-gateway-methods") {
+          expect(group.includePatterns!.length).toBeLessThanOrEqual(26);
+        }
+        if (name === "agentic-control-plane-agent-chat") {
+          expect(jobs.find((job) => job.groups.includes(group))!.groups).toHaveLength(1);
+        }
+      }
+    }
+  }
+  const health = jobs
+    .flatMap((job) => job.groups)
+    .filter((group) =>
+      group.includePatterns?.includes("src/cli/gateway-backed-exit-health.process.test.ts"),
+    );
+  for (const file of [
+    "src/auto-reply/reply/session.test.ts",
+    "src/agents/main-session-recovery/main-session-restart-recovery.test.ts",
+  ]) {
+    const rows = jobs.filter((job) =>
+      job.groups.some(
+        (group) =>
+          group.shard_name.replace(/-hosted-\d+$/u, "") === "core-runtime-infra-storage-state" &&
+          group.includePatterns?.includes(file),
+      ),
+    );
+    expect(rows, file).toHaveLength(1);
+    expect(rows[0]!.groups, file).toHaveLength(1);
+    expect(rows[0]!.groups[0]!.includePatterns, file).toEqual([file]);
+  }
+  expect(health).toHaveLength(1);
+  expect(health[0]!.includePatterns).toEqual([
+    "src/cli/gateway-backed-exit-health.process.test.ts",
+  ]);
 });

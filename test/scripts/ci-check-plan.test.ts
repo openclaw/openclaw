@@ -50,9 +50,10 @@ function materializePlan(runnerProfile: string, rows: number) {
     runnerProfile,
     checkMatrix: {
       include: Array.from({ length: rows }, (_, index) => ({
-        check_name: `check-guards-${index}`,
-        task: "guards",
+        check_name: `check-dependencies-${index}`,
+        task: "dependencies",
         runner: "blacksmith-4vcpu-ubuntu-2404",
+        dependency_stripe: (index % 3) + 1,
       })),
     },
     coreTypeMatrix: { include: [] },
@@ -85,10 +86,59 @@ function materializePlan(runnerProfile: string, rows: number) {
 }
 
 describe("CI check-plan completion count", () => {
+  it.each([2, 5])("retains the preflight's %i hybrid core lint owners", async (coreRows) => {
+    const plan = await createCiCheckPlan({
+      changedPaths: ["src/utils.ts"],
+      changedCoreTestPaths: null,
+      runnerProfile: "hybrid",
+      checkMatrix: {
+        include: [{ check_name: "check-lint", task: "lint", runner: "unused" }],
+      },
+      coreTypeMatrix: { include: [] },
+      lintCoreMatrix: {
+        include: Array.from({ length: coreRows }, (_, index) => ({ stripe: index + 1 })),
+      },
+      lintExtensionMatrix: { include: [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })) },
+    });
+    expect(plan.lint_core_matrix.include).toHaveLength(coreRows);
+    expect(
+      plan.lint_core_matrix.include.map(
+        ({ lint_selection_json }) => JSON.parse(lint_selection_json!).coreStripes,
+      ),
+    ).toEqual(
+      coreRows === 2
+        ? [
+            [1, 2],
+            [3, 4, 5],
+          ]
+        : [[1], [2], [3], [4], [5]],
+    );
+    expect(plan.check_job_count).toBe(
+      admittedCheckRows({
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerProfile: "hybrid",
+        preflightOutputs: { run_check_plan: "true", narrow_check_paths_json: "[]" },
+        additionalNeeds: {
+          "check-plan": {
+            result: "success",
+            outputs: Object.fromEntries(
+              Object.entries(plan).map(([name, value]) => [
+                name,
+                typeof value === "string" ? value : JSON.stringify(value),
+              ]),
+            ),
+          },
+        },
+      }).length,
+    );
+  });
+
   it.each(["blacksmith", "github", "hybrid"] as const)(
     "publishes the admitted workflow expansion for %s, including an empty plan",
     (runnerProfile) => {
-      for (const rows of [1, 0]) {
+      for (const rows of [1, 3, 0]) {
         const { run, planner, outputs } = materializePlan(runnerProfile, rows);
         expect(run.status, run.stderr).toBe(0);
         const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
@@ -102,6 +152,11 @@ describe("CI check-plan completion count", () => {
         };
         const admittedRows = admittedCheckRows(context);
         expect(outputs.check_job_count).toBe(String(admittedRows.length));
+        expect(
+          JSON.parse(outputs.check_matrix!).include.map(
+            (row: { dependency_stripe: number }) => row.dependency_stripe,
+          ),
+        ).toEqual(Array.from({ length: rows }, (_, index) => (index % 3) + 1));
         const marker: WorkflowStep = planner.steps.at(-1);
         const admission = marker.if ?? "success()";
         const condition = admission.startsWith("${{") ? admission : `\${{ ${admission} }}`;

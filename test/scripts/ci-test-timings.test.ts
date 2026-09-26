@@ -13,7 +13,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import {
+  decodeNodeTestGroups,
+  encodeNodeTestGroups,
+} from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   type CompactNodeTestShard,
   type NodeTestShardGroup,
@@ -262,6 +265,20 @@ describe("runtime placement observations", () => {
   ])("does not merge runtime placement with changed ownership %j", (change) => {
     const result = refitTestTimings([sample(1, runtimeLog(1)), sample(2, runtimeLog(2, change))]);
     expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+  });
+
+  it("retains valid runtime placement when another descriptor is malformed", () => {
+    const runs = [1, 2].map((id) => {
+      const text = runtimeLog(id).replace(
+        /BASE64: (\S+)/u,
+        (_match, encoded: string) =>
+          `BASE64: ${encodeNodeTestGroups([...decodeNodeTestGroups(encoded), { shard_name: "malformed", configs: [] }])}`,
+      );
+      return sample(id, text);
+    });
+    expect(refitTestTimings(runs).timings.runtimePlacementTimings.blacksmith).toEqual([
+      { ...reader, seconds: 20 },
+    ]);
   });
 
   it.each(["failed", "missing readiness", "malformed descriptor"])(
@@ -716,6 +733,7 @@ function withSamplerFixture(
       dryRun?: boolean,
       count?: number,
       toolingRunIds?: number[],
+      pullRequestRunIds?: number[],
     ) => SpawnSyncReturns<string>;
     contents: () => string;
     requests: () => string[][];
@@ -791,7 +809,7 @@ if (args[1] === "--help") {
           .split("\n")
           .filter(Boolean)
           .map((line) => JSON.parse(line) as string[]),
-      invoke: (dryRun = false, count = 2, toolingRunIds = []) =>
+      invoke: (dryRun = false, count = 2, toolingRunIds = [], pullRequestRunIds = []) =>
         spawnSync(
           process.execPath,
           [
@@ -808,6 +826,7 @@ if (args[1] === "--help") {
             "--out",
             output,
             ...toolingRunIds.flatMap((id) => ["--tooling-run", String(id)]),
+            ...pullRequestRunIds.flatMap((id) => ["--pull-request-run", String(id)]),
             ...(dryRun ? ["--dry-run"] : []),
           ],
           {
@@ -1062,6 +1081,321 @@ it.todo("retains todo coverage");
     });
   });
 
+  it.each([
+    { name: "complete Node/Bun pair", node: "complete", bun: "complete", expected: 120 },
+    { name: "missing Bun child", node: "complete", bun: "absent" },
+    { name: "unfinished Bun child", node: "complete", bun: "unfinished" },
+    { name: "failed Node child", node: "failed", bun: "complete" },
+    {
+      name: "successful pure Bun job",
+      node: "absent",
+      bun: "complete",
+      completeJob: true,
+      expected: 20,
+    },
+    { name: "partial pure Bun job", node: "absent", bun: "complete" },
+    {
+      name: "unambiguous empty UI Node child",
+      node: "skipped",
+      bun: "complete",
+      ui: true,
+      expected: 20,
+    },
+    {
+      name: "ambiguous empty UI Node child",
+      node: "skipped",
+      bun: "complete",
+      ui: true,
+      ambiguous: true,
+    },
+    { name: "empty Node marker outside UI", node: "skipped", bun: "complete" },
+    { name: "dual Node child before missing Bun", node: "complete", bun: "absent", dual: true },
+  ])("admits only complete hosted PR runtime costs: $name", (scenario) => {
+    const group = {
+      shard_name: "fixture-runtime-hosted-1",
+      configs: [scenario.ui ? "ui/vitest.config.ts" : "test/vitest/vitest.gateway-core.config.ts"],
+      includePatterns: ["src/fixture.test.ts"],
+      timing_key: "fixture-runtime",
+    };
+    const span = (key: string, seconds: number, outcome: string) => {
+      if (outcome === "absent" || outcome === "skipped") {
+        return "";
+      }
+      const lines = compactLog(seconds, key).split("\n").slice(0, 2);
+      return outcome === "unfinished"
+        ? lines[0]!
+        : lines.join("\n").replace("exit 0", outcome === "failed" ? "exit 1" : "exit 0");
+    };
+    const text = [
+      `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${scenario.dual ? "dual" : "bun-compatible"}`,
+      `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(scenario.ambiguous ? [group, { ...group, timing_key: "other" }] : [group])}`,
+      span(`${scenario.dual ? "" : "node-subset:"}fixture-runtime`, 100, scenario.node),
+      span("bun:fixture-runtime", 20, scenario.bun),
+      scenario.node === "skipped"
+        ? "2026-08-27T23:01:00Z [shard:node-subset:fixture-runtime-hosted-1] skipped (native shard has no Node-only files)"
+        : "",
+    ].join("\n");
+    const runs = [1, 2].map((id) =>
+      timingRun(id, [
+        {
+          kind: "compactPullRequest",
+          labels: ["ubuntu-24.04"],
+          completeJob: scenario.completeJob,
+          text,
+        },
+      ]),
+    );
+    const measured =
+      refitTestTimings(runs).timings.compactGroupSeconds.githubPullRequest?.groups ?? {};
+    expect(measured["fixture-runtime"]?.rawSeconds).toBe(scenario.expected);
+    expect(Object.keys(measured).some((key) => /^(?:node-subset|bun):/u.test(key))).toBe(false);
+    if (scenario.expected === undefined) {
+      expect(measured).toEqual({});
+    }
+  });
+
+  describe("shared hosted worker preparation accounting", () => {
+    const at = (seconds: number) =>
+      new Date(Date.parse("2026-09-26T10:00:00Z") + seconds * 1000).toISOString();
+    const descriptors = [
+      { shard_name: "a", configs: ["a.config.ts"], includePatterns: ["a.test.ts"] },
+      { shard_name: "b", configs: ["b.config.ts"] },
+    ];
+    const preparation = `${at(31)} [vitest-workers] prepared 0123456789ab in 30000ms (12 inputs, 20 outputs)`;
+    const job = (reverse = false) => {
+      const [first, second] = reverse ? ["b", "a"] : ["a", "b"];
+      const firstEnd = reverse ? 110 : 90;
+      return {
+        kind: "compactPullRequest" as const,
+        labels: ["ubuntu-24.04"],
+        completeJob: true,
+        jobId: 101,
+        text: [
+          `${at(0)} OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: 1`,
+          `${at(0)} [shard:resources] logicalCpuCount=4 totalMemoryBytes=16000000000 requested plans=1 admitted plans=1`,
+          `${at(0)} OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(descriptors)}`,
+          `${at(0)} [shard:${first}] begin`,
+          preparation,
+          `${at(firstEnd)} [shard:${first}] end (exit 0)`,
+          `${at(firstEnd + 10)} [shard:${second}] begin`,
+          `${at(180)} [shard:${second}] end (exit 0)`,
+        ].join("\n"),
+      };
+    };
+
+    it.each([false, true])(
+      "conserves raw spans and charges preparation once after reorder=%s",
+      (reverse) => {
+        const result = refitTestTimings([timingRun(1, [job(reverse)])], undefined, {
+          seedPullRequest: true,
+        });
+        const profile = result.timings.compactGroupSeconds.githubPullRequest!;
+        expect(profile.groups.a).toEqual({ rawSeconds: reverse ? 60 : 90, workloadSeconds: 60 });
+        expect(profile.groups.b).toEqual({ rawSeconds: reverse ? 110 : 80, workloadSeconds: 80 });
+        expect(profile.sharedPreparationSeconds).toBe(30);
+        const [receipt] = result.pullRequestObservations;
+        expect(receipt).toMatchObject({
+          runId: 1,
+          jobId: 101,
+          sharedPreparation: { at: at(31), identity: "0123456789ab", seconds: 30 },
+        });
+        expect(receipt!.spans).toHaveLength(2);
+        expect(receipt!.spans.map((span) => span.sharedPreparationSeconds)).toEqual([30, 0]);
+        expect(
+          receipt!.spans.reduce((sum, span) => sum + span.workloadSeconds, 0) +
+            profile.sharedPreparationSeconds,
+        ).toBe(170);
+        for (const span of receipt!.spans) {
+          expect(span.rawSeconds).toBe((Date.parse(span.end) - Date.parse(span.start)) / 1000);
+          expect(span.workloadSeconds + span.sharedPreparationSeconds).toBe(span.rawSeconds);
+        }
+      },
+    );
+
+    it("keeps fitted raw estimates admissible across incomplete and complete job populations", () => {
+      const partial = {
+        ...job(),
+        completeJob: false,
+        jobId: 100,
+        text: `${at(0)} [shard:a] begin\n${at(20)} [shard:a] end (exit 0)`,
+      };
+      const complete = job();
+      complete.text = complete.text
+        .replace(`${at(90)} [shard:a] end`, `${at(100)} [shard:a] end`)
+        .replace(`${at(100)} [shard:b] begin`, `${at(110)} [shard:b] begin`);
+      const result = refitTestTimings(
+        [timingRun(1, [partial]), timingRun(2, [complete])],
+        undefined,
+        { seedPullRequest: true },
+      );
+      // The partial 20s sample still contributes: dropping it would fit raw=100.
+      expect(result.timings.compactGroupSeconds.githubPullRequest!.groups.a).toEqual({
+        rawSeconds: 70,
+        workloadSeconds: 70,
+      });
+      expect(() => ciTestTimingsSchema.parse(result.timings)).not.toThrow();
+      expect(result.pullRequestObservations[0]!.spans).toEqual([
+        {
+          key: "a",
+          start: at(0),
+          end: at(20),
+          rawSeconds: 20,
+          workloadSeconds: 20,
+          sharedPreparationSeconds: 0,
+        },
+      ]);
+      expect(result.pullRequestObservations[1]!.spans[0]).toEqual({
+        key: "a",
+        start: at(0),
+        end: at(100),
+        rawSeconds: 100,
+        workloadSeconds: 70,
+        sharedPreparationSeconds: 30,
+      });
+      for (const observation of result.pullRequestObservations) {
+        for (const span of observation.spans) {
+          expect(span.rawSeconds).toBe(span.workloadSeconds + span.sharedPreparationSeconds);
+        }
+      }
+    });
+
+    it.each([
+      "nested",
+      "duplicate",
+      "malformed duplicate",
+      "parallel",
+      "unadmitted",
+      "parallel admission",
+      "unknown admission",
+      "contradictory admission",
+      "partial job",
+      "overlap",
+      "outside span",
+      "duplicate span",
+      "failed sibling",
+      "incomplete descriptor",
+      "malformed sibling descriptor",
+    ])("retains conservative raw cost for %s preparation", (condition) => {
+      const log = job();
+      switch (condition) {
+        case "nested":
+          log.text = log.text.replace(
+            "[vitest-workers] prepared",
+            "[shard:a] [vitest-workers] prepared",
+          );
+          break;
+        case "duplicate":
+          log.text += `\n${preparation}`;
+          break;
+        case "malformed duplicate":
+          log.text += `\n${at(32)} [vitest-workers] prepared malformed`;
+          break;
+        case "parallel":
+          log.text = log.text.replace("CONCURRENCY: 1", "CONCURRENCY: 2");
+          break;
+        case "unadmitted":
+          log.text = log.text.split("\n").slice(1).join("\n");
+          break;
+        case "parallel admission":
+          log.text = log.text.replace("admitted plans=1", "admitted plans=2");
+          break;
+        case "unknown admission":
+          log.text = log.text
+            .split("\n")
+            .filter((line) => !line.includes("[shard:resources]"))
+            .join("\n");
+          break;
+        case "contradictory admission":
+          log.text += `\n${at(1)} [shard:resources] logicalCpuCount=4 totalMemoryBytes=16000000000 requested plans=1 admitted plans=unknown`;
+          break;
+        case "partial job":
+          log.completeJob = false;
+          break;
+        case "overlap":
+          log.text = log.text.replace(`${at(100)} [shard:b] begin`, `${at(80)} [shard:b] begin`);
+          break;
+        case "outside span":
+          log.text = log.text.replace(at(31), at(10));
+          break;
+        case "duplicate span":
+          log.text += `\n${at(190)} [shard:b] begin\n${at(270)} [shard:b] end (exit 0)`;
+          break;
+        case "failed sibling":
+          log.text = log.text.replace("[shard:b] end (exit 0)", "[shard:b] end (exit 1)");
+          break;
+        case "incomplete descriptor":
+          log.text = log.text.replace(
+            encodeNodeTestGroups(descriptors),
+            encodeNodeTestGroups(descriptors.slice(0, 1)),
+          );
+          break;
+        case "malformed sibling descriptor":
+          log.text = log.text.replace(
+            encodeNodeTestGroups(descriptors),
+            encodeNodeTestGroups([...descriptors, { shard_name: "malformed", configs: [] }]),
+          );
+          break;
+      }
+      const result = refitTestTimings([timingRun(1, [log])], undefined, { seedPullRequest: true });
+      const profile = result.timings.compactGroupSeconds.githubPullRequest!;
+      expect(profile.sharedPreparationSeconds).toBe(0);
+      expect(profile.groups.a!.rawSeconds).toBe(90);
+      expect(profile.groups.a!.workloadSeconds ?? profile.groups.a!.rawSeconds).toBe(90);
+      expect(result.pullRequestObservations[0]!.sharedPreparation).toBeUndefined();
+      expect(
+        result.pullRequestObservations[0]!.spans.every(
+          (span) => span.workloadSeconds === span.rawSeconds,
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("seeds one cancelled PR run with complete groups without lowering or pruning retained costs", () => {
+    withSamplerFixture(
+      {
+        runs: [],
+        seedRuns: { "1": samplerRun(1, { event: "pull_request", conclusion: "cancelled" }) },
+        baseline: {
+          ...baseline,
+          compactGroupSeconds: {
+            blacksmith: { retained: 40 },
+            github: { retained: 50 },
+            githubPullRequest: {
+              groups: { omitted: { rawSeconds: 90 }, "kept-higher": { rawSeconds: 200 } },
+              sharedPreparationSeconds: 0,
+            },
+          },
+        },
+        jobs: [
+          samplerJob(11, 1, {
+            labels: ["ubuntu-24.04"],
+            conclusion: "cancelled",
+            log: `${compactLog(100, "new-cost")}\n${compactLog(20, "kept-higher")}`,
+          }),
+        ],
+      },
+      (fixture) => {
+        const result = fixture.invoke(false, 2, [], [1]);
+        expect(result.status, result.stderr).toBe(0);
+        const timings = ciTestTimingsSchema.parse(JSON.parse(fixture.contents()));
+        expect(timings.compactGroupSeconds).toEqual({
+          blacksmith: { retained: 40 },
+          github: { retained: 50 },
+          githubPullRequest: {
+            groups: {
+              omitted: { rawSeconds: 90 },
+              "kept-higher": { rawSeconds: 200 },
+              "new-cost": { rawSeconds: 100 },
+            },
+            sharedPreparationSeconds: 0,
+          },
+        });
+        expect(timings.source).toContain("hosted PR qualification seed");
+        expect(fixture.requests().some((args) => args[1]?.includes("/workflows/"))).toBe(false);
+      },
+    );
+  });
+
   it("retains measured parent costs across split inventory changes without double-counting retries", () => {
     const parentShardName = "agentic-control-plane-agent-chat";
     const generations = [0, 1, 2].map((index) =>
@@ -1106,6 +1440,67 @@ it.todo("retains todo coverage");
     expect(refitTestTimings([runs[0]!]).timings.compactGroupSeconds).toEqual({
       blacksmith: {},
       github: {},
+    });
+  });
+
+  it("keeps hosted PR membership costs across repartitioning without changing main timings", () => {
+    const runs = [70, 78, 80].map((seconds, index) => {
+      const descriptor = {
+        shard_name: `fixture-process-hosted-${index + 1}`,
+        timing_key: `old-generation-${index}`,
+        configs: ["test/vitest/vitest.cli-process.config.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: index === 2 ? "4" : "2" },
+        includePatterns: ["src/cli/example.process.test.ts"],
+      };
+      return Object.assign(
+        timingRun(index + 1, [
+          {
+            kind: "compactPullRequest",
+            labels: ["ubuntu-24.04"],
+            text: [
+              `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+              compactLog(seconds, descriptor.timing_key),
+            ].join("\n"),
+          },
+        ]),
+        { completeInventory: false },
+      );
+    });
+    const previous = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { old: 20 }, github: { old: 30 } },
+    };
+    expect(
+      refitTestTimings([runs[0]!], previous).timings.compactGroupSeconds.githubPullRequest,
+    ).toEqual({ groups: {}, sharedPreparationSeconds: 0 });
+    const result = refitTestTimings(runs, previous);
+    expect(result.timings.compactGroupSeconds.blacksmith).toEqual({ old: 20 });
+    expect(result.timings.compactGroupSeconds.github).toEqual({ old: 30 });
+    const measurements = Object.entries(
+      result.timings.compactGroupSeconds.githubPullRequest!.groups,
+    );
+    expect(measurements).toHaveLength(1);
+    expect(measurements[0]![0]).toMatch(/^fixture-process#membership#selector-1-/u);
+    expect(measurements[0]![1]).toEqual({ rawSeconds: 74 });
+    expect(result.contributingRunIds.githubPullRequest).toEqual([1, 2, 3]);
+    expect(ciTestTimingsSchema.parse(result.timings)).toEqual(result.timings);
+
+    // Successful PRs finish their selected plan, not the repository's full inventory.
+    const successful = runs.map((run) => Object.assign({}, run, { completeInventory: true }));
+    const unselectedTooling = { "core-tooling-7": { rawSeconds: 480 } };
+    const retained = refitTestTimings(successful, {
+      ...previous,
+      compactGroupSeconds: {
+        ...previous.compactGroupSeconds,
+        githubPullRequest: { groups: unselectedTooling, sharedPreparationSeconds: 0 },
+      },
+    });
+    expect(retained.timings.compactGroupSeconds.githubPullRequest).toEqual({
+      ...result.timings.compactGroupSeconds.githubPullRequest,
+      groups: {
+        ...result.timings.compactGroupSeconds.githubPullRequest!.groups,
+        ...unselectedTooling,
+      },
     });
   });
 
@@ -2111,6 +2506,20 @@ describe("CI timing schema", () => {
       { ...baseline, compactGroupSeconds: { ...baseline.compactGroupSeconds, extra: {} } },
     ],
     ["missing profile", { ...baseline, compactGroupSeconds: { blacksmith: {} } }],
+    ...[
+      { group: 100 },
+      {
+        groups: { group: { rawSeconds: 100, workloadSeconds: 101 } },
+        sharedPreparationSeconds: 30,
+      },
+      { groups: { group: { rawSeconds: 100 } }, sharedPreparationSeconds: -1 },
+    ].map((githubPullRequest): [string, unknown] => [
+      `invalid PR accounting ${JSON.stringify(githubPullRequest)}`,
+      {
+        ...baseline,
+        compactGroupSeconds: { ...baseline.compactGroupSeconds, githubPullRequest },
+      },
+    ]),
     ...["ui", "repoE2e", "blacksmith", "github"].flatMap((profile) =>
       (profile === "ui"
         ? [
@@ -2210,7 +2619,17 @@ describe("committed CI timing loader", () => {
   it("reads the repo-relative file once and honors the disable switch even after caching", async () => {
     const data = {
       ...baseline,
-      compactGroupSeconds: { blacksmith: { group: 110 }, github: { group: 181 } },
+      compactGroupSeconds: {
+        blacksmith: { group: 110 },
+        github: { group: 181 },
+        githubPullRequest: {
+          groups: {
+            group: { rawSeconds: 330, workloadSeconds: 300 },
+            "raw-only": { rawSeconds: 250 },
+          },
+          sharedPreparationSeconds: 30,
+        },
+      },
       repoE2eFileSeconds: { "test/example.e2e.test.ts": 90 },
       toolingFileSeconds: {
         blacksmith: { "test/scripts/ci-node-test-plan.test.ts": 300 },
@@ -2222,6 +2641,11 @@ describe("committed CI timing loader", () => {
     expect(loader.readRepoE2eFileTimings()).toEqual(data.repoE2eFileSeconds);
     expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 110 });
     expect(loader.readCompactGroupTimings("github")).toEqual({ group: 181 });
+    expect(loader.readCompactGroupTimings("github", { pullRequest: true })).toEqual({
+      group: 300,
+      "raw-only": 250,
+    });
+    expect(loader.readCompactPullRequestPreparationSeconds()).toBe(30);
     expect(loader.readToolingFileTimings("blacksmith")).toEqual(data.toolingFileSeconds.blacksmith);
     expect(loader.readToolingFileTimings("github")).toEqual(data.toolingFileSeconds.github);
     vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "0");
@@ -2229,6 +2653,7 @@ describe("committed CI timing loader", () => {
     expect(loader.readRepoE2eFileTimings()).toEqual({});
     expect(loader.readCompactGroupTimings("blacksmith")).toEqual({});
     expect(loader.readCompactGroupTimings("github")).toEqual({});
+    expect(loader.readCompactPullRequestPreparationSeconds()).toBe(0);
     expect(loader.readToolingFileTimings("blacksmith")).toEqual({});
     expect(loader.readToolingFileTimings("github")).toEqual({});
     vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", undefined);

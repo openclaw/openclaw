@@ -138,10 +138,10 @@ describe("check-extension-package-tsc-boundary", () => {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.symlinkSync(path.resolve(file), path.join(root, file));
     }
-    const run = () =>
+    const run = (args: string[] = []) =>
       spawnSync(
         process.execPath,
-        ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile"],
+        ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile", ...args],
         {
           cwd: root,
           encoding: "utf8",
@@ -165,6 +165,30 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(warm.status, warm.stdout + warm.stderr).toBe(0);
     expect(warm.stdout).toContain("compiled plugins: 0");
     expect(warm.stdout).toContain("skipped plugins: 2");
+    write("extensions/third/tsconfig.json", '{"extends":"../tsconfig.package-boundary.base.json"}');
+    write("extensions/third/package.json", '{"name":"@openclaw/third"}');
+    write(
+      "extensions/third/index.ts",
+      `export const value = ${JSON.stringify("x".repeat(500))};\n`,
+    );
+    const compiledAcrossShards: string[] = [];
+    for (const shard of ["1/3", "2/3", "3/3"]) {
+      const selected = run([`--shard=${shard}`]);
+      expect(selected.status, selected.stdout + selected.stderr).toBe(0);
+      expect(selected.stdout).toContain(`compile shard ${shard}: 1 of 3 plugins`);
+      expect(selected.stdout).toContain("compiled plugins: 1");
+      compiledAcrossShards.push(
+        ...Array.from(selected.stdout.matchAll(/^\[1\/1\] (\S+)$/gmu), (match) => match[1]!),
+      );
+    }
+    expect(compiledAcrossShards.toSorted()).toEqual(["demo", "larger", "third"]);
+    const afterShards = run();
+    expect(afterShards.status, afterShards.stdout + afterShards.stderr).toBe(0);
+    expect(afterShards.stdout).toContain("compiled plugins: 0");
+    expect(afterShards.stdout).toContain("skipped plugins: 3");
+    const invalidShard = run(["--shard=0/3"]);
+    expect(invalidShard.status, invalidShard.stderr).toBe(1);
+    expect(invalidShard.stderr).toContain("Compile sharding requires --mode=compile");
     write(
       "extensions/demo/package.json",
       JSON.stringify({

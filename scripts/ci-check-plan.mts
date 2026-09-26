@@ -11,6 +11,7 @@ type CheckRow = {
   check_name: string;
   task: string;
   runner: string;
+  dependency_stripe?: number;
   type_graph_names_json?: string;
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
@@ -36,6 +37,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         await import("./check-changed.mts")
       ).createChangedCiLintPlan(detectChangedLanes(input.changedPaths), {
         runnerProfile: input.runnerProfile,
+        compactCoreLint: input.lintCoreMatrix.include.length === 2,
       })
     : null;
   const started = performance.now();
@@ -195,7 +197,24 @@ function parseInput(value: unknown): CiCheckPlanInput {
       ) {
         throw new Error("Check planning requires canonical check templates");
       }
-      return { check_name: row.check_name, task: row.task, runner: row.runner };
+      if (
+        row.dependency_stripe !== undefined &&
+        (row.task !== "dependencies" ||
+          typeof row.dependency_stripe !== "number" ||
+          !Number.isInteger(row.dependency_stripe) ||
+          row.dependency_stripe < 1 ||
+          row.dependency_stripe > 3)
+      ) {
+        throw new Error("Check planning requires a canonical dependency stripe");
+      }
+      return {
+        check_name: row.check_name,
+        task: row.task,
+        runner: row.runner,
+        ...(row.dependency_stripe !== undefined
+          ? { dependency_stripe: row.dependency_stripe }
+          : {}),
+      };
     }),
     coreTypeMatrix: matrix(value.coreTypeMatrix, stripe),
     lintCoreMatrix: matrix(value.lintCoreMatrix, stripe),

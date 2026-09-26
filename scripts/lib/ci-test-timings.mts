@@ -13,6 +13,7 @@ const emptyGroupTimings: Readonly<Record<string, number>> = {};
 const emptyRuntimeTimings: readonly RuntimePlacementTiming[] = [];
 let cachedTimings: CiTestTimings | null | undefined;
 let cachedReadFileSync: typeof fs.readFileSync | undefined;
+let cachedPullRequestTimings: Readonly<Record<string, number>> | undefined;
 
 function readTestTimings(): CiTestTimings | null {
   if (process.env.OPENCLAW_CI_TEST_TIMINGS === "0") {
@@ -22,6 +23,7 @@ function readTestTimings(): CiTestTimings | null {
   // Cache one parse per reader so a replacement cannot inherit stale bytes.
   if (cachedTimings === undefined || cachedReadFileSync !== fs.readFileSync) {
     cachedReadFileSync = fs.readFileSync;
+    cachedPullRequestTimings = undefined;
     try {
       // Every independent shard must read the same checkout bytes, not a
       // restored cache or downloaded artifact that may differ between jobs.
@@ -52,8 +54,25 @@ export function readToolingFileTimings(
 
 export function readCompactGroupTimings(
   profile: "blacksmith" | "github",
+  options: { pullRequest?: boolean } = {},
 ): Readonly<Record<string, number>> {
-  return readTestTimings()?.compactGroupSeconds[profile] ?? emptyGroupTimings;
+  const timings = readTestTimings()?.compactGroupSeconds;
+  if (profile === "github" && options.pullRequest && timings?.githubPullRequest) {
+    return (cachedPullRequestTimings ??= {
+      ...timings.github,
+      ...Object.fromEntries(
+        Object.entries(timings.githubPullRequest.groups).map(([key, group]) => [
+          key,
+          group.workloadSeconds ?? group.rawSeconds,
+        ]),
+      ),
+    });
+  }
+  return timings?.[profile] ?? emptyGroupTimings;
+}
+
+export function readCompactPullRequestPreparationSeconds(): number {
+  return readTestTimings()?.compactGroupSeconds.githubPullRequest?.sharedPreparationSeconds ?? 0;
 }
 
 export function readRepoE2eFileTimings(): Readonly<Record<string, number>> {

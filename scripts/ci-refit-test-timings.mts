@@ -60,6 +60,7 @@ async function main() {
     options: {
       runs: { type: "string", default: "5" },
       "tooling-run": { type: "string", multiple: true },
+      "pull-request-run": { type: "string", multiple: true },
       repo: { type: "string", default: "openclaw/openclaw" },
       "dry-run": { type: "boolean", default: false },
       out: {
@@ -73,6 +74,15 @@ async function main() {
     ...new Set((values["tooling-run"] ?? []).map((id) => parsePositiveInt(id, "--tooling-run"))),
   ];
   const seedTooling = toolingRunIds.length > 0;
+  const pullRequestRunIds = [
+    ...new Set(
+      (values["pull-request-run"] ?? []).map((id) => parsePositiveInt(id, "--pull-request-run")),
+    ),
+  ];
+  const seedPullRequest = pullRequestRunIds.length > 0;
+  if (seedTooling && seedPullRequest) {
+    throw new Error("Select either tooling or hosted PR qualification seeds");
+  }
   const repo = z
     .string()
     .regex(/^[\w.-]+\/[\w.-]+$/u)
@@ -107,7 +117,7 @@ async function main() {
   const runs: CiTimingRun[] = [];
   const seenRuns = new Map<number, string>();
   const seenJobs = new Map<number, string>();
-  type TimingSource = "main" | "release" | "tooling";
+  type TimingSource = "main" | "release" | "tooling" | "pull-request";
   async function readRun(run: z.infer<typeof runSchema>, source: TimingSource) {
     const logs: CiTimingRun["logs"] = [];
     const completeInventory = run.conclusion === "success";
@@ -155,7 +165,7 @@ async function main() {
             continue;
           }
           seenJobs.set(job.id, identity);
-          if (job.conclusion !== "success") {
+          if (job.conclusion !== "success" && source !== "pull-request") {
             continue;
           }
           if (
@@ -175,15 +185,19 @@ async function main() {
               ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
                 ? "repoE2e"
                 : undefined
-              : source === "tooling"
-                ? job.name.startsWith("checks-node-compact-")
-                  ? "tooling"
+              : source === "pull-request"
+                ? job.name.startsWith("checks-node-compact-") && job.labels.includes("ubuntu-24.04")
+                  ? "compactPullRequest"
                   : undefined
-                : job.name.startsWith("checks-ui-e2e (")
-                  ? "uiE2e"
-                  : job.name.startsWith("checks-node-compact-")
-                    ? "compact"
-                    : undefined;
+                : source === "tooling"
+                  ? job.name.startsWith("checks-node-compact-")
+                    ? "tooling"
+                    : undefined
+                  : job.name.startsWith("checks-ui-e2e (")
+                    ? "uiE2e"
+                    : job.name.startsWith("checks-node-compact-")
+                      ? "compact"
+                      : undefined;
           if (kind) {
             timingJobs.push({ ...job, kind });
           }
@@ -207,11 +221,27 @@ async function main() {
       const attemptLogs: CiTimingRun["logs"] = [];
       for (const job of timingJobs) {
         console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+        const text = await readGh([
+          "api",
+          `repos/${repo}/actions/jobs/${job.id}/logs`,
+          ...logFlags,
+        ]);
         attemptLogs.push({
           kind: job.kind,
           labels: job.labels,
-          text: await readGh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`, ...logFlags]),
+          text,
+          completeJob: job.conclusion === "success",
+          jobId: job.id,
         });
+        if (source === "tooling" && job.labels.includes("ubuntu-24.04") && !seedTooling) {
+          attemptLogs.push({
+            kind: "compactPullRequest",
+            labels: job.labels,
+            text,
+            completeJob: true,
+            jobId: job.id,
+          });
+        }
       }
       const { contributingRunIds } = refitTestTimings([
         { id: run.id, createdAt: run.created_at, logs: attemptLogs, completeInventory },
@@ -303,7 +333,8 @@ async function main() {
             ? compact
             : source === "tooling"
               ? contributingRunIds.toolingBlacksmith.length +
-                  contributingRunIds.toolingGithub.length >
+                  contributingRunIds.toolingGithub.length +
+                  contributingRunIds.githubPullRequest.length >
                 0
               : contributingRunIds.repoE2e.length > 0;
         if (contributes) {
@@ -325,7 +356,31 @@ async function main() {
     }
     throw new Error(`Run pagination limit reached for ${workflow}; reduce --runs`);
   }
-  if (seedTooling) {
+  if (seedPullRequest) {
+    const schema = runSchema.extend({
+      path: z.literal(".github/workflows/ci.yml"),
+      event: z.literal("pull_request"),
+    });
+    for (const id of pullRequestRunIds) {
+      const run = schema.parse(
+        JSON.parse(await readGh(["api", `repos/${repo}/actions/runs/${id}`])),
+      );
+      if (run.id !== id) {
+        throw new Error(`Requested PR run ${id} returned run ${run.id}`);
+      }
+      const timingRun = await readRun(run, "pull-request");
+      if (!timingRun) {
+        throw new Error(`PR run ${id} completed after the frozen cutoff`);
+      }
+      runs.push(timingRun);
+    }
+    if (
+      refitTestTimings(runs, undefined, { seedPullRequest: true }).contributingRunIds
+        .githubPullRequest.length === 0
+    ) {
+      throw new Error("PR qualification runs supplied no complete hosted group measurements");
+    }
+  } else if (seedTooling) {
     const toolingRunSchema = runSchema.extend({
       conclusion: z.literal("success"),
       path: z.literal(".github/workflows/ci.yml"),
@@ -391,11 +446,15 @@ async function main() {
   }
   const { timings, changes, runIds, contributingRunIds } = refitTestTimings(runs, previous, {
     seedTooling,
+    seedPullRequest,
   });
   const { blacksmith, github, toolingBlacksmith, toolingGithub } = contributingRunIds;
   const mainContributors = new Set([...blacksmith, ...github]);
   console.log(
     `\nIndependent main compact contributors: ${mainContributors.size} (Blacksmith: ${blacksmith.length}; GitHub: ${github.length}). Release Gateway contributors: ${contributingRunIds.repoE2e.length}.\n`,
+  );
+  console.log(
+    `Independent hosted PR compact contributors: ${contributingRunIds.githubPullRequest.length}.\n`,
   );
   console.log(
     `Independent PR tooling contributors: ${new Set([...toolingBlacksmith, ...toolingGithub]).size} (Blacksmith: ${toolingBlacksmith.length}; GitHub: ${toolingGithub.length}).${seedTooling ? " Explicit tooling seed; single-run measurements allowed." : ""}\n`,

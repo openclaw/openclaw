@@ -14,34 +14,47 @@ function packageScripts(files: string[]) {
 }
 
 describe("Windows CI whole-file placement", () => {
-  it("covers the package-owned native inventory exactly once within five budgeted jobs", () => {
-    const { scripts } = JSON.parse(
-      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-    );
-    const inventory = [1, 2].flatMap((part) =>
-      scripts[`test:windows:ci:${part}`].slice(command.length + 1).split(" "),
-    );
-    const shards = createWindowsTestShards(scripts);
-    expect(shards).toHaveLength(5);
-    const compareFiles = (a: string, b: string) => a.localeCompare(b);
-    expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
-      inventory.toSorted(compareFiles),
-    );
-    // New Windows suspension/handoff fixtures round two shards (up to 419.4s raw) to 420s.
-    expect(shards.every((shard) => shard.predicted_seconds < 425)).toBe(true);
-    expect(
-      shards.filter(
-        (shard) =>
-          resolveVitestPretestBuildMode([{ includePatterns: shard.targets }]) !== undefined,
-      ),
-    ).toHaveLength(1);
-    expect(createWindowsTestShards(packageScripts(inventory.toReversed()))).toEqual(shards);
-    expect(
-      shards.filter((shard) =>
-        shard.targets.includes("test/scripts/vitest-worker-artifacts.test.ts"),
-      ),
-    ).toHaveLength(1);
-  });
+  it.each([
+    { profile: "default", options: {}, jobs: 5, ceiling: 425 },
+    {
+      profile: "hosted PR",
+      options: { hostedPullRequest: true },
+      jobs: 12,
+      ceiling: 600,
+    },
+  ])(
+    "covers the package-owned native inventory exactly once for $profile",
+    ({ options, jobs, ceiling }) => {
+      const { scripts } = JSON.parse(
+        readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+      );
+      const inventory = [1, 2].flatMap((part) =>
+        scripts[`test:windows:ci:${part}`].slice(command.length + 1).split(" "),
+      );
+      const shards = createWindowsTestShards(scripts, options);
+      expect(shards).toHaveLength(jobs);
+      const compareFiles = (a: string, b: string) => a.localeCompare(b);
+      expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
+        inventory.toSorted(compareFiles),
+      );
+      // Hosted runtime/fixture rows retain truthful estimates above the packing target.
+      expect(shards.every((shard) => shard.predicted_seconds < ceiling)).toBe(true);
+      expect(
+        shards.filter(
+          (shard) =>
+            resolveVitestPretestBuildMode([{ includePatterns: shard.targets }]) !== undefined,
+        ),
+      ).toHaveLength(1);
+      expect(createWindowsTestShards(packageScripts(inventory.toReversed()), options)).toEqual(
+        shards,
+      );
+      expect(
+        shards.filter((shard) =>
+          shard.targets.includes("test/scripts/vitest-worker-artifacts.test.ts"),
+        ),
+      ).toHaveLength(1);
+    },
+  );
 
   it("keeps an unmeasured project together regardless of inventory ordering", () => {
     const files = Array.from({ length: 24 }, (_, index) => `src/native/case-${index}.test.ts`);
