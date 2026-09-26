@@ -114,7 +114,9 @@ file triggers a fresh inspection; failed probes remain retryable.
 Distinct files wait in a bounded inspection queue. If the queue is full, metadata
 reports temporary unavailability that you can retry, and playback remains
 preparing. Disconnected requests stop waiting, and queued probes with no remaining
-viewers are skipped.
+viewers release their queue slots immediately. Queued reads recheck current access
+before opening and probing the file. A busy inspector does not discard outgoing
+attachments; their optional playback metadata can remain absent.
 
 Gateway-managed assistant attachments use these per-file caps:
 

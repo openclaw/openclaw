@@ -15,6 +15,26 @@ import {
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
 
+export function requireBlock(
+  blocks: readonly Record<string, unknown>[],
+  index = 0,
+): Record<string, unknown> {
+  const block = blocks[index];
+  if (!block) {
+    throw new Error(`expected block ${index}`);
+  }
+  return block;
+}
+
+export function requireAttachmentIdFromUrl(url: unknown): string {
+  expect(url).toBeTypeOf("string");
+  const attachmentId = String(url).split("/").at(-2);
+  if (!attachmentId) {
+    throw new Error(`expected attachment id in URL ${String(url)}`);
+  }
+  return attachmentId;
+}
+
 export async function requireManagedOriginalPath(
   stateDir: string,
   attachmentId: string,

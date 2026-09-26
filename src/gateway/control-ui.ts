@@ -410,8 +410,10 @@ async function resolveAssistantMediaAvailability(
   allowance: true | AssistantMediaFile | undefined,
   agentId: string | undefined,
   signal: AbortSignal,
+  assertCurrent: () => void,
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
+    assertCurrent();
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
     // The inspection owner reopens and verifies this identity after queue admission.
     await opened[Symbol.asyncDispose]();
@@ -424,6 +426,7 @@ async function resolveAssistantMediaAvailability(
             mimeType,
             kind: mediaKind,
             signal,
+            assertCurrent,
           })
         : undefined;
     return {
@@ -561,6 +564,7 @@ export async function handleControlUiAssistantMediaRequest(
       allowance,
       agentId,
       requestAbort.signal,
+      assertCurrentPolicy,
     );
     if (requestAbort.signal.aborted) {
       return true;
@@ -607,6 +611,7 @@ export async function handleControlUiAssistantMediaRequest(
         mimeType: contentType,
         kind: mediaKind,
         signal: byteStream.signal,
+        assertCurrent: assertCurrentPolicy,
       });
       if (playback.kind === "preparing") {
         await byteStream.close();

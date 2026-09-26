@@ -5,9 +5,8 @@ import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
+import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
-import pLimit from "p-limit";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,6 +15,7 @@ import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createPermitPool } from "../shared/permit-pool.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import {
   probePlaybackMediaFileDescriptor,
@@ -23,81 +23,16 @@ import {
   type MediaProbeResult,
   type PlaybackMediaProbeResult,
 } from "./media-probe.js";
-import { resolveNativePlaybackCodecCompatibility } from "./playback-codec-policy.js";
+import {
+  PLAYBACK_TRANSCODE_POLICY,
+  resolveNativePlaybackCodecCompatibility,
+  resolvePlaybackInputFormat,
+  resolvePlaybackMode,
+  type PlaybackMediaKind,
+  type PlaybackMode,
+  type PlaybackPolicyEntry,
+} from "./playback-codec-policy.js";
 import { getMediaDir, PLAYBACK_TRANSCODE_SUBDIR, writePlaybackTranscodeCache } from "./store.js";
-
-type PlaybackMediaKind = Extract<MediaKind, "audio" | "video">;
-type PlaybackMode = "native" | "transcode";
-
-type PlaybackPolicyEntry = {
-  nativeMimeTypes: readonly string[];
-  codecProbeInputFormats: Readonly<Record<string, string>>;
-  transcodeInputFormats: Readonly<Record<string, string>>;
-  target: { contentType: string; extension: `.${string}` };
-};
-
-/**
- * Native means safe across the supported browser, AVPlayer, and ExoPlayer clients.
- * Client-specific formats stay in the transcode path because metadata cannot know its consumer.
- */
-const PLAYBACK_TRANSCODE_POLICY = {
-  audio: {
-    nativeMimeTypes: [
-      "audio/m4a",
-      "audio/mp3",
-      "audio/mp4",
-      "audio/mpeg",
-      "audio/wav",
-      "audio/wave",
-      "audio/x-m4a",
-      "audio/x-wav",
-    ],
-    codecProbeInputFormats: {
-      "audio/m4a": "mov",
-      "audio/mpeg": "mp3",
-      "audio/mp4": "mov",
-      "audio/wav": "wav",
-      "audio/wave": "wav",
-      "audio/x-m4a": "mov",
-      "audio/x-wav": "wav",
-    },
-    transcodeInputFormats: {
-      "audio/aac": "aac",
-      "audio/aiff": "aiff",
-      "audio/amr": "amr",
-      "audio/amr-wb": "amr",
-      "audio/flac": "flac",
-      "audio/ogg": "ogg",
-      "audio/opus": "ogg",
-      "audio/vorbis": "ogg",
-      "audio/webm": "matroska,webm",
-      "audio/x-aiff": "aiff",
-      "audio/x-caf": "caf",
-      "audio/x-ms-asf": "asf",
-      "audio/x-ms-wma": "asf",
-    },
-    target: { contentType: "audio/mp4", extension: ".m4a" },
-  },
-  video: {
-    nativeMimeTypes: ["video/mp4"],
-    codecProbeInputFormats: {
-      "video/mp4": "mov",
-    },
-    transcodeInputFormats: {
-      "video/avi": "avi",
-      "video/flv": "flv",
-      "video/matroska": "matroska,webm",
-      "video/quicktime": "mov",
-      "video/webm": "matroska,webm",
-      "video/x-flv": "flv",
-      "video/x-matroska": "matroska,webm",
-      "video/x-ms-asf": "asf",
-      "video/x-ms-wmv": "asf",
-      "video/x-msvideo": "avi",
-    },
-    target: { contentType: "video/mp4", extension: ".mp4" },
-  },
-} as const satisfies Record<PlaybackMediaKind, PlaybackPolicyEntry>;
 
 type PlaybackSourceIdentity = {
   path: string;
@@ -110,12 +45,13 @@ type PlaybackSourceIdentity = {
 
 type PlaybackSourceStat = Omit<PlaybackSourceIdentity, "path">;
 
-type PlaybackSourceParams = {
+type PlaybackInspectionWaiter = { signal?: AbortSignal; assertCurrent?: () => void };
+
+type PlaybackSourceParams = PlaybackInspectionWaiter & {
   sourcePath: string;
   sourceStat: PlaybackSourceStat;
   mimeType: string;
   kind: PlaybackMediaKind;
-  signal?: AbortSignal;
 };
 
 type PlaybackTranscodeResolution =
@@ -143,7 +79,9 @@ type PlaybackInspection = MediaProbeResult &
 
 type PlaybackInspectionJob = {
   result: Promise<PlaybackInspection>;
-  waiters: Set<AbortSignal | undefined>;
+  waiters: Set<PlaybackInspectionWaiter>;
+  controller: AbortController;
+  readonly pending: boolean;
 };
 
 export class PlaybackInspectionBusyError extends Error {
@@ -165,7 +103,7 @@ const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, PlaybackInspectionJob>();
-const limitPlaybackInspections = pLimit(2);
+const playbackInspectionPermits = createPermitPool(2);
 const log = createSubsystemLogger("media/playback");
 
 /** Hashes the immutable source identity used by playback cache file names. */
@@ -182,21 +120,6 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
       ]),
     )
     .digest("hex");
-}
-
-/** Returns whether a sniffed audio/video type needs the cross-client playback target. */
-function resolvePlaybackMode(
-  mimeType: string,
-  policy: PlaybackPolicyEntry,
-): PlaybackMode | undefined {
-  const mime = normalizeMimeType(mimeType);
-  if (!mime) {
-    return undefined;
-  }
-  if (policy.nativeMimeTypes.includes(mime)) {
-    return "native";
-  }
-  return policy.transcodeInputFormats[mime] ? "transcode" : undefined;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -249,16 +172,36 @@ function playbackInspectionCacheKey(params: {
 async function probePlaybackSource(
   source: PlaybackSourceIdentity,
   kind: PlaybackMediaKind,
+  assertCurrent: () => void,
 ): Promise<PlaybackMediaProbeResult | null> {
+  assertCurrent();
   await using opened = await openLocalFileSafely({ filePath: source.path }).catch(() => null);
   if (!opened || !playbackSourceIdentityMatches(source, opened)) {
     return null;
   }
+  assertCurrent();
   return await probePlaybackMediaFileDescriptor(opened.handle.fd, kind);
+}
+
+function assertPlaybackInspectionAuthority(waiters: Set<PlaybackInspectionWaiter>): void {
+  let failure: unknown = createAbortError("Playback inspection abandoned");
+  for (const waiter of waiters) {
+    if (waiter.signal?.aborted) {
+      continue;
+    }
+    try {
+      waiter.assertCurrent?.();
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 
 async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<PlaybackInspection> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
   const source = playbackSourceIdentity(params);
@@ -272,8 +215,8 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
   if (cached) {
     return cached;
   }
-  const computeInspection = async (): Promise<PlaybackInspection> => {
-    const probe = await probePlaybackSource(source, params.kind);
+  const computeInspection = async (assertCurrent: () => void): Promise<PlaybackInspection> => {
+    const probe = await probePlaybackSource(source, params.kind, assertCurrent);
     const metadata = toMediaProbeResult(probe);
     const mimeType = normalizeMimeType(params.mimeType);
     const needsCodecProbe = Boolean(mimeType && policy.codecProbeInputFormats[mimeType]);
@@ -325,26 +268,53 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
   };
   let job = playbackInspectionJobs.get(cacheKey);
   if (!job) {
-    if (limitPlaybackInspections.pendingCount >= MAX_PENDING_PLAYBACK_INSPECTIONS) {
+    if (playbackInspectionPermits.pendingCount >= MAX_PENDING_PLAYBACK_INSPECTIONS) {
       throw new PlaybackInspectionBusyError();
     }
-    const waiters = new Set<AbortSignal | undefined>();
-    const result = limitPlaybackInspections(async () => {
-      if (![...waiters].some((signal) => !signal?.aborted)) {
-        throw createAbortError("Playback inspection abandoned");
-      }
-      return await computeInspection();
-    }).finally(() => {
-      playbackInspectionJobs.delete(cacheKey);
-    });
-    job = { result, waiters };
+    const waiters = new Set<PlaybackInspectionWaiter>();
+    const controller = new AbortController();
+    let pending = true;
+    const created: PlaybackInspectionJob = {
+      waiters,
+      controller,
+      get pending() {
+        return pending;
+      },
+      result: (async () => {
+        const release = await playbackInspectionPermits.acquire({ signal: controller.signal });
+        if (!release) {
+          throw createAbortError("Playback inspection abandoned");
+        }
+        pending = false;
+        try {
+          return await computeInspection(() => assertPlaybackInspectionAuthority(waiters));
+        } finally {
+          release();
+        }
+      })().finally(() => {
+        // A canceled pending job can be replaced before its promise settles.
+        if (playbackInspectionJobs.get(cacheKey) === created) {
+          playbackInspectionJobs.delete(cacheKey);
+        }
+      }),
+    };
+    job = created;
     playbackInspectionJobs.set(cacheKey, job);
   }
-  job.waiters.add(params.signal);
+  const waiter = { signal: params.signal, assertCurrent: params.assertCurrent };
+  job.waiters.add(waiter);
   try {
-    return await racePromiseWithAbortSignal(job.result, params.signal);
+    const inspection = await racePromiseWithAbortSignal(job.result, params.signal);
+    params.assertCurrent?.();
+    return inspection;
   } finally {
-    job.waiters.delete(params.signal);
+    job.waiters.delete(waiter);
+    if (job.pending && job.waiters.size === 0) {
+      job.controller.abort();
+      if (playbackInspectionJobs.get(cacheKey) === job) {
+        playbackInspectionJobs.delete(cacheKey);
+      }
+    }
   }
 }
 
@@ -393,16 +363,6 @@ function makePlaybackInputFileName(sourcePath: string, mimeType: string): string
     ? sourceExtension
     : (extensionForMime(mimeType) ?? ".media");
   return `input${extension}`;
-}
-
-function resolvePlaybackInputFormat(
-  policy: PlaybackPolicyEntry,
-  mimeType: string,
-): string | undefined {
-  const normalized = normalizeMimeType(mimeType);
-  return normalized
-    ? (policy.transcodeInputFormats[normalized] ?? policy.codecProbeInputFormats[normalized])
-    : undefined;
 }
 
 function playbackDurationsMatch(sourceDurationMs: number, outputDurationMs: number): boolean {
@@ -605,6 +565,7 @@ export async function resolvePlaybackTranscode(
   params: PlaybackSourceParams,
 ): Promise<PlaybackTranscodeResolution> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
   if (!containerMode) {
@@ -627,6 +588,7 @@ export async function resolvePlaybackTranscode(
     maxBytes,
   });
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   if (cachedPath) {
     return {
       kind: "transcoded",

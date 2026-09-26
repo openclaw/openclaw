@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -8,6 +9,7 @@ import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import * as playback from "../media/playback-transcode.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import * as httpAuth from "./http-auth-utils.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const runFfprobe = vi.hoisted(() => vi.fn<() => Promise<string>>());
@@ -314,3 +316,145 @@ it("skips a disconnected byte-playback inspection and serves later metadata", as
     await Promise.allSettled(requests.map(({ handled }) => handled));
   }
 });
+
+it("reclaims a full abandoned queue before active inspections finish", async () => {
+  const probes = blockPlaybackProbes();
+  const root = tempDirs.make("ui-media-reclaimed-meta-", resolvePreferredOpenClawTmpDir());
+  const paths = Array.from({ length: 35 }, (_, index) => path.join(root, `${index}.caf`));
+  await Promise.all(paths.map((filePath) => fs.writeFile(filePath, Buffer.from("caff-original"))));
+  const requests = paths.slice(0, 2).map((filePath) => startMediaRequest(filePath));
+  try {
+    await probes.started;
+    const queueFull = createDeferred();
+    const laterRequested = createDeferred();
+    const resolveMetadata = playback.resolvePlaybackMetadataForSource;
+    let queuedRequests = 0;
+    vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
+      const result = resolveMetadata(params);
+      if (++queuedRequests === 32) {
+        queueFull.resolve();
+      } else if (queuedRequests === 33) {
+        laterRequested.resolve();
+      }
+      return result;
+    });
+    const abandoned = paths.slice(2, 34).map((filePath) => startMediaRequest(filePath));
+    requests.push(...abandoned);
+    await queueFull.promise;
+    const closed = Promise.all(abandoned.map(({ res }) => once(res, "close")));
+    for (const { res } of abandoned) {
+      res.destroy();
+    }
+    await closed;
+    await Promise.all(abandoned.map(({ handled }) => handled));
+    const later = startMediaRequest(paths[34]!);
+    requests.push(later);
+    await laterRequested.promise;
+    expect(runFfprobe).toHaveBeenCalledTimes(2);
+    probes.release();
+    for (const request of [...requests.slice(0, 2), later]) {
+      expect(await readMetadataResponse(request)).toMatchObject({
+        available: true,
+        playback: "transcode",
+        durationMs: 1000,
+      });
+    }
+    expect(runFfprobe).toHaveBeenCalledTimes(3);
+  } finally {
+    probes.release();
+    await Promise.allSettled(requests.map(({ handled }) => handled));
+  }
+});
+
+it.each(["while queued", "during safe-open"] as const)(
+  "rechecks reader authority %s and retains work for an authorized shared viewer",
+  async (revocation) => {
+    const probes = blockPlaybackProbes();
+    const root = tempDirs.make("ui-media-authority-meta-", resolvePreferredOpenClawTmpDir());
+    const paths = ["first", "second", "allowed", "revoked", "shared"].map((name) =>
+      path.join(root, `${name}.caf`),
+    );
+    await Promise.all(
+      paths.map((filePath) => fs.writeFile(filePath, Buffer.from("caff-original"))),
+    );
+    const realPaths = await Promise.all(paths.map((filePath) => fs.realpath(filePath)));
+    const revokedRequests = new Set<IncomingMessage>();
+    const authorize = httpAuth.authorizeControlUiReadRequestOrReply;
+    vi.spyOn(httpAuth, "authorizeControlUiReadRequestOrReply").mockImplementation(
+      async (params) => {
+        const authorized = await authorize(params);
+        return authorized
+          ? {
+              ...authorized,
+              hasCurrentClientAuthority: () =>
+                !revokedRequests.has(params.req) &&
+                authorized.hasCurrentClientAuthority?.() !== false,
+            }
+          : authorized;
+      },
+    );
+    const openedFiles: fsSafe.OpenResult[] = [];
+    const openFile = fsSafe.openLocalFileSafely;
+    let revokeDuringOpen: (() => void) | undefined;
+    vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
+      const opened = await openFile(params);
+      openedFiles.push(opened);
+      if (
+        opened.realPath === realPaths[3] &&
+        openedFiles.filter((entry) => entry.realPath === realPaths[3]).length === 2
+      ) {
+        revokeDuringOpen?.();
+      }
+      return opened;
+    });
+    const requests = realPaths.slice(0, 2).map((filePath) => startMediaRequest(filePath));
+    try {
+      await probes.started;
+      const queued = createDeferred();
+      const resolveMetadata = playback.resolvePlaybackMetadataForSource;
+      let queuedRequests = 0;
+      vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
+        const result = resolveMetadata(params);
+        if (++queuedRequests === 4) {
+          queued.resolve();
+        }
+        return result;
+      });
+      const allowed = startMediaRequest(realPaths[2]!);
+      const revoked = startMediaRequest(realPaths[3]!);
+      const sharedRevoked = startMediaRequest(realPaths[4]!);
+      const sharedAllowed = startMediaRequest(realPaths[4]!);
+      requests.push(allowed, revoked, sharedRevoked, sharedAllowed);
+      await queued.promise;
+      revokedRequests.add(sharedRevoked.res.req);
+      const revoke = () => revokedRequests.add(revoked.res.req);
+      if (revocation === "while queued") {
+        revoke();
+      } else {
+        revokeDuringOpen = revoke;
+      }
+      probes.release();
+      for (const request of [...requests.slice(0, 2), allowed, sharedAllowed]) {
+        expect(await readMetadataResponse(request)).toMatchObject({
+          available: true,
+          playback: "transcode",
+          durationMs: 1000,
+        });
+      }
+      for (const request of [revoked, sharedRevoked]) {
+        expect(await request.handled).toBe(true);
+        expect(request.res.statusCode).toBe(404);
+      }
+      expect(openedFiles.filter((entry) => entry.realPath === realPaths[3])).toHaveLength(
+        revocation === "while queued" ? 1 : 2,
+      );
+      expect(runFfprobe).toHaveBeenCalledTimes(4);
+      for (const opened of openedFiles) {
+        expect(opened.handle.fd).toBe(-1);
+      }
+    } finally {
+      probes.release();
+      await Promise.allSettled(requests.map(({ handled }) => handled));
+    }
+  },
+);

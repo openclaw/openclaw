@@ -38,6 +38,9 @@ export function createPermitPool(limit: number) {
   };
 
   return {
+    get pendingCount(): number {
+      return waiters.length;
+    },
     async acquire({
       signal,
       deadlineAtMs,

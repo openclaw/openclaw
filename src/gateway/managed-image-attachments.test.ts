@@ -49,6 +49,8 @@ import {
   createFixture,
   prepareAgentSessionStore,
   prepareManagedSessionStore as seedManagedSessionStore,
+  requireAttachmentIdFromUrl,
+  requireBlock,
   requireManagedOriginalPath,
   usePreparedManagedImageState,
 } from "./managed-image-attachments.test-support.js";
@@ -164,6 +166,7 @@ const {
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
 const { bindHttpResponseAuthority } = await import("./http-request-authority.js");
+const { PlaybackInspectionBusyError } = await import("../media/playback-transcode.js");
 
 type ManagedOutgoingImageTestParams = Omit<
   Parameters<typeof createManagedOutgoingImageBlocksActual>[0],
@@ -220,15 +223,6 @@ async function createPngDataUrl(width: number, height: number): Promise<string> 
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
-function requireAttachmentIdFromUrl(url: unknown): string {
-  expect(url).toBeTypeOf("string");
-  const attachmentId = String(url).split("/").at(-2);
-  if (!attachmentId) {
-    throw new Error(`expected attachment id in URL ${String(url)}`);
-  }
-  return attachmentId;
-}
-
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -237,26 +231,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`expected ${targetPath} to be missing`);
-}
-
-type ManagedImageBlock = {
-  type?: string;
-  artifactId?: string;
-  alt?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  url?: string;
-  openUrl?: string;
-  fileName?: string;
-  playback?: "native" | "transcode";
-};
-
-function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
-  const block = blocks[index];
-  if (!block) {
-    throw new Error(`expected block ${index}`);
-  }
-  return block as ManagedImageBlock;
 }
 
 async function prepareManagedSessionStore(stateDir: string): Promise<void> {
@@ -1460,20 +1434,29 @@ describe("createManagedOutgoingImageBlocks", () => {
     },
   );
 
-  it.each([
-    { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
-    { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
-  ])(
-    "creates managed $kind blocks with media artifact ids",
-    async ({ kind, contentType, fileName }) => {
+  it.each(
+    [
+      { kind: "audio" as const, contentType: "audio/mpeg", fileName: "theme.mp3" },
+      { kind: "video" as const, contentType: "video/mp4", fileName: "clip.mp4" },
+    ].flatMap((fixture) =>
+      ["available", "busy"].map((inspection) => Object.assign({}, fixture, { inspection })),
+    ),
+  )(
+    "creates managed $kind blocks and retains originals when inspection is $inspection",
+    async ({ kind, contentType, fileName, inspection }) => {
       const sourcePath = path.join(stateDir, "workspace", fileName);
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(
-        sourcePath,
+      const original =
         kind === "audio"
           ? Buffer.from([0xff, 0xfb, 0x90, 0x00])
-          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
-      );
+          : Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+      await fs.writeFile(sourcePath, original);
+      if (inspection === "busy") {
+        resolvePlaybackMetadataForSourceMock.mockRejectedValueOnce(
+          new PlaybackInspectionBusyError(),
+        );
+      }
+      const onPrepareError = vi.fn();
 
       const blocks = await createManagedOutgoingImageBlocks({
         sessionKey: "agent:main:main",
@@ -1481,23 +1464,32 @@ describe("createManagedOutgoingImageBlocks", () => {
         stateDir,
         localRoots: [path.join(stateDir, "workspace")],
         allowLocalNonImage: true,
+        continueOnPrepareError: true,
+        onPrepareError,
       });
 
+      expect(onPrepareError).not.toHaveBeenCalled();
       expect(blocks).toHaveLength(1);
       const block = requireBlock(blocks);
       expect(block).toMatchObject({
         type: kind,
         mimeType: contentType,
         fileName,
-        playback: "native",
       });
+      expect(block.playback).toBe(inspection === "busy" ? undefined : "native");
       const attachmentId = requireAttachmentIdFromUrl(block.url);
       expect(block.artifactId).toBe(`${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`);
-      expect((await readManagedImageRecord(attachmentId, stateDir))?.original).toMatchObject({
+      const record = await readManagedImageRecord(attachmentId, stateDir);
+      if (!record) {
+        throw new Error("Expected a persisted managed media record");
+      }
+      expect(record.original).toMatchObject({
         contentType,
         width: null,
         height: null,
       });
+      const { mediaRoot, mediaSubdir, mediaId } = record.original;
+      expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(original);
     },
   );
 
