@@ -250,8 +250,6 @@ vi.mock("./translator.js", () => ({
 
 describe("serveAcpGateway startup", () => {
   let serveAcpGateway: typeof import("./server.js").serveAcpGateway;
-  let signalHandlers: ReturnType<typeof captureProcessSignalHandlers>["signalHandlers"];
-  let onceSpy: ReturnType<typeof captureProcessSignalHandlers>["onceSpy"];
 
   function createGatewayBootstrap(
     url = "ws://127.0.0.1:18789",
@@ -333,20 +331,6 @@ describe("serveAcpGateway startup", () => {
     }
   }
 
-  async function captureAcpMessagesAfterStartup(inputMessages: unknown[]): Promise<unknown[]> {
-    mockState.acpInputMessages.push(...inputMessages);
-    const servePromise = serveAcpGateway({});
-
-    try {
-      await emitHelloAndWaitForAgentSideConnection();
-      mockState.closeAcpInput?.();
-      return await readCapturedAcpMessages();
-    } finally {
-      signalHandlers.get("SIGINT")?.();
-      await servePromise;
-    }
-  }
-
   async function stopServeWithSigint(
     handlers: Map<NodeJS.Signals, () => void>,
     servePromise: Promise<void>,
@@ -414,6 +398,23 @@ describe("serveAcpGateway startup", () => {
   });
 
   describe("Gateway lifecycle", () => {
+    let signalHandlers: ReturnType<typeof captureProcessSignalHandlers>["signalHandlers"];
+    let onceSpy: ReturnType<typeof captureProcessSignalHandlers>["onceSpy"];
+
+    async function captureAcpMessagesAfterStartup(inputMessages: unknown[]): Promise<unknown[]> {
+      mockState.acpInputMessages.push(...inputMessages);
+      const servePromise = serveAcpGateway({});
+
+      try {
+        await emitHelloAndWaitForAgentSideConnection();
+        mockState.closeAcpInput?.();
+        return await readCapturedAcpMessages();
+      } finally {
+        signalHandlers.get("SIGINT")?.();
+        await servePromise;
+      }
+    }
+
     beforeEach(() => {
       ({ signalHandlers, onceSpy } = captureProcessSignalHandlers());
     });
