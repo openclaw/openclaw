@@ -604,13 +604,13 @@ describe("createChatRunState", () => {
   it("retains native boxed values, shared containers, and a proxy revoked by its last getter", () => {
     const state = createChatRunState();
     const numberHints: string[] = [];
-    const value = Object.assign(Object(3), {
+    const boxedNumber = Object.assign(Object(3), {
       [Symbol.toPrimitive]: (hint: string) => {
         numberHints.push(hint);
         return -3.25;
       },
     });
-    const shared = { value, text: Object("é"), enabled: Object(false) };
+    const shared = { value: boxedNumber, text: Object("é"), enabled: Object(false) };
     const revocable = Proxy.revocable(["last"], {
       get(target, key, receiver) {
         const value: unknown = Reflect.get(target, key, receiver);
