@@ -35,7 +35,13 @@ describe("Agents API event submission retries", () => {
         if (operation === "tool result") {
           return client.toolResult(
             "session-fixture",
-            { type: "function_call", turn_id: "turn-fixture", call_id: "call-fixture", name: "lookup", arguments: {} },
+            {
+              type: "function_call",
+              turn_id: "turn-fixture",
+              call_id: "call-fixture",
+              name: "lookup",
+              arguments: {},
+            },
             { success: true, output: "Saved result" },
             signal,
           );
@@ -53,7 +59,11 @@ describe("Agents API event submission retries", () => {
       const key = attempts[0]!.headers.get("Idempotency-Key");
       expect(key).toEqual(expect.any(String));
       expect(key).not.toBe("");
-      expect(attempts.map((request) => request.headers.get("Idempotency-Key"))).toEqual([key, key, key]);
+      expect(attempts.map((request) => request.headers.get("Idempotency-Key"))).toEqual([
+        key,
+        key,
+        key,
+      ]);
       const bodies = await Promise.all(attempts.map((request) => request.text()));
       expect(bodies[1]).toBe(bodies[0]);
       expect(bodies[2]).toBe(bodies[0]);
@@ -63,7 +73,9 @@ describe("Agents API event submission retries", () => {
         queueResponse(Response.json({ id: "session-fixture", status: "idle" }));
       }
       await submit();
-      const next = requests().filter((request) => request.method === "POST").at(-1)!;
+      const next = requests()
+        .filter((request) => request.method === "POST")
+        .at(-1)!;
       expect(next.headers.get("Idempotency-Key")).not.toBe(key);
     },
   );
@@ -72,49 +84,59 @@ describe("Agents API event submission retries", () => {
     for (const status of [500, 502, 504]) {
       queueResponse(serverError(status));
     }
-    const result = expect(createClient().message("session-fixture", "Hello", new AbortController().signal))
-      .rejects.toMatchObject({ status: 504, message: expect.stringContaining("Failure 504") });
+    const result = expect(
+      createClient().message("session-fixture", "Hello", new AbortController().signal),
+    ).rejects.toMatchObject({ status: 504, message: expect.stringContaining("Failure 504") });
     await vi.runAllTimersAsync();
     await result;
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each([400, 401, 409, 429])("returns HTTP %s without retrying the submission", async (status) => {
-    queueResponse(serverError(status));
-    await expect(createClient().message("session-fixture", "Hello", new AbortController().signal))
-      .rejects.toMatchObject({ status });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-  });
+  it.each([400, 401, 409, 429])(
+    "returns HTTP %s without retrying the submission",
+    async (status) => {
+      queueResponse(serverError(status));
+      await expect(
+        createClient().message("session-fixture", "Hello", new AbortController().signal),
+      ).rejects.toMatchObject({ status });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("honors the server's explicit instruction not to retry", async () => {
     queueResponse(serverError(500, { "x-should-retry": "false" }));
-    await expect(createClient().message("session-fixture", "Hello", new AbortController().signal))
-      .rejects.toMatchObject({ status: 500 });
+    await expect(
+      createClient().message("session-fixture", "Hello", new AbortController().signal),
+    ).rejects.toMatchObject({ status: 500 });
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["abort", "revoked ownership"])("does not resend after %s during backoff", async (interruption) => {
-    queueResponse(serverError(500));
-    const controller = new AbortController();
-    let current = true;
-    const client = createClient(() => {
-      if (!current) {
-        throw new Error("Session ownership revoked");
+  it.each(["abort", "revoked ownership"])(
+    "does not resend after %s during backoff",
+    async (interruption) => {
+      queueResponse(serverError(500));
+      const controller = new AbortController();
+      let current = true;
+      const client = createClient(() => {
+        if (!current) {
+          throw new Error("Session ownership revoked");
+        }
+      });
+      const result = expect(
+        client.message("session-fixture", "Hello", controller.signal),
+      ).rejects.toThrow(interruption === "abort" ? "aborted" : "Session ownership revoked");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      if (interruption === "abort") {
+        controller.abort();
+      } else {
+        current = false;
       }
-    });
-    const result = expect(client.message("session-fixture", "Hello", controller.signal))
-      .rejects.toThrow(interruption === "abort" ? "aborted" : "Session ownership revoked");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    if (interruption === "abort") {
-      controller.abort();
-    } else {
-      current = false;
-    }
-    await vi.runAllTimersAsync();
-    await result;
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-  });
+      await vi.runAllTimersAsync();
+      await result;
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 function createClient(assertCurrent: () => void = () => {}) {
@@ -133,5 +155,7 @@ function queueResponse(response: Response) {
 }
 
 function requests() {
-  return fetchWithSsrFGuardMock.mock.calls.map(([request]) => new Request(request.url, request.init));
+  return fetchWithSsrFGuardMock.mock.calls.map(
+    ([request]) => new Request(request.url, request.init),
+  );
 }

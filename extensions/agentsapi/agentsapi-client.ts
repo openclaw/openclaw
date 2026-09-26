@@ -6,8 +6,8 @@ import type {
   AgentSessionEvent,
   HostedEnvironmentFileParam,
 } from "openai/resources/beta/agents/agents";
-import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import type { EventCreateParams } from "openai/resources/beta/agents/sessions/events";
+import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -285,14 +285,14 @@ export class AgentsApiClient {
     await this.submitEvents(
       sessionId,
       [
-          {
-            type: "agent.session.input.tool_result",
-            turn_id: call.turn_id,
-            call_id: call.call_id,
-            ...(result.success
-              ? { success: true, output: result.output }
-              : { success: false, error: result.error }),
-          },
+        {
+          type: "agent.session.input.tool_result",
+          turn_id: call.turn_id,
+          call_id: call.call_id,
+          ...(result.success
+            ? { success: true, output: result.output }
+            : { success: false, error: result.error }),
+        },
       ],
       signal,
     );
@@ -461,21 +461,17 @@ export class AgentsApiClient {
     await this.submitEvents(
       sessionId,
       [
-          {
-            type: "agent.session.input.message",
-            input: [{ role: "user", content: [{ type: "input_text", text }] }],
-          },
+        {
+          type: "agent.session.input.message",
+          input: [{ role: "user", content: [{ type: "input_text", text }] }],
+        },
       ],
       signal,
     );
   }
 
   async cancel(sessionId: string, signal: AbortSignal): Promise<void> {
-    await this.submitEvents(
-      sessionId,
-      [{ type: "agent.session.input.cancel" }],
-      signal,
-    );
+    await this.submitEvents(sessionId, [{ type: "agent.session.input.cancel" }], signal);
     // The input acknowledgement is not a settlement barrier for hosted work.
     while (true) {
       const session = await this.session(sessionId, signal);
