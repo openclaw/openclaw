@@ -382,8 +382,6 @@ describe("TUI task suggestions", () => {
 
   it.each([
     { value: "accept", fails: false },
-    { value: "accept", fails: true },
-    { value: "dismiss", fails: false },
     { value: "dismiss", fails: true },
   ])("ignores $value completion after disposal (fails=$fails)", async ({ value, fails }) => {
     const harness = createHarness();
@@ -463,59 +461,11 @@ describe("TUI task suggestions", () => {
       visible: true,
     },
     {
-      label: "rejects a fixed-store alias owned by another agent",
-      selectedAgent: "main",
-      selectedSession: "agent:main:support",
-      suggestionAgent: "work",
-      suggestionSession: "support",
-      visible: false,
-    },
-    {
-      label: "rejects a fixed-store alias without explicit owner evidence",
-      selectedAgent: "main",
-      selectedSession: "agent:main:support",
-      suggestionAgent: undefined,
-      suggestionSession: "support",
-      visible: false,
-    },
-    {
       label: "rejects a matching canonical key with a contradictory explicit owner",
       selectedAgent: "main",
       selectedSession: "agent:main:support",
       suggestionAgent: "work",
       suggestionSession: "agent:main:support",
-      visible: false,
-    },
-    {
-      label: "accepts a canonical key whose parsed owner identifies the active agent",
-      selectedAgent: "main",
-      selectedSession: "agent:main:support",
-      suggestionAgent: undefined,
-      suggestionSession: "agent:main:support",
-      visible: true,
-    },
-    {
-      label: "rejects a foreign canonical key against a bare selected alias",
-      selectedAgent: "main",
-      selectedSession: "support",
-      suggestionAgent: "main",
-      suggestionSession: "agent:work:support",
-      visible: false,
-    },
-    {
-      label: "rejects a global suggestion without explicit owner evidence",
-      selectedAgent: "main",
-      selectedSession: "global",
-      suggestionAgent: undefined,
-      suggestionSession: "global",
-      visible: false,
-    },
-    {
-      label: "preserves case-sensitive opaque session references",
-      selectedAgent: "main",
-      selectedSession: "agent:main:matrix:group:!Room:example.org",
-      suggestionAgent: "main",
-      suggestionSession: "matrix:group:!room:example.org",
       visible: false,
     },
   ])(

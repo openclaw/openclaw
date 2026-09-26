@@ -1,4 +1,3 @@
-// Child process adapter wraps spawned child processes for the supervisor.
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
 import type { Writable } from "node:stream";
 import {
@@ -134,7 +133,7 @@ export async function createChildAdapter(
   params: ChildAdapterInput,
 ): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
   if (params.anchoredShellCommand !== undefined) {
-    const startup = await createServiceChildRelayAdapter({
+    return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
@@ -148,7 +147,6 @@ export async function createChildAdapter(
       onSpawnCleanup: params.onSpawnCleanup,
       stderrDestination: params.stderrDestination,
     });
-    return startup;
   }
 
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
@@ -176,7 +174,7 @@ export async function createChildAdapter(
     params.ownedWorker === undefined &&
     (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
-    const startup = await createServiceChildRelayAdapter({
+    return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       command: preparedSpawn.command,
@@ -193,7 +191,6 @@ export async function createChildAdapter(
       stderrDestination: params.stderrDestination,
       stdoutConsumption: params.stdoutConsumption,
     });
-    return startup;
   }
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
@@ -493,22 +490,18 @@ export async function createChildAdapter(
     }
   }
 
-  child.stdout?.once("end", () => {
+  const markStdoutDrained = () => {
     stdoutDrained = true;
     maybeSettleAfterExit();
-  });
-  child.stdout?.once("close", () => {
-    stdoutDrained = true;
-    maybeSettleAfterExit();
-  });
-  child.stderr?.once("end", () => {
+  };
+  const markStderrDrained = () => {
     stderrDrained = true;
     maybeSettleAfterExit();
-  });
-  child.stderr?.once("close", () => {
-    stderrDrained = true;
-    maybeSettleAfterExit();
-  });
+  };
+  child.stdout?.once("end", markStdoutDrained);
+  child.stdout?.once("close", markStdoutDrained);
+  child.stderr?.once("end", markStderrDrained);
+  child.stderr?.once("close", markStderrDrained);
 
   // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
   child.on("error", (error) => {
@@ -539,11 +532,7 @@ export async function createChildAdapter(
     return await joinProcessCompletionAndOutput(completion.promise, awaitedStdout.drain());
   };
 
-  // The actual detachment of the spawned child can differ from `useDetached`:
-  // when the detached spawn fails, `spawnWithFallback` retries with the
-  // `no-detach` fallback (detached:false). In that case the child shares the
-  // gateway's process group regardless of intent, so the kill must avoid
-  // group-kill. (#71662 follow-up — caught by Greptile review)
+  // A no-detach fallback shares the Gateway's group and must never group-kill it.
   const childIsDetached = useDetached && !spawned.usedFallback;
   const attachedLinuxFallback = process.platform === "linux" && !childIsDetached;
   let attachedTerminationStarted = false;

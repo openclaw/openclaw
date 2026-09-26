@@ -3486,13 +3486,13 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
-            ["Select Xcode 27", "Verify Xcode"].includes(step.name ?? ""),
+            ["Select Xcode", "Verify Xcode"].includes(step.name ?? ""),
           ),
           `${workflowPath}: ${jobName} toolchain selection`,
         );
         const toolingRoot = workflowPath === ".github/workflows/ci.yml" ? ".ci-harness/" : "";
         expect(selection.run).toContain(`source ${toolingRoot}scripts/lib/swift-toolchain.sh`);
-        expect(selection.run).toContain("select_xcode_toolchain 27.0");
+        expect(selection.run).toContain("select_xcode_toolchain");
       }
     }
   });

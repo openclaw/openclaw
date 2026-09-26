@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, type RequestClient } from "../internal/discord.js";

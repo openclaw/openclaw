@@ -1,15 +1,11 @@
-// GitHub config discovery helpers locate skill config files inside repository archives.
 import { posix as posixPath, win32 as win32Path } from "node:path";
 
 function pathFor(platform: NodeJS.Platform) {
   return platform === "win32" ? win32Path : posixPath;
 }
 
-// Detects the case where `gh` is authenticated under one HOME but the current
-// OpenClaw process is running with a different HOME (e.g. the per-agent
-// codex-home, a systemd service home, or a sudo'd shell). Without GH_CONFIG_DIR
-// the gh CLI looks at $XDG_CONFIG_HOME/gh or $HOME/.config/gh and reports
-// "not logged in", even though the operator HOME has a valid hosts.yml.
+// Redirected Gateway homes can hide an operator's existing gh login. Look for
+// the operator config before suggesting authentication under the service HOME.
 // See https://github.com/openclaw/openclaw/issues/78063.
 
 type GhConfigDiscoveryEnv = {
@@ -26,28 +22,19 @@ export type GhConfigDiscoveryInput = {
   platform: NodeJS.Platform;
   env: GhConfigDiscoveryEnv;
   fileExists: (absolutePath: string) => boolean;
-  // Optional: well-known operator-home guesses to consider when looking for an
-  // alternate gh config dir. Defaults to a small Linux/macOS set; tests pass an
-  // explicit list to keep behavior deterministic.
+  // Known operator homes; defaults to a small Linux/macOS set.
   candidateOperatorHomes?: readonly string[];
 };
 
 type GhConfigDirMismatch = {
-  // The directory `gh` would actually consult given the current process env.
   effectiveConfigDir: string;
-  // The directory that contains the operator's real `hosts.yml`.
   alternateConfigDir: string;
-  // Absolute path to the alternate hosts.yml that the current process won't see.
   alternateHostsFile: string;
-  // The HOME-like path the alternate dir was derived from, if known.
   alternateHomeHint?: string;
-  // Suggested env value the operator should set on the OpenClaw service to
-  // surface the alternate config to the agent shell.
   suggestedEnvValue: string;
 };
 
 export type GhConfigDiscoveryResult =
-  | { kind: "no-gh-binary" }
   | { kind: "explicit-gh-config-dir-set"; ghConfigDir: string }
   | { kind: "no-process-home" }
   | { kind: "auth-discoverable"; effectiveConfigDir: string }
@@ -59,9 +46,6 @@ const HOSTS_FILE = "hosts.yml";
 // gh config-dir lookup order, matching `gh help environment`.
 function resolveEffectiveGhConfigDir(input: GhConfigDiscoveryInput): string | undefined {
   const env = input.env;
-  if (env.GH_CONFIG_DIR && env.GH_CONFIG_DIR.trim()) {
-    return env.GH_CONFIG_DIR.trim();
-  }
   const xdg = env.XDG_CONFIG_HOME?.trim();
   if (xdg) {
     return pathFor(input.platform).join(xdg, "gh");
@@ -110,8 +94,6 @@ function defaultCandidateOperatorHomes(input: GhConfigDiscoveryInput): string[] 
       }
     }
   }
-  // Drop the current process HOME from the candidate set; we want directories
-  // that are NOT what gh would already consult.
   const processHome = env.HOME?.trim();
   if (processHome) {
     homes.delete(processHome);

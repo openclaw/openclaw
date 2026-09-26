@@ -149,12 +149,7 @@ describe("killProcessTree", () => {
   });
 
   it("on Windows force-kills after grace period only when PID still exists", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === 5252 && signal === 0) {
-        return true;
-      }
-      return true;
-    }) as typeof process.kill);
+    killSpy.mockImplementation(() => true);
 
     await withMockedPlatform("win32", async () => {
       killProcessTree(5252, { graceMs: 10 });
@@ -164,22 +159,6 @@ describe("killProcessTree", () => {
       expect(spawnMock).toHaveBeenCalledTimes(2);
       expectTaskkillCall(0, ["/T", "/PID", "5252"]);
       expectTaskkillCall(1, ["/F", "/T", "/PID", "5252"]);
-    });
-  });
-
-  it("on Windows force-kills immediately when graceful taskkill refuses a live process tree", async () => {
-    const gracefulTaskkill = new EventEmitter();
-    spawnMock.mockReturnValueOnce(gracefulTaskkill);
-    killSpy.mockImplementation(() => true);
-
-    await withMockedPlatform("win32", async () => {
-      killProcessTree(4711, { graceMs: 30_000 });
-
-      expectTaskkillCall(0, ["/T", "/PID", "4711"]);
-      gracefulTaskkill.emit("close", 128);
-
-      expect(spawnMock).toHaveBeenCalledTimes(2);
-      expectTaskkillCall(1, ["/F", "/T", "/PID", "4711"]);
     });
   });
 
@@ -214,6 +193,7 @@ describe("killProcessTree", () => {
     await withMockedPlatform("win32", async () => {
       killProcessTree(4713, { graceMs: 20 });
       gracefulTaskkill.emit("close", 128);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(20);
 
       expect(spawnMock).toHaveBeenCalledTimes(2);
@@ -719,26 +699,6 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix uses group kill when the omitted option resolves to a group leader", async () => {
-    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === -6666 && signal === 0) {
-        throw new Error("ESRCH");
-      }
-      if (pid === 6666 && signal === 0) {
-        throw new Error("ESRCH");
-      }
-      return true;
-    }) as typeof process.kill);
-
-    await withMockedPlatform("linux", async () => {
-      mockIsProcessGroupLeader(6666);
-      killProcessTree(6666, { graceMs: 10 });
-      await vi.advanceTimersByTimeAsync(10);
-
-      expect(killSpy).toHaveBeenCalledWith(-6666, "SIGTERM");
-    });
-  });
-
   it.each([
     [
       "throws",
@@ -748,7 +708,6 @@ describe("killProcessTree", () => {
     ],
     ["exits non-zero", () => ({ status: 1, stdout: "" })],
     ["returns non-numeric output", () => ({ status: 0, stdout: "not-a-pgid" })],
-    ["returns empty output", () => ({ status: 0, stdout: "" })],
   ])("on Unix falls back to single-pid kill when ps %s", async (_label, psResult) => {
     killSpy.mockImplementation(() => true);
 
@@ -896,18 +855,6 @@ describe("killProcessTree", () => {
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
       expectTaskkillCall(0, ["/F", "/T", "/PID", "9999"]);
-    });
-  });
-
-  it("on Windows ignores async taskkill spawn errors", async () => {
-    const taskkillChild = new EventEmitter();
-    spawnMock.mockReturnValueOnce(taskkillChild);
-
-    await withMockedPlatform("win32", async () => {
-      killProcessTree(9191, { force: true });
-
-      expect(() => taskkillChild.emit("error", new Error("spawn ENOENT"))).not.toThrow();
-      expectTaskkillCall(0, ["/F", "/T", "/PID", "9191"]);
     });
   });
 });

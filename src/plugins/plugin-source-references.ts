@@ -252,6 +252,17 @@ const TRANSFORMED_REFERENCE_NAMES = new Set([
   "__dirname",
 ]);
 
+function* sourceChildren(node: AnyNode): Generator<AnyNode> {
+  for (const value of Object.values(node)) {
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (child && typeof child === "object" && "type" in child) {
+        // SAFETY: Child fields and arrays come from the same Acorn tree.
+        yield child as AnyNode;
+      }
+    }
+  }
+}
+
 function parseNativePluginJavaScript(source: string, sourceText: string): Program | undefined {
   if (!/\.[cm]?js$/.test(source)) {
     return undefined;
@@ -329,32 +340,12 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
         }
       }
     }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        for (const child of value) {
-          if (
-            child &&
-            typeof child === "object" &&
-            "type" in child &&
-            needsTransform(
-              // SAFETY: Array children belong to the same Acorn tree.
-              child as AnyNode,
-              exportedDeclaration ||
-                (node.type === "ExportNamedDeclaration" && child === node.declaration),
-            )
-          ) {
-            return true;
-          }
-        }
-      } else if (
-        value &&
-        typeof value === "object" &&
-        "type" in value &&
+    for (const child of sourceChildren(node)) {
+      if (
         needsTransform(
-          // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
-          value as AnyNode,
+          child,
           exportedDeclaration ||
-            (node.type === "ExportNamedDeclaration" && value === node.declaration),
+            (node.type === "ExportNamedDeclaration" && child === node.declaration),
         )
       ) {
         return true;
@@ -530,18 +521,8 @@ export function visitPluginSourceReferences(
         visitDirectoryAsset(name, args.slice(1).map(staticString));
       }
     }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        for (const child of value) {
-          if (child && typeof child === "object" && "type" in child) {
-            // SAFETY: Array children belong to the same Acorn tree.
-            visit(child as AnyNode);
-          }
-        }
-      } else if (value && typeof value === "object" && "type" in value) {
-        // SAFETY: The tree comes directly from Acorn; typed child fields are Acorn nodes.
-        visit(value as AnyNode);
-      }
+    for (const child of sourceChildren(node)) {
+      visit(child);
     }
   };
   visit(tree);

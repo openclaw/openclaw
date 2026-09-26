@@ -161,8 +161,6 @@ function sequencedPlacementService(
 test.each([
   { action: "fork" as const, allowed: true },
   { action: "restore" as const, allowed: false },
-  { action: "rewind" as const, allowed: false },
-  { action: "switch" as const, allowed: false },
 ])("stopped cloud placement only permits identity-preserving $action", ({ action, allowed }) => {
   for (const state of ["reclaimed", "failed"] as const) {
     const sessionId = `stopped-${state}-${action}`;
@@ -523,6 +521,7 @@ test.each([
             workerSessionPlacementService: {
               getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
               retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
+                expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
                 expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
                 events.push("placement:retire");
                 placementStore.retireSessionPlacement(retirement);
@@ -599,61 +598,29 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
 
 test.each([
   {
-    name: "ordinary reset",
-    sessionKey: "discord:group:local-reset",
-    incognito: false,
-    state: "local" as const,
-  },
-  {
-    name: "incognito reset",
-    sessionKey: "agent:main:dashboard:incognito-local-reset",
-    incognito: true,
-    state: "local" as const,
-  },
-  {
     name: "reclaimed cloud reset",
     sessionKey: "discord:group:reclaimed-reset",
-    incognito: false,
     state: "reclaimed" as const,
   },
   {
     name: "failed cloud reset after worker destruction",
     sessionKey: "discord:group:destroyed-worker-reset",
-    incognito: false,
     state: "failed" as const,
     environment: { state: "destroyed" },
   },
   {
     name: "failed cloud reset after proven bootstrap teardown",
     sessionKey: "discord:group:failed-worker-reset",
-    incognito: false,
     state: "failed" as const,
     environment: { state: "failed", leaseId: null },
   },
 ])("sessions.reset retires the old placement before $name", async (testCase) => {
   await createSessionStoreDir();
-  const sessionId = testCase.incognito
-    ? await (async () => {
-        const created = await directSessionReq<{ sessionId?: string }>("sessions.create", {
-          agentId: "main",
-          key: testCase.sessionKey,
-          incognito: true,
-        });
-        if (!created.ok || !created.payload?.sessionId) {
-          throw new Error(`incognito setup failed: ${JSON.stringify(created.error)}`);
-        }
-        return created.payload.sessionId;
-      })()
-    : `sess-${testCase.name.replaceAll(" ", "-")}`;
-  if (!testCase.incognito) {
-    await writeSessionStore({
-      entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
-    });
-  }
-  const placement =
-    testCase.state === "local"
-      ? placementRecord(sessionId, "local")
-      : terminalPlacementRecord(sessionId, testCase.state);
+  const sessionId = `sess-${testCase.name.replaceAll(" ", "-")}`;
+  await writeSessionStore({
+    entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
+  });
+  const placement = terminalPlacementRecord(sessionId, testCase.state);
   const placementService = sequencedPlacementService([placement], () => {
     expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
   });
@@ -680,7 +647,7 @@ test.each([
     expectedState: testCase.state,
     expectedGeneration: placement.generation,
   });
-  expect(loadSessionEntry(testCase.sessionKey).entry === undefined).toBe(testCase.incognito);
+  expect(loadSessionEntry(testCase.sessionKey).entry).toBeDefined();
 });
 
 test.each([

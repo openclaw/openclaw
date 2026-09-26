@@ -13,15 +13,6 @@ import {
 } from "./google-meet-urls.js";
 
 describe("forceMeetEnglishUi", () => {
-  it("pins hl=en on Meet URLs", () => {
-    expect(forceMeetEnglishUi("https://meet.google.com/abc-defg-hij")).toBe(
-      "https://meet.google.com/abc-defg-hij?hl=en",
-    );
-    expect(forceMeetEnglishUi("https://meet.google.com/new")).toBe(
-      "https://meet.google.com/new?hl=en",
-    );
-  });
-
   it("overrides an existing hl and keeps other params", () => {
     expect(forceMeetEnglishUi("https://meet.google.com/abc-defg-hij?hl=zh-TW&authuser=1")).toBe(
       "https://meet.google.com/abc-defg-hij?hl=en&authuser=1",

@@ -228,11 +228,11 @@ it.each([
       const observed = tasks.find(
         (candidate) => pathname === candidate.scriptPath || pathname === candidate.launcherPath,
       );
-      if (!observed) {
+      if (typeof pathname !== "string" || !observed) {
         throw new Error("Unexpected file read in bounded inventory fixture");
       }
-      const read = (reads.get(String(pathname)) ?? 0) + 1;
-      reads.set(String(pathname), read);
+      const read = (reads.get(pathname) ?? 0) + 1;
+      reads.set(pathname, read);
       if (observed === slow) {
         const phase = pathname === slow.scriptPath ? "source" : "launcher";
         if (`${phase}${read === 2 ? " revalidation" : ""}` === exhaustedBy) {

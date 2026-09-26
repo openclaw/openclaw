@@ -176,14 +176,19 @@ enum ChatToolDiff {
         isError: Bool = false) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
         let normalizedName = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        // Plugin tools own their details schema; only edit-family tools may
+        // interpret details.diff as a filesystem diff (mirrors the web guard).
+        guard self.textEditorToolNames.contains(normalizedName) || self.editToolNames.contains(normalizedName) ||
+            self.writeToolNames.contains(normalizedName) || self.patchToolNames.contains(normalizedName)
+        else { return nil }
+        // Applied diff details stay authoritative even when the result reports an error.
+        if let detailsDiff = self.resolveDetailsDiff(details) {
+            return detailsDiff
+        }
+        // Failed args describe a proposal, not a mutation known to have been applied.
+        guard !isError else { return nil }
         let argumentsRecord = arguments?.dictionaryValue
         if self.textEditorToolNames.contains(normalizedName) {
-            if let detailsDiff = self.resolveDetailsDiff(details) {
-                // Applied diff details stay authoritative even when the result reports an error.
-                return detailsDiff
-            }
-            // Failed args describe a proposal, not a mutation known to have been applied.
-            guard !isError else { return nil }
             switch self.string(in: argumentsRecord, keys: ["command"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
@@ -194,39 +199,22 @@ enum ChatToolDiff {
                     keys: ["file_text", "content"],
                     details: details)
             case "insert":
-                return self.resolveInsertionDiff(argumentsRecord, details: details)
+                return self.resolveInsertionDiff(argumentsRecord)
             default:
-                return self.resolveEditDiff(argumentsRecord, details: details)
+                return self.resolveEditDiff(argumentsRecord)
             }
         }
 
-        // Plugin tools own their details schema; only edit-family tools may
-        // interpret details.diff as a filesystem diff (mirrors the web guard).
         if self.editToolNames.contains(normalizedName) {
-            if let detailsDiff = self.resolveDetailsDiff(details) {
-                return detailsDiff
-            }
-            guard !isError else { return nil }
-            return self.resolveEditDiff(argumentsRecord, details: nil)
+            return self.resolveEditDiff(argumentsRecord)
         }
         if self.writeToolNames.contains(normalizedName) {
-            if let detailsDiff = self.resolveDetailsDiff(details) {
-                return detailsDiff
-            }
-            guard !isError else { return nil }
             return self.resolveWriteDiff(
                 argumentsRecord,
                 keys: ["content", "text", "file_text"],
                 details: details)
         }
-        if self.patchToolNames.contains(normalizedName) {
-            if let detailsDiff = self.resolveDetailsDiff(details) {
-                return detailsDiff
-            }
-            guard !isError else { return nil }
-            return self.resolvePatchDiff(argumentsRecord)
-        }
-        return nil
+        return self.resolvePatchDiff(argumentsRecord)
     }
 
     private static func parseNumberedLine(_ raw: String) -> ChatToolDiffLine? {
@@ -547,7 +535,6 @@ enum ChatToolDiff {
         _ details: AnyCodable?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
         guard let diff = details?.dictionaryValue?["diff"]?.stringValue,
-              !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let parsed = self.parseDetailsDiffResult(diff)
         else {
             return nil
@@ -557,12 +544,8 @@ enum ChatToolDiff {
     }
 
     private static func resolveInsertionDiff(
-        _ arguments: [String: AnyCodable]?,
-        details: AnyCodable?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
+        _ arguments: [String: AnyCodable]?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
-        if let detailsDiff = self.resolveDetailsDiff(details) {
-            return detailsDiff
-        }
         guard let insertText = self.string(in: arguments, keys: ["insert_text"]) else { return nil }
         let lines = self.computeLineDiff(old: "", new: insertText)
         // The inserted text is known, but its final placement is not, so keep the stat absent.
@@ -600,13 +583,8 @@ enum ChatToolDiff {
     }
 
     private static func resolveEditDiff(
-        _ arguments: [String: AnyCodable]?,
-        details: AnyCodable?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
+        _ arguments: [String: AnyCodable]?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
-        // Persisted details are authoritative; args are a local fallback for live/foreign harnesses.
-        if let detailsDiff = self.resolveDetailsDiff(details) {
-            return detailsDiff
-        }
         guard let arguments else { return nil }
         let resolved = self.readEditPairs(arguments)
         guard !resolved.pairs.isEmpty else {
@@ -624,13 +602,7 @@ enum ChatToolDiff {
         let joined = self.join(sections, truncated: resolved.truncated)
         guard !joined.lines.isEmpty else { return nil }
         let truncated = resolved.truncated || sectionTruncated || joined.truncated
-        let stat = truncated ? nil : sections.reduce(ChatToolDiffStat(added: 0, removed: 0)) { sum, section in
-            let sectionStat = self.stat(for: section)
-            return ChatToolDiffStat(
-                added: sum.added + sectionStat.added,
-                removed: sum.removed + sectionStat.removed)
-        }
-        return (joined.lines, stat)
+        return (joined.lines, truncated ? nil : self.stat(for: joined.lines))
     }
 
     private static func readEditPairs(
@@ -737,11 +709,6 @@ enum ChatToolDiff {
     }
 
     private static func firstValue(in record: [String: AnyCodable], keys: [String]) -> AnyCodable? {
-        for key in keys {
-            if let value = record[key] {
-                return value
-            }
-        }
-        return nil
+        keys.lazy.compactMap { record[$0] }.first
     }
 }

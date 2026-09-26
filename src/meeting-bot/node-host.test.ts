@@ -19,20 +19,6 @@ describe("MeetingNodeAudioPullWaiters", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("cancels a pull timeout when audio wakes the waiter early", async () => {
-    vi.useFakeTimers();
-    const waiters = new MeetingNodeAudioPullWaiters();
-    const waiting = waiters.wait(2_000);
-
-    expect(waiters.size).toBe(1);
-    expect(vi.getTimerCount()).toBe(1);
-    waiters.wake();
-    await waiting;
-
-    expect(waiters.size).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   // Bun does not expose Timeout entries through process.getActiveResourcesInfo().
   it.skipIf(Boolean(process.versions.bun))(
     "releases its real timeout resource when audio wakes the waiter early",

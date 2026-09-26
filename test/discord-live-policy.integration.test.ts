@@ -28,6 +28,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -196,6 +197,7 @@ describe("Discord admission through Gateway policy publication", () => {
       cronState: createLazyGatewayCronState({ cfg, deps: {}, broadcast: vi.fn() }),
     };
     const { applyHotReload } = createGatewayReloadHandlers({
+      scheduler: createTestGatewayScheduler(),
       deps: {},
       broadcast: vi.fn(),
       getPluginRegistry: () => registry,

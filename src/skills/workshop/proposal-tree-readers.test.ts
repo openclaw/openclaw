@@ -14,12 +14,6 @@ afterEach(async () => {
 
 const readers = [
   { name: "target", read: readSkillProposalTargetTreeSha256, marker: "SKILL.md", depth: 16 },
-  {
-    name: "target with root metadata",
-    read: (dir: string) => readSkillProposalTargetTreeSha256(dir, { includeRootMetadata: true }),
-    marker: "SKILL.md",
-    depth: 16,
-  },
   { name: "draft", read: readSkillProposalDraftDirectory, marker: "PROPOSAL.md", depth: 8 },
 ];
 

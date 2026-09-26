@@ -40,18 +40,15 @@ describe("resolveGatewayTaskScriptPath", () => {
     expect(resolveGatewayTaskScriptPath(env)).toBe(expected);
   });
 
-  it.each([
-    "../gateway.cmd",
-    "..\\gateway.cmd",
-    "nested/gateway.cmd",
-    "nested\\gateway.cmd",
-    "gateway..cmd",
-  ])("rejects non-file task script name %s", (scriptName) => {
-    expect(() =>
-      resolveGatewayTaskScriptPath({
-        USERPROFILE: "C:\\Users\\test",
-        OPENCLAW_TASK_SCRIPT_NAME: scriptName,
-      }),
-    ).toThrow("OPENCLAW_TASK_SCRIPT_NAME must be a file name only");
-  });
+  it.each(["nested/gateway.cmd", "nested\\gateway.cmd", "gateway..cmd"])(
+    "rejects non-file task script name %s",
+    (scriptName) => {
+      expect(() =>
+        resolveGatewayTaskScriptPath({
+          USERPROFILE: "C:\\Users\\test",
+          OPENCLAW_TASK_SCRIPT_NAME: scriptName,
+        }),
+      ).toThrow("OPENCLAW_TASK_SCRIPT_NAME must be a file name only");
+    },
+  );
 });

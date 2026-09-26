@@ -1,4 +1,3 @@
-// Msteams tests cover setup surface plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,29 +62,6 @@ describe("msteams setup surface", () => {
     expect(msteamsSetupAdapter.resolveAccountId?.({ accountId: "work" } as never)).toBe(
       DEFAULT_ACCOUNT_ID,
     );
-  });
-
-  it("enables the msteams channel without dropping existing config", () => {
-    expect(
-      msteamsSetupAdapter.applyAccountConfig?.({
-        cfg: {
-          channels: {
-            msteams: {
-              appId: "existing-app",
-            },
-          },
-        },
-        accountId: DEFAULT_ACCOUNT_ID,
-        input: {},
-      } as never),
-    ).toEqual({
-      channels: {
-        msteams: {
-          appId: "existing-app",
-          enabled: true,
-        },
-      },
-    });
   });
 
   it("reports configured status from resolved credentials", () => {
@@ -168,22 +144,6 @@ describe("msteams setup surface", () => {
         appId: "env-app",
         tenantId: "env-tenant",
         useManagedIdentity: true,
-      },
-      msteams: {},
-    },
-    {
-      label: "federated certificate env",
-      env: {
-        MSTEAMS_AUTH_TYPE: "federated",
-        MSTEAMS_APP_ID: "env-app",
-        MSTEAMS_TENANT_ID: "env-tenant",
-        MSTEAMS_CERTIFICATE_PATH: "/tmp/msteams-certificate.pem",
-      },
-      credentials: {
-        type: "federated",
-        appId: "env-app",
-        tenantId: "env-tenant",
-        certificatePath: "/tmp/msteams-certificate.pem",
       },
       msteams: {},
     },

@@ -10,6 +10,10 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as transcriptHeader from "../../config/sessions/session-accessor.sqlite-transcript-header.js";
 import {
   registerProjectRegistry,
@@ -396,10 +400,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
               ? ("source-after-commit" as const)
               : ("source-and-retry" as const),
         },
+        { storage, fork: true, ending: "source-and-retry" as const },
         { storage, fork: true, ending: "parent-replaced" as const },
       ]),
     )(
-      "retains $storage creation custody across its transcript commit (fork=$fork, ending=$ending)",
+      "retains $storage creation custody through transcript preparation and commit (fork=$fork, ending=$ending)",
       async ({ storage, fork, ending }) => {
         const prefix = storage === "incognito" ? "incognito-" : "";
         const suffix = `${prefix}owned-header-${fork}-${ending}`;
@@ -430,17 +435,65 @@ export function registerSessionOperatorPreparationTests(fixture: {
               },
               now: 1,
             },
+            {
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Synthetic completed parent reply." }],
+                timestamp: 2,
+              },
+              now: 2,
+            },
           ],
         });
         const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
         const context = contextFor(caller);
         const getCurrentConfig = context.getRuntimeConfig;
         const header = vi.spyOn(transcriptHeader, "ensureTranscriptHeader");
-        const forked = vi.spyOn(sessionFork, "forkSessionFromParentWithDecision");
-        const revoked = new Error("original creation source ended after header commit");
-        let committedHeaderId: string | undefined;
+        const prepareFork = sessionFork.prepareSessionForkFromParent;
+        const revoked = new Error("original creation source ended before entry commit");
+        let childSessionId: string | undefined;
         let parentReplacement: ReturnType<typeof loadSessionEntry>;
+        const assertNoForkState = (sessionKey: string, sessionId: string) => {
+          expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+          expect(loadTranscriptEventsSync({ agentId: "main", sessionKey, sessionId })).toEqual([]);
+          const database = openOpenClawAgentDatabase(
+            toDatabaseOptions(resolveSqliteScope({ agentId: "main", sessionKey })),
+          );
+          expect(
+            database.db
+              .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+              .get(sessionKey),
+          ).toBeUndefined();
+        };
         const createAttempt = async (source: AbortController) => {
+          const forked = vi
+            .spyOn(sessionFork, "prepareSessionForkFromParent")
+            .mockImplementation(async (params) => {
+              const prepared = await prepareFork(params);
+              if (prepared.status === "prepared") {
+                assertNoForkState(params.sessionKey, prepared.transcript.sessionId);
+                if (!childSessionId) {
+                  childSessionId = prepared.transcript.sessionId;
+                  if (ending === "source-and-retry") {
+                    source.abort(revoked);
+                  } else if (ending === "parent-replaced") {
+                    await upsertSessionEntryCore(
+                      { agentId: "main", sessionKey: parentKey },
+                      {
+                        ...parentEntry,
+                        sessionId: `${parentId}-replacement`,
+                        updatedAt: 2,
+                      },
+                    );
+                    parentReplacement = loadSessionEntry({
+                      agentId: "main",
+                      sessionKey: parentKey,
+                    });
+                  }
+                }
+              }
+              return prepared;
+            });
           const preparation = captureGatewayOperatorRunAuthority({
             client: caller,
             context,
@@ -473,7 +526,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
                   value: {
                     withCommit: async (run) => {
                       const result = await run(() => source.signal.throwIfAborted());
-                      if (!committedHeaderId) {
+                      if (!fork && !childSessionId) {
                         const committedEntry = loadSessionEntry({
                           agentId: "main",
                           sessionKey: childKey,
@@ -482,18 +535,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
                         childId ??= header.mock.calls.find(
                           ([, scope]) => scope.sessionKey === childKey,
                         )?.[1].sessionId;
-                        if (fork) {
-                          const index = forked.mock.calls.findIndex(
-                            ([params]) => params.sessionKey === childKey,
-                          );
-                          const call = forked.mock.results[index];
-                          if (call?.type === "return") {
-                            const value = await call.value;
-                            if (value.status === "created") {
-                              childId = value.transcript.sessionId;
-                            }
-                          }
-                        }
                         if (childId) {
                           const transcript = loadTranscriptEventsSync({
                             agentId: "main",
@@ -503,27 +544,14 @@ export function registerSessionOperatorPreparationTests(fixture: {
                           expect(transcript).toEqual(
                             expect.arrayContaining([expect.objectContaining({ type: "session" })]),
                           );
-                          if (storage === "durable" && !fork) {
+                          if (storage === "durable") {
                             expect(committedEntry).toMatchObject({ sessionId: childId });
                           } else {
                             expect(committedEntry).toBeUndefined();
                           }
-                          committedHeaderId = childId;
+                          childSessionId = childId;
                           if (ending === "source-and-retry" || ending === "source-after-commit") {
                             source.abort(revoked);
-                          } else if (ending === "parent-replaced") {
-                            await upsertSessionEntryCore(
-                              { agentId: "main", sessionKey: parentKey },
-                              {
-                                ...parentEntry,
-                                sessionId: `${parentId}-replacement`,
-                                updatedAt: 2,
-                              },
-                            );
-                            parentReplacement = loadSessionEntry({
-                              agentId: "main",
-                              sessionKey: parentKey,
-                            });
                           }
                         }
                       }
@@ -534,6 +562,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
               },
             });
           } finally {
+            forked.mockRestore();
             (await preparation.catch(() => undefined))?.release();
           }
         };
@@ -542,13 +571,32 @@ export function registerSessionOperatorPreparationTests(fixture: {
             (result) => ({ result }),
             (error: unknown) => ({ error }),
           );
-          expect(committedHeaderId).toBeDefined();
+          expect(childSessionId).toBeDefined();
           if (ending === "complete" || ending === "source-after-commit") {
             expect(outcome).toMatchObject({ result: { ok: true } });
             expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toHaveProperty(
               "sessionId",
-              committedHeaderId,
+              childSessionId,
             );
+            if (fork) {
+              expect(
+                loadTranscriptEventsSync({
+                  agentId: "main",
+                  sessionKey: childKey,
+                  sessionId: childSessionId!,
+                }),
+              ).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({
+                    type: "message",
+                    message: expect.objectContaining({
+                      role: "assistant",
+                      content: [{ type: "text", text: "Synthetic completed parent reply." }],
+                    }),
+                  }),
+                ]),
+              );
+            }
           } else {
             if ("error" in outcome) {
               expect(outcome.error).toBeInstanceOf(Error);
@@ -562,13 +610,18 @@ export function registerSessionOperatorPreparationTests(fixture: {
               expect(outcome.result.ok).toBe(false);
             }
             expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toBeUndefined();
-            expect(
-              loadTranscriptEventsSync({
-                agentId: "main",
-                sessionKey: childKey,
-                sessionId: committedHeaderId!,
-              }),
-            ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+            const rejectedKey = childKey;
+            if (fork) {
+              assertNoForkState(rejectedKey, childSessionId!);
+            } else {
+              expect(
+                loadTranscriptEventsSync({
+                  agentId: "main",
+                  sessionKey: rejectedKey,
+                  sessionId: childSessionId!,
+                }),
+              ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+            }
             if (ending === "parent-replaced") {
               expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(
                 parentReplacement,
@@ -582,15 +635,16 @@ export function registerSessionOperatorPreparationTests(fixture: {
               expect(
                 loadTranscriptEventsSync({
                   agentId: "main",
-                  sessionKey: childKey,
-                  sessionId: committedHeaderId!,
+                  sessionKey: rejectedKey,
+                  sessionId: childSessionId!,
                 }),
-              ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+              ).toEqual(
+                fork ? [] : expect.arrayContaining([expect.objectContaining({ type: "session" })]),
+              );
             }
           }
         } finally {
           header.mockRestore();
-          forked.mockRestore();
         }
       },
     );

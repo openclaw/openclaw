@@ -2,6 +2,7 @@ import type { APIEmbed } from "discord-api-types/v10";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   hasOutboundReplyContent,
@@ -10,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { registerDiscordComponentEntries } from "../components-registry.js";
 import { buildDiscordComponentMessage } from "../components.js";
@@ -26,8 +28,21 @@ import {
   DISCORD_PRESENTATION_CAPABILITIES,
   resolveDiscordComponentSpec,
 } from "../outbound-components.js";
+import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
+
+export function resolveDiscordInteractionReplyOptions(
+  params: Pick<DiscordCommandArgContext, "cfg" | "discordConfig" | "accountId">,
+) {
+  return {
+    textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
+      fallbackLimit: 2000,
+    }),
+    maxLinesPerMessage: resolveDiscordMaxLinesPerMessage(params),
+    chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
+  };
+}
 
 function isDiscordUnknownInteraction(error: unknown): boolean {
   if (!error || typeof error !== "object") {

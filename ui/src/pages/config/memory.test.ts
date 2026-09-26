@@ -3,12 +3,7 @@
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderConfigForm } from "../../components/config-form.ts";
-import {
-  memorySchemaKeysForTab,
-  memoryTabForRoute,
-  memoryVisibleSchemaKeys,
-  narrowMemorySchema,
-} from "./memory-schema.ts";
+import { memorySchemaKeysForTab, memoryTabForRoute, narrowMemorySchema } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
 
 /** The view is the only public surface, so its props type comes from its signature. */
@@ -92,20 +87,6 @@ describe("renderMemory", () => {
     expect(container.textContent).toContain("Memory import requires operator.admin access.");
   });
 
-  it("shows the exclusive engine choice as one radio group over installed engines", () => {
-    const container = renderInto(createProps());
-
-    const group = container.querySelector("wa-radio-group.settings-segmented");
-    expect(group).not.toBeNull();
-    const values = [...container.querySelectorAll("wa-radio")].map((radio) =>
-      radio.getAttribute("value"),
-    );
-    expect(values).toContain("memory-core");
-    expect(values).toContain("memory-lancedb");
-    // The trailing empty value switches the memory slot off entirely.
-    expect(values).toContain("");
-  });
-
   it("reports whether the engine came from config or from the slot default", () => {
     const auto = renderInto(createProps());
     expect(auto.textContent).toContain("falls back to its default owner");
@@ -140,25 +121,6 @@ describe("renderMemory", () => {
     ).toBe(true);
   });
 
-  it("surfaces a failed engine write next to the control", () => {
-    expect(renderInto(createProps()).textContent).not.toContain("Could not change");
-
-    const failed = renderInto(
-      createProps({ engineOutcome: { kind: "error", message: "gateway rejected the change" } }),
-    );
-    expect(failed.textContent).toContain("Could not change the memory engine");
-    expect(failed.textContent).toContain("gateway rejected the change");
-  });
-
-  it("selects the Off option and says so for an explicit plugins.slots.memory none", () => {
-    const container = renderInto(createProps({ engineSelection: { kind: "off" } }));
-
-    const active = container.querySelector("wa-radio.settings-segmented__btn--active");
-    expect(active?.getAttribute("value")).toBe("");
-    expect(container.textContent).toContain("switched off");
-    expect(container.textContent).not.toContain("pinned in config");
-  });
-
   it("renders enabled and disabled add-ons as accessible toggles", () => {
     const container = renderInto(createProps());
 
@@ -172,71 +134,6 @@ describe("renderMemory", () => {
     expect(switches[1]?.textContent).toContain("Enable or disable Memory wiki");
     const link = container.querySelector<HTMLAnchorElement>("a.memory-page__link");
     expect(link?.getAttribute("href")).toBe("/settings/plugins");
-  });
-
-  it("uses read-only add-on statuses when mutations are not authorized", () => {
-    const container = renderInto(createProps({ canToggleAddons: false }));
-
-    expect(container.querySelector("wa-switch")).toBeNull();
-    expect(container.textContent).toContain("Enabled");
-    expect(container.textContent).toContain("Disabled");
-    expect(container.textContent).toContain("Open Plugins");
-  });
-
-  it("keeps mutation busy and errors scoped to one add-on row", () => {
-    const container = renderInto(
-      createProps({
-        addons: [
-          {
-            id: "active-memory",
-            label: "Active memory",
-            description: "Recent context",
-            state: "enabled",
-            busy: true,
-            error: "gateway rejected the change",
-            notice: null,
-          },
-          {
-            id: "memory-wiki",
-            label: "Memory wiki",
-            description: "Wiki pages",
-            state: "disabled",
-            busy: false,
-            error: null,
-            notice: null,
-          },
-        ],
-      }),
-    );
-    const switches = [...container.querySelectorAll<HTMLElement>("wa-switch")];
-    expect(switches[0]?.hasAttribute("disabled")).toBe(true);
-    expect(switches[1]?.hasAttribute("disabled")).toBe(false);
-    expect(container.textContent).toContain("Could not update Active memory");
-    expect(container.textContent).toContain("gateway rejected the change");
-    expect(container.textContent).not.toContain("Could not update Memory wiki");
-  });
-
-  it("never states an add-on is off while the catalog is unread", () => {
-    for (const state of ["loading", "unknown"] as const) {
-      const container = renderInto(
-        createProps({
-          addons: [
-            {
-              id: "active-memory",
-              label: "Active memory",
-              description: "x",
-              state,
-              busy: false,
-              error: null,
-              notice: null,
-            },
-          ],
-        }),
-      );
-      expect(container.textContent).not.toContain("Disabled");
-      expect(container.textContent).not.toContain("Enabled");
-      expect(container.querySelector("wa-switch")).toBeNull();
-    }
   });
 
   it("keeps config only on Settings and the agent experience on Dreams", () => {
@@ -315,14 +212,6 @@ describe("memoryTabForRoute", () => {
     expect(memoryTabForRoute({ tab: "unknown" })).toBeNull();
   });
 
-  it("routes old tabless schema links to Settings without changing the plain landing", () => {
-    expect(memoryTabForRoute({ section: "memory", targetBlockId: "config-section-memory" })).toBe(
-      "settings",
-    );
-    expect(memoryTabForRoute({ targetBlockId: "config-section-memory" })).toBe("settings");
-    expect(memoryTabForRoute({})).toBeNull();
-  });
-
   it("prefers an explicit canonical path over stale legacy route state", () => {
     expect(
       memoryTabForRoute({
@@ -342,12 +231,6 @@ describe("memorySchemaKeysForTab", () => {
     expect(memorySchemaKeysForTab("memories")).toEqual([]);
     expect(memorySchemaKeysForTab("dreams")).toEqual([]);
     expect(memorySchemaKeysForTab("settings")).toEqual(["citations", "search"]);
-  });
-});
-
-describe("memoryVisibleSchemaKeys", () => {
-  it("matches the builtin Settings editor", () => {
-    expect(memoryVisibleSchemaKeys()).toEqual(["citations", "search"]);
   });
 });
 

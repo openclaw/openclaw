@@ -19,7 +19,6 @@ const {
   createPageViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } = pwAi;
 
@@ -586,7 +585,9 @@ describe("pw-session connection scoping", () => {
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
-    expect(retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" })).toBe(true);
+    expect(
+      retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" }).retired,
+    ).toBe(true);
     await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).resolves.toEqual([
       expect.objectContaining({ targetId: "B" }),
     ]);
@@ -741,7 +742,7 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
-    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+    retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" });
 
     await vi.waitFor(() => expect(stuck.browserClose).toHaveBeenCalledTimes(1));
 
@@ -778,7 +779,7 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
-    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+    retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" });
 
     const successor = listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
@@ -818,7 +819,7 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
-    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+    retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" });
 
     const recovered = await listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",

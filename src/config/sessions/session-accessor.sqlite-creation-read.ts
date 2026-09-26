@@ -10,6 +10,25 @@ import {
   resolveSessionEntryCandidates,
 } from "./store-entry.js";
 
+/** Recheck the explicit claim inside the transaction that writes its session row. */
+export function assertSessionCreationLabelAvailable(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  label: string | undefined,
+): void {
+  if (label === undefined) {
+    return;
+  }
+  const occupied = readSelectedSessionEntriesInDatabase(database, [], { label }).some(
+    (candidate) => candidate.sessionKey !== sessionKey,
+  );
+  if (occupied) {
+    const error = new Error(`label already in use: ${label}`);
+    error.name = "SessionLabelConflictError";
+    throw error;
+  }
+}
+
 export type SessionCreationSnapshot = SessionEntryCreateWithTranscriptContext & {
   normalizedKey: string;
   legacyKeys: string[];

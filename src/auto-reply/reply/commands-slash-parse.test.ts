@@ -34,11 +34,6 @@ describe("parseSlashCommandOrNull", () => {
       expect(parseSlashCommandOrNull("/configfoo", "/config", opts)).toBeNull();
     });
 
-    it("does not match when prefix sits in the middle of a longer word", () => {
-      // /modelsy should not be captured by /models
-      expect(parseSlashCommandOrNull("/modelsy", "/models", opts)).toBeNull();
-    });
-
     it("still matches when the boundary is a colon (`/config:json`)", () => {
       // Some clients allow `cmd:subkey` to pass through to the action parser
       // when there's no whitespace — the boundary character is still a

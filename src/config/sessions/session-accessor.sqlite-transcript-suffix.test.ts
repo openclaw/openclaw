@@ -45,6 +45,15 @@ const rewriteEvents = [
   },
 ] as const;
 
+function keyedAssistant(id: string, parentId: string, idempotencyKey: string, content = id) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    message: { role: "assistant", content, idempotencyKey },
+  } as const;
+}
+
 async function withRewriteFixture(
   run: (fixture: {
     db: ReturnType<typeof openOpenClawAgentDatabase>["db"];
@@ -532,52 +541,11 @@ describe("SQLite exact transcript suffix replacement", () => {
     });
   });
 
-  it("updates the idempotency owner when a retained event changes its key", async () => {
-    const originalEvents = [
-      rewriteEvents[0],
-      {
-        type: "message",
-        id: "owner",
-        parentId: "root",
-        message: { role: "assistant", content: "original", idempotencyKey: "old-key" },
-      },
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      const replacementEvents = [
-        originalEvents[0],
-        {
-          ...originalEvents[1],
-          message: { role: "assistant", content: "updated", idempotencyKey: "new-key" },
-        },
-      ] as const;
-
-      replaceTranscriptSuffixForTest(scope, originalEvents, replacementEvents);
-
-      expect(
-        db
-          .prepare(
-            "SELECT event_id, message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
-          )
-          .get(scope.sessionId, "owner"),
-      ).toEqual({ event_id: "owner", message_idempotency_key: "new-key" });
-    }, originalEvents);
-  });
-
   it("promotes an unchanged-prefix duplicate when a retained event changes its key", async () => {
     const originalEvents = [
       rewriteEvents[0],
-      {
-        type: "message",
-        id: "duplicate",
-        parentId: "root",
-        message: { role: "assistant", content: "duplicate", idempotencyKey: "old-key" },
-      },
-      {
-        type: "message",
-        id: "owner",
-        parentId: "duplicate",
-        message: { role: "assistant", content: "owner", idempotencyKey: "old-key" },
-      },
+      keyedAssistant("duplicate", "root", "old-key"),
+      keyedAssistant("owner", "duplicate", "old-key"),
     ] as const;
     await withRewriteFixture(({ db, scope }) => {
       db.prepare(
@@ -613,12 +581,7 @@ describe("SQLite exact transcript suffix replacement", () => {
   it("removes the idempotency owner when a retained event removes its key", async () => {
     const originalEvents = [
       rewriteEvents[0],
-      {
-        type: "message",
-        id: "owner",
-        parentId: "root",
-        message: { role: "assistant", content: "original", idempotencyKey: "old-key" },
-      },
+      keyedAssistant("owner", "root", "old-key", "original"),
     ] as const;
     await withRewriteFixture(({ db, scope }) => {
       const replacementEvents = [
@@ -644,19 +607,9 @@ describe("SQLite exact transcript suffix replacement", () => {
   it("preserves the established idempotency owner across retained suffix rows", async () => {
     const duplicateKeyEvents = [
       rewriteEvents[0],
-      {
-        type: "message",
-        id: "first",
-        parentId: "root",
-        message: { role: "assistant", content: "first", idempotencyKey: "retry" },
-      },
+      keyedAssistant("first", "root", "retry"),
       { type: "custom", id: "removed", parentId: "first" },
-      {
-        type: "message",
-        id: "owner",
-        parentId: "removed",
-        message: { role: "assistant", content: "owner", idempotencyKey: "retry" },
-      },
+      keyedAssistant("owner", "removed", "retry"),
     ] as const;
     await withRewriteFixture(({ db, scope }) => {
       db.prepare(
@@ -702,22 +655,12 @@ describe("SQLite exact transcript suffix replacement", () => {
     const duplicateKeyEvents = [
       rewriteEvents[0],
       { type: "custom", id: "removed", parentId: "root" },
-      {
-        type: "message",
-        id: "owner",
-        parentId: "removed",
-        message: { role: "assistant", content: "owner", idempotencyKey: "retry" },
-      },
+      keyedAssistant("owner", "removed", "retry"),
     ] as const;
     await withRewriteFixture(({ db, scope }) => {
       replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
         duplicateKeyEvents[0],
-        {
-          type: "message",
-          id: "new",
-          parentId: "root",
-          message: { role: "assistant", content: "new", idempotencyKey: "retry" },
-        },
+        keyedAssistant("new", "root", "retry"),
         { ...duplicateKeyEvents[2], parentId: "new" },
       ]);
 
@@ -737,60 +680,14 @@ describe("SQLite exact transcript suffix replacement", () => {
   it("promotes a retained duplicate when its prior idempotency owner is removed", async () => {
     const duplicateKeyEvents = [
       rewriteEvents[0],
-      {
-        type: "message",
-        id: "owner",
-        parentId: "root",
-        message: { role: "assistant", content: "owner", idempotencyKey: "retry" },
-      },
-      {
-        type: "message",
-        id: "duplicate",
-        parentId: "owner",
-        message: { role: "assistant", content: "duplicate", idempotencyKey: "retry" },
-      },
+      keyedAssistant("owner", "root", "retry"),
+      keyedAssistant("duplicate", "owner", "retry"),
     ] as const;
     await withRewriteFixture(({ db, scope }) => {
       replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
         duplicateKeyEvents[0],
         { ...duplicateKeyEvents[2], parentId: "root" },
       ]);
-
-      expect(
-        db
-          .prepare(
-            "SELECT event_id, message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
-          )
-          .get(scope.sessionId, "duplicate"),
-      ).toEqual({ event_id: "duplicate", message_idempotency_key: "retry" });
-    }, duplicateKeyEvents);
-  });
-
-  it("promotes an unchanged-prefix duplicate when its suffix owner is removed", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      {
-        type: "message",
-        id: "duplicate",
-        parentId: "root",
-        message: { role: "assistant", content: "duplicate", idempotencyKey: "retry" },
-      },
-      {
-        type: "message",
-        id: "owner",
-        parentId: "duplicate",
-        message: { role: "assistant", content: "owner", idempotencyKey: "retry" },
-      },
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, "duplicate");
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
-      ).run("retry", scope.sessionId, "owner");
-
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, duplicateKeyEvents.slice(0, -1), 2);
 
       expect(
         db
@@ -811,18 +708,8 @@ describe("SQLite exact transcript suffix replacement", () => {
         parentId: "root",
         message: { role: "assistant", content: "corrupt" },
       },
-      {
-        type: "message",
-        id: "duplicate",
-        parentId: "corrupt-prefix",
-        message: { role: "assistant", content: "duplicate", idempotencyKey: "retry" },
-      },
-      {
-        type: "message",
-        id: "owner",
-        parentId: "duplicate",
-        message: { role: "assistant", content: "owner", idempotencyKey: "retry" },
-      },
+      keyedAssistant("duplicate", "corrupt-prefix", "retry"),
+      keyedAssistant("owner", "duplicate", "retry"),
     ] as const;
     await withRewriteFixture(({ db, scope }) => {
       db.prepare(

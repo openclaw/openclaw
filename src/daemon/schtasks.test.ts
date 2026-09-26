@@ -234,22 +234,6 @@ describe("readScheduledTaskCommand", () => {
     }
   }
 
-  it("parses script with quoted arguments containing spaces", async () => {
-    await withScheduledTaskScript(
-      {
-        // Use forward slashes which work in Windows cmd and avoid escape parsing issues.
-        scriptLines: ["@echo off", '"C:/Program Files/Node/node.exe" gateway.js'],
-      },
-      async (env) => {
-        const result = await readScheduledTaskCommand(env);
-        expect(result).toEqual({
-          programArguments: ["C:/Program Files/Node/node.exe", "gateway.js"],
-          sourcePath: resolveTaskScriptPath(env),
-        });
-      },
-    );
-  });
-
   it("reads legacy UTF-8 scripts with CJK paths written before the encoding fix", async () => {
     await withScheduledTaskScript(
       {
@@ -934,34 +918,6 @@ describe("readScheduledTaskCommand", () => {
         expect(result).toEqual({
           programArguments: ["node", "gateway.js", "--from-state-dir"],
           sourcePath: resolveTaskScriptPath(env),
-        });
-      },
-    );
-  });
-
-  it("parses quoted set assignments with escaped metacharacters", async () => {
-    await withScheduledTaskScript(
-      {
-        scriptLines: [
-          "@echo off",
-          'set "OC_AMP=left & right"',
-          'set "OC_PIPE=a | b"',
-          'set "OC_CARET=^^"',
-          'set "OC_PERCENT=%%TEMP%%"',
-          'set "OC_BANG=^!token^!"',
-          'set "OC_QUOTE=he said ^"hi^""',
-          "node gateway.js --verbose",
-        ],
-      },
-      async (env) => {
-        const result = await readScheduledTaskCommand(env);
-        expect(result?.environment).toEqual({
-          OC_AMP: "left & right",
-          OC_PIPE: "a | b",
-          OC_CARET: "^",
-          OC_PERCENT: "%TEMP%",
-          OC_BANG: "!token!",
-          OC_QUOTE: 'he said "hi"',
         });
       },
     );

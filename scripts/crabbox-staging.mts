@@ -17,6 +17,7 @@ import {
   rmSync,
   rmdirSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -345,6 +346,7 @@ function inventory(
   payload: string,
   known = new Map<string, Entry>(),
   preservedArtifacts = false,
+  observeEntry?: (path: string, stat: Stats) => void,
 ): Entry[] {
   const entries: Entry[] = [];
   const walk = (directory: string, parent: string) => {
@@ -358,6 +360,7 @@ function inventory(
       }
       const absolute = join(payload, path);
       const stat = lstatSync(absolute);
+      observeEntry?.(path, stat);
       if (stat.isDirectory()) {
         if (!preservedArtifacts || path !== "source/.crabbox") {
           entries.push({ path, kind: "directory" });
@@ -415,7 +418,11 @@ export type StagingHandle = {
   recorded: boolean;
   root: string;
   payload: string;
-  prepared: (source: FrozenSource, witness?: SourceWitness) => void;
+  prepared: (
+    source: FrozenSource,
+    witness?: SourceWitness,
+    observeEntry?: (path: string, stat: Stats) => void,
+  ) => void;
   admitted: (claims?: ClaimNamespace, leases?: string[]) => void;
   settled: (leases?: string[]) => void;
   preserved: (artifacts: CrabboxArtifactEvidence) => void;
@@ -498,7 +505,7 @@ function stagingHandle(root: string, initialReceipt: Receipt, recorded: boolean)
     recorded,
     root,
     payload,
-    prepared(source, witness) {
+    prepared(source, witness, observeEntry) {
       if (!recorded) {
         return;
       }
@@ -512,7 +519,10 @@ function stagingHandle(root: string, initialReceipt: Receipt, recorded: boolean)
           },
         ]),
       );
-      const manifest: Manifest = { source, entries: inventory(payload, known) };
+      const manifest: Manifest = {
+        source,
+        entries: inventory(payload, known, false, observeEntry),
+      };
       const bytes = JSON.stringify(manifest) + "\n";
       if (Buffer.byteLength(bytes) > manifestLimit) {
         throw new Error("staging manifest exceeds the recovery metadata limit");

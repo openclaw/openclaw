@@ -251,7 +251,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       } => Boolean(value.accountId),
     );
   if (bindTargets.length > 0) {
-    const agentSummaries = buildAgentSummaries(nextConfig);
+    const agentSummaries = await buildAgentSummaries(nextConfig);
     const bindNow =
       usesTargetedDefaults && agentSummaries.length <= 1
         ? false

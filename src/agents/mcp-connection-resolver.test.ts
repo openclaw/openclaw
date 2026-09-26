@@ -13,6 +13,7 @@ import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
@@ -335,6 +336,7 @@ describe("mcp connection resolver helpers", () => {
         sourceDigests: {},
       };
       const gatewayReload = createGatewayReloadHandlers({
+        scheduler: createTestGatewayScheduler(),
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
