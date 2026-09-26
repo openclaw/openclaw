@@ -12,6 +12,7 @@ import {
   inspectOpenAIToolSchemas,
   normalizeDeepSeekToolSchemas,
   normalizeGeminiToolSchemas,
+  normalizeKimiToolSchemas,
   normalizeLlamacppGbnfToolSchemas,
   normalizeOpenAIToolSchemas,
 } from "./provider-tools.js";
@@ -166,6 +167,44 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(normalizedTool.requiredClientCaps).toBe(requiredClientCaps);
     expect(normalizedTool.execute).toBe(execute);
     expect(parameters).toEqual(originalParameters);
+  });
+
+  it("distributes Kimi parent types through nested schema locations", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        entry: {
+          type: "object",
+          anyOf: [{ required: ["contact_id"] }, { required: ["account_id"] }],
+        },
+      },
+      dependencies: {
+        billing: {
+          type: "number",
+          anyOf: [{ minimum: 0 }, { type: "integer" }],
+        },
+      },
+    };
+    const original = structuredClone(parameters);
+    const tools = [tool(parameters, "apollo"), tool(undefined, "parameterless")];
+
+    const normalized = normalizeKimiToolSchemas(providerContext(tools));
+    const schema = normalized[0]?.parameters as {
+      properties: { entry: Record<string, unknown> };
+      dependencies: { billing: Record<string, unknown> };
+    };
+
+    expect(schema.properties.entry).toEqual({
+      anyOf: [
+        { type: "object", required: ["contact_id"] },
+        { type: "object", required: ["account_id"] },
+      ],
+    });
+    expect(schema.dependencies.billing).toEqual({
+      anyOf: [{ type: "number", minimum: 0 }, { type: "integer" }],
+    });
+    expect(normalized[1]).toBe(tools[1]);
+    expect(parameters).toEqual(original);
   });
 
   it.each([
