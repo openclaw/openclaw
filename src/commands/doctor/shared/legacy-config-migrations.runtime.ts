@@ -21,6 +21,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT } from "./legacy-config-m
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES } from "./legacy-config-migrations.runtime.tool-names.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_POLICY_CONFLICTS } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_WORKSPACE } from "./legacy-config-migrations.runtime.workspace.js";
 
 /** Ordered runtime legacy config migrations applied by doctor. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
@@ -44,6 +45,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   // Runs after the profile-bound agent repair so that owner claims its scopes first;
   // this sweeps up the remaining conflicts it declines (no profile, or profile "full").
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_POLICY_CONFLICTS,
+  LEGACY_CONFIG_MIGRATION_RUNTIME_WORKSPACE,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT,
 ];

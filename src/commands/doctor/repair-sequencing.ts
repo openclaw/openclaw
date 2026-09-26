@@ -105,6 +105,9 @@ export async function runDoctorRepairSequence(params: {
     const soleAgentId = tryResolveSoleAgentId(config);
     return {
       config,
+      // A saved blank workspace is stripped by the shared Doctor migration that
+      // runs later in this sequence; the public resolver keeps the shipped
+      // fallback (the default directory), so this preparation cannot abort.
       workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId, env) : undefined,
     };
   };

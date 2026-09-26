@@ -57,6 +57,13 @@ when personas must not share compiled wiki knowledge.
 | Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
+<Note>
+Workspace config values must not be blank: only omitting `agents.entries.*.workspace` or
+`agents.defaults.workspace` selects the default workspace directory. An explicit empty or
+whitespace-only value is rejected with `agents.<id>.workspace must not be blank` (or
+`agents.defaults.workspace must not be blank`) instead of silently running in the default directory.
+</Note>
+
 ### Single-agent mode (default)
 
 If you configure nothing, OpenClaw runs one agent:

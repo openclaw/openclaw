@@ -158,7 +158,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     return runWithPluginMetadataSnapshot(
       {
         config,
-        workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
+        // The public resolver preserves the shipped fallback for a saved blank
+        // (the default directory), so Doctor's workspace-dependent preparation
+        // cannot abort; the shared migration below still strips it.
+        workspaceDir: soleAgentId
+          ? resolveAgentWorkspaceDir(config, soleAgentId, process.env)
+          : undefined,
       },
       run,
     );

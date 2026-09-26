@@ -471,13 +471,22 @@ export function resolveAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  // Blank workspace values are rejected at the config-input boundary (config
+  // validation reports a field-level issue) and stripped by the shared Doctor
+  // migration for saved configs. The public resolver keeps the shipped fallback
+  // (blank selects the default directory) so existing SDK callers and callers
+  // that construct configs outside the migrated config-loading path keep their
+  // established behavior instead of throwing.
+  const configuredWorkspace = resolveAgentConfig(cfg, id)?.workspace;
+  const configured =
+    typeof configuredWorkspace === "string" ? configuredWorkspace.trim() : undefined;
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
   // Read-time migration removes default:true before write-time workspace pinning can run.
   const inheritedWorkspaceAgentId = tryResolveLegacyDataOwnerAgentId(cfg);
-  const fallback = cfg.agents?.defaults?.workspace?.trim();
+  const defaultsWorkspace = cfg.agents?.defaults?.workspace;
+  const fallback = typeof defaultsWorkspace === "string" ? defaultsWorkspace.trim() : undefined;
   if (inheritedWorkspaceAgentId && id === inheritedWorkspaceAgentId) {
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback, env));
@@ -572,6 +581,11 @@ export function tryResolveConfiguredAgentWorkspaceDir(
 ): string | undefined {
   const inheritedWorkspaceAgentId = tryResolveLegacyDataOwnerAgentId(cfg);
   if (inheritedWorkspaceAgentId) {
+    // Discovery (plugin metadata scope, channel read-only, model selection,
+    // state migration planning) enumerates the same directory the resolver
+    // returns for the legacy data owner; the resolver preserves the shipped
+    // fallback for a saved blank, so pre-migration preparation cannot abort the
+    // Doctor repair that strips it.
     return resolveAgentWorkspaceDir(cfg, inheritedWorkspaceAgentId, env);
   }
   const configured = cfg.agents?.defaults?.workspace?.trim();
