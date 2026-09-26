@@ -85,6 +85,7 @@ type SlackTestState = {
     (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
+  socketModeReceiverArgs?: Record<string, unknown>;
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
 };
 
@@ -111,6 +112,7 @@ const { state: slackTestState, transport: slackTestTransport } = vi.hoisted(
       upsertPairingRequestMock: vi.fn(),
       resolveSlackUserAllowlistMock: vi.fn(),
       socketModeLogger: undefined,
+      socketModeReceiverArgs: undefined,
       createSlackStartupAuthClientMock: vi.fn(),
     },
     transport: {},
@@ -339,6 +341,7 @@ export async function resetSlackTestState(
   slackTestState.config = config;
   slackTestState.appConstructorArgs = undefined;
   slackTestState.socketModeLogger = undefined;
+  slackTestState.socketModeReceiverArgs = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.httpRequestListenerMock.mockReset();
@@ -519,8 +522,11 @@ vi.mock("@slack/bolt", () => {
       send: vi.fn<(envelopeId: string) => Promise<void>>().mockResolvedValue(undefined),
     });
 
-    constructor(args: { logger?: { error: (...args: unknown[]) => void } }) {
-      slackTestState.socketModeLogger = args.logger;
+    constructor(args: Record<string, unknown>) {
+      slackTestState.socketModeReceiverArgs = args;
+      slackTestState.socketModeLogger = args.logger as
+        | { error: (...args: unknown[]) => void }
+        | undefined;
     }
   }
   return {
