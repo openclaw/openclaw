@@ -654,8 +654,42 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
+    if (this.scrollFileFromToolbar(event)) {
+      return;
+    }
     handleSidebarKeydown(event, this);
   };
+
+  // Escape leaves focus on Search in file, outside the reader. Page keys from
+  // that toolbar still have to move the file, without taking the reader's own
+  // paging or a key typed into the search field.
+  private scrollFileFromToolbar(event: KeyboardEvent): boolean {
+    if (
+      (event.key !== "PageDown" && event.key !== "PageUp") ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey
+    ) {
+      return false;
+    }
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest(".cm-scroller, input, textarea, select")) {
+      return false;
+    }
+    if (!target.closest(".sidebar-file-view")) {
+      return false;
+    }
+    const scroller = this.querySelector<HTMLElement>(".sidebar-file-view .cm-scroller");
+    if (!scroller || scroller.scrollHeight <= scroller.clientHeight) {
+      return false;
+    }
+    event.preventDefault();
+    scroller.scrollBy({
+      top: event.key === "PageDown" ? scroller.clientHeight : -scroller.clientHeight,
+    });
+    return true;
+  }
 
   override render() {
     const file = this.htmlPreview.file;
