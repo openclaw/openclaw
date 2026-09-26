@@ -352,7 +352,7 @@ describe("scheduled message actions", () => {
         ]) {
           vi.stubEnv(key, "1");
         }
-        // Minimal mode suppresses channel startup; the skip flags would also
+        // Minimal mode suppresses initial channel startup; the skip flags would also
         // remove channel credentials from the published runtime config.
         vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
         vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", undefined);
@@ -566,6 +566,8 @@ describe("scheduled message actions", () => {
           channels: {
             discord: {
               enabled: true,
+              // Advancing the grant clock must not start an unrelated Discord transport.
+              healthMonitor: { enabled: false },
               ...(nativeCreator
                 ? {
                     token: "synthetic-unused-default-token",
