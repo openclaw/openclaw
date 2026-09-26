@@ -29,7 +29,11 @@ const boundaries = [
     id: "cli-guided-onboarding",
     coverageId: "cli.guided-onboarding",
     title: "CLI guided onboarding",
-    marker: "QA_ASSERT cli.guided-onboarding pass",
+    markers: [
+      "QA_ASSERT cli.guided-onboarding pass",
+      "QA_ASSERT cli.guided-onboarding.health-success pass",
+      "QA_ASSERT cli.guided-onboarding.health-failure pass",
+    ],
   },
   {
     id: "cli-remote-onboarding",
@@ -85,7 +89,7 @@ const child = spawn("bash", ["scripts/e2e/onboard-docker.sh"], {
   env: {
     ...process.env,
     OPENCLAW_ONBOARD_E2E_CASES:
-      "guided-skip-ui,local-auth-refs,local-password,remote-non-interactive,reset,skills",
+      "guided-skip-ui,guided-health-success,guided-health-failure,local-auth-refs,local-password,remote-non-interactive,reset,skills",
   },
   stdio: ["inherit", "pipe", "pipe"],
 });

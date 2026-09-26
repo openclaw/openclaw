@@ -91,6 +91,7 @@ describe("onboard config fixture helpers", () => {
     expect(config.gateway).toEqual({
       mode: "local",
       bind: "loopback",
+      auth: { mode: "token", token: "openclaw-onboard-health-e2e-token" },
       controlUi: { enabled: false },
     });
     expect(config.agents.defaults.workspace).toBe(workspace);

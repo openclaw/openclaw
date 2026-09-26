@@ -296,8 +296,10 @@ describe.skipIf(process.platform === "win32")("onboarding assertion attribution"
         [
           "#!/bin/sh",
           '[ "$1" = "scripts/e2e/onboard-docker.sh" ] || exit 91',
-          '[ "$OPENCLAW_ONBOARD_E2E_CASES" = "guided-skip-ui,local-auth-refs,local-password,remote-non-interactive,reset,skills" ] || exit 92',
+          '[ "$OPENCLAW_ONBOARD_E2E_CASES" = "guided-skip-ui,guided-health-success,guided-health-failure,local-auth-refs,local-password,remote-non-interactive,reset,skills" ] || exit 92',
           "echo 'QA_ASSERT cli.guided-onboarding pass'",
+          "echo 'QA_ASSERT cli.guided-onboarding.health-success pass'",
+          "echo 'QA_ASSERT cli.guided-onboarding.health-failure pass'",
           "exit 7",
         ].join("\n"),
         { mode: 0o755 },

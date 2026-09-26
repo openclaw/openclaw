@@ -20,11 +20,13 @@ mkdir -p "$ONBOARD_TMP_ROOT"
 ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"
 OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"
 GATEWAY_LOG_PATH="$ONBOARD_TMP_DIR/gateway-e2e.log"
+GATEWAY_BACKEND_LOG_PATH="$ONBOARD_TMP_DIR/gateway-unhealthy-backend.log"
 export OPENCLAW_E2E_LOG_DIR
 export GATEWAY_LOG_PATH
 mkdir -p "$OPENCLAW_E2E_LOG_DIR"
 cleanup_onboard_artifacts() {
   openclaw_e2e_stop_process "${GATEWAY_PID:-}"
+  openclaw_e2e_stop_process "${GATEWAY_BACKEND_PID:-}"
   openclaw_e2e_stop_process "${mock_openai_pid:-}"
   rm -rf "$ONBOARD_TMP_DIR"
 }
@@ -103,19 +105,58 @@ wait_for_skills_prompt_or_ready() {
 }
 
 start_gateway() {
+  GATEWAY_BACKEND_PID=""
   GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 "$GATEWAY_LOG_PATH")"
 }
 
+start_reachable_unhealthy_gateway() {
+  GATEWAY_BACKEND_PID="$(
+    openclaw_e2e_start_gateway \
+      "$OPENCLAW_ENTRY" \
+      18790 \
+      "$GATEWAY_BACKEND_LOG_PATH"
+  )"
+  if ! wait_for_gateway 18790 "$GATEWAY_BACKEND_LOG_PATH"; then
+    return 1
+  fi
+  GATEWAY_PID="$(
+    openclaw_e2e_start_tracked_process \
+      "$GATEWAY_LOG_PATH" \
+      env \
+      OPENCLAW_ONBOARD_FIXTURE_PORT=18789 \
+      OPENCLAW_ONBOARD_BACKEND_PORT=18790 \
+      node scripts/e2e/lib/onboard/reachable-unhealthy-gateway.mjs
+  )"
+}
+
+start_wizard_gateway() {
+  local outcome="$1"
+  case "$outcome" in
+    healthy) start_gateway ;;
+    reachable-unhealthy) start_reachable_unhealthy_gateway ;;
+    none) return 0 ;;
+    *)
+      echo "Unknown onboarding Gateway outcome: $outcome" >&2
+      return 2
+      ;;
+  esac
+  gw_pid="$GATEWAY_PID"
+  gw_backend_pid="${GATEWAY_BACKEND_PID:-}"
+  wait_for_gateway
+}
+
 wait_for_gateway() {
+  local port="${1:-18789}"
+  local log_path="${2:-$GATEWAY_LOG_PATH}"
   local wait_attempts
   wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS 20)" || return $?
   local wait_interval_s="${OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S:-1}"
   local saw_listening_log="false"
   for _ in $(seq 1 "$wait_attempts"); do
-    if openclaw_e2e_probe_tcp 127.0.0.1 18789 500 >/dev/null 2>&1; then
+    if openclaw_e2e_probe_tcp 127.0.0.1 "$port" 500 >/dev/null 2>&1; then
       return 0
     fi
-    if [ -f "$GATEWAY_LOG_PATH" ] && grep -E -q "listening on ws://[^ ]+:18789" "$GATEWAY_LOG_PATH"; then
+    if [ -f "$log_path" ] && grep -E -q "listening on ws://[^ ]+:${port}" "$log_path"; then
       saw_listening_log="true"
     fi
     sleep "$wait_interval_s"
@@ -124,7 +165,7 @@ wait_for_gateway() {
   if [ "$saw_listening_log" = "true" ]; then
     echo "Gateway log reported listening, but TCP probe never succeeded"
   fi
-  cat "$GATEWAY_LOG_PATH" || true
+  cat "$log_path" || true
   return 1
 }
 
@@ -136,6 +177,7 @@ cleanup_wizard_case() {
   { exec 3>&-; } 2>/dev/null || true
   openclaw_e2e_stop_process "${wizard_pid:-}"
   stop_gateway "${gw_pid:-}"
+  stop_gateway "${gw_backend_pid:-}"
   rm -rf "${input_fifo_dir:-}"
 }
 
@@ -144,12 +186,13 @@ run_wizard_cmd() {
   local state_ref="$2"
   local command="$3"
   local send_fn="$4"
-  local with_gateway="${5:-false}"
+  local gateway_outcome="${5:-none}"
   local validate_fn="${6:-}"
   local input_fifo_dir=""
   local input_fifo=""
   local wizard_pid=""
   local gw_pid=""
+  local gw_backend_pid=""
   local wizard_status=0
 
   echo "== Wizard case: $case_name =="
@@ -176,15 +219,6 @@ run_wizard_cmd() {
   if ! exec 3>"$input_fifo"; then
     cleanup_wizard_case
     return 1
-  fi
-
-  if [ "$with_gateway" = "true" ]; then
-    start_gateway
-    gw_pid="$GATEWAY_PID"
-    if ! wait_for_gateway; then
-      cleanup_wizard_case
-      exit 1
-    fi
   fi
 
   "$send_fn" || wizard_status=$?
@@ -262,6 +296,20 @@ send_guided_skip_ui_flow() {
   send $'\r' 0.8
 }
 
+send_guided_health_flow() {
+  wait_for_log "Help make OpenClaw better?" 120 || return $?
+  send $'\r' 0.8
+  wait_for_first_agent_prompt log_contains 120 0.8 || return $?
+  send $'\r' 0.8
+  wait_for_log "Model/auth provider" 120 || return $?
+  send $'\r' 0.8
+  wait_for_log "OpenAI auth method" 120 || return $?
+  send $'\r' 0.8
+  wait_for_log "Test AI access now with a live completion?" 120 || return $?
+  start_wizard_gateway "$gateway_outcome" || return $?
+  send $'\r' 0.8
+}
+
 validate_guided_skip_ui_log() {
   local log_path="$1"
   local mock_request_log="$2"
@@ -289,6 +337,107 @@ validate_guided_skip_ui_log() {
     echo "Guided onboarding did not verify the configured model through /v1/responses"
     return 1
   }
+}
+
+validate_guided_health_log() {
+  local log_path="$1"
+  local mock_request_log="$2"
+  local expected_outcome="$3"
+  log_contains "OpenClaw setup" || {
+    echo "Guided onboarding introduction was not rendered"
+    return 1
+  }
+  log_contains "Gateway: reachable" || {
+    echo "Guided onboarding did not report the reachable Gateway"
+    return 1
+  }
+  if log_contains "Opening the Control UI dashboard"; then
+    echo "Guided skip-UI onboarding attempted a browser handoff"
+    return 1
+  fi
+  if log_contains "Your browser is ready"; then
+    echo "Guided skip-UI onboarding completed a browser handoff"
+    return 1
+  fi
+  if log_contains "Hatching your agent now"; then
+    echo "Guided skip-UI onboarding attempted a terminal handoff"
+    return 1
+  fi
+  grep -q '"/v1/responses"' "$mock_request_log" || {
+    echo "Guided onboarding did not verify the configured model through /v1/responses"
+    return 1
+  }
+  case "$expected_outcome" in
+    healthy)
+      log_contains "OpenClaw is ready." || {
+        echo "Guided onboarding did not report its healthy completion"
+        return 1
+      }
+      if log_contains "health check failed"; then
+        echo "Healthy guided onboarding reported a failed health check"
+        return 1
+      fi
+      ;;
+    reachable-unhealthy)
+      log_contains "Onboarding complete, but the gateway health check failed." || {
+        echo "Guided onboarding did not report its reachable-but-unhealthy completion"
+        return 1
+      }
+      log_contains "https://docs.openclaw.ai/gateway/health" || {
+        echo "Guided onboarding health failure did not link the Gateway health documentation"
+        return 1
+      }
+      log_contains "https://docs.openclaw.ai/gateway/troubleshooting" || {
+        echo "Guided onboarding health failure did not link the Gateway troubleshooting documentation"
+        return 1
+      }
+      log_contains "openclaw health" || {
+        echo "Guided onboarding health failure did not name the recovery command"
+        return 1
+      }
+      if log_contains "OpenClaw is ready."; then
+        echo "Reachable-but-unhealthy guided onboarding reported plain success"
+        return 1
+      fi
+      ;;
+    *)
+      echo "Unknown guided onboarding health outcome: $expected_outcome" >&2
+      return 2
+      ;;
+  esac
+}
+
+run_guided_health_case() {
+  local case_name="$1"
+  local mock_port="$2"
+  local gateway_outcome="$3"
+  local mock_log="$ONBOARD_TMP_DIR/${case_name}-mock-openai.log"
+  local mock_request_log="$ONBOARD_TMP_DIR/${case_name}-mock-requests.jsonl"
+  set_isolated_openclaw_env "$case_name"
+  export OPENAI_API_KEY="sk-openclaw-${case_name}-e2e"
+  node scripts/e2e/lib/onboard/write-config.mjs \
+    guided-skip-ui \
+    "$OPENCLAW_CONFIG_PATH" \
+    "$OPENCLAW_TEST_WORKSPACE_DIR" \
+    "$mock_port"
+  mock_openai_pid="$(
+    openclaw_e2e_start_tracked_process \
+      "$mock_log" \
+      env MOCK_PORT="$mock_port" MOCK_REQUEST_LOG="$mock_request_log" \
+      node scripts/e2e/mock-openai-server.mjs
+  )"
+  openclaw_e2e_wait_mock_openai "$mock_port"
+
+  run_wizard_cmd \
+    "$case_name" \
+    "$HOME" \
+    "node \"$OPENCLAW_ENTRY\" onboard --flow quickstart --skip-channels --skip-search --skip-skills --skip-hooks --skip-daemon --skip-ui" \
+    send_guided_health_flow \
+    "$gateway_outcome"
+
+  validate_guided_health_log "$WIZARD_LOG_PATH" "$mock_request_log" "$gateway_outcome"
+  openclaw_e2e_stop_process "$mock_openai_pid"
+  mock_openai_pid=""
 }
 
 run_case_guided_skip_ui() {
@@ -320,6 +469,16 @@ run_case_guided_skip_ui() {
   echo "QA_ASSERT cli.guided-onboarding pass"
   openclaw_e2e_stop_process "$mock_openai_pid"
   mock_openai_pid=""
+}
+
+run_case_guided_health_success() {
+  run_guided_health_case guided-health-success 19092 healthy
+  echo "QA_ASSERT cli.guided-onboarding.health-success pass"
+}
+
+run_case_guided_health_failure() {
+  run_guided_health_case guided-health-failure 19093 reachable-unhealthy
+  echo "QA_ASSERT cli.guided-onboarding.health-failure pass"
 }
 
 run_case_local_basic() {
@@ -484,6 +643,8 @@ run_selected_cases() {
   for case_name in "${cases[@]}"; do
     case "$case_name" in
       guided-skip-ui) run_case_guided_skip_ui ;;
+      guided-health-success) run_case_guided_health_success ;;
+      guided-health-failure) run_case_guided_health_failure ;;
       local-basic) run_case_local_basic ;;
       local-auth-refs) run_case_local_auth_refs ;;
       local-password) run_case_local_password ;;
