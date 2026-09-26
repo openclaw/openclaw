@@ -30,45 +30,61 @@ export {
  * Finds unsupported JSON-schema keywords and reports their nested schema paths.
  */
 export function findUnsupportedSchemaKeywords(
-  /** JSON schema node to inspect recursively. */
+  /** JSON schema node to inspect. */
   schema: unknown,
   /** Dot/bracket path prefix used in returned diagnostics. */
   path: string,
   /** Schema keywords unsupported by the target provider family. */
   unsupportedKeywords: ReadonlySet<string>,
 ): string[] {
-  if (!schema || typeof schema !== "object") {
-    return [];
-  }
-  if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) =>
-      findUnsupportedSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
-    );
-  }
-  const record = schema as Record<string, unknown>;
   const violations: string[] = [];
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
-      violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
-      );
-    }
-  }
-  for (const [key, value] of Object.entries(record)) {
-    if (key === "properties") {
+  type Visit =
+    | { kind: "schema"; schema: unknown; path: string }
+    | { kind: "violation"; path: string }
+    | { kind: "leave"; schema: object };
+  const pending: Visit[] = [{ kind: "schema", schema, path }];
+  const active = new WeakSet<object>();
+  for (let visit = pending.pop(); visit; visit = pending.pop()) {
+    if (visit.kind === "violation") {
+      violations.push(visit.path);
       continue;
     }
-    if (unsupportedKeywords.has(key)) {
-      violations.push(`${path}.${key}`);
+    if (visit.kind === "leave") {
+      active.delete(visit.schema);
+      continue;
     }
-    if (value && typeof value === "object") {
-      violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords),
-      );
+    const node = visit.schema;
+    if (!node || typeof node !== "object") {
+      continue;
+    }
+    if (active.has(node)) {
+      throw new TypeError("Cannot inspect a circular tool schema");
+    }
+    active.add(node);
+    pending.push({ kind: "leave", schema: node });
+    if (Array.isArray(node)) {
+      for (let index = node.length - 1; index >= 0; index--) {
+        pending.push({ kind: "schema", schema: node[index], path: `${visit.path}[${index}]` });
+      }
+      continue;
+    }
+    const record = node as Record<string, unknown>;
+    // Reverse scheduling preserves properties-first, depth-first diagnostic order.
+    for (const [key, value] of Object.entries(record).toReversed()) {
+      if (key === "properties") {
+        continue;
+      }
+      const childPath = `${visit.path}.${key}`;
+      pending.push({ kind: "schema", schema: value, path: childPath });
+      if (unsupportedKeywords.has(key)) {
+        pending.push({ kind: "violation", path: childPath });
+      }
+    }
+    const properties = record.properties;
+    if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+      for (const [key, value] of Object.entries(properties).toReversed()) {
+        pending.push({ kind: "schema", schema: value, path: `${visit.path}.properties.${key}` });
+      }
     }
   }
   return violations;
@@ -248,19 +264,54 @@ function isNullSchemaVariant(schema: unknown): boolean {
 }
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  const normalized = new WeakMap<object, unknown>();
+  const active = new WeakSet<object>();
+  const pending = [{ schema, leave: false }];
+  const readNormalized = (value: unknown): unknown =>
+    value && typeof value === "object" ? normalized.get(value) : value;
+  for (let visit = pending.pop(); visit; visit = pending.pop()) {
+    const node = visit.schema;
+    if (visit.leave) {
+      normalized.set(node, normalizeDeepSeekSchemaNode(node, readNormalized));
+      active.delete(node);
+      continue;
+    }
+    if (normalized.has(node)) {
+      continue;
+    }
+    if (active.has(node)) {
+      throw new TypeError("Cannot normalize a circular tool schema");
+    }
+    active.add(node);
+    pending.push({ schema: node, leave: true });
+    const children = Array.isArray(node) ? node : Object.values(node);
+    for (let index = children.length - 1; index >= 0; index--) {
+      const child: unknown = children[index];
+      if (child && typeof child === "object") {
+        pending.push({ schema: child, leave: false });
+      }
+    }
+  }
+  return normalized.get(schema);
+}
+
+// Children are completed first so union reduction keeps the existing copy-on-write contract.
+function normalizeDeepSeekSchemaNode(
+  schema: object,
+  readNormalized: (value: unknown) => unknown,
+): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeDeepSeekSchema(entry);
+      const next = readNormalized(entry);
       changed ||= next !== entry;
       return next;
     });
     return changed ? normalized : schema;
   }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-
   const record = schema as Record<string, unknown>;
   const unionKey = Array.isArray(record.anyOf)
     ? "anyOf"
@@ -273,7 +324,7 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     Object.entries(record)
       .filter(([key]) => key !== unionKey)
       .map(([key, value]) => {
-        const next = normalizeDeepSeekSchema(value);
+        const next = readNormalized(value);
         changed ||= next !== value;
         return [key, next];
       }),
@@ -284,7 +335,7 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   }
 
   const variants = record[unionKey] as unknown[];
-  const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
+  const normalizedVariants = variants.map(readNormalized);
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
   const hasNullVariant =
     nonNullVariants.length < normalizedVariants.length ||
@@ -382,6 +433,61 @@ const SCHEMA_ANNOTATION_KEYS = new Set([
   "writeOnly",
 ]);
 
+/** Compare JSON schema containers without recursing through deeply nested constraints or literals. */
+function schemaValuesEqual(left: unknown, right: unknown): boolean {
+  const pending: [unknown, unknown][] = [[left, right]];
+  const compared = new WeakMap<object, WeakSet<object>>();
+  for (let pair = pending.pop(); pair; pair = pending.pop()) {
+    const [a, b] = pair;
+    if (Object.is(a, b)) {
+      continue;
+    }
+    if (!a || !b || typeof a !== "object" || typeof b !== "object") {
+      return false;
+    }
+    const prototype = Object.getPrototypeOf(a);
+    if (prototype !== Object.getPrototypeOf(b) || Array.isArray(a) !== Array.isArray(b)) {
+      return false;
+    }
+    if (
+      prototype !== Object.prototype &&
+      prototype !== null &&
+      !(Array.isArray(a) && prototype === Array.prototype)
+    ) {
+      // Non-JSON values retain Node's existing comparison semantics.
+      if (!isDeepStrictEqual(a, b)) {
+        return false;
+      }
+      continue;
+    }
+    if (Array.isArray(a) && Array.isArray(b) && a.length !== b.length) {
+      return false;
+    }
+    if (compared.get(a)?.has(b)) {
+      continue;
+    }
+    const keys = Reflect.ownKeys(a).filter((key) =>
+      Object.prototype.propertyIsEnumerable.call(a, key),
+    );
+    const otherKeys = Reflect.ownKeys(b).filter((key) =>
+      Object.prototype.propertyIsEnumerable.call(b, key),
+    );
+    if (keys.length !== otherKeys.length) {
+      return false;
+    }
+    const matches = compared.get(a) ?? new WeakSet<object>();
+    matches.add(b);
+    compared.set(a, matches);
+    for (const key of keys) {
+      if (!Object.prototype.propertyIsEnumerable.call(b, key)) {
+        return false;
+      }
+      pending.push([Reflect.get(a, key), Reflect.get(b, key)]);
+    }
+  }
+  return true;
+}
+
 /**
  * Flattens a union of object schemas into one object schema, keeping every
  * branch expressible: the union of the variants' properties, and the
@@ -420,7 +526,7 @@ function flattenObjectVariants(
         continue;
       }
       const existing = properties[key];
-      if (isDeepStrictEqual(existing, value)) {
+      if (schemaValuesEqual(existing, value)) {
         continue;
       }
       const pooled = poolLiteralEnum(existing, value);
@@ -505,7 +611,7 @@ function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | u
     if (!enumValues) {
       return [schema.const];
     }
-    return enumValues.some((value) => isDeepStrictEqual(value, schema.const)) ? [schema.const] : [];
+    return enumValues.some((value) => schemaValuesEqual(value, schema.const)) ? [schema.const] : [];
   }
   return enumValues;
 }
@@ -520,13 +626,13 @@ function poolLiteralEnum(left: unknown, right: unknown): Record<string, unknown>
   if (!leftValues || !rightValues) {
     return undefined;
   }
-  if (!isDeepStrictEqual(literalValidationConstraints(left), literalValidationConstraints(right))) {
+  if (!schemaValuesEqual(literalValidationConstraints(left), literalValidationConstraints(right))) {
     return undefined;
   }
   const combined = [...leftValues, ...rightValues];
   const values = combined.filter(
     (value, index) =>
-      combined.findIndex((candidate) => isDeepStrictEqual(candidate, value)) === index,
+      combined.findIndex((candidate) => schemaValuesEqual(candidate, value)) === index,
   );
   if (values.length === 0) {
     return undefined;
