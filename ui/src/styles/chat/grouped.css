@@ -838,11 +838,14 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Align with the text inside the native 4px-padded assistant bubble. */
+/* Center on the first text line inside the native 4px-padded assistant bubble:
+   the strip row and bubble padding above the line, minus half the avatar's
+   overhang beyond one line box. */
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
   margin-top: calc(
-    var(--chat-reply-attribution-font-size) * 1.5 + var(--chat-reply-attribution-gap) + 4px
+    var(--chat-reply-attribution-font-size) * 1.5 + var(--chat-reply-attribution-gap) + 4px +
+      (1lh - var(--chat-avatar-column)) / 2
   );
 }
 

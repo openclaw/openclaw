@@ -155,8 +155,11 @@ describe.each(cells)("reply attribution ($theme, $width px)", ({ theme, width })
       expect(icon.getBoundingClientRect().width).toBe(0);
       const speaker = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
       const text = group.querySelector(".chat-bubble > .chat-text")!;
+      const speakerBounds = speaker.getBoundingClientRect();
+      const textBounds = text.getBoundingClientRect();
+      const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
       expect(
-        Math.abs(speaker.getBoundingClientRect().top - text.getBoundingClientRect().top),
+        Math.abs(speakerBounds.top + speakerBounds.height / 2 - textBounds.top - lineHeight / 2),
       ).toBeLessThanOrEqual(1);
       await expect
         .poll(() => {
@@ -174,7 +177,7 @@ describe.each(cells)("reply attribution ($theme, $width px)", ({ theme, width })
           const expectedEndX = labelEdge + (direction === "rtl" ? 5 : -5);
           return Math.max(
             Math.abs(svg.left + start.x - avatar.left - avatar.width / 2),
-            Math.abs(svg.top + start.y - avatar.top - avatar.height / 2),
+            Math.abs(svg.top + start.y - avatar.top),
             Math.abs(svg.left + end.x - expectedEndX),
             Math.abs(svg.top + end.y - label.top - label.height / 2),
           );

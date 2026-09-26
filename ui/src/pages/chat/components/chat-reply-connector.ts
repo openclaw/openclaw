@@ -28,7 +28,7 @@ function replyConnectorRef() {
         const identity = avatar.getBoundingClientRect();
         const text = label.getBoundingClientRect();
         const startX = identity.left + identity.width / 2 - bounds.left;
-        const startY = identity.top + identity.height / 2 - bounds.top;
+        const startY = identity.top - bounds.top;
         const direction = getComputedStyle(group).direction === "rtl" ? -1 : 1;
         const rowBounds = row.getBoundingClientRect();
         const endX =
