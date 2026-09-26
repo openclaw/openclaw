@@ -51,6 +51,7 @@ import {
   proposeCreateSkill,
   proposeUpdateSkill,
   quarantineSkillProposal,
+  purgeRejectedSkillProposal,
   readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
   rejectSkillProposal,
@@ -1139,6 +1140,31 @@ export function registerSkillsCli(program: Command) {
           ),
       );
   }
+
+  workshop
+    .command("purge")
+    .description("Permanently remove a rejected proposal and its retained history")
+    .argument("<proposal-id>", "Rejected proposal id")
+    .option("--json", "Output as JSON", false)
+    .action((proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) =>
+      runWorkshopAction(
+        opts,
+        command,
+        async ({ agentId, config, workspaceDir }) => {
+          const reviewed = await inspectSkillProposal(proposalId, { agentId, config });
+          if (!reviewed) throw new Error(`Skill proposal not found: ${proposalId}`);
+          return await purgeRejectedSkillProposal({
+            agentId,
+            eventActor: { type: "system", id: "cli" },
+            workspaceDir,
+            config,
+            proposalId,
+            expectedRevisionHash: reviewed.revisionHash,
+          });
+        },
+        (result) => `Purged ${result.proposalId}\n`,
+      ),
+    );
 
   for (const command of workshop.commands) {
     command.option(

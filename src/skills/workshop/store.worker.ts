@@ -21,7 +21,10 @@ import {
   updateSkillProposalRecordInDatabase,
 } from "./store-proposal.kernel.js";
 import { listStoredSkillProposalEventsInDatabase } from "./store-sqlite-event.js";
-import { readStoredProposalInDatabase } from "./store-sqlite-record.js";
+import {
+  purgeRejectedProposalInDatabase,
+  readStoredProposalInDatabase,
+} from "./store-sqlite-record.js";
 import {
   clearSkillProposalRollbackInDatabase,
   readSkillProposalRollbackInDatabase,
@@ -50,6 +53,7 @@ export function isSkillWorkshopCommand(command: {
     case "workshop.events.list":
     case "workshop.schema.ensure":
     case "workshop.proposal.read":
+    case "workshop.proposal.purge":
     case "workshop.proposals.list":
     case "workshop.proposal.create":
     case "workshop.proposal.update":
@@ -137,6 +141,13 @@ export function executeSkillWorkshopCommand(
   switch (command.type) {
     case "workshop.proposal.read":
       return readStoredProposalInDatabase(database.db, command.input.value);
+    case "workshop.proposal.purge":
+      return write(
+        "skill-workshop.proposal.purge",
+        () =>
+          purgeRejectedProposalInDatabase(database.db, command.input.value, command.input.agentId),
+        command.input.value,
+      );
     case "workshop.proposals.list":
       return listStoredSkillProposalsInDatabase(database.db, command.input.value);
     case "workshop.proposal.create":

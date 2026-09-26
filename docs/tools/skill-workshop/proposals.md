@@ -102,7 +102,12 @@ omitted with directions to the operator workflow; binary supporting content is
 not injected into model context.
 
 For Workshop proposals, omit `target`. The tool uses one required `action`:
-`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
+`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | purge | quarantine | history | restore_collection`.
+
+`purge` permanently removes an already-rejected proposal, its retained draft,
+and its event history. It does not remove active skills. Use it only after an
+explicit operator request, passing the reviewed proposal ID and exact revision
+hash. The CLI equivalent is `openclaw skills workshop purge <proposal-id>`.
 Other Workshop parameters apply depending on the action:
 
 | Parameter                  | Used by                                                          | Notes                                                                 |

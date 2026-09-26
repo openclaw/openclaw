@@ -24,6 +24,7 @@ import {
   listSkillProposals as listSkillProposalsImpl,
   proposeCreateSkill as proposeCreateSkillImpl,
   proposeUpdateSkill as proposeUpdateSkillImpl,
+  purgeRejectedSkillProposal as purgeRejectedSkillProposalImpl,
   quarantineSkillProposal as quarantineSkillProposalImpl,
   readSkillProposalDraftDirectory,
   rejectSkillProposal as rejectSkillProposalImpl,
@@ -90,6 +91,9 @@ const quarantineSkillProposal = (
 const rejectSkillProposal = (
   input: OptionalWorkshopConfig<Parameters<typeof rejectSkillProposalImpl>[0]>,
 ) => rejectSkillProposalImpl(withWorkshopOwner(input));
+const purgeRejectedSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof purgeRejectedSkillProposalImpl>[0]>,
+) => purgeRejectedSkillProposalImpl(withWorkshopOwner(input));
 const resolvePendingSkillProposal = (
   input: OptionalWorkshopOwner<Parameters<typeof resolvePendingSkillProposalImpl>[0]>,
 ) => resolvePendingSkillProposalImpl(withWorkshopOwner(input));
@@ -952,6 +956,54 @@ describe("skill workshop proposals", () => {
         reason: "already applied",
       }),
     ).rejects.toThrow("Only pending proposals can be rejected");
+  });
+
+  it("purges only rejected proposals and their retained artifacts", async () => {
+    const workspaceDir = await makeWorkspace();
+    const pending = await proposeCreateSkill({
+      workspaceDir,
+      name: "Keep Pending",
+      description: "Remain pending",
+      content: "# Pending\n",
+    });
+    const rejected = await proposeCreateSkill({
+      workspaceDir,
+      name: "Discard Rejected",
+      description: "Discard after rejection",
+      content: "# Rejected\n",
+    });
+    await expect(
+      purgeRejectedSkillProposal({ workspaceDir, proposalId: pending.record.id }),
+    ).rejects.toThrow("Only rejected proposals can be purged");
+    await rejectSkillProposal({ workspaceDir, proposalId: rejected.record.id });
+    const reviewed = await inspectSkillProposal(rejected.record.id);
+    expect(reviewed).not.toBeNull();
+    await expect(
+      purgeRejectedSkillProposal({
+        workspaceDir,
+        proposalId: rejected.record.id,
+        expectedRevisionHash: "wrong-revision",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      purgeRejectedSkillProposal({
+        workspaceDir,
+        agentId: "other-agent",
+        proposalId: rejected.record.id,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      purgeRejectedSkillProposal({
+        workspaceDir,
+        proposalId: rejected.record.id,
+        expectedRevisionHash: reviewed!.revisionHash,
+      }),
+    ).resolves.toEqual({ proposalId: rejected.record.id, purged: true });
+    expect(await inspectSkillProposal(rejected.record.id)).toBeNull();
+    expect(await inspectSkillProposal(pending.record.id)).not.toBeNull();
+    await expect(
+      fs.access(path.join(stateDir, "skill-workshop", "proposals", rejected.record.id)),
+    ).rejects.toThrow();
   });
 
   it("reconciles a create apply interrupted after the live skill write", async () => {

@@ -17,6 +17,7 @@ import {
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
+  purgeRejectedSkillProposal,
   quarantineSkillProposal,
   rejectSkillProposal,
   resolvePendingSkillProposal,
@@ -346,6 +347,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         return actionResult(record, {
           contentText: `${action === "reject" ? "Rejected" : "Quarantined"} skill proposal ${record.id}.`,
         });
+      }
+
+      if (action === "purge") {
+        const purged = await purgeRejectedSkillProposal({
+          ...lifecycleParams(),
+          expectedRevisionHash: readToolStringParam(params, "expected_revision_hash", {
+            required: true,
+          }),
+        });
+        return textResult(`Purged skill proposal ${purged.proposalId}.`, purged);
       }
 
       const proposalContent = readToolStringParam(params, "proposal_content", {
