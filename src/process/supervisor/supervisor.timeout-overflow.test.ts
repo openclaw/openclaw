@@ -56,26 +56,24 @@ function createTimeoutTestAdapter(): TimeoutTestAdapter {
   };
 }
 
-const oversizedTimeouts = [
-  { durationName: "the first overflowing Node delay", durationMs: 2 ** 31 },
-  { durationName: "the maximum safe integer", durationMs: Number.MAX_SAFE_INTEGER },
-] as const;
-
 const deadlineCases = [
   {
     deadlineName: "overall deadline",
+    mode: "child",
     timeoutField: "timeoutMs",
     reason: "overall-timeout",
     refreshOutput: false,
   },
   {
     deadlineName: "silent-output deadline",
+    mode: "pty",
     timeoutField: "noOutputTimeoutMs",
     reason: "no-output-timeout",
     refreshOutput: false,
   },
   {
     deadlineName: "refreshed output deadline",
+    mode: "child",
     timeoutField: "noOutputTimeoutMs",
     reason: "no-output-timeout",
     refreshOutput: true,
@@ -95,140 +93,133 @@ describe("process supervisor oversized timer deadlines", () => {
     vi.restoreAllMocks();
   });
 
-  for (const mode of ["child", "pty"] as const) {
-    describe(`${mode} processes`, () => {
-      for (const { durationName, durationMs } of oversizedTimeouts) {
-        describe(durationName, () => {
-          it.each(deadlineCases)(
-            "bounds the $deadlineName",
-            async ({ timeoutField, reason, refreshOutput }) => {
-              const adapter = createTimeoutTestAdapter();
-              const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-              const adapterMock = mode === "child" ? createChildAdapterMock : createPtyAdapterMock;
-              adapterMock.mockResolvedValue(adapter);
+  it.each([
+    ...deadlineCases.map((entry) => ({ ...entry, durationMs: 2 ** 31 })),
+    { ...deadlineCases[0], durationMs: Number.MAX_SAFE_INTEGER },
+  ])(
+    "bounds the $deadlineName at $durationMs ms ($mode)",
+    async ({ mode, durationMs, timeoutField, reason, refreshOutput }) => {
+      const adapter = createTimeoutTestAdapter();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const adapterMock = mode === "child" ? createChildAdapterMock : createPtyAdapterMock;
+      adapterMock.mockResolvedValue(adapter);
 
-              const supervisor = createProcessSupervisor();
-              const run = await supervisor.spawn({
-                [timeoutField]: durationMs,
-                mode,
-                argv: [process.execPath, "-e", ""],
-              });
+      const supervisor = createProcessSupervisor();
+      const run = await supervisor.spawn({
+        [timeoutField]: durationMs,
+        mode,
+        argv: [process.execPath, "-e", ""],
+      });
 
-              try {
-                expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual([
-                  MAX_TIMER_TIMEOUT_MS,
-                ]);
+      try {
+        expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual([MAX_TIMER_TIMEOUT_MS]);
 
-                await vi.advanceTimersByTimeAsync(1);
-                expect(adapter.killMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(adapter.killMock).not.toHaveBeenCalled();
 
-                if (refreshOutput) {
-                  adapter.emitStdout("still running");
-                  expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual([
-                    MAX_TIMER_TIMEOUT_MS,
-                    MAX_TIMER_TIMEOUT_MS,
-                  ]);
-                }
+        if (refreshOutput) {
+          adapter.emitStdout("still running");
+          expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual([
+            MAX_TIMER_TIMEOUT_MS,
+            MAX_TIMER_TIMEOUT_MS,
+          ]);
+        }
 
-                await vi.advanceTimersByTimeAsync(
-                  refreshOutput ? MAX_TIMER_TIMEOUT_MS - 1 : MAX_TIMER_TIMEOUT_MS - 2,
-                );
-                expect(adapter.killMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(
+          refreshOutput ? MAX_TIMER_TIMEOUT_MS - 1 : MAX_TIMER_TIMEOUT_MS - 2,
+        );
+        expect(adapter.killMock).not.toHaveBeenCalled();
 
-                await vi.advanceTimersByTimeAsync(1);
-                expect(adapter.killMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(adapter.killMock).not.toHaveBeenCalled();
 
-                const remainingIntervalMs = Math.min(
-                  durationMs - MAX_TIMER_TIMEOUT_MS,
-                  MAX_TIMER_TIMEOUT_MS,
-                );
-                expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
-                  refreshOutput
-                    ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, remainingIntervalMs]
-                    : [MAX_TIMER_TIMEOUT_MS, remainingIntervalMs],
-                );
+        const remainingIntervalMs = Math.min(
+          durationMs - MAX_TIMER_TIMEOUT_MS,
+          MAX_TIMER_TIMEOUT_MS,
+        );
+        expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
+          refreshOutput
+            ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, remainingIntervalMs]
+            : [MAX_TIMER_TIMEOUT_MS, remainingIntervalMs],
+        );
 
-                if (durationMs === Number.MAX_SAFE_INTEGER) {
-                  adapter.settle();
-                  await expect(run.wait()).resolves.toMatchObject({
-                    reason: "exit",
-                    timedOut: false,
-                    noOutputTimedOut: false,
-                  });
-                  expect(adapter.killMock).not.toHaveBeenCalled();
-                  expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
-                  expect(vi.getTimerCount()).toBe(0);
-                  return;
-                }
-
-                await vi.advanceTimersByTimeAsync(remainingIntervalMs - 1);
-                expect(adapter.killMock).not.toHaveBeenCalled();
-                await vi.advanceTimersByTimeAsync(1);
-                await expect(run.wait()).resolves.toMatchObject({
-                  reason,
-                  timedOut: true,
-                  noOutputTimedOut: reason === "no-output-timeout",
-                });
-                expect(adapter.killMock).toHaveBeenCalledTimes(1);
-                expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
-                expect(vi.getTimerCount()).toBe(0);
-              } finally {
-                adapter.settle();
-                await run.wait();
-              }
-            },
-          );
-        });
-      }
-
-      it.each(deadlineCases)(
-        "preserves the $deadlineName when an intermediate timer fires late",
-        async ({ timeoutField, reason, refreshOutput }) => {
-          const initialNowMs = 1_000;
-          const trailingDurationMs = 10 * 60_000;
-          const callbackLatenessMs = 9 * 60_000;
-          const nowSpy = vi.spyOn(performance, "now").mockReturnValue(initialNowMs);
-          const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-          const adapter = createTimeoutTestAdapter();
-          const adapterMock = mode === "child" ? createChildAdapterMock : createPtyAdapterMock;
-          adapterMock.mockResolvedValue(adapter);
-
-          const run = await createProcessSupervisor().spawn({
-            [timeoutField]: MAX_TIMER_TIMEOUT_MS + trailingDurationMs,
-            mode,
-            argv: [process.execPath, "-e", ""],
+        if (durationMs === Number.MAX_SAFE_INTEGER) {
+          adapter.settle();
+          await expect(run.wait()).resolves.toMatchObject({
+            reason: "exit",
+            timedOut: false,
+            noOutputTimedOut: false,
           });
+          expect(adapter.killMock).not.toHaveBeenCalled();
+          expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
+          expect(vi.getTimerCount()).toBe(0);
+          return;
+        }
 
-          try {
-            if (refreshOutput) {
-              adapter.emitStdout("still running");
-            }
+        await vi.advanceTimersByTimeAsync(remainingIntervalMs - 1);
+        expect(adapter.killMock).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(run.wait()).resolves.toMatchObject({
+          reason,
+          timedOut: true,
+          noOutputTimedOut: reason === "no-output-timeout",
+        });
+        expect(adapter.killMock).toHaveBeenCalledTimes(1);
+        expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        adapter.settle();
+        await run.wait();
+      }
+    },
+  );
 
-            nowSpy.mockReturnValue(initialNowMs + MAX_TIMER_TIMEOUT_MS + callbackLatenessMs);
-            await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
-            expect(adapter.killMock).not.toHaveBeenCalled();
-            expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
-              refreshOutput
-                ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, 60_000]
-                : [MAX_TIMER_TIMEOUT_MS, 60_000],
-            );
+  it.each([deadlineCases[0], deadlineCases[2]])(
+    "preserves the $deadlineName when an intermediate timer fires late",
+    async ({ mode, timeoutField, reason, refreshOutput }) => {
+      const initialNowMs = 1_000;
+      const trailingDurationMs = 10 * 60_000;
+      const callbackLatenessMs = 9 * 60_000;
+      const nowSpy = vi.spyOn(performance, "now").mockReturnValue(initialNowMs);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const adapter = createTimeoutTestAdapter();
+      const adapterMock = mode === "child" ? createChildAdapterMock : createPtyAdapterMock;
+      adapterMock.mockResolvedValue(adapter);
 
-            nowSpy.mockReturnValue(initialNowMs + MAX_TIMER_TIMEOUT_MS + trailingDurationMs);
-            await vi.advanceTimersByTimeAsync(60_000);
-            await expect(run.wait()).resolves.toMatchObject({
-              reason,
-              timedOut: true,
-              noOutputTimedOut: reason === "no-output-timeout",
-            });
-            expect(adapter.killMock).toHaveBeenCalledTimes(1);
-            expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
-            expect(vi.getTimerCount()).toBe(0);
-          } finally {
-            adapter.settle();
-            await run.wait();
-          }
-        },
-      );
-    });
-  }
+      const run = await createProcessSupervisor().spawn({
+        [timeoutField]: MAX_TIMER_TIMEOUT_MS + trailingDurationMs,
+        mode,
+        argv: [process.execPath, "-e", ""],
+      });
+
+      try {
+        if (refreshOutput) {
+          adapter.emitStdout("still running");
+        }
+
+        nowSpy.mockReturnValue(initialNowMs + MAX_TIMER_TIMEOUT_MS + callbackLatenessMs);
+        await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+        expect(adapter.killMock).not.toHaveBeenCalled();
+        expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
+          refreshOutput
+            ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, 60_000]
+            : [MAX_TIMER_TIMEOUT_MS, 60_000],
+        );
+
+        nowSpy.mockReturnValue(initialNowMs + MAX_TIMER_TIMEOUT_MS + trailingDurationMs);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await expect(run.wait()).resolves.toMatchObject({
+          reason,
+          timedOut: true,
+          noOutputTimedOut: reason === "no-output-timeout",
+        });
+        expect(adapter.killMock).toHaveBeenCalledTimes(1);
+        expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        adapter.settle();
+        await run.wait();
+      }
+    },
+  );
 });

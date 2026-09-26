@@ -47,5 +47,16 @@ export async function createGatewayRuntimeStateForTest(
     ...params,
     clients: connectionState.clients,
   });
+  onTestFinished(async () => {
+    await Promise.all(
+      httpTransport.httpServers.map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            server.closeAllConnections();
+          }),
+      ),
+    );
+  });
   return { ...httpTransport, ...connectionState };
 }

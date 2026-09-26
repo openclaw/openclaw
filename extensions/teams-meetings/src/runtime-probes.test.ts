@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { teamsMeetingsConfig } from "./config.js";
-import { testTeamsMeetingListening } from "./runtime-probes.js";
+import { teamsMeetingsProbes } from "./runtime-probes.js";
 import type { TeamsMeetingsSession } from "./transports/types.js";
 
 const URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_probe%40thread.v2/0";
-type TeamsMeetingsProbeContext = Parameters<typeof testTeamsMeetingListening>[0];
+type TeamsMeetingsProbeContext = Parameters<typeof teamsMeetingsProbes.testListening>[0];
 
 describe.each(["chrome", "chrome-node"] as const)(
   "Microsoft Teams %s runtime probes",
@@ -53,7 +53,7 @@ describe.each(["chrome", "chrome-node"] as const)(
         resolveAgentId: () => "main",
       } satisfies TeamsMeetingsProbeContext;
 
-      const result = await testTeamsMeetingListening(context, {
+      const result = await teamsMeetingsProbes.testListening(context, {
         mode: "transcribe",
         timeoutMs: 100,
         url: URL,

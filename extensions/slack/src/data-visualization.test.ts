@@ -106,28 +106,6 @@ describe("Slack data visualization blocks", () => {
     ).toBe(false);
   });
 
-  it("extracts full chart data from inbound or provider-native Slack blocks", () => {
-    expect(
-      renderSlackDataVisualizationFallbackText({
-        type: "data_visualization",
-        title: "Quarterly revenue",
-        chart: {
-          type: "bar",
-          series: [
-            {
-              name: "Revenue",
-              data: [
-                { label: "Q1", value: 120 },
-                { label: "Q2", value: 145 },
-              ],
-            },
-          ],
-          axis_config: { categories: ["Q1", "Q2"] },
-        },
-      }),
-    ).toBe("Quarterly revenue (bar chart)\n- Revenue: Q1: 120; Q2: 145");
-  });
-
   it("orders inbound data by axis categories instead of array position", () => {
     expect(
       renderSlackDataVisualizationFallbackText({

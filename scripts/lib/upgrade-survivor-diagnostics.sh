@@ -5,6 +5,7 @@ prepare_diagnostics_capture() {
   if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] || [ -L "$ARTIFACT_DIR/missing-load-path" ] ||
     ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/summary.json" \
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
+      "$ARTIFACT_DIR"/update-noop.{json,err} \
       "$ARTIFACT_DIR/candidate-cohort.json" \
       "$ARTIFACT_DIR/backup-rollback.json" \
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json \

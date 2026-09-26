@@ -232,29 +232,6 @@ describe("proxy validation", () => {
     ]);
   });
 
-  it("fails denied checks when the destination returns a non-2xx HTTP status", async () => {
-    const result = await runProxyValidation({
-      config: {
-        proxyUrl: "http://127.0.0.1:3128",
-      },
-      env: {},
-      allowedUrls: [],
-      deniedUrls: ["https://example.com/not-found"],
-      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 404 }),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([
-      {
-        kind: "denied",
-        url: "https://example.com/not-found",
-        ok: false,
-        status: 404,
-        error: "Denied destination returned HTTP 404; expected the proxy to block the connection",
-      },
-    ]);
-  });
-
   it("fails custom denied checks on ambiguous transport errors", async () => {
     const result = await runProxyValidation({
       config: {

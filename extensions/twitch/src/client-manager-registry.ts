@@ -1,40 +1,13 @@
-/**
- * Client manager registry for Twitch plugin.
- *
- * Manages the lifecycle of TwitchClientManager instances across the plugin,
- * ensuring proper cleanup when accounts are stopped or reconfigured.
- */
-
 import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelAccountSnapshot, ChannelLogSink } from "./types.js";
 
-/**
- * Registry entry tracking a client manager and its associated account.
- */
 type RegistryEntry = {
-  /** The client manager instance */
   manager: TwitchClientManager;
-  /** The account ID this manager is for */
-  accountId: string;
-  /** Logger for this entry */
   logger: ChannelLogSink;
-  /** When this entry was created */
-  createdAt: number;
 };
 
-/**
- * Global registry of client managers.
- * Keyed by account ID.
- */
 const registry = new Map<string, RegistryEntry>();
 
-/**
- * Get or create a client manager for an account.
- *
- * @param accountId - The account ID
- * @param logger - Logger instance
- * @returns The client manager
- */
 export function getOrCreateClientManager(
   accountId: string,
   logger: ChannelLogSink,
@@ -47,33 +20,16 @@ export function getOrCreateClientManager(
   }
 
   const manager = new TwitchClientManager(logger, statusSink);
-  registry.set(accountId, {
-    manager,
-    accountId,
-    logger,
-    createdAt: Date.now(),
-  });
+  registry.set(accountId, { manager, logger });
 
   logger.info(`Registered client manager for account: ${accountId}`);
   return manager;
 }
 
-/**
- * Get an existing client manager for an account.
- *
- * @param accountId - The account ID
- * @returns The client manager, or undefined if not registered
- */
 export function getClientManager(accountId: string): TwitchClientManager | undefined {
   return registry.get(accountId)?.manager;
 }
 
-/**
- * Disconnect and remove a client manager from the registry.
- *
- * @param accountId - The account ID
- * @returns Promise that resolves when cleanup is complete
- */
 export async function removeClientManager(accountId: string): Promise<void> {
   const entry = registry.get(accountId);
   if (!entry) {

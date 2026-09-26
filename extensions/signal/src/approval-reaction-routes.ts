@@ -10,7 +10,6 @@ import { resolveSignalTarget } from "./aliases.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
-type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
 
 export type SignalApprovalReactionRoute =
   | {
@@ -33,20 +32,6 @@ function resolveApprovalForwardingConfig(params: {
   return params.approvalKind === "plugin"
     ? params.cfg.approvals?.plugin
     : params.cfg.approvals?.exec;
-}
-
-function normalizeApprovalForwardingMode(
-  mode: ApprovalForwardingConfig["mode"] | undefined,
-): ApprovalForwardingMode {
-  return mode ?? "session";
-}
-
-function approvalModeIncludesSession(mode: ApprovalForwardingMode): boolean {
-  return mode === "session" || mode === "both";
-}
-
-function approvalModeIncludesTargets(mode: ApprovalForwardingMode): boolean {
-  return mode === "targets" || mode === "both";
 }
 
 function matchesSignalApprovalReactionFilters(params: {
@@ -137,10 +122,10 @@ export function isSignalApprovalReactionRouteStillEnabled(params: {
   if (!config?.enabled) {
     return false;
   }
-  const mode = normalizeApprovalForwardingMode(config.mode);
+  const mode = config.mode ?? "session";
   if (params.target.route.deliveryMode === "target") {
     return (
-      approvalModeIncludesTargets(mode) &&
+      (mode === "targets" || mode === "both") &&
       matchesSignalApprovalReactionFilters({ config, route: params.target.route }) &&
       hasMatchingSignalApprovalReactionTarget({
         cfg: params.cfg,
@@ -149,10 +134,10 @@ export function isSignalApprovalReactionRouteStillEnabled(params: {
       })
     );
   }
-  if (!approvalModeIncludesSession(mode)) {
-    return false;
-  }
-  return matchesSignalApprovalReactionFilters({ config, route: params.target.route });
+  return (
+    (mode === "session" || mode === "both") &&
+    matchesSignalApprovalReactionFilters({ config, route: params.target.route })
+  );
 }
 
 export function buildTargetRoute(params: {

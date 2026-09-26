@@ -22,6 +22,7 @@ import {
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
+import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -217,6 +218,19 @@ export function createGatewayHttpServer(opts: {
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) {
+    // Legacy ports retain their plugin's raw URLs and wire responses, not Gateway endpoints.
+    if (getWebhookLegacyListener(req)) {
+      try {
+        if (!(await handlePluginRequest?.(req, res)) && !res.writableEnded && !res.destroyed) {
+          res.writeHead(404);
+          res.end();
+        }
+      } catch (error) {
+        console.error("[gateway-http] legacy plugin request failed:", error);
+        res.destroy(error instanceof Error ? error : undefined);
+      }
+      return;
+    }
     // Read only the published snapshot: even liveness and rejection responses need
     // current headers without depending on config IO or auth resolution.
     setDefaultSecurityHeaders(res, getRuntimeConfigSnapshot()?.gateway?.http?.securityHeaders);

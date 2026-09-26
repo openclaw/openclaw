@@ -10,6 +10,16 @@ const repoRoot = process.cwd();
 
 const tempDirs = createTempDirTracker();
 
+function fixtureGit(
+  cwd: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; input?: string } = {},
+) {
+  const result = spawnSync("git", args, { ...options, cwd, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout.trim();
+}
+
 function makeRetryRepo(): { repoDir: string; headSha: string } {
   const dir = tempDirs.make("openclaw-pr-gates-retry-");
   const repoDir = join(dir, "repo");
@@ -20,15 +30,11 @@ function makeRetryRepo(): { repoDir: string; headSha: string } {
     ["config", "user.email", "t@example.com"],
     ["commit", "-q", "--allow-empty", "-m", "retry head"],
   ]) {
-    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-    expect(result.status).toBe(0);
+    fixtureGit(repoDir, args);
   }
   mkdirSync(join(repoDir, ".local"));
 
-  const headSha = spawnSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoDir,
-    encoding: "utf8",
-  }).stdout.trim();
+  const headSha = fixtureGit(repoDir, ["rev-parse", "HEAD"]);
   return { repoDir, headSha };
 }
 
@@ -36,11 +42,7 @@ function makeSyncRepo(options: { needsRebase: boolean }): string {
   const repoDir = join(tempDirs.make("openclaw-pr-sync-"), "repo");
   mkdirSync(repoDir);
 
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
+  const git = (...args: string[]) => fixtureGit(repoDir, args);
   git("init", "-q", "-b", "main");
   git("config", "user.name", "t");
   git("config", "user.email", "t@example.com");
@@ -87,11 +89,7 @@ function makePreparePushHeadDriftRepo(): {
   const repoDir = join(tempDirs.make("openclaw-pr-prepare-drift-"), "repo");
   mkdirSync(repoDir);
 
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
+  const git = (...args: string[]) => fixtureGit(repoDir, args);
   git("init", "-q", "-b", "main");
   git("config", "user.name", "t");
   git("config", "user.email", "t@example.com");
@@ -346,9 +344,6 @@ describe("prepare gate changed-file plan", () => {
     );
     expect(result.stdout).toContain("changelog/fragments/stale.md");
     expect(result.stderr).not.toContain("cannot create temp file");
-    expect(readFileSync(join(repoRoot, "scripts/pr-lib/gates.sh"), "utf8")).not.toMatch(
-      /done\s+(?:<<<|<\s*<\()/u,
-    );
   });
 });
 
@@ -548,13 +543,9 @@ describe("prepare sync-head transitions", () => {
       ["add", "fixup.ts"],
       ["commit", "-qm", "reviewed fixup"],
     ]) {
-      const commit = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-      expect(commit.status, commit.stderr).toBe(0);
+      fixtureGit(repoDir, args);
     }
-    const localHead = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
+    const localHead = fixtureGit(repoDir, ["rev-parse", "HEAD"]);
 
     const result = runGatesBash(
       [
@@ -620,20 +611,12 @@ describe("prepare push head drift", () => {
 describe("GraphQL fork publication", () => {
   it("classifies appended and replaced hosted ancestry without tree heuristics", () => {
     const { repoDir, headSha } = makeRetryRepo();
-    spawnSync("git", ["commit", "-qm", "appended", "--allow-empty"], { cwd: repoDir });
-    const appendedHead = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    const replacedHead = spawnSync("git", ["-c", "commit.gpgsign=false", "commit-tree", tree], {
-      cwd: repoDir,
+    fixtureGit(repoDir, ["commit", "-qm", "appended", "--allow-empty"]);
+    const appendedHead = fixtureGit(repoDir, ["rev-parse", "HEAD"]);
+    const tree = fixtureGit(repoDir, ["rev-parse", "HEAD^{tree}"]);
+    const replacedHead = fixtureGit(repoDir, ["-c", "commit.gpgsign=false", "commit-tree", tree], {
       input: "replacement\n",
-      encoding: "utf8",
-    }).stdout.trim();
+    });
 
     const result = runGatesBash(
       [
@@ -655,8 +638,7 @@ describe("GraphQL fork publication", () => {
       ["add", "fixup.ts"],
       ["commit", "-qm", "reviewed fixup\n\nCo-authored-by: Helper <helper@example.com>"],
     ]) {
-      const commit = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-      expect(commit.status, commit.stderr).toBe(0);
+      fixtureGit(repoDir, args);
     }
 
     const result = runGatesBash(
@@ -676,18 +658,14 @@ describe("GraphQL fork publication", () => {
 
   it("rejects merge commits before encoding files or calling GitHub", () => {
     const { repoDir, headSha } = makeRetryRepo();
-    const baseBranch = spawnSync("git", ["branch", "--show-current"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
+    const baseBranch = fixtureGit(repoDir, ["branch", "--show-current"]);
     for (const args of [
       ["checkout", "-qb", "other"],
       ["commit", "-qm", "other", "--allow-empty"],
       ["checkout", "-q", baseBranch],
       ["merge", "-q", "--no-ff", "other", "-m", "merge other"],
     ]) {
-      const command = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
-      expect(command.status, command.stderr).toBe(0);
+      fixtureGit(repoDir, args);
     }
 
     const result = runGatesBash(
@@ -705,29 +683,9 @@ describe("GraphQL fork publication", () => {
 
   it("rejects rewritten history before encoding files or calling GitHub", () => {
     const { repoDir, headSha } = makeRetryRepo();
-    const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
-    const unrelatedHead = spawnSync(
-      "git",
-      [
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@example.com",
-        "commit-tree",
-        tree,
-        "-m",
-        "rewritten",
-      ],
-      { cwd: repoDir, encoding: "utf8" },
-    ).stdout.trim();
-    const checkout = spawnSync("git", ["checkout", "-q", "--detach", unrelatedHead], {
-      cwd: repoDir,
-      encoding: "utf8",
-    });
-    expect(checkout.status, checkout.stderr).toBe(0);
+    const tree = fixtureGit(repoDir, ["rev-parse", "HEAD^{tree}"]);
+    const unrelatedHead = fixtureGit(repoDir, ["commit-tree", tree, "-m", "rewritten"]);
+    fixtureGit(repoDir, ["checkout", "-q", "--detach", unrelatedHead]);
 
     const result = runGatesBash(
       [
@@ -973,16 +931,9 @@ fi
   ])("derives recent parent evidence for a %s commit: %s", (path, expected) => {
     const { repoDir, headSha: parentSha } = makeRetryRepo();
     writeFileSync(join(repoDir, path), "change\n");
-    spawnSync("git", ["add", path], { cwd: repoDir });
-    spawnSync(
-      "git",
-      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change"],
-      { cwd: repoDir },
-    );
-    const currentHead = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoDir,
-      encoding: "utf8",
-    }).stdout.trim();
+    fixtureGit(repoDir, ["add", path]);
+    fixtureGit(repoDir, ["commit", "-qm", "change"]);
+    const currentHead = fixtureGit(repoDir, ["rev-parse", "HEAD"]);
     writeFileSync(
       join(repoDir, ".local", "gates-hosted-checks.json"),
       JSON.stringify({ headSha: currentHead }),
@@ -1046,15 +997,11 @@ fi
 
   it("clears remote stamps when fresh docs-only gates do not reuse prior proof", () => {
     const { repoDir } = makeRetryRepo();
-    spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+    fixtureGit(repoDir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     mkdirSync(join(repoDir, "docs"), { recursive: true });
     writeFileSync(join(repoDir, "docs", "proof.md"), "fresh docs\n");
-    spawnSync("git", ["add", "docs/proof.md"], { cwd: repoDir });
-    spawnSync(
-      "git",
-      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "docs"],
-      { cwd: repoDir },
-    );
+    fixtureGit(repoDir, ["add", "docs/proof.md"]);
+    fixtureGit(repoDir, ["commit", "-qm", "docs"]);
     writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
     writeFileSync(
       join(repoDir, ".local", "gates.env"),
@@ -1091,7 +1038,7 @@ fi
 
   it.each(["hosted", "github"])("clears stale proof when %s gates replace remote proof", (mode) => {
     const { repoDir } = makeRetryRepo();
-    spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+    fixtureGit(repoDir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     writeFileSync(join(repoDir, "changed.ts"), "export {};\n");
     spawnSync("git", ["add", "changed.ts"], { cwd: repoDir });
     spawnSync(

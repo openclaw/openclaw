@@ -316,6 +316,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
         await withPluginLifecycleLease({ assertCurrent }, async (lease) => {
           await completeSourceUpdateRuntime({
             root: params.root,
+            sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
             timeoutMs: params.timeoutMs,
             lease,
             beforePersistentEffect: assertCurrent,

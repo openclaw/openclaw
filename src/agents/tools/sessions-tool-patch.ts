@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   type SessionsPatchManyResult,
@@ -104,9 +103,7 @@ export async function runSessionsToolPatchMany(params: {
           "Archive the current session with a single patch; it is deferred until this run finishes.",
         );
       }
-      const expectedSessionId = normalizeOptionalString(
-        readToolStringParam(input, "expectedSessionId"),
-      );
+      const expectedSessionId = readToolStringParam(input, "expectedSessionId");
       if (typeof params.patch.archived === "boolean" && !expectedSessionId) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }

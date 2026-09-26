@@ -31,21 +31,15 @@ import {
   type MemorySessionStartupFileState,
 } from "./manager-session-sync-state.js";
 import { inspectMemorySourceState, loadMemorySourceFileState } from "./manager-source-state.js";
+import { memorySessionSyncTargetKey } from "./manager-sync-control.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const log = createSubsystemLogger("memory");
 
-type MemorySessionTranscriptUpdate = {
-  agentId?: string;
-  sessionFile?: string;
-  sessionKey?: string;
-  target?: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-  };
-};
+type MemorySessionTranscriptUpdate = Parameters<
+  Parameters<typeof onInternalSessionTranscriptUpdate>[0]
+>[0];
 
 export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps {
   protected async inspectDiagnosticSourceState(): Promise<void> {
@@ -297,7 +291,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (typeof target === "string") {
       this.sessionPendingFiles.add(target);
     } else {
-      this.sessionPendingTargets.set(this.memorySessionSyncTargetKey(target), target);
+      this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
     }
     if (this.sessionWatchTimer) {
       return;
@@ -455,10 +449,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       files.add(file);
     }
     return files.size > 0 ? { corpusEntries, targetArchiveFiles: files } : null;
-  }
-
-  private memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
-    return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
   }
 
   protected shouldSyncSessions(params?: MemorySyncParams, needsFullReindex = false) {

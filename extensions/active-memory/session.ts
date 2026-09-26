@@ -9,7 +9,6 @@ import {
   ACTIVE_MEMORY_STATUS_PREFIX,
   type ActiveMemorySearchDebug,
   type ActiveRecallResult,
-  type PluginDebugEntry,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
@@ -244,7 +243,7 @@ async function persistPluginStatusLines(params: {
           ? existing.pluginDebugEntries
           : [];
         const nextEntries = previousEntries.filter(
-          (entry): entry is PluginDebugEntry =>
+          (entry) =>
             Boolean(entry) &&
             typeof entry === "object" &&
             typeof entry.pluginId === "string" &&

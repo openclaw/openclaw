@@ -333,6 +333,7 @@ export type SessionExactEntriesWorkerInput = {
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
   replacementSelection?: SessionEntryReplacementSelection;
+  creationLabel?: string;
   continuation?: CanonicalSessionReaderContinuation;
 };
 

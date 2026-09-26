@@ -9,11 +9,7 @@ import { resolveResetPreservedSelection } from "../../config/sessions/reset-pres
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import {
-  DEFAULT_RESET_TRIGGERS,
-  type SessionEntry,
-  type SessionScope,
-} from "../../config/sessions/types.js";
+import { DEFAULT_RESET_TRIGGERS, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -41,20 +37,6 @@ function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
     (isVitestRuntimeEnv(env) && env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1") ||
     env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
   );
-}
-
-function resolveFastSessionKey(params: {
-  ctx: MsgContext;
-  sessionScope: SessionScope;
-  mainKey?: string;
-  agentId: string;
-}): string {
-  const { ctx } = params;
-  const nativeCommandTarget = resolveCommandTurnTargetSessionKey(ctx) ?? "";
-  if (nativeCommandTarget) {
-    return nativeCommandTarget;
-  }
-  return resolveSessionKey(params.sessionScope, ctx, params.mainKey, params.agentId);
 }
 
 export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
@@ -110,12 +92,9 @@ export function initFastReplySessionState(params: {
 }): SessionInitResult {
   const { ctx, cfg, agentId, commandAuthorized } = params;
   const sessionScope = cfg.session?.scope ?? "per-sender";
-  const sessionKey = resolveFastSessionKey({
-    ctx,
-    sessionScope,
-    mainKey: cfg.session?.mainKey,
-    agentId,
-  });
+  const sessionKey =
+    resolveCommandTurnTargetSessionKey(ctx) ||
+    resolveSessionKey(sessionScope, ctx, cfg.session?.mainKey, agentId);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const relatedSessionKeys = [
     ctx.ParentSessionKey,

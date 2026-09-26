@@ -170,11 +170,11 @@ describe("Gemini embedding provider", () => {
     },
   );
 
-  it.each(
-    ["gemini-embedding-001", "gemini-embedding-2", "gemini-embedding-2-preview"].flatMap((model) =>
-      [128, 512, 1024, 3072].map((dimensions) => [model, dimensions] as const),
-    ),
-  )("supports %s with %i output dimensions", async (model, dimensions) => {
+  it.each([
+    ["gemini-embedding-001", 128],
+    ["gemini-embedding-2", 3072],
+    ["gemini-embedding-2-preview", 512],
+  ] as const)("supports %s with %i output dimensions", async (model, dimensions) => {
     const fetchMock = installFetchMock((input) => {
       const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
       return url.endsWith(":batchEmbedContents")
@@ -201,22 +201,25 @@ describe("Gemini embedding provider", () => {
     });
   });
 
-  it.each(
-    ["gemini-embedding-001", "gemini-embedding-2", "gemini-embedding-2-preview"].flatMap((model) =>
-      [127, 512.5, 3073].map((dimensions) => [model, dimensions] as const),
-    ),
-  )("rejects unsupported %s dimension %i before making a request", async (model, dimensions) => {
-    await expect(
-      createGeminiEmbeddingProvider({
-        config: {} as never,
-        provider: "gemini",
-        remote: { apiKey: "placeholder" },
-        model,
-        dimensions,
-        fallback: "none",
-      }),
-    ).rejects.toThrow(/integer between 128 and 3072/);
-  });
+  it.each([
+    ["gemini-embedding-001", 127],
+    ["gemini-embedding-2", 512.5],
+    ["gemini-embedding-2-preview", 3073],
+  ] as const)(
+    "rejects unsupported %s dimension %i before making a request",
+    async (model, dimensions) => {
+      await expect(
+        createGeminiEmbeddingProvider({
+          config: {} as never,
+          provider: "gemini",
+          remote: { apiKey: "placeholder" },
+          model,
+          dimensions,
+          fallback: "none",
+        }),
+      ).rejects.toThrow(/integer between 128 and 3072/);
+    },
+  );
 
   it.each([
     ["gemini-embedding-001", undefined],

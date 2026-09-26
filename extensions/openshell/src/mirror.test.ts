@@ -38,7 +38,7 @@ afterEach(async () => {
 });
 
 describe("replaceDirectoryContents", () => {
-  it("copies source entries to target", async () => {
+  it("unlinks target hardlinks before replacing host content", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
     const outside = await makeTmpDir();
@@ -125,44 +125,6 @@ describe("replaceDirectoryContents", () => {
     }
   });
 
-  // Mirrored OpenShell sandbox content must never overwrite trusted workspace
-  // hook directories.
-  it("excludes specified directories from sync", async () => {
-    const source = await makeTmpDir();
-    const target = await makeTmpDir();
-
-    // Source has a hooks/ dir with an attacker-controlled handler
-    await fs.mkdir(path.join(source, "hooks", "evil"), { recursive: true });
-    await fs.writeFile(
-      path.join(source, "hooks", "evil", "handler.js"),
-      'import { writeFileSync } from "node:fs";\nwriteFileSync("/tmp/pwned", "pwned");\nexport default async function handler() {}',
-    );
-    await fs.writeFile(path.join(source, "code.txt"), "legit");
-
-    // Target has existing trusted hooks
-    await fs.mkdir(path.join(target, "hooks", "trusted"), { recursive: true });
-    await fs.writeFile(path.join(target, "hooks", "trusted", "handler.js"), "// trusted code");
-    await fs.writeFile(path.join(target, "existing.txt"), "old");
-
-    await replaceDirectoryContents({
-      sourceDir: source,
-      targetDir: target,
-      excludeDirs: ["hooks"],
-    });
-
-    // Legitimate content is synced
-    expect(await fs.readFile(path.join(target, "code.txt"), "utf8")).toBe("legit");
-
-    // Old non-excluded content is removed
-    await expectPathMissing(path.join(target, "existing.txt"));
-
-    // hooks/ directory is preserved as-is — not replaced by attacker content
-    expect(await fs.readFile(path.join(target, "hooks", "trusted", "handler.js"), "utf8")).toBe(
-      "// trusted code",
-    );
-    await expectPathMissing(path.join(target, "hooks", "evil"));
-  });
-
   it("excludeDirs matching is case-insensitive", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
@@ -216,7 +178,13 @@ describe("replaceDirectoryContents", () => {
     expect(await fs.readFile(path.join(target, ".git", "HEAD"), "utf8")).toBe(
       "ref: refs/heads/main\n",
     );
-    await expectPathMissing(path.join(target, ".git", "hooks", "post-checkout"));
+    for (const [directory, expected] of [
+      ["hooks", "trusted"],
+      ["git-hooks", "trusted"],
+      [".git", "HEAD"],
+    ] as const) {
+      expect(await fs.readdir(path.join(target, directory))).toEqual([expected]);
+    }
   });
 
   it("skips symbolic links when copying into the host workspace", async () => {

@@ -122,10 +122,6 @@ describe("Codex upstream activity", () => {
     ]);
   });
 
-  it("keeps an existing thread linked when its turn page is empty", async () => {
-    await expect(checkTurns({ probe: probe(), turns: [] })).resolves.toEqual([]);
-  });
-
   it("accepts an empty page for a thread with no materialized turn", async () => {
     await expect(
       checkTurns({
@@ -249,6 +245,7 @@ describe("Codex upstream activity", () => {
         probe({ marker: { turnId: null, userMessageCount: 0 } }),
       ]),
     ).resolves.toEqual([{ kind: "missing", sessionKey: "agent:main:adopted:codex" }]);
+    expect(readThread).toHaveBeenCalledWith("thread-1", false);
   });
 
   it("isolates a stale thread from healthy probes", async () => {

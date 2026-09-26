@@ -66,7 +66,7 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-subscriptions.ts",
 ];
 
-export const migratedSessionTranscriptReaderFiles = new Set([
+const migratedSessionTranscriptReaderFiles = new Set([
   "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
   "src/agents/subagents/announce/subagent-announce-output.test.ts",
   "src/agents/subagents/announce/subagent-announce-output.ts",

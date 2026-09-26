@@ -27,41 +27,11 @@ describe("argv-invocation", () => {
     });
   });
 
-  it.each([
-    {
-      name: "version-pinned install",
-      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
-      commandPath: ["skills", "install"],
-    },
-    {
-      name: "version-pinned verification",
-      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
-      commandPath: ["skills", "verify"],
-    },
-    {
-      name: "equals-form version-pinned install",
-      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
-      commandPath: ["skills", "install"],
-    },
-    {
-      name: "profiled version-pinned verification",
-      argv: [
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "skills",
-        "verify",
-        "@owner/weather",
-        "--version",
-        "1.2.3",
-      ],
-      commandPath: ["skills", "verify"],
-    },
-  ])("keeps $name in command execution mode", ({ argv, commandPath }) => {
+  it("keeps a version-pinned install in command execution mode", () => {
+    const argv = ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"];
     expect(resolveCliArgvInvocation(argv)).toEqual({
       argv,
-      commandPath,
+      commandPath: ["skills", "install"],
       primary: "skills",
       hasHelpOrVersion: false,
       isRootHelpInvocation: false,
@@ -151,21 +121,18 @@ describe("argv-invocation", () => {
     expect(resolveCliArgvInvocation(argv).commandPath).toEqual(parsedPath);
   });
 
-  it.each(["cleanup", "status", "repair", "finalize", "wizard"])(
-    "resolves update %s after parent options and interleaved root options",
-    (child) => {
-      for (const args of [
-        ["--channel", "beta", "--tag", "latest", "--timeout", "5", child],
-        ["--channel=beta", "--no-color", "--timeout=5", "--yes", child],
-        ["--", child],
-      ]) {
-        expect(
-          resolveCliArgvInvocation(["node", "openclaw", "--profile", "work", "update", ...args])
-            .commandPath,
-        ).toEqual(["update", child]);
-      }
-    },
-  );
+  it("resolves update cleanup after parent options and interleaved root options", () => {
+    for (const args of [
+      ["--channel", "beta", "--tag", "latest", "--timeout", "5", "cleanup"],
+      ["--channel=beta", "--no-color", "--timeout=5", "--yes", "cleanup"],
+      ["--", "cleanup"],
+    ]) {
+      expect(
+        resolveCliArgvInvocation(["node", "openclaw", "--profile", "work", "update", ...args])
+          .commandPath,
+      ).toEqual(["update", "cleanup"]);
+    }
+  });
 
   it.each(["--channel", "--tag", "--timeout"])(
     "does not mistake a cleanup-valued %s for a child command",

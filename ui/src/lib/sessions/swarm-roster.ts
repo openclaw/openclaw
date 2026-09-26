@@ -36,12 +36,6 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   return agentEnabled ?? globalEnabled ?? true;
 }
 
-function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
-  // Equal persisted timestamps intentionally prefer the later row source,
-  // while Map replacement preserves each key's first insertion position.
-  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
-}
-
 export function mergeSwarmSessionRows(
   ...rowSources: readonly (readonly GatewaySessionRow[])[]
 ): GatewaySessionRow[] {
@@ -49,7 +43,8 @@ export function mergeSwarmSessionRows(
   for (const rows of rowSources) {
     for (const row of rows) {
       const current = merged.get(row.key);
-      if (!current || isNewerSessionRow(row, current)) {
+      // Ties prefer the later source without changing the first insertion position.
+      if (!current || (row.updatedAt ?? 0) >= (current.updatedAt ?? 0)) {
         merged.set(row.key, row);
       }
     }
@@ -63,7 +58,7 @@ export async function hydrateSwarmSessionRows(params: {
   isCurrent: () => boolean;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const childRows = await fetchPagedSessionRows({
+  return fetchPagedSessionRows({
     list: (offset) =>
       params.sessions.list({
         ...childSessionListQuery(params.parentKey, SWARM_SESSION_PAGE_SIZE),
@@ -77,7 +72,6 @@ export async function hydrateSwarmSessionRows(params: {
       return rows.map((row) => params.sessions.inheritRow({ ...row, runtimeSampledAt }, row));
     },
   });
-  return childRows;
 }
 
 type SwarmHydrationParams = {

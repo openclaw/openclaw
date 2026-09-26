@@ -3,15 +3,6 @@ import { resolveSafeInstallDir } from "../../infra/install-safe-path.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
-function hasNonAscii(value: string): boolean {
-  for (const char of value) {
-    if (char.charCodeAt(0) > 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Normalizes a tracked slug without accepting traversal or path separators. */
 export function normalizeTrackedSkillSlug(raw: string): string {
   const slug = raw.trim();
@@ -23,7 +14,7 @@ export function normalizeTrackedSkillSlug(raw: string): string {
 
 export function validateRequestedSkillSlug(raw: string): string {
   const slug = normalizeTrackedSkillSlug(raw);
-  if (hasNonAscii(slug) || !VALID_SLUG_PATTERN.test(slug)) {
+  if (!VALID_SLUG_PATTERN.test(slug)) {
     throw new Error(`Invalid skill slug: ${raw}`);
   }
   return slug;

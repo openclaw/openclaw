@@ -214,8 +214,8 @@ modules share the host's code identity; each inventory still owns its registered
 callbacks and cleanup. Replacing that compiled code requires a build and Gateway
 restart. Conditional package aliases retain their package metadata, and native
 Node conditions select the target from that captured metadata. Legacy packages
-without an exports map also prefetch their existing main or index entry as raw
-bytes; this can read a large native entry, but does not execute unselected code.
+without an exports map also admit their existing main or index entry without
+executing unselected code. Native entries reuse the recorded admission below.
 The selected package's remaining body is captured before execution.
 Dependency links retain existing nested installation locations. Dependencies installed
 beside a package remain siblings in the capture, including optional platform packages
@@ -223,6 +223,27 @@ whose native assets are read through relative filesystem paths. Other ancestor
 dependencies link at the captured package root. Capture does not add `node_modules` beside
 individual source files, so native-addon loaders can still locate their package
 root and its build assets.
+
+Native artifacts are admitted with their complete companion directory, so a
+binary's real path retains its sibling files. Installer-owned directories use
+hardlinks or an existing retained-directory reference; files inspected by plugin
+safety checks keep independent copies. Mutable source trees retain one private
+directory snapshot per admitted identity, preserving old binary and companion
+bytes through in-place edits. Files in this namespace are prepared at admission;
+module execution remains on demand. Registrations share admission facts without
+sharing their runtime authority.
+When file symlinks are unavailable, a generation can use hardlinks only if its
+directory preserves every captured companion and the selected host SDK. Otherwise
+that plugin reports a load error asking for file symlink support; the update
+continues with the existing plugin-failure warning behavior.
+The existing installed-index SQLite payload records directory membership, device,
+inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
+generation receipt. Unchanged warm startup reuses those facts. Added, removed, or
+changed companions require admission again; ctime-only uncertainty is resolved
+with a bounded rehash. Legacy reload receipts keep their framed raw-byte value,
+so a changed receipt still requires streaming its native payloads.
+Identity reuse cannot detect an edit that preserves every recorded identity field.
+Source code outside an admitted native namespace is captured and verified separately.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -306,6 +327,9 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+If its payload directory is removed while the instance still holds custody, the
+next capture recreates that directory under the same lease. This does not restore
+previously deleted captured files or recreate a missing coordinator directory.
 
 Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and

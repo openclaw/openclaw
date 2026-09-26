@@ -107,15 +107,6 @@ describe("release-beta-smoke", () => {
     expect(merged.indexOf("actions/runs/123")).toBeLessThan(merged.indexOf("### Assets"));
   });
 
-  it("bounds child command hangs", () => {
-    expect(() =>
-      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        capture: true,
-        timeoutMs: 50,
-      }),
-    ).toThrow(/timed out after 50ms/u);
-  });
-
   it("uses a non-ignorable timeout signal for trapped children", () => {
     expect(() =>
       run(

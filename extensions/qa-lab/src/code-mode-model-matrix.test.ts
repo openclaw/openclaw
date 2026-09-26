@@ -158,29 +158,18 @@ describe("Code Mode model matrix classification", () => {
     sessionId: "session",
   } satisfies Parameters<typeof classifyCodeModeMatrixCell>[0]["envelope"];
 
-  it("requires engagement, tool execution, effect, and exact final text", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }),
-    ).toEqual({
-      failureCategory: null,
-      passed: true,
-      oracle: {
-        answer: true,
-        effect: true,
-        engagement: true,
-        identity: true,
-        toolExecution: true,
-      },
+  function classify(overrides: Partial<Parameters<typeof classifyCodeModeMatrixCell>[0]>) {
+    return classifyCodeModeMatrixCell({
+      diagnostics: "",
+      effectPassed: true,
+      envelope: successEnvelope,
+      expected: "CM-EXPECTED",
+      mode: "code",
+      model: "ollama/qwen3.5:9b",
+      task: "read",
+      ...overrides,
     });
-  });
+  }
 
   it.each([
     ["HTTP 402 payment required", "credits depleted", "provider_billing"],
@@ -189,7 +178,7 @@ describe("Code Mode model matrix classification", () => {
     ["HTTP 403", "Forbidden", "provider_auth"],
   ])("classifies %s with %s as %s", (diagnostics, message, category) => {
     expect(
-      classifyCodeModeMatrixCell({
+      classify({
         diagnostics,
         effectPassed: false,
         envelope: {
@@ -199,58 +188,37 @@ describe("Code Mode model matrix classification", () => {
           final: "",
           error: { kind: "error_payload", message },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe(category);
   });
 
   it("does not fail a successful run because diagnostics mention a recovered provider error", () => {
     expect(
-      classifyCodeModeMatrixCell({
+      classify({
         diagnostics: "recovered after a transient network socket error",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBeNull();
   });
 
   it("fails a successful envelope when JSON stdout has trailing output", () => {
     expect(
-      classifyCodeModeMatrixCell({
+      classify({
         diagnostics: "unexpected stdout after JSON: noisy log",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
         stdoutContractValid: false,
-        task: "read",
       }).failureCategory,
     ).toBe("harness_error");
   });
 
   it("classifies a direct read with extra prose as an answer mismatch", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
           ...successEnvelope,
           bridgeCalls: { search: 0, describe: 0, call: 0 },
           codeModeEngaged: false,
           final: "The value is CM-EXPECTED.",
         },
-        expected: "CM-EXPECTED",
         mode: "direct",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }),
     ).toMatchObject({
       failureCategory: "answer_mismatch",
@@ -261,18 +229,13 @@ describe("Code Mode model matrix classification", () => {
   it("requires outer tool-call evidence for direct and automatic cells", () => {
     for (const mode of ["direct", "auto"] as const) {
       expect(
-        classifyCodeModeMatrixCell({
-          diagnostics: "",
-          effectPassed: true,
+        classify({
           envelope: {
             ...successEnvelope,
             codeModeEngaged: mode === "auto",
             toolSummary: { calls: 0, tools: [] },
           },
-          expected: "CM-EXPECTED",
           mode,
-          model: "ollama/qwen3.5:9b",
-          task: "read",
         }).failureCategory,
       ).toBe("tool_execution");
     }
@@ -280,19 +243,14 @@ describe("Code Mode model matrix classification", () => {
 
   it("uses outer tool-call evidence for automatic cells that engage Code Mode", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
           ...successEnvelope,
           bridgeCalls: { search: 1, describe: 1, call: 0 },
           codeModeEngaged: true,
           toolSummary: { calls: 1, tools: ["exec"] },
         },
-        expected: "CM-EXPECTED",
         mode: "auto",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }),
     ).toMatchObject({
       failureCategory: null,
@@ -303,54 +261,35 @@ describe("Code Mode model matrix classification", () => {
 
   it("keeps nested bridge-call evidence mandatory for forced Code Mode", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
           ...successEnvelope,
           bridgeCalls: { search: 1, describe: 1, call: 0 },
           toolSummary: { calls: 1, tools: ["exec"] },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("tool_execution");
   });
 
   it("rejects forced Code Mode runs that never engaged", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: { ...successEnvelope, codeModeEngaged: false },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("activation");
   });
 
   it("rejects a successful response from a different model route", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: { ...successEnvelope, model: "fallback-model" },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("model_mismatch");
   });
 
   it("reports an agent error before evaluating missing activation metadata", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
+      classify({
         effectPassed: false,
         envelope: {
           ...successEnvelope,
@@ -360,10 +299,6 @@ describe("Code Mode model matrix classification", () => {
           codeModeEngaged: undefined,
           error: { kind: "agent_error", message: "run failed" },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("agent_error");
   });

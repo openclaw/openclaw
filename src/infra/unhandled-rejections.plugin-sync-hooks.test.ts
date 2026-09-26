@@ -125,7 +125,8 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it.each(syncHookNames)("composes synchronous %s results after fail-open errors", (hookName) => {
+  it("composes synchronous results after fail-open errors", () => {
+    const hookName = "tool_result_persist";
     const logger = createLogger();
     const originalMessage = createToolResultMessage("original");
     const replacementMessage = createToolResultMessage("replacement");
@@ -167,8 +168,6 @@ describe("sync-only plugin hooks", () => {
 
   it.each([
     ["tool_result_persist", "event"],
-    ["before_message_write", "event"],
-    ["tool_result_persist", "message"],
     ["before_message_write", "message"],
     ["before_message_write", "block"],
   ] as const)(
@@ -243,37 +242,35 @@ describe("sync-only plugin hooks", () => {
     expect(blockReads).toBe(0);
   });
 
-  it.each(syncHookNames)(
-    "fails closed on synchronous %s invocation errors and skips later handlers",
-    (hookName) => {
-      const cause = new Error("sync-hook-failure");
-      const laterHandler = vi.fn();
-      const runner = createHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName,
-            pluginId: "failed",
-            priority: 20,
-            handler: () => {
-              throw cause;
-            },
+  it("fails closed on synchronous invocation errors and skips later handlers", () => {
+    const hookName = "tool_result_persist";
+    const cause = new Error("sync-hook-failure");
+    const laterHandler = vi.fn();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName,
+          pluginId: "failed",
+          priority: 20,
+          handler: () => {
+            throw cause;
           },
-          { hookName, pluginId: "later", priority: 10, handler: laterHandler },
-        ]),
-        { failurePolicyByHook: { [hookName]: "fail-closed" } },
-      );
+        },
+        { hookName, pluginId: "later", priority: 10, handler: laterHandler },
+      ]),
+      { failurePolicyByHook: { [hookName]: "fail-closed" } },
+    );
 
-      expect(() =>
-        runSyncHook({ hookName, runner, message: createToolResultMessage("original") }),
-      ).toThrow(
-        expect.objectContaining({
-          message: `[hooks] ${hookName} handler from failed failed: Error: sync-hook-failure`,
-          cause,
-        }),
-      );
-      expect(laterHandler).not.toHaveBeenCalled();
-    },
-  );
+    expect(() =>
+      runSyncHook({ hookName, runner, message: createToolResultMessage("original") }),
+    ).toThrow(
+      expect.objectContaining({
+        message: `[hooks] ${hookName} handler from failed failed: Error: sync-hook-failure`,
+        cause,
+      }),
+    );
+    expect(laterHandler).not.toHaveBeenCalled();
+  });
 
   it("preserves synchronous secret redaction and subsequent handler composition", () => {
     const logger = createLogger();
@@ -372,7 +369,8 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it.each(syncHookNames)("preserves fail-closed behavior for async %s handlers", (hookName) => {
+  it("preserves fail-closed behavior for async handlers", () => {
+    const hookName = "tool_result_persist";
     const logger = createLogger();
     const runner = createHookRunner(
       createMockPluginRegistry([

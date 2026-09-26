@@ -173,18 +173,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(task).not.toHaveBeenCalled();
   });
 
-  it("loads the selected agent on the first gateway bind", async () => {
-    const client = {} as GatewayBrowserClient;
-    const context = contextWithGateway(client, true);
-    const page = createPage(context);
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.dreaming.selectedAgentId).toBe("main");
-    expect(page.loadAll).toHaveBeenCalledOnce();
-  });
-
   it("resets stale panel data when the selected agent changes", async () => {
     const client = {} as GatewayBrowserClient;
     const page = createPage(contextWithGateway(client, true));

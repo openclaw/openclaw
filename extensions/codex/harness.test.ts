@@ -264,36 +264,19 @@ describe("Codex agent harness supports()", () => {
     expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });
 
-  it.each(["gpt-future", "test-next-model"])(
-    "lets explicitly selected Codex discover %s with its own account",
-    (modelId) => {
-      expect(
-        harness.supports({
-          provider: "openai",
-          modelId,
-          requestedRuntime: "codex",
-          modelProvider: {
-            requestTransportOverrides: "none",
-            preparedAuth: { source: "harness" },
-          },
-        }),
-      ).toEqual({ supported: true, priority: 100 });
-    },
-  );
-
-  it.each(["gpt-future", "test-next-model"])(
-    "lets explicit Codex discovery of %s run before auth has been prepared",
-    (modelId) => {
-      expect(
-        harness.supports({
-          provider: "openai",
-          modelId,
-          requestedRuntime: "codex",
-          modelProvider: { requestTransportOverrides: "none" },
-        }),
-      ).toEqual({ supported: true, priority: 100 });
-    },
-  );
+  it.each([
+    { label: "before auth preparation", preparedAuth: undefined },
+    { label: "with harness-owned auth", preparedAuth: { source: "harness" as const } },
+  ])("lets explicitly selected Codex discover a new model $label", ({ preparedAuth }) => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        modelId: "gpt-future",
+        requestedRuntime: "codex",
+        modelProvider: { requestTransportOverrides: "none", preparedAuth },
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
 
   it.each([
     {
@@ -385,39 +368,16 @@ describe("Codex agent harness supports()", () => {
     }
   });
 
-  it.each([
-    {
-      name: "custom endpoint",
-      modelProvider: {
-        api: "openai-responses",
-        baseUrl: "https://relay.example.test/v1",
-        requestTransportOverrides: "none" as const,
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    },
-    {
-      name: "Completions adapter",
-      modelProvider: {
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        requestTransportOverrides: "none" as const,
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    },
-    {
-      name: "HTTP endpoint",
-      modelProvider: {
-        api: "openai-responses",
-        baseUrl: "http://api.openai.com/v1",
-        requestTransportOverrides: "none" as const,
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    },
-  ])("rejects a $name that Codex cannot reproduce", ({ modelProvider }) => {
+  it("rejects a prepared route that does not declare Codex compatibility", () => {
     const result = harness.supports({
       provider: "openai",
       requestedRuntime: "codex",
-      modelProvider,
+      modelProvider: {
+        api: "openai-responses",
+        baseUrl: "https://relay.example.test/v1",
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw"] },
+      },
     });
     expect(result.supported).toBe(false);
     expect(!result.supported ? result.reason : undefined).toContain("prepared provider route");

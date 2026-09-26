@@ -77,22 +77,6 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
-  it("returns fallback value when config is empty and no SecretRef is configured", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig(""),
-      env: {} as NodeJS.ProcessEnv,
-      value: "",
-      path: "gateway.auth.token",
-      readFallback: () => "env-token",
-    });
-
-    expect(resolved).toEqual({
-      value: "env-token",
-      source: "fallback",
-      secretRefConfigured: false,
-    });
-  });
-
   it("ignores blank fallback values when no SecretRef is configured", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig(""),

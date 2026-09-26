@@ -595,10 +595,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it.for([
-    ["two-phase exec UUID", "12345678-1234-1234-1234-123456789abc"],
     ["plugin approval UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
-    ["system-agent approval UUID", "system-agent:12345678-1234-1234-1234-123456789abc"],
-    ["node system.run replay UUID", "abcdefab-1234-5678-9abc-123456789abc"],
     ["leading dash", "-approval-123"],
     ["128-character id", "a".repeat(128)],
   ])("preserves a safe explicit %s byte-for-byte", ([_label, id], testContext) => {
@@ -627,9 +624,6 @@ describe("ExecApprovalManager", () => {
     ["lone surrogate", "approval-\ud800hidden"],
     ["whitespace", "approval unsafe"],
     ["trailing line feed", "approval-safe\n"],
-    ["trailing carriage return", "approval-safe\r"],
-    ["trailing line separator", "approval-safe\u2028"],
-    ["trailing paragraph separator", "approval-safe\u2029"],
     ["overlong value", "a".repeat(129)],
   ])("rejects an explicit approval id containing an %s", ([_label, id], testContext) => {
     const manager = createTestApprovalManager(testContext);

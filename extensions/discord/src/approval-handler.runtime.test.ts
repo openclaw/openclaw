@@ -1,4 +1,3 @@
-// Discord tests cover approval handler plugin behavior.
 import assert from "node:assert/strict";
 import {
   createChannelApprovalHandlerFromCapability,
@@ -232,27 +231,6 @@ describe("discordApprovalNativeRuntime", () => {
     },
     {
       approvalKind: "exec",
-      phase: "resolved",
-      decision: "allow-always",
-      label: "Allowed (always)",
-      accentColor: 0x5865f2,
-    },
-    {
-      approvalKind: "exec",
-      phase: "resolved",
-      decision: "deny",
-      label: "Denied",
-      accentColor: 0xed4245,
-    },
-    {
-      approvalKind: "plugin",
-      phase: "resolved",
-      decision: "allow-once",
-      label: "Allowed (once)",
-      accentColor: 0x57f287,
-    },
-    {
-      approvalKind: "plugin",
       phase: "resolved",
       decision: "allow-always",
       label: "Allowed (always)",
