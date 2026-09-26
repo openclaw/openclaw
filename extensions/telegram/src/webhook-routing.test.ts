@@ -6,7 +6,7 @@ const createTelegramBot = vi.hoisted(() => vi.fn());
 vi.mock("./bot.js", () => ({ createTelegramBot }));
 
 describe("Telegram webhook routes", () => {
-  it.each([undefined, false, { port: 8787 }])(
+  it.each([undefined, false as const, { port: 8787 }])(
     "rejects the exact health path with legacy listener %j",
     async (legacyWebhook) => {
       await expect(

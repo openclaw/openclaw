@@ -557,8 +557,8 @@ describe("startTelegramWebhook", () => {
 
   it("keeps the Gateway route registered and retries when setWebhook has a recoverable startup failure", async () => {
     const advertised = createDeferred<void>();
-    const runtimeLog = vi.fn((message: string) => {
-      if (message.startsWith("webhook advertised to telegram on ")) {
+    const runtimeLog = vi.fn((message: unknown) => {
+      if (typeof message === "string" && message.startsWith("webhook advertised to telegram on ")) {
         advertised.resolve();
       }
     });
@@ -2176,8 +2176,11 @@ describe("startTelegramWebhook", () => {
       update: telegramMessageUpdate(52, "stop retry"),
     });
     const retryScheduled = createDeferred<void>();
-    const runtimeLog = vi.fn((message: string) => {
-      if (/completion retry 1 scheduled|tombstone retry 1\//.test(message)) {
+    const runtimeLog = vi.fn((message: unknown) => {
+      if (
+        typeof message === "string" &&
+        /completion retry 1 scheduled|tombstone retry 1\//.test(message)
+      ) {
         retryScheduled.resolve();
       }
     });
