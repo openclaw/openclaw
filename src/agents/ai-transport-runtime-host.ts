@@ -1,6 +1,6 @@
 import {
   configureAiTransportHost,
-  getAiTransportHost,
+  getDefaultAiTransportHost,
   type AiProviderRequestCapabilities,
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -38,7 +38,7 @@ export function configureAiTransportRuntimeHost(): void {
   if (configured) {
     return;
   }
-  const host = getAiTransportHost();
+  const host = getDefaultAiTransportHost();
   configureAiTransportHost({
     ...host,
     plugin: {

@@ -87,15 +87,19 @@ The process runs the normal embedded agent loop with a restricted backend:
 - The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
   run locally in the worker workspace when present in the Gateway-issued turn
   authority. An empty authority runs the model with no tools.
-- Model calls use the gateway inference proxy. No local model auth profile is
-  loaded.
+- Model calls use the Gateway inference proxy by default. Explicitly configured
+  paired-device profiles can select [worker-local inference](/gateway/cloud-workers/native-inference)
+  with node-provisioned model configuration and externally scoped proxy auth; no Gateway auth profile is loaded.
 - Transcript writes use the gateway transcript-commit RPC.
 - Streaming and tool lifecycle updates use the gateway live-event RPC.
 - Only the assigned session and turn are accepted.
 
 Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
-beyond the assigned session toolset. It uses a throwaway state directory and has
-no model provider credentials. When the Gateway's effective shared GitHub identity
+beyond the assigned session toolset. It uses a throwaway state directory. Proxied
+workers have no model provider credentials; explicitly selected local-inference
+workers hold their node-granted opaque auth values in runtime memory. An external
+custodian must keep actual provider keys outside an untrusted worker workload;
+the worker process is not a same-user credential-isolation boundary. When the Gateway's effective shared GitHub identity
 is available, the worker receives a turn-bound access token in its private launch
 envelope. The token is materialized in a private per-turn profile inside the
 throwaway state directory, with earlier profiles removed before the next binding,
