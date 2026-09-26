@@ -1,4 +1,4 @@
-import { existsSync, linkSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,7 +18,10 @@ import {
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  prepareOpenClawStateReadSource,
+} from "./openclaw-state-worker-context.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -32,6 +35,57 @@ function databasePath(name = "state") {
 }
 
 describe("canonical shared-state resource drainage", () => {
+  it.each(["ordinary", "existing"] as const)(
+    "reuses prepared %s source facts without resolving or re-admitting the schema",
+    (scope) => {
+      const pathname = databasePath();
+      writeFileSync(pathname, "");
+      const consume = () => {
+        const source = prepareOpenClawStateReadSource({ path: pathname });
+        const context = source.current();
+        const resolve = vi.spyOn(path, "resolve");
+        let reused = true;
+        let resolutions: number;
+        try {
+          for (let index = 0; index < 100; index++) {
+            reused &&= source.current() === context;
+          }
+          resolutions = resolve.mock.calls.length;
+        } finally {
+          resolve.mockRestore();
+        }
+        expect(resolutions).toBe(0);
+        expect(reused).toBe(true);
+      };
+      if (scope === "existing") {
+        withExistingOpenClawStateSchema({ path: pathname }, consume);
+      } else {
+        consume();
+      }
+    },
+  );
+
+  it("renews prepared reads of the same file without adopting its replacement", async () => {
+    const pathname = databasePath();
+    const source = prepareOpenClawStateReadSource({ path: pathname });
+    const absent = source.current();
+    writeFileSync(pathname, "");
+    const created = source.current();
+    expect(created.admission.identity.key).toMatch(/^file:/);
+    absent.admission.assertCurrent();
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    const renewed = source.current();
+    expect(created.admission.assertCurrent).toThrow(/admission changed/);
+    expect(renewed.admission.identity.key).toBe(created.admission.identity.key);
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    renameSync(pathname, `${pathname}.retired`);
+    writeFileSync(pathname, "");
+    const replacement = captureOpenClawStateReadContext(pathname);
+    expect(replacement.admission.identity.key).not.toBe(created.admission.identity.key);
+    expect(source.current).toThrow(/identity changed/);
+    expect(source.workerContext).toThrow(/identity changed/);
+  });
+
   it("reuses warm admission without resolving paths or allocating replacement tokens", () => {
     const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
     const pathname = databasePath();
@@ -59,7 +113,7 @@ describe("canonical shared-state resource drainage", () => {
     renewed.assertCurrent();
   });
 
-  it("keeps captured schema scope lifetime separate from shared physical admission", () => {
+  it("keeps captured schema scope lifetime separate from shared physical admission", async () => {
     const pathname = databasePath();
     const ordinary = captureOpenClawStateReadContext(pathname);
     const restricted = withExistingOpenClawStateSchema({ path: pathname }, () => {
@@ -69,11 +123,14 @@ describe("canonical shared-state resource drainage", () => {
       expect(context.admission.identity.key).toBe(created.identity.key);
       expect(context.admission.identity.key).toMatch(/^file:/);
       context.admission.assertCurrent();
-      return context;
+      return { context, source: prepareOpenClawStateReadSource({ path: pathname }) };
     });
-    expect(restricted.admission.assertCurrent).toThrow(/schema admission has ended/);
+    expect(restricted.context.admission.assertCurrent).toThrow(/schema admission has ended/);
+    expect(restricted.source.current).toThrow(/schema admission has ended/);
     ordinary.admission.assertCurrent();
     captureOpenClawStateReadContext(pathname).admission.assertCurrent();
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    expect(restricted.source.current).toThrow(/schema admission has ended/);
   });
 
   it.each(["missing", "directory"] as const)(
