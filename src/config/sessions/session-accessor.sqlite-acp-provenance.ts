@@ -43,17 +43,25 @@ function readSources(database: DatabaseSync, sessionKey: string): LegacyAcpMigra
     : [];
 }
 
+export function readLegacyAcpMigrationContextInDatabase(
+  database: Parameters<typeof readExactSessionEntryRowValidated>[0],
+  sessionKey: string,
+) {
+  const selected = readExactSessionEntryRowValidated(database, sessionKey);
+  return {
+    entry: selected?.entry,
+    sources: selected?.row.legacy_acp_migration_json
+      ? sourcesSchema.parse(JSON.parse(selected.row.legacy_acp_migration_json))
+      : [],
+  };
+}
+
 export function readLegacyAcpMigrationContext(scope: SessionEntryReadScope) {
   const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const selected = readExactSessionEntryRowValidated(database, resolved.sessionKey);
-    return {
-      entry: selected?.entry,
-      sources: selected?.row.legacy_acp_migration_json
-        ? sourcesSchema.parse(JSON.parse(selected.row.legacy_acp_migration_json))
-        : [],
-    };
-  }, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readLegacyAcpMigrationContextInDatabase(database, resolved.sessionKey),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : { entry: undefined, sources: [] };
 }
 

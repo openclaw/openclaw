@@ -7,7 +7,6 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -15,6 +14,7 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
+import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
 async function seedAcpSessionEntry(params: {
   storePath: string;
@@ -188,33 +188,38 @@ describe("ACP session listing", () => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:codex:acp:s1";
       const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          updatedAt: 100,
-        },
-      });
-      await upsertAcpSessionMeta({
-        cfg,
-        env,
-        sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-s1",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 321,
-        }),
-      });
+      try {
+        await seedAcpSessionEntry({
+          storePath,
+          sessionKey,
+          entry: {
+            sessionId: "sess-acp",
+            updatedAt: 100,
+          },
+        });
+        await upsertAcpSessionMeta({
+          cfg,
+          env,
+          sessionKey,
+          mutate: () => ({
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex-s1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 321,
+          }),
+        });
 
-      const entries = await listAcpSessionEntries({ cfg, env });
+        const entries = await listAcpSessionEntries({ cfg, env });
 
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.storePath).toBe(storePath);
-      expect(entries[0]?.entry?.sessionId).toBe("sess-acp");
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.storePath).toBe(storePath);
+        expect(entries[0]?.entry?.sessionId).toBe("sess-acp");
+      } finally {
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+      }
     });
   });
 });

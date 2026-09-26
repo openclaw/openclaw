@@ -261,6 +261,12 @@ hint; the reader returns `undefined` when no advice is available.
 
 ## ACP harness turns
 
+Use `readAcpSessionEntryAsync` from `openclaw/plugin-sdk/acp-runtime` to read an
+ACP session and its lifecycle-bound metadata. Await the result and recheck the
+current binding or caller authority before cleanup or runtime side effects.
+The synchronous helper remains only for the shipped compatibility contract;
+see [SDK migration](/plugins/sdk-migration).
+
 Pass optional `currentInboundContext` to `resolveAgentHarnessBeforePromptBuildResult` from
 `openclaw/plugin-sdk/agent-harness-runtime`. It combines the prompt with its inbound context
 and channel-provided joiner before prompt hooks run. Frame ordinary chat

@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -34,7 +33,7 @@ import {
   resolveBackgroundTaskFailureStatus,
 } from "./manager.background-task.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
-import type { AcpSessionManagerDeps } from "./manager.types.js";
+import { DEFAULT_DEPS, type AcpSessionManagerDeps } from "./manager.types.js";
 
 // U+1F99E (🦞) is a surrogate pair in UTF-16; a raw .slice() boundary can split it.
 const LOBSTER = "🦞";
@@ -49,12 +48,22 @@ afterEach(async () => {
 
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 
-function fakeDeps(): AcpSessionManagerDeps {
-  const loadSessionEntry = (params: { sessionKey: string }) =>
-    params.sessionKey === "child-session"
-      ? { entry: { spawnedBy: "requester-session" } }
-      : { entry: {} };
-  return { loadSessionEntry } as unknown as AcpSessionManagerDeps;
+function fakeDeps(storePath: string): AcpSessionManagerDeps {
+  return {
+    ...DEFAULT_DEPS,
+    loadSessionEntryAsync: async (params) => ({
+      cfg: params.cfg ?? {},
+      agentId: params.agentId,
+      storePath,
+      sessionKey: params.sessionKey,
+      storeSessionKey: params.sessionKey,
+      entry: {
+        sessionId: params.sessionKey,
+        updatedAt: 0,
+        ...(params.sessionKey === "child-session" ? { spawnedBy: "agent:main:main" } : {}),
+      },
+    }),
+  };
 }
 
 describe("appendBackgroundTaskProgressSummary", () => {
@@ -78,30 +87,36 @@ describe("appendBackgroundTaskProgressSummary", () => {
 });
 
 describe("resolveBackgroundTaskContext", () => {
-  it("keeps surrogate pairs intact in the bounded task label", () => {
-    // normalized length 164 puts the pair astride the 159-char cut point.
-    const context = resolveBackgroundTaskContext({
-      deps: fakeDeps(),
-      cfg: {} as unknown as OpenClawConfig,
-      sessionKey: "child-session",
-      agentId: "qa",
-      requestId: "run-1",
-      text: `${"y".repeat(158)}${LOBSTER}tail`,
+  it("keeps surrogate pairs intact in the bounded task label", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      // normalized length 164 puts the pair astride the 159-char cut point.
+      const context = await resolveBackgroundTaskContext({
+        deps: fakeDeps(state.statePath("sessions.json")),
+        assertCurrent: () => {},
+        cfg: {},
+        sessionKey: "child-session",
+        agentId: "qa",
+        requestId: "run-1",
+        text: `${"y".repeat(158)}${LOBSTER}tail`,
+      });
+      expect(context?.task).toBe(`${"y".repeat(158)}…`);
+      expect(HIGH_SURROGATE_WITHOUT_LOW.test(context?.task ?? "")).toBe(false);
     });
-    expect(context?.task).toBe(`${"y".repeat(158)}…`);
-    expect(HIGH_SURROGATE_WITHOUT_LOW.test(context?.task ?? "")).toBe(false);
   });
 
-  it("passes short task text through unchanged", () => {
-    const context = resolveBackgroundTaskContext({
-      deps: fakeDeps(),
-      cfg: {} as unknown as OpenClawConfig,
-      sessionKey: "child-session",
-      agentId: "qa",
-      requestId: "run-2",
-      text: `summarize ${LOBSTER} feedback`,
+  it("passes short task text through unchanged", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const context = await resolveBackgroundTaskContext({
+        deps: fakeDeps(state.statePath("sessions.json")),
+        assertCurrent: () => {},
+        cfg: {},
+        sessionKey: "child-session",
+        agentId: "qa",
+        requestId: "run-2",
+        text: `summarize ${LOBSTER} feedback`,
+      });
+      expect(context?.task).toBe(`summarize ${LOBSTER} feedback`);
     });
-    expect(context?.task).toBe(`summarize ${LOBSTER} feedback`);
   });
 });
 

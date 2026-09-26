@@ -49,7 +49,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importO
 vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auto-reply/reply/dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => ({
-    resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
+    resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
       meta: createAcpSessionMeta({ agent: "main" }),

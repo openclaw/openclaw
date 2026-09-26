@@ -1,4 +1,4 @@
-import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
+import { readAcpSessionEntryAsync } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -99,8 +99,9 @@ async function initializeThreadBindingManager(
     });
   }
 
+  const startupBindings = listBindingsForAccount(accountId);
   const acpSessionKeys = new Set<string>();
-  for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
+  for (const binding of startupBindings) {
     if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
       continue;
     }
@@ -109,7 +110,7 @@ async function initializeThreadBindingManager(
 
   const staleSessionKeys = new Set<string>();
   for (const targetSessionKey of acpSessionKeys) {
-    const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
+    const sessionEntry = await readAcpSessionEntryAsync({ sessionKey: targetSessionKey });
     if (!sessionEntry || sessionEntry.storeReadFailed) {
       continue;
     }
@@ -125,13 +126,13 @@ async function initializeThreadBindingManager(
   }
 
   for (const sessionKey of staleSessionKeys) {
-    const bindingsToRemove = listBindingsForAccount(accountId).filter(
-      (b) => b.targetSessionKey === sessionKey,
-    );
+    const bindingsToRemove = startupBindings.filter((b) => b.targetSessionKey === sessionKey);
     for (const binding of bindingsToRemove) {
-      getThreadBindingsState().bindingsByAccountConversation.delete(
-        resolveBindingKey({ accountId, conversationId: binding.conversationId }),
-      );
+      const bindingKey = resolveBindingKey({ accountId, conversationId: binding.conversationId });
+      if (getThreadBindingsState().bindingsByAccountConversation.get(bindingKey) !== binding) {
+        continue;
+      }
+      getThreadBindingsState().bindingsByAccountConversation.delete(bindingKey);
       await persistBindingMutation({
         accountId,
         persist,

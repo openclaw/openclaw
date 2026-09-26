@@ -1,4 +1,8 @@
 import {
+  prepareAcpSessionMutationInWorker,
+  commitAcpSessionMutationInWorker,
+} from "../acp/runtime/session-meta-write.worker.js";
+import {
   readAuthProfileRows,
   SHARED_AUTH_STORE_STATE_KEY,
 } from "../agents/auth-profiles/sqlite-json.js";
@@ -353,6 +357,12 @@ export function executeSharedStateCommand(
     return command.input.artifactPreservingReadOnly
       ? withArtifactPreservingStateReads(read)
       : read();
+  }
+  if (command.type === "acp.prepareMutation") {
+    return prepareAcpSessionMutationInWorker(open(), command.input);
+  }
+  if (command.type === "acp.commitMutation") {
+    return commitAcpSessionMutationInWorker(open(), command.input);
   }
   if (command.type === "plugins.conversationBindingApprovals.read") {
     return readPluginBindingApprovalsInDatabase(open().db);

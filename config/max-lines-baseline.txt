@@ -72,7 +72,6 @@ extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
 extensions/discord/src/monitor/native-command.ts
 extensions/discord/src/monitor/provider.test.ts
-extensions/discord/src/monitor/thread-bindings.lifecycle.test.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
@@ -376,7 +375,6 @@ src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.progress.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.routing.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
-src/auto-reply/reply/dispatch-from-config.shared.test-harness.ts
 src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
@@ -535,7 +533,6 @@ src/gateway/server-methods/agent.events-and-subagents.test-utils.ts
 src/gateway/server-methods/agent.media-and-routing.test-utils.ts
 src/gateway/server-methods/agent.reset-and-identity.test-utils.ts
 src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
-src/gateway/server-methods/agent.test-harness.ts
 src/gateway/server-methods/agents-mutate.test.ts
 src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts

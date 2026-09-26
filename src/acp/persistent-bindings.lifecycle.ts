@@ -66,11 +66,13 @@ export async function ensureConfiguredAcpBindingSession(params: {
     ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
   };
   try {
-    const resolution = acpManager.resolveSession({
+    const resolution = await acpManager.resolveSessionAsync({
       cfg: params.cfg,
       agentId: params.spec.agentId,
       sessionKey,
+      assertCurrent: params.assertActive,
     });
+    params.assertActive?.();
     if (
       resolution.kind === "ready" &&
       sessionStructurallyMatchesConfiguredBinding({

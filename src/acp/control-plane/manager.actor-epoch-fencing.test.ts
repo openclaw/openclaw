@@ -1,15 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 /** Tests that reset actor rotation fences every ACP metadata-writing operation. */
+import { runManagerCloseSession } from "./manager.close-session.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
+import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  runResetManagerSessionRuntimeOptions,
+  type RuntimeOptionCommandServices,
+} from "./manager.runtime-options-commands.js";
 import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
+  disposeAcpSessionManagerInstance,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
   mockCallArg,
+  readySessionMeta,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
@@ -17,6 +25,191 @@ const sessionKey = "agent:codex:acp:actor-epoch-fencing";
 
 describe("AcpSessionManager actor epoch fencing", () => {
   installAcpSessionManagerTestLifecycle();
+
+  it.each([
+    { operation: "option reset", retired: "actor" },
+    { operation: "option reset", retired: "caller" },
+    { operation: "session close", retired: "actor" },
+    { operation: "session close", retired: "caller" },
+  ] as const)(
+    "does not close a cached runtime during $operation after $retired retirement at metadata-read settlement",
+    async ({ operation, retired }) => {
+      const runtime = createRuntime();
+      const target = { sessionKey, agentId: "codex" };
+      const meta = readySessionMeta();
+      const entry = {
+        sessionId: "session-1",
+        lifecycleRevision: "revision-1",
+        updatedAt: 1,
+        spawnedBy: "agent:main:main",
+      };
+      const handle = { sessionKey, backend: "acpx", runtimeSessionName: meta.runtimeSessionName };
+      const runtimeHandles = new ManagerRuntimeHandleCache();
+      runtimeHandles.set(target, {
+        runtime: runtime.runtime,
+        handle,
+        backend: "acpx",
+        agent: "codex",
+        mode: "persistent",
+      });
+      let current = true;
+      let readReturned = false;
+      let ensured = false;
+      const retireAtSettlement = () => {
+        if (readReturned) {
+          queueMicrotask(() => {
+            current = false;
+          });
+        }
+      };
+      const assertActive = () => {
+        if (retired === "caller") {
+          if (!current) {
+            throw new Error("ACP caller retired");
+          }
+          retireAtSettlement();
+        }
+      };
+      const writeSessionMeta = vi.fn(async () => null);
+      const services: RuntimeOptionCommandServices = {
+        runtimeHandles,
+        resolveSession: async () => {
+          // Close refreshes its control binding after ensure; retire at that helper's settlement.
+          readReturned = operation === "option reset" || ensured;
+          return { kind: "ready", ...target, meta, entry };
+        },
+        ensureRuntimeHandle: async () => {
+          if (operation === "option reset") {
+            throw new Error("Reset must use the cached handle");
+          }
+          const cached = runtimeHandles.get(target);
+          if (!cached) {
+            throw new Error("Expected the retained runtime handle");
+          }
+          ensured = true;
+          return { runtime: cached.runtime, handle: cached.handle, meta };
+        },
+        writeSessionMeta,
+        isCurrentActor: () => {
+          if (retired === "actor") {
+            retireAtSettlement();
+            return current;
+          }
+          return true;
+        },
+      };
+      const pending =
+        operation === "option reset"
+          ? runResetManagerSessionRuntimeOptions({
+              ...target,
+              cfg: baseCfg,
+              assertActive,
+              ...services,
+            })
+          : runManagerCloseSession({
+              input: {
+                ...target,
+                cfg: baseCfg,
+                assertActive,
+                reason: "test-close",
+                clearMeta: true,
+                expectedControlBinding: {
+                  sessionId: entry.sessionId,
+                  lifecycleRevision: entry.lifecycleRevision,
+                  ownerKey: entry.spawnedBy,
+                },
+              },
+              ...target,
+              deps: { getRuntimeBackend: () => ({ id: "acpx", runtime: runtime.runtime }) },
+              ...services,
+            });
+      await expect(pending).rejects.toThrow();
+      expect(runtime.close).not.toHaveBeenCalled();
+      expect(writeSessionMeta).not.toHaveBeenCalled();
+      expect(runtimeHandles.get(target)?.handle).toBe(handle);
+    },
+  );
+
+  it.each(["actor", "caller"] as const)(
+    "does not start backend work after %s authority expires during the status metadata read",
+    async (retired) => {
+      const runtime = createRuntime();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const stored = {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: { sessionId: "held-read", lifecycleRevision: "original", updatedAt: 1 },
+        acp: readySessionMeta(),
+      };
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtime.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockReturnValue(stored);
+      hoisted.readAcpSessionEntryAsyncMock.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return stored;
+      });
+      let current = true;
+      const revoked = new Error("status caller authority revoked");
+      const manager = new AcpSessionManager();
+      const pending = manager.getSessionStatus({
+        cfg: baseCfg,
+        sessionKey,
+        assertActive: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      });
+      let settled = false;
+      const outcome = pending.then(
+        (value) => {
+          settled = true;
+          return { kind: "success" as const, value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { kind: "error" as const, error };
+        },
+      );
+      try {
+        expect(
+          await Promise.race([entered.promise.then(() => "read"), outcome.then(() => "settled")]),
+        ).toBe("read");
+        if (retired === "actor") {
+          await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
+            cfg: baseCfg,
+            sessionKey,
+            reason: "session-reset",
+          });
+        } else {
+          current = false;
+        }
+        expect(settled).toBe(false);
+        release.resolve();
+        const result = await outcome;
+        if (result.kind !== "error") {
+          throw new Error("Expected the retired status read to reject");
+        }
+        if (retired === "actor") {
+          expect(result.error).toMatchObject({ detailCode: "SESSION_ACTOR_SUPERSEDED" });
+        } else {
+          expect(result.error).toBe(revoked);
+        }
+        expect(runtime.ensureSession).not.toHaveBeenCalled();
+        expect(runtime.getCapabilities).not.toHaveBeenCalled();
+        expect(runtime.getStatus).not.toHaveBeenCalled();
+        expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await outcome;
+        await disposeAcpSessionManagerInstance(manager, "test-complete");
+      }
+    },
+  );
 
   it.each([
     { operation: "runtime mode", freshOptions: { runtimeMode: "fresh" } },

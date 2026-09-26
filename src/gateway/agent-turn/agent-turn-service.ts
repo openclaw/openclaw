@@ -164,6 +164,7 @@ export function createAgentTurnService(
     try {
       assertAdmissionCurrent?.();
       const content = await prepareAgentContentPhase({
+        assertAdmissionCurrent: assertRequestCurrent,
         request,
         cfg,
         context,
@@ -181,6 +182,16 @@ export function createAgentTurnService(
         modelOverride,
         explicitRecipientSession,
         knownAgents,
+      }).catch((error: unknown) => {
+        assertAdmissionCurrent?.();
+        // Preparation refusal must preserve the cached Stop or replacement response.
+        if (
+          !dedupeLifecycle.ownsReservation() &&
+          replayAgentTurnIfCached({ preflight, context, io, acceptedOnly: privateCompletion })
+        ) {
+          return undefined;
+        }
+        throw error;
       });
       if (!content) {
         return;

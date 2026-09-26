@@ -1,6 +1,6 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -36,16 +36,22 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionStoreEntry,
     turnLedger,
   } = state;
+  const assertPreparationCurrent = () => {
+    state.getPreDispatchAbortSignal()?.throwIfAborted();
+    state.params.replyOptions?.operatorAuthority?.assertCurrent();
+  };
   // Gather awaits runtime preparation after its first row read. Reread ACP
   // metadata with the same owner to preserve current lifecycle fences and
   // recovery from an earlier store-read failure.
   const currentAcpSession = sessionStoreEntry.sessionKey
-    ? readAcpSessionEntry({
+    ? await readAcpSessionEntryAsync({
         cfg,
         agentId: sessionStoreEntry.agentId,
         sessionKey: sessionStoreEntry.sessionKey,
+        assertCurrent: assertPreparationCurrent,
       })
     : undefined;
+  assertPreparationCurrent();
   const sessionEntryWithAcp = currentAcpSession?.entry
     ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
     : undefined;

@@ -1,19 +1,20 @@
 import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
 import { readAcpSessionMetaForEntry } from "../runtime/session-meta-readonly.js";
 import {
   readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   writeAcpSessionMetaForMigration,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
@@ -21,16 +22,23 @@ import { AcpSessionManager } from "./manager.core.js";
 import { disposeAcpSessionManagerInstance } from "./manager.lifecycle.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
-describe("ACP manager with real owner-scoped metadata", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+async function withManagerTestDir(prefix: string, run: (dir: string) => Promise<void>) {
+  await withTestDir({ prefix }, async (dir) => {
+    try {
+      await run(dir);
+    } finally {
+      // Worker leases must settle before the fixture removes their database files.
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+    }
   });
+}
 
+describe("ACP manager with real owner-scoped metadata", () => {
   it.each(["global", "shared-project"])(
     "isolates two owners of %s and retains the harness",
     async (sessionKey) => {
-      await withTestDir({ prefix: "acp-manager-owner-" }, async (dir) => {
+      await withManagerTestDir("acp-manager-owner-", async (dir) => {
         const cfg = {
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
           session: { scope: "global", store: path.join(dir, "{agentId}", "sessions.json") },
@@ -54,6 +62,7 @@ describe("ACP manager with real owner-scoped metadata", () => {
         const manager = new AcpSessionManager({
           ...DEFAULT_DEPS,
           loadSessionEntry: (input) => readAcpSessionEntry({ ...input, databasePath }),
+          loadSessionEntryAsync: (input) => readAcpSessionEntryAsync({ ...input, databasePath }),
           upsertSessionMeta: (input) => upsertAcpSessionMeta({ ...input, databasePath }),
           requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
         });
@@ -140,7 +149,7 @@ describe("ACP manager with real owner-scoped metadata", () => {
 });
 
 it("keeps legacy runtime implementations assignable and rejects unisolated bare targets before effects", async () => {
-  await withTestDir({ prefix: "acp-legacy-owner-" }, async (dir) => {
+  await withManagerTestDir("acp-legacy-owner-", async (dir) => {
     const cfg = {
       agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
       session: { store: path.join(dir, "{agentId}", "sessions.json") },
@@ -192,7 +201,7 @@ it("keeps legacy runtime implementations assignable and rejects unisolated bare 
 });
 
 it("retains canonical metadata when an unmigrated backend locator blocks status or reset", async () => {
-  await withTestDir({ prefix: "acp-owner-repair-" }, async (dir) => {
+  await withManagerTestDir("acp-owner-repair-", async (dir) => {
     const cfg = {
       agents: { ownership: "explicit" as const, entries: { work: {} } },
       session: { store: path.join(dir, "{agentId}", "sessions.json") },
@@ -217,6 +226,8 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
       ...DEFAULT_DEPS,
       loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
         readAcpSessionEntry({ ...input, databasePath }),
+      loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
+        readAcpSessionEntryAsync({ ...input, databasePath }),
       upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
         upsertAcpSessionMeta({ ...input, databasePath }),
       requireRuntimeBackend: () => ({ id: "synthetic", runtime }),

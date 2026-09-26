@@ -34,7 +34,7 @@ export type StatefulBindingTargetDriver = {
     cfg: OpenClawConfig;
     sessionKey: string;
     agentId?: string;
-  }) => StatefulBindingTargetDescriptor | null;
+  }) => Promise<StatefulBindingTargetDescriptor | null> | StatefulBindingTargetDescriptor | null;
   resetInPlace?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -84,11 +84,14 @@ export function getStatefulBindingTargetDriver(id: string): StatefulBindingTarge
   return registeredStatefulBindingTargetDrivers.get(normalizedId) ?? null;
 }
 
-export function resolveStatefulBindingTargetBySessionKey(params: {
+export async function resolveStatefulBindingTargetBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-}): { driver: StatefulBindingTargetDriver; bindingTarget: StatefulBindingTargetDescriptor } | null {
+}): Promise<{
+  driver: StatefulBindingTargetDriver;
+  bindingTarget: StatefulBindingTargetDescriptor;
+} | null> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
@@ -96,12 +99,12 @@ export function resolveStatefulBindingTargetBySessionKey(params: {
   // Session keys are globally opaque to callers. Ask each registered driver so
   // channel-specific encodings stay private to their owner.
   for (const driver of listStatefulBindingTargetDrivers()) {
-    const bindingTarget = driver.resolveTargetBySessionKey?.({
+    const bindingTarget = await driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,
       sessionKey,
       agentId: params.agentId,
     });
-    if (bindingTarget) {
+    if (bindingTarget && getStatefulBindingTargetDriver(driver.id) === driver) {
       return {
         driver,
         bindingTarget,

@@ -54,6 +54,24 @@ registration behavior.
 The category does not enable channel docking or restore retired docking commands.
 New definitions should use `"tools"`.
 
+ACP plugins should await `readAcpSessionEntryAsync` from
+`openclaw/plugin-sdk/acp-runtime` for session metadata reads. File-backed reads
+run on the SQLite workers and preserve the session lifecycle throughout the
+metadata join. File-backed results are detached snapshots, including when
+`clone: false` is supplied. The returned `storeReadFailed` flag still distinguishes an
+unreadable session store from missing metadata; startup cleanup must keep
+bindings when that flag is set. Unbound legacy ACP metadata can still accompany
+that flag; it does not certify the session row. Source retirement and worker failures reject
+the read and must not be treated as an absent session.
+
+The synchronous `readAcpSessionEntry` and
+`getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
+remain available for existing third-party plugins. They are deprecated for
+runtime use; migrate to `readAcpSessionEntryAsync` and
+`getAcpSessionManager().resolveSessionAsync()` respectively. Their removal
+requires a separately announced breaking SDK release. Incognito reads retain
+their existing native in-memory owner until that owner's worker migration.
+
 ### Why
 
 - **Slow startup** - importing one helper loaded dozens of unrelated modules.

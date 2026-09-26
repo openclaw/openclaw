@@ -167,7 +167,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionStoreMocks.updateSessionEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
-      resolveSession: () => ({ kind: "none" as const }),
+      resolveSessionAsync: async () => ({ kind: "none" as const }),
       getObservabilitySnapshot: () => ({
         runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
         turns: {

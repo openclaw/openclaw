@@ -87,11 +87,11 @@ function setNoAbort() {
 
 function createMockAcpSessionManager() {
   return {
-    resolveSession: (params: {
+    resolveSessionAsync: async (params: {
       cfg: OpenClawConfig;
       sessionKey: string;
       agentId?: string;
-    }): AcpSessionResolution => {
+    }): Promise<AcpSessionResolution> => {
       const target = resolveAcpSessionTarget(params);
       const entry = acpMocks.readAcpSessionEntry({
         cfg: params.cfg,

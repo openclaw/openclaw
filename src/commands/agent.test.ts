@@ -1788,7 +1788,7 @@ describe("agentCommand", () => {
       });
       const runTurn = vi.fn();
       acpManagerTesting.setAcpSessionManagerForTests({
-        resolveSession: vi.fn(() => ({
+        resolveSessionAsync: vi.fn(async () => ({
           kind: "ready",
           sessionKey,
           meta: {

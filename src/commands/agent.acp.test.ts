@@ -219,7 +219,9 @@ function writeAcpSessionStore(storePath: string, agent = "codex") {
 function resolveReadySession(
   sessionKey: string,
   agent = "codex",
-): ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]> {
+): Awaited<
+  ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSessionAsync"]>
+> {
   const owner = parseAgentSessionKey(sessionKey);
   if (!owner) {
     throw new Error("Expected an owner-qualified ACP fixture key");
@@ -241,18 +243,15 @@ function resolveReadySession(
 
 function mockAcpManager(params: {
   runTurn: (params: unknown) => Promise<void>;
-  resolveSession?: (params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-  }) => ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]>;
+  resolveSessionAsync?: ReturnType<
+    typeof acpManagerModule.getAcpSessionManager
+  >["resolveSessionAsync"];
 }) {
   getAcpSessionManagerSpy.mockReturnValue({
     runTurn: params.runTurn,
-    resolveSession:
-      params.resolveSession ??
-      ((input) => {
-        return resolveReadySession(input.sessionKey);
-      }),
+    resolveSessionAsync:
+      params.resolveSessionAsync ??
+      (async (input: { sessionKey: string }) => resolveReadySession(input.sessionKey)),
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
 }
 
@@ -318,7 +317,7 @@ function firstRunTurnInput(runTurn: { mock: { calls: unknown[][] } }) {
 
 async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
-  resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
+  resolveSessionAsync?: Parameters<typeof mockAcpManager>[0]["resolveSessionAsync"];
 }) {
   await withTempHome(async (home) => {
     const storePath = path.join(home, "sessions.json");
@@ -328,7 +327,7 @@ async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
     const runTurn = vi.fn(async (_params: unknown) => {});
     mockAcpManager({
       runTurn: (input: unknown) => runTurn(input),
-      ...(params.resolveSession ? { resolveSession: params.resolveSession } : {}),
+      ...(params.resolveSessionAsync ? { resolveSessionAsync: params.resolveSessionAsync } : {}),
     });
 
     await expectAcpCommandRejects("agent:codex:acp:test", "ACP_DISPATCH_DISABLED");
@@ -521,7 +520,7 @@ describe("agentCommand ACP runtime routing", () => {
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
-        resolveSession: ({ sessionKey }) => {
+        resolveSessionAsync: async ({ sessionKey }) => {
           return {
             kind: "stale",
             sessionKey,
@@ -564,7 +563,7 @@ describe("agentCommand ACP runtime routing", () => {
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
-        resolveSession: ({ sessionKey }) => resolveReadySession(sessionKey, "codex"),
+        resolveSessionAsync: async ({ sessionKey }) => resolveReadySession(sessionKey, "codex"),
       });
 
       await expectAcpCommandRejects(
@@ -588,7 +587,7 @@ describe("agentCommand ACP runtime routing", () => {
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
-        resolveSession: ({ sessionKey }) => resolveReadySession(sessionKey, "kimi"),
+        resolveSessionAsync: async ({ sessionKey }) => resolveReadySession(sessionKey, "kimi"),
       });
 
       await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);

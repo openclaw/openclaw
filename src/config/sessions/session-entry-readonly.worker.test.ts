@@ -1,5 +1,7 @@
-import { symlinkSync, unlinkSync } from "node:fs";
+import { symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   invalidateRegisteredAgentDatabasesMemo,
@@ -18,6 +20,63 @@ import { captureCanonicalSessionReaderContinuation } from "./session-canonical-k
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
+
+it.each([false, true])(
+  "returns unreadable-store data only after its connection closes (close failure: %s)",
+  async (failClose) => {
+    await withOpenClawTestState({ label: "readonly-entry-open-failure" }, async ({ env, path }) => {
+      const storePath = path("unreadable.sqlite");
+      writeFileSync(storePath, "Not a SQLite database");
+      const closeError = Object.assign(new Error("native read close failed"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 26,
+      });
+      const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
+      let reader: DatabaseSync | undefined;
+      let restoreClose: (() => void) | undefined;
+      const open = vi
+        .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+        .mockImplementation((location, options) => {
+          const database = nativeOpen(location, options);
+          if (location === storePath) {
+            reader = database;
+            if (failClose) {
+              const close = vi.spyOn(database, "close").mockImplementation(() => {
+                throw closeError;
+              });
+              restoreClose = () => close.mockRestore();
+            }
+          }
+          return database;
+        });
+      const read = () =>
+        loadSessionEntryReadOnlyResultInScope({
+          agentId: "main",
+          databaseAgentId: "main",
+          storePath,
+          sessionKey: "agent:main:unreadable",
+          env,
+        });
+      try {
+        if (failClose) {
+          expect(read).toThrow(closeError);
+        } else {
+          expect(read()).toMatchObject({
+            ok: false,
+            error: { code: "ERR_SQLITE_ERROR", errcode: 26 },
+          });
+          expect(reader?.isOpen).toBe(false);
+        }
+      } finally {
+        restoreClose?.();
+        open.mockRestore();
+        if (reader?.isOpen) {
+          reader.close();
+        }
+      }
+    });
+  },
+);
 
 it.each([false, true])(
   "keeps schema error classification with a disposable reader: %s",
@@ -140,7 +199,10 @@ it("keeps source refusal outside the ordinary row-error result", async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:source-error";
     writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const refusal = new Error("retained source changed");
+    const refusal = Object.assign(new Error("retained source changed"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 26,
+    });
     expect(() =>
       loadSessionEntryReadOnlyResultInScope(
         {

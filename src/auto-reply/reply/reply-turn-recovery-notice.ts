@@ -1,5 +1,5 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -42,6 +42,11 @@ export async function sendReplyRestartRecoveryNotice(params: {
   deliver: (text: string) => Promise<boolean>;
 }): Promise<void> {
   try {
+    const currentAcpSession = await readAcpSessionEntryAsync({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
     // Admission may have waited while reset or deletion changed the session.
     const entry: InternalSessionEntry | undefined = loadSessionStoreEntry({
       agentId: params.agentId,
@@ -53,11 +58,6 @@ export async function sendReplyRestartRecoveryNotice(params: {
     if (!entry || !recovery?.tombstone) {
       return;
     }
-    const currentAcpSession = readAcpSessionEntry({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
     if (
       isParentOwnedBackgroundAcpSession(
         currentAcpSession?.entry

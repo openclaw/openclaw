@@ -1,4 +1,7 @@
-import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import {
+  readAcpSessionEntryAsync,
+  type AcpSessionStoreEntry,
+} from "openclaw/plugin-sdk/acp-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -240,11 +243,17 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       staleBindings.push(binding);
       continue;
     }
-    const session = readAcpSessionEntry({
+    const session = await readAcpSessionEntryAsync({
       cfg: params.cfg,
       sessionKey,
       agentId: binding.agentId,
     });
+    if (
+      getThreadBindingManager(manager.accountId) !== manager ||
+      manager.getByThreadId(binding.threadId) !== binding
+    ) {
+      continue;
+    }
     if (!session) {
       staleBindings.push(binding);
       continue;

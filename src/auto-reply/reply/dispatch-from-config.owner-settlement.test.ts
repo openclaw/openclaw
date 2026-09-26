@@ -319,7 +319,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
       sessionStoreMocks.updateSessionEntry.mockClear();
       acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
-        resolveSession: () => ({ kind: "none" as const }),
+        resolveSessionAsync: async () => ({ kind: "none" as const }),
         getObservabilitySnapshot: () => ({
           runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
           turns: {

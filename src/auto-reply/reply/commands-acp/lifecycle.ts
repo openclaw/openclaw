@@ -266,17 +266,20 @@ export async function handleAcpSpawnAction(
   return commandReply(parts.join(" "));
 }
 
-function resolveAcpSessionForCommandOrStop(params: {
+async function resolveAcpSessionForCommandOrStop(params: {
   acpManager: ReturnType<typeof getAcpSessionManager>;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
-}): CommandHandlerResult | null {
-  const resolved = params.acpManager.resolveSession({
+  assertCurrent?: () => void;
+}): Promise<CommandHandlerResult | null> {
+  const resolved = await params.acpManager.resolveSessionAsync({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCurrent: params.assertCurrent,
   });
+  params.assertCurrent?.();
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
     return commandReply(
@@ -322,11 +325,13 @@ async function withResolvedAcpSessionTarget(params: {
   if (!("sessionKey" in target)) {
     return target;
   }
-  const guardFailure = resolveAcpSessionForCommandOrStop({
+  const guardFailure = await resolveAcpSessionForCommandOrStop({
     acpManager,
     cfg: params.commandParams.cfg,
     ...target,
+    assertCurrent: params.commandParams.command.assertOwnerCurrent,
   });
+  params.commandParams.command.assertOwnerCurrent?.();
   if (guardFailure) {
     return guardFailure;
   }
@@ -449,11 +454,13 @@ export async function handleAcpSteerAction(
     return commandReply(`⚠️ ${target.error}`);
   }
 
-  const guardFailure = resolveAcpSessionForCommandOrStop({
+  const guardFailure = await resolveAcpSessionForCommandOrStop({
     acpManager,
     cfg: params.cfg,
     ...target,
+    assertCurrent: params.command.assertOwnerCurrent,
   });
+  params.command.assertOwnerCurrent?.();
   if (guardFailure) {
     return guardFailure;
   }

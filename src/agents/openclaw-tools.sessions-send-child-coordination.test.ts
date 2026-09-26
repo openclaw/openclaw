@@ -32,6 +32,40 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
   }));
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
+  readAcpSessionEntryAsync: async (params: {
+    cfg?: OpenClawConfig;
+    sessionKey: string;
+    agentId?: string;
+    assertCurrent?: () => void;
+  }) => {
+    params.assertCurrent?.();
+    const cfg = params.cfg ?? config;
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      readOnly: true,
+      exactRead: true,
+    });
+    const entry = target.store[target.canonicalKey];
+    const acp = await readAcpSessionMetaForEntryMock({
+      ...params,
+      cfg,
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
+      entry,
+    });
+    params.assertCurrent?.();
+    return {
+      cfg,
+      agentId: target.agentId,
+      storePath: target.storePath,
+      sessionKey: params.sessionKey,
+      storeSessionKey: target.canonicalKey,
+      entry,
+      acp,
+    };
+  },
 }));
 vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   const { rowToAcpSessionMeta } = await vi.importActual<

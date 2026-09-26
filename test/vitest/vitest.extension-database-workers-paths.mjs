@@ -227,6 +227,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/discord/src/monitor/presence-cooldown-store.test.ts",
   "extensions/discord/src/monitor/thread-bindings.authority.test.ts",
   "extensions/discord/src/monitor/thread-bindings.lifecycle.test.ts",
+  "extensions/discord/src/monitor/thread-bindings.creation.test.ts",
+  "extensions/discord/src/monitor/thread-bindings.acp-reconciliation.test.ts",
   "extensions/discord/src/monitor/thread-bindings.state.test.ts",
   "extensions/discord/src/monitor/thread-bindings.worker.test.ts",
   "extensions/facetime/tests/runtime-admission.test.ts",
