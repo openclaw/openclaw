@@ -46,6 +46,10 @@ import {
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
+import {
+  cancelReaderBestEffort,
+  captureBestEffortReaderCancellation,
+} from "./provider-transport-cancellation.js";
 import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
 
@@ -82,15 +86,6 @@ function findSseEventBoundary(
   delimiter.lastIndex = startIndex;
   const match = delimiter.exec(buffer);
   return match ? { index: match.index, length: match[0].length } : undefined;
-}
-
-async function cancelReaderBestEffort(
-  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
-  reason?: unknown,
-): Promise<void> {
-  // Reader cancellation is cleanup. An upstream cancel failure must not replace
-  // the wrapper's authoritative stream error or downstream cancellation.
-  await reader?.cancel(reason).catch(() => undefined);
 }
 
 function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
@@ -148,6 +143,7 @@ function sanitizeOpenAISdkSseResponse(
   if (!response.ok) {
     return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
   }
+  const cancelOnError = captureBestEffortReaderCancellation();
   if (
     options?.synthesizeJsonAsSse === true &&
     (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
@@ -186,7 +182,7 @@ function sanitizeOpenAISdkSseResponse(
             buffer += decoder.decode(chunk.value, { stream: true });
           }
         } catch (error) {
-          await cancelReaderBestEffort(reader, error);
+          cancelOnError(reader, error);
           controller.error(error);
         }
       },
@@ -278,7 +274,7 @@ function sanitizeOpenAISdkSseResponse(
           }
         }
       } catch (error) {
-        await cancelReaderBestEffort(reader, error);
+        cancelOnError(reader, error);
         controller.error(error);
       }
     },
