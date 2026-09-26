@@ -330,21 +330,21 @@ describe("durable cron task maintenance", () => {
           ...getDetachedTaskLifecycleRuntime(),
           tryRecoverTaskBeforeMarkLost: hook,
         });
-        const receipts: unknown[] = [];
         const store = getTaskRegistryStore();
-        const runMutation = store.runInitialMutationAsync.bind(store);
-        using _mutationResults = vi
-          .spyOn(store, "runInitialMutationAsync")
-          .mockImplementation(async (context, command, assertCurrent, onGranted) => {
-            const result = await runMutation(context, command, assertCurrent, onGranted);
-            if (command.type === "tasks.maintainCron" && result !== null) {
-              receipts.push(result);
-            }
-            return result;
-          });
+        using mutationResults = vi.spyOn(store, "runInitialMutationAsync");
         const summary = await runTaskRegistryMaintenance();
         expect(hook).toHaveBeenCalledOnce();
-        expect(receipts).toEqual([expect.objectContaining({ persisted: !retentionPresent })]);
+        const receipts = await Promise.all(
+          mutationResults.mock.results.flatMap((result, index) =>
+            mutationResults.mock.calls[index]?.[1].type === "tasks.maintainCron" &&
+            result.type === "return"
+              ? [result.value]
+              : [],
+          ),
+        );
+        expect(receipts.filter((result) => result !== null)).toEqual([
+          expect.objectContaining({ persisted: !retentionPresent }),
+        ]);
         expect(summary).toEqual({ reconciled: 0, recovered: 1, cleanupStamped: 0, pruned: 0 });
         expect(tasks.get(target.taskId)).toMatchObject({
           taskId: target.taskId,
