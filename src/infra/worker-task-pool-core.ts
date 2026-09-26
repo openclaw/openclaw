@@ -172,7 +172,6 @@ class WorkerTaskPoolCore<Input, Output> {
       ...createDeferredCore<Output>(),
       id: ++this.nextTaskId,
       runInContext: AsyncLocalStorage.snapshot(),
-      controller: new AbortController(),
       inputConsumed: false,
       executionNotified: false,
       exchangeSequence: 0,
@@ -585,7 +584,7 @@ class WorkerTaskPoolCore<Input, Output> {
           throw new WorkerTaskError("worker task closed before host dispatch", "unavailable");
         }
         return task.options.onRequest!(message.value, {
-          signal: task.controller.signal,
+          signal: (task.controller ??= new AbortController()).signal,
           yieldSignal: exchange.pressure.signal,
         });
       })
@@ -679,7 +678,9 @@ class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     task.done = true;
-    task.runInContext(() => task.controller.abort());
+    if (task.controller) {
+      task.runInContext(() => task.controller?.abort());
+    }
     clearTimeout(task.timer);
     task.options.signal?.removeEventListener("abort", task.abort);
     const complete = createWorkerTaskCompletion(task, this.completion, error, value);

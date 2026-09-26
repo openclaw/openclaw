@@ -88,7 +88,7 @@ type WorkerHostExchange = {
 export type Task<Input, Output> = Deferred<Output> & {
   id: number;
   runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
-  controller: AbortController;
+  controller?: AbortController;
   exchange?: WorkerHostExchange;
   inputConsumed: boolean;
   executionNotified: boolean;

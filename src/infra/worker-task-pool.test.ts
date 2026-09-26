@@ -491,12 +491,15 @@ describe("worker task pool", () => {
 
   it("moves worker-owned host request bytes out of the worker", async () => {
     const pool = createPool();
+    const signals: AbortSignal[] = [];
     let transferred: ArrayBuffer | undefined;
     const result = await pool.run(
       { label: "request bytes", exchanges: 2, relayBuffer: true },
       {
         timeoutMs: 10_000,
-        onRequest: async (value) => {
+        onRequest: async (value, { signal }) => {
+          expect(signal.aborted).toBe(false);
+          signals.push(signal);
           const request = value as { buffer?: ArrayBuffer };
           if (request.buffer) {
             transferred = request.buffer;
@@ -509,6 +512,9 @@ describe("worker task pool", () => {
       },
     );
     expect(result.relayedBufferBytes).toBe(0);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]).toBe(signals[0]);
+    expect(signals[0]?.aborted).toBe(true);
     expect(transferred?.byteLength).toBe(1024 * 1024);
     expect(new Uint8Array(transferred!).slice(0, 2)).toEqual(new Uint8Array([31, 47]));
   });
