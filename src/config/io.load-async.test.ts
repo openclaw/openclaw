@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -124,49 +123,40 @@ it.each(["sync", "async"] as const)(
       mode === "sync"
         ? context.resolveDeferredPluginMigrations()
         : context.resolveDeferredPluginMigrationsAsync();
-    const allocations: string[] = [];
     const coldStagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
     fs.mkdirSync(path.dirname(coldStagingRoot), { recursive: true });
     const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
-    // Linux recursive watches rescan after synchronous snapshots have already been removed.
-    // Watch the staging root directly so their creation and removal remain observable.
-    const watcher = fs.watch(stagingRoot, (_event, filename) => {
-      if (filename?.includes("openclaw-sqlite-readonly-")) {
-        allocations.push(filename);
-      }
+    // The isolated root retains create/remove evidence even when fs.watch drops transient events.
+    const sentinel = new Date("2000-01-01T00:00:00.000Z");
+    fs.utimesSync(stagingRoot, sentinel, sentinel);
+    const stagingMtime = fs.statSync(stagingRoot).mtimeMs;
+    expect(await read()).toEqual([pending]);
+    const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
+    expect(loaded.gateway?.mode).toBe("local");
+    recordDeferredPluginMigrations({
+      env: options.env,
+      pending: [{ ...pending, reason: "Changed obligation" }],
     });
-    try {
-      expect(await read()).toEqual([pending]);
-      const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
-      expect(loaded.gateway?.mode).toBe("local");
-      recordDeferredPluginMigrations({
-        env: options.env,
-        pending: [{ ...pending, reason: "Changed obligation" }],
-      });
-      await closeOpenClawStateDatabaseAsync();
-      expect(await read()).toEqual([{ ...pending, reason: "Changed obligation" }]);
-      await nextTurn();
+    await closeOpenClawStateDatabaseAsync();
+    expect(await read()).toEqual([{ ...pending, reason: "Changed obligation" }]);
+    expect(synchronousSnapshot).not.toHaveBeenCalled();
+    expect(fs.statSync(stagingRoot).mtimeMs).toBe(stagingMtime);
+    expect(
+      await withArtifactPreservingStateReads(() =>
+        mode === "sync"
+          ? withSynchronousArtifactPreservingStateSnapshot(() =>
+              context.resolveDeferredPluginMigrations(),
+            )
+          : context.resolveDeferredPluginMigrationsAsync(),
+      ),
+    ).toEqual([{ ...pending, reason: "Changed obligation" }]);
+    if (mode === "sync") {
+      expect(synchronousSnapshot).toHaveBeenCalledTimes(1);
+      expect(path.dirname(synchronousSnapshot.mock.calls[0]?.[1] ?? "")).toBe(stagingRoot);
+    } else {
       expect(synchronousSnapshot).not.toHaveBeenCalled();
-      expect(allocations).toEqual([]);
-      expect(
-        await withArtifactPreservingStateReads(() =>
-          mode === "sync"
-            ? withSynchronousArtifactPreservingStateSnapshot(() =>
-                context.resolveDeferredPluginMigrations(),
-              )
-            : context.resolveDeferredPluginMigrationsAsync(),
-        ),
-      ).toEqual([{ ...pending, reason: "Changed obligation" }]);
-      if (mode === "sync") {
-        expect(synchronousSnapshot).toHaveBeenCalledTimes(1);
-        expect(path.dirname(synchronousSnapshot.mock.calls[0]?.[1] ?? "")).toBe(stagingRoot);
-      } else {
-        expect(synchronousSnapshot).not.toHaveBeenCalled();
-      }
-      await vi.waitFor(() => expect(allocations.length).toBeGreaterThan(0));
-    } finally {
-      watcher.close();
     }
+    expect(fs.statSync(stagingRoot).mtimeMs).not.toBe(stagingMtime);
   },
 );
 
