@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
@@ -42,6 +41,9 @@ vi.mock("./bot-message-dispatch.js", () => ({
 }));
 
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
+type TelegramMessageProcessorTurnContext = Parameters<
+  ReturnType<typeof createTelegramMessageProcessor>
+>[0]["turnContext"];
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
 let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;

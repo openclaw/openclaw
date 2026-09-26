@@ -131,7 +131,7 @@ type TelegramBufferedFinalSettlement = {
 
 type TelegramProgressCompositor = ReturnType<typeof createChannelProgressDraftCompositor>;
 
-export type TelegramReasoningStepState = ReturnType<typeof createTelegramReasoningStepState>;
+type TelegramReasoningStepState = ReturnType<typeof createTelegramReasoningStepState>;
 
 export type TelegramDraftStateSlice = {
   answerLane: DraftLaneState;

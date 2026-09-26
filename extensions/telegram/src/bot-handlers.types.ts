@@ -31,7 +31,7 @@ export type TelegramPendingInboundTarget = {
   senderId: string;
 };
 
-export type TelegramMessageProcessorTurnContext = {
+type TelegramMessageProcessorTurnContext = {
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   onDispatchStart?: () => Promise<void> | void;
