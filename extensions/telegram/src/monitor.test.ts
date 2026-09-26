@@ -165,6 +165,80 @@ describe("monitorTelegramProvider", () => {
     });
   });
 
+  it.each(["lookup", "purge"])(
+    "preserves replacement rows and the offset when aborted during %s",
+    async (phase) => {
+      await withStateDirEnv("telegram-aborted-reset-", async ({ stateDir }) => {
+        const store = await vi.importActual<typeof OffsetStore>("./update-offset-store.js");
+        const paused = createDeferred<void>();
+        const resume = createDeferred<void>();
+        let storedOffset: unknown = {
+          version: 3,
+          botId: "111111",
+          tokenFingerprint: "old",
+          lastUpdateId: 1,
+        };
+        const queue = createChannelIngressQueueForTests({
+          channelId: "telegram",
+          accountId: "default",
+          stateDir,
+        });
+        if (phase === "purge") {
+          const purge = queue.purge?.bind(queue);
+          if (!purge) {
+            throw new Error("Expected core purge capability");
+          }
+          queue.purge = async () => {
+            const count = await purge();
+            paused.resolve();
+            await resume.promise;
+            return count;
+          };
+        }
+        mocks.runtime.mockReturnValue({
+          state: {
+            openChannelIngressQueue: () => queue,
+            openKeyedStore: () => ({
+              lookup: async () => {
+                if (phase === "lookup") {
+                  paused.resolve();
+                  await resume.promise;
+                }
+                return storedOffset;
+              },
+              delete: async () => {
+                storedOffset = undefined;
+                return true;
+              },
+            }),
+          },
+        });
+        mocks.readOffset.mockImplementation(store.readTelegramUpdateOffset);
+        mocks.deleteOffset.mockImplementation(store.deleteTelegramUpdateOffset);
+        const monitor = startMonitor({ token: "222222:token-b" });
+        try {
+          await paused.promise;
+          monitor.abort.abort(new Error("account task retired"));
+          await queue.enqueue("pending", { text: "replacement pending" });
+          await queue.enqueue("claimed", { text: "replacement claimed" });
+          await queue.claim("claimed");
+          const pending = await queue.listPending();
+          const claims = await queue.listClaims();
+          const rejected = expect(monitor.task).rejects.toThrow("account task retired");
+          resume.resolve();
+          await rejected;
+          expect(await queue.listPending()).toEqual(pending);
+          expect(await queue.listClaims()).toEqual(claims);
+          expect(await store.readTelegramUpdateOffset({})).toBe(1);
+          expect(mocks.sessions).toHaveLength(0);
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([monitor.task]);
+        }
+      });
+    },
+  );
+
   it.each([
     { name: "same-bot token rotation", version: 3, botId: "111111", tokenFingerprint: "old" },
     { name: "matching legacy identity", version: 2, botId: "111111", tokenFingerprint: null },

@@ -164,9 +164,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
                 "The host does not support ingress identity resets; update OpenClaw.",
               );
             }
-            // Keep the old identity until the queue purge commits so interrupted resets retry.
+            opts.abortSignal?.throwIfAborted();
             await queue.purge();
           }
+          // An abort keeps the old identity so the next start re-detects and repeats the purge.
+          opts.abortSignal?.throwIfAborted();
           await deleteTelegramUpdateOffset({ accountId: account.accountId });
         } catch (err) {
           throw new Error(
