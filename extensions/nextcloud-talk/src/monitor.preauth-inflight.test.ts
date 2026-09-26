@@ -1,8 +1,33 @@
 // Nextcloud Talk tests cover pre-authentication webhook in-flight admission behavior.
+import type { IncomingMessage } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
+import { startWebhookServer } from "./monitor.test-harness.js";
+import { generateNextcloudTalkSignature } from "./signature.js";
+
+const { rejection, legacyListeners } = vi.hoisted(() => ({
+  rejection: vi.fn(),
+  legacyListeners: new WeakMap<IncomingMessage, { port: number; host?: string }>(),
+}));
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>();
+  return {
+    ...actual,
+    getWebhookLegacyListener: (req: IncomingMessage) => legacyListeners.get(req),
+  };
+});
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>();
+  return {
+    ...actual,
+    sendHttpRequestRejection: (...args: Parameters<typeof actual.sendHttpRequestRejection>) => {
+      rejection(...args);
+      return actual.sendHttpRequestRejection(...args);
+    },
+  };
+});
 
 const WEBHOOK_PATH = "/nextcloud-talk-webhook-preauth-inflight";
 const IN_FLIGHT_LIMIT = 64;
@@ -51,196 +76,180 @@ function readEntireResponse(socket: Socket): Promise<string> {
 }
 
 describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
-  it("rejects overflow requests while 64 pre-auth body reads are held open, then recovers", async () => {
-    const dispatches: string[] = [];
-    const { server, start, stop } = createNextcloudTalkWebhookServer({
-      host: "127.0.0.1",
-      port: 0,
-      path: WEBHOOK_PATH,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-      onWebhook: async (rawBody) => {
-        dispatches.push(rawBody);
-        return "accepted";
-      },
-    });
-    const sockets: Socket[] = [];
-    try {
-      let requestCount = 0;
-      server.on("request", () => {
-        requestCount += 1;
-      });
-      await start();
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        // SAFETY: a TCP listener on port 0 always reports an AddressInfo.
-        throw new Error("expected TCP listener address");
-      }
-      const host = address.address;
-      const port = address.port;
-
-      // Hold the full pre-auth admission budget open with incomplete bodies.
-      await Promise.all(
-        Array.from({ length: IN_FLIGHT_LIMIT }, () =>
-          openIncompleteWebhookRequest({ host, port, sockets }),
-        ),
-      );
-      await vi.waitFor(() => expect(requestCount).toBe(IN_FLIGHT_LIMIT));
-
-      // The next request must be rejected immediately with a close-aware 429
-      // instead of pinning another reader until the pre-auth timeout.
-      const overflow = await openIncompleteWebhookRequest({ host, port, sockets });
-      const overflowResponse = await readEntireResponse(overflow);
-      expect(overflowResponse.startsWith("HTTP/1.1 429")).toBe(true);
-      expect(overflowResponse.toLowerCase()).toContain("connection: close");
-      expect(dispatches).toHaveLength(0);
-
-      // Releasing the held reads must restore admission for legitimate traffic.
-      for (const socket of sockets.splice(0)) {
-        socket.destroy();
-      }
-      const { body, headers } = createSignedCreateMessageRequest();
-      await vi.waitFor(async () => {
-        const response = await fetch(`http://${host}:${port}${WEBHOOK_PATH}`, {
-          method: "POST",
-          headers,
-          body,
-        });
-        expect(response.status).toBe(200);
-      });
-      expect(dispatches).toHaveLength(1);
-    } finally {
-      for (const socket of sockets.splice(0)) {
-        socket.destroy();
-      }
-      await stop();
-    }
-  }, 30_000);
-
-  it("preserves an earlier queued acknowledgement when a pipelined request hits overflow", async () => {
-    const dispatches: string[] = [];
-    let releaseAdmission: (() => void) | undefined;
-    const admissionBlocked = new Promise<void>((resolve) => {
-      releaseAdmission = resolve;
-    });
-    const { server, start, stop } = createNextcloudTalkWebhookServer({
-      host: "127.0.0.1",
-      port: 0,
-      path: WEBHOOK_PATH,
-      secret: "nextcloud-secret", // pragma: allowlist secret
-      onWebhook: async (rawBody) => {
-        dispatches.push(rawBody);
-        if (dispatches.length === 1) {
-          // Hold durable admission for the first signed delivery.
-          await admissionBlocked;
+  it.each(["Gateway", "legacy"] as const)(
+    "isolates %s admission while preserving ordered acknowledgements and recovery",
+    async (ingress) => {
+      const firstEndpoint = { port: 8788, host: "127.0.0.1" };
+      const secondEndpoint = { port: 8789, host: "127.0.0.1" };
+      let endpoint = ingress === "legacy" ? firstEndpoint : undefined;
+      const markIngress = (req: IncomingMessage) => {
+        if (endpoint) {
+          legacyListeners.set(req, endpoint);
         }
-        return "accepted";
-      },
-    });
-    const sockets: Socket[] = [];
-    try {
-      let requestCount = 0;
-      server.on("request", () => {
-        requestCount += 1;
+      };
+      const admitted = Promise.withResolvers<void>();
+      const releaseAdmission = Promise.withResolvers<void>();
+      const dispatches: string[] = [];
+      const { server, webhookUrl, waitForIdle } = await startWebhookServer({
+        path: WEBHOOK_PATH,
+        legacyListener: firstEndpoint,
+        onWebhook: async (rawBody) => {
+          dispatches.push(rawBody);
+          if (dispatches.length === 1) {
+            admitted.resolve();
+            await releaseAdmission.promise;
+          }
+          return "accepted";
+        },
       });
-      await start();
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        // SAFETY: a TCP listener on port 0 always reports an AddressInfo.
-        throw new Error("expected TCP listener address");
-      }
-      const host = address.address;
-      const port = address.port;
-
-      // Signed delivery whose acknowledgement is delayed inside onWebhook.
-      const connection = await new Promise<Socket>((resolve, reject) => {
-        const socket = createConnection({ host, port });
-        sockets.push(socket);
-        socket.once("error", reject);
-        socket.once("connect", () => resolve(socket));
+      const secondAccount = vi.fn(async () => "accepted" as const);
+      await startWebhookServer({
+        path: WEBHOOK_PATH,
+        legacyListener: secondEndpoint,
+        secret: "second-account-secret",
+        onWebhook: secondAccount,
       });
-      const { body, headers } = createSignedCreateMessageRequest();
-      const signedHeaders = Object.entries(headers)
-        .map(([key, value]) => `${key}: ${value}`)
-        .join("\r\n");
-      connection.write(
-        [
-          `POST ${WEBHOOK_PATH} HTTP/1.1`,
-          `Host: ${host}:${port}`,
-          signedHeaders,
-          `Content-Length: ${Buffer.byteLength(body)}`,
-          "Connection: keep-alive",
-          "",
-          body,
-        ].join("\r\n"),
-      );
-      await vi.waitFor(() => expect(dispatches).toHaveLength(1));
-
-      // Saturate the pre-auth budget from other connections.
-      await Promise.all(
-        Array.from({ length: IN_FLIGHT_LIMIT }, () =>
-          openIncompleteWebhookRequest({ host, port, sockets }),
-        ),
-      );
-      await vi.waitFor(() => expect(requestCount).toBe(IN_FLIGHT_LIMIT + 1));
-
-      // Pipeline an overflow request behind the still-pending acknowledgement.
-      // Parsing is immediate; per-connection ordering defers only its admission.
-      connection.write(
-        [
-          `POST ${WEBHOOK_PATH} HTTP/1.1`,
-          `Host: ${host}:${port}`,
-          "Content-Type: application/json",
-          `Content-Length: ${PROMISED_BODY_BYTES}`,
-          "X-Nextcloud-Talk-Signature: invalid-but-present",
-          "X-Nextcloud-Talk-Random: attacker-controlled",
-          "X-Nextcloud-Talk-Backend: https://nextcloud.example",
-          "Connection: keep-alive",
-          "",
-          "{",
-        ].join("\r\n"),
-      );
-      // Complete the delayed admission only after the rejection's one-second
-      // close timer would have fired on unordered connections: the earlier
-      // 200 must flush before the pipelined request's close-aware 429 can tear
-      // the connection down.
-      await new Promise<void>((resolve) => {
-        setTimeout(() => {
-          resolve();
-        }, 2_000);
+      const alternatePath = await startWebhookServer({
+        path: `${WEBHOOK_PATH}-alternate`,
+        legacyListener: firstEndpoint,
+        onWebhook: async () => "accepted",
       });
-      releaseAdmission?.();
-      const connectionData = await Promise.race([
-        readEntireResponse(connection),
-        new Promise<string>((resolve) => {
-          setTimeout(() => {
-            resolve("read-timeout");
-          }, 5_000);
-        }),
-      ]);
-      const acknowledgedAt = connectionData.indexOf("HTTP/1.1 200");
-      const rejectedAt = connectionData.indexOf("HTTP/1.1 429");
-      expect(acknowledgedAt).toBeGreaterThanOrEqual(0);
-      expect(rejectedAt).toBeGreaterThan(acknowledgedAt);
-      expect(connectionData.toLowerCase()).toContain("x-openclaw-delivery-accepted");
+      server.prependListener("request", markIngress);
+      const { hostname: host, port: portText } = new URL(webhookUrl);
+      const port = Number(portText);
+      const sockets: Socket[] = [];
+      let received = 0;
+      let awaitedCount = 0;
+      let receivedCount = Promise.withResolvers<void>();
+      const onRequest = () => {
+        received += 1;
+        if (received === awaitedCount) {
+          receivedCount.resolve();
+        }
+      };
+      const waitForRequests = (count: number) => {
+        awaitedCount = count;
+        receivedCount = Promise.withResolvers<void>();
+        if (received >= count) {
+          receivedCount.resolve();
+        }
+        return receivedCount.promise;
+      };
+      server.on("request", onRequest);
+      try {
+        const connection = await new Promise<Socket>((resolve, reject) => {
+          const socket = createConnection({ host, port });
+          sockets.push(socket);
+          socket.once("error", reject);
+          socket.once("connect", () => resolve(socket));
+        });
+        const { body, headers } = createSignedCreateMessageRequest();
+        const signedHeaders = Object.entries(headers)
+          .map(([key, value]) => `${key}: ${value}`)
+          .join("\r\n");
+        connection.write(
+          [
+            `POST ${WEBHOOK_PATH} HTTP/1.1`,
+            `Host: ${host}:${port}`,
+            signedHeaders,
+            `Content-Length: ${Buffer.byteLength(body)}`,
+            "Connection: keep-alive",
+            "",
+            body,
+          ].join("\r\n"),
+        );
+        await admitted.promise;
 
-      // Releasing the held reads still restores admission for legitimate traffic.
-      for (const socket of sockets.splice(0)) {
-        socket.destroy();
-      }
-      await vi.waitFor(async () => {
-        const response = await fetch(`http://${host}:${port}${WEBHOOK_PATH}`, {
+        const saturated = waitForRequests(IN_FLIGHT_LIMIT + 1);
+        await Promise.all(
+          Array.from({ length: IN_FLIGHT_LIMIT }, () =>
+            openIncompleteWebhookRequest({ host, port, sockets }),
+          ),
+        );
+        await saturated;
+        const overflow = await openIncompleteWebhookRequest({ host, port, sockets });
+        const overflowResponse = await readEntireResponse(overflow);
+        expect(overflowResponse).toMatch(/^HTTP\/1.1 429/);
+        expect(dispatches).toHaveLength(1);
+
+        endpoint = firstEndpoint;
+        const sameLegacyEndpoint = await fetch(alternatePath.webhookUrl, {
           method: "POST",
           headers,
           body,
         });
-        expect(response.status).toBe(200);
-      });
-      expect(dispatches).toHaveLength(2);
-    } finally {
-      for (const socket of sockets.splice(0)) {
-        socket.destroy();
+        expect(sameLegacyEndpoint.status).toBe(ingress === "legacy" ? 429 : 200);
+
+        const signedSecond = generateNextcloudTalkSignature({
+          body,
+          secret: "second-account-secret",
+        });
+        const secondHeaders = {
+          ...headers,
+          "x-nextcloud-talk-random": signedSecond.random,
+          "x-nextcloud-talk-signature": signedSecond.signature,
+        };
+        endpoint = secondEndpoint;
+        const independentLegacy = await fetch(webhookUrl, {
+          method: "POST",
+          headers: secondHeaders,
+          body,
+        });
+        expect(independentLegacy.status).toBe(200);
+        expect(secondAccount).toHaveBeenCalledOnce();
+
+        endpoint = undefined;
+        const sharedGateway = await fetch(webhookUrl, {
+          method: "POST",
+          headers: secondHeaders,
+          body,
+        });
+        expect(sharedGateway.status).toBe(ingress === "Gateway" ? 429 : 200);
+        expect(secondAccount).toHaveBeenCalledTimes(ingress === "Gateway" ? 1 : 2);
+        endpoint = ingress === "legacy" ? firstEndpoint : undefined;
+
+        rejection.mockClear();
+        const pipelined = waitForRequests(received + 1);
+        const connectionResponse = readEntireResponse(connection);
+        connection.write(
+          [
+            `POST ${WEBHOOK_PATH} HTTP/1.1`,
+            `Host: ${host}:${port}`,
+            "Content-Type: application/json",
+            `Content-Length: ${PROMISED_BODY_BYTES}`,
+            "X-Nextcloud-Talk-Signature: invalid-but-present",
+            "X-Nextcloud-Talk-Random: attacker-controlled",
+            "X-Nextcloud-Talk-Backend: https://nextcloud.example",
+            "Connection: keep-alive",
+            "",
+            "{",
+          ].join("\r\n"),
+        );
+        await pipelined;
+        // Parsing a later request cannot select a close while admission is pending.
+        expect(rejection).not.toHaveBeenCalled();
+        releaseAdmission.resolve();
+        const data = await connectionResponse;
+        const acknowledgedAt = data.indexOf("HTTP/1.1 200");
+        expect(acknowledgedAt).toBeGreaterThanOrEqual(0);
+        expect(data.indexOf("HTTP/1.1 429")).toBeGreaterThan(acknowledgedAt);
+        expect(data.toLowerCase()).toContain("x-openclaw-delivery-accepted: durable");
+        for (const socket of sockets.splice(0)) {
+          socket.destroy();
+        }
+        await waitForIdle();
+        const recovered = await fetch(webhookUrl, { method: "POST", headers, body });
+        expect(recovered.status).toBe(200);
+        expect(dispatches).toHaveLength(2);
+      } finally {
+        releaseAdmission.resolve();
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await waitForIdle();
+        server.off("request", onRequest);
+        server.off("request", markIngress);
       }
-      await stop();
-    }
-  }, 30_000);
+    },
+  );
 });

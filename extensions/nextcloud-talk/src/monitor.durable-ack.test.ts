@@ -10,7 +10,9 @@ describe("Nextcloud Talk durable webhook acknowledgement", () => {
     const admission = new Promise<void>((resolve) => {
       releaseAdmission = resolve;
     });
+    const entered = Promise.withResolvers<void>();
     const onWebhook = vi.fn(async () => {
+      entered.resolve();
       await admission;
       return "accepted" as const;
     });
@@ -21,7 +23,7 @@ describe("Nextcloud Talk durable webhook acknowledgement", () => {
       settled = true;
     });
 
-    await vi.waitFor(() => expect(onWebhook).toHaveBeenCalledTimes(1));
+    await entered.promise;
     expect(settled).toBe(false);
     releaseAdmission();
     const response = await request;
