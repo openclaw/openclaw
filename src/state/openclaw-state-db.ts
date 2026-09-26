@@ -337,7 +337,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   if (existingSchema) {
     recordExistingOpenClawStateSchemaDatabase(unpublished.db, pathname);
   }
-  const database = stateDbCache.publishOpenClawStateDatabase(unpublished);
+  const database = stateDbCache.publishOpenClawStateDatabase(unpublished, env);
   try {
     if (!existingSchema && readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
       deferredStateDatabases.add(database.db);

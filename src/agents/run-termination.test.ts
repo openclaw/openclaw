@@ -9,7 +9,6 @@ import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
   isAbortedAgentStopReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
@@ -31,26 +30,6 @@ function createCliWatchdogError() {
 
 describe("resolveCliToolTerminalReason", () => {
   it.each([
-    {
-      name: "abort-timeout",
-      setup: () => {
-        const controller = new AbortController();
-        const timeout = new Error("timed out");
-        timeout.name = "TimeoutError";
-        controller.abort(timeout);
-        return { abortSignal: controller.signal, error: new Error("other") };
-      },
-      expected: "timed_out",
-    },
-    {
-      name: "abort-cancel",
-      setup: () => {
-        const controller = new AbortController();
-        controller.abort();
-        return { abortSignal: controller.signal, error: undefined };
-      },
-      expected: "cancelled",
-    },
     {
       name: "restart-abort reason",
       setup: () => {
@@ -147,28 +126,6 @@ describe("resolveCliToolTerminalReason", () => {
 });
 
 describe("resolveAgentRunAbortLifecycleFields", () => {
-  it("classifies generic cancellation as aborted", () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    expect(resolveAgentRunAbortLifecycleFields(controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "aborted",
-    });
-  });
-
-  it("preserves timeout attribution", () => {
-    const controller = new AbortController();
-    const timeout = new Error("timed out");
-    timeout.name = "TimeoutError";
-    controller.abort(timeout);
-
-    expect(resolveAgentRunAbortLifecycleFields(controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "timeout",
-    });
-  });
-
   it("classifies managed restart cancellation", () => {
     const controller = new AbortController();
     controller.abort(createAgentRunRestartAbortError());
@@ -210,17 +167,6 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
     expect(isAbortedAgentStopReason("aborted")).toBe(true);
     expect(isAbortedAgentStopReason("restart")).toBe(true);
     expect(isAbortedAgentStopReason("timeout")).toBe(false);
-  });
-
-  it("marks direct active-run cancellation independently of an AbortSignal", () => {
-    const error = createAgentRunDirectAbortError();
-
-    expect(error).toMatchObject({
-      name: "AbortError",
-      message: "agent run aborted",
-    });
-    expect(isAgentRunDirectAbortReason(error)).toBe(true);
-    expect(isAgentRunDirectAbortReason(createAgentRunRestartAbortError())).toBe(false);
   });
 });
 

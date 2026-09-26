@@ -1,22 +1,27 @@
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { isAbortError } from "../infra/abort-signal.js";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import type { SqliteWalHealth } from "../infra/sqlite-wal-checkpoint.js";
-import { registerSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
+import {
+  registerSqliteWalWorkerMaintenance,
+  type SqliteWalPeriodicRequest,
+  type SqliteWalPeriodicResult,
+} from "../infra/sqlite-wal-write-admission.js";
 import {
   assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
-  getOpenClawDatabaseMaintenanceScope,
+  getOpenClawDatabaseMaintenanceResourceScope,
   isStateDatabaseReadAdmissionInvalidatedError,
   StateDatabaseReadAdmissionInvalidatedError,
+  type OpenClawStateDatabaseReadAdmission,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContextWithAdmission } from "./openclaw-state-worker-context.capture.js";
 
 /** Bind periodic maintenance and its observations to the cache's exact native owner. */
 export function createStateDatabaseWalOwner(
@@ -24,75 +29,115 @@ export function createStateDatabaseWalOwner(
   retainForIdle: (database: OpenClawStateDatabase) => () => void,
 ) {
   return {
-    register(this: void, database: OpenClawStateDatabase, identity: DatabasePathIdentity): void {
+    register(
+      this: void,
+      database: OpenClawStateDatabase,
+      identity: DatabasePathIdentity,
+      admission: OpenClawStateDatabaseReadAdmission,
+      env: NodeJS.ProcessEnv,
+    ): void {
       if (!isMainThread) {
         return;
       }
-      const maintenanceScope = getOpenClawDatabaseMaintenanceScope();
+      const capturedContext = captureOpenClawStateWorkerContextWithAdmission(
+        { path: database.path, env },
+        () => admission,
+      );
       const controller = new AbortController();
-      let pending: Promise<void> | undefined;
+      let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;
       const cancel = () => {
         controller.abort();
         if (!pending) {
           unregister();
+          return undefined;
         }
+        return pending.then(
+          () => undefined,
+          () => undefined,
+        );
       };
-      const unregister = asyncResources.register({
-        async close(selected) {
+      const resource = {
+        async close(selected?: DatabasePathIdentity) {
           if (selected && selected.key !== identity.key) {
             return;
           }
-          cancel();
-          // The WAL scheduler reports operation errors; close joins before native retirement.
+          void cancel();
+          // The broker retains native cleanup; this owner joins accepted work before retirement.
           await pending?.catch(() => {});
           unregister();
         },
-      });
-      const run = async (operation: () => void) => {
+      };
+      const unregister = asyncResources.register(resource);
+      const run = async (request: SqliteWalPeriodicRequest) => {
+        const maintenanceScope = getOpenClawDatabaseMaintenanceResourceScope(database.db);
+        const context = { ...capturedContext, maintenanceScope };
+        const assertCurrent = () => {
+          controller.signal.throwIfAborted();
+          context.admission.assertCurrent();
+          maintenanceScope?.assertAdmission();
+          if (
+            getOpenClawDatabaseMaintenanceResourceScope(database.db) !== maintenanceScope ||
+            cachedDatabases.get(database.path) !== database ||
+            !database.db.isOpen
+          ) {
+            throw new StateDatabaseReadAdmissionInvalidatedError(
+              "Shared-state WAL maintenance owner changed",
+            );
+          }
+          assertExistingDatabaseIdentity(database.path, identity.key, identity.birthtime);
+        };
         let releaseIdle: (() => void) | undefined;
         let operationStarted = false;
         try {
-          const admission = asyncResources.capture(database.path);
+          assertCurrent();
           releaseIdle = retainForIdle(database);
-          const assertCurrent = () => {
-            controller.signal.throwIfAborted();
-            admission.assertCurrent();
-            if (cachedDatabases.get(database.path) !== database || !database.db.isOpen) {
-              throw new StateDatabaseReadAdmissionInvalidatedError(
-                "Shared-state WAL maintenance owner changed",
-              );
-            }
-          };
+          const { runOpenClawStateWorkerOperation } =
+            await import("./openclaw-state-worker-store.js");
           assertCurrent();
-          // Yield before native work; SQLite's zero-busy maintenance owns writer contention.
-          await setImmediate(undefined, { signal: controller.signal });
+          const result = await runOpenClawStateWorkerOperation(
+            context,
+            (worker) =>
+              worker.execute(
+                { type: "database.walMaintenance", input: request },
+                { signal: controller.signal },
+              ),
+            {
+              existingOnly: true,
+              assertCurrent,
+              createAdmission: () => ({
+                nativeLocations: [database.path, identity.canonicalPath],
+                admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+                  assertCurrent();
+                  if (!grant()) {
+                    throw new StateDatabaseReadAdmissionInvalidatedError(
+                      "Shared-state WAL maintenance authority expired",
+                    );
+                  }
+                  operationStarted = true;
+                }),
+              }),
+            },
+          );
           assertCurrent();
-          assertExistingDatabaseIdentity(database.path, identity.key);
-          assertStateDatabaseAccessAllowed(database.path, { maintenanceScope });
-          operationStarted = true;
-          if (maintenanceScope) {
-            maintenanceScope.run(operation);
-          } else {
-            operation();
-          }
+          return result;
         } catch (error) {
           if (
             !operationStarted &&
             (isStateDatabaseReadAdmissionInvalidatedError(error) ||
               (controller.signal.aborted && isAbortError(error)))
           ) {
-            return;
+            return undefined;
           }
           throw error;
         } finally {
           releaseIdle?.();
         }
       };
-      registerSqliteWalWriteAdmission(
+      registerSqliteWalWorkerMaintenance(
         database.db,
         (operation) => {
           if (controller.signal.aborted) {
-            return Promise.resolve();
+            return Promise.resolve(undefined);
           }
           const active = run(operation);
           pending = active;

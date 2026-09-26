@@ -67,8 +67,7 @@ const mocks = vi.hoisted(() => ({
   disposeAllBundleLspRuntimes: vi.fn<() => Promise<void>>(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn<() => Promise<void>>(async () => undefined),
   stopGmailWatcher: vi.fn(async () => undefined),
-  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
-  getAcpSessionManager: vi.fn(() => ({})),
+  disposeAcpSessionManager: vi.fn(async (_reason: string) => undefined),
   fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
   closePluginStateDatabaseAsync: vi.fn<() => Promise<void>>(async () => undefined),
 }));
@@ -136,12 +135,8 @@ vi.mock("../agents/session-suspension.js", () => ({
     mocks.fenceSessionSuspensionWritesForGatewayShutdown,
 }));
 
-vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
-  disposeAcpSessionManagerInstance: mocks.disposeAcpSessionManagerInstance,
-}));
-
 vi.mock("../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: mocks.getAcpSessionManager,
+  disposeAcpSessionManager: mocks.disposeAcpSessionManager,
 }));
 
 vi.mock("../plugin-state/plugin-state-store.js", async () => ({
@@ -448,9 +443,8 @@ describe("createGatewayCloseHandler", () => {
     mocks.stopGmailWatcher.mockResolvedValue(undefined);
     mocks.closeProviderTransportDispatcherPool.mockClear();
     mocks.closeProviderTransportDispatcherPool.mockResolvedValue(undefined);
-    mocks.disposeAcpSessionManagerInstance.mockReset();
-    mocks.disposeAcpSessionManagerInstance.mockResolvedValue(undefined);
-    mocks.getAcpSessionManager.mockClear();
+    mocks.disposeAcpSessionManager.mockReset();
+    mocks.disposeAcpSessionManager.mockResolvedValue(undefined);
     mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockReset();
     mocks.closePluginStateDatabaseAsync.mockReset();
     mocks.closePluginStateDatabaseAsync.mockResolvedValue(undefined);
@@ -1166,7 +1160,7 @@ describe("createGatewayCloseHandler", () => {
 
   it("disposes ACP sessions before plugin services and channel runtimes", async () => {
     const events: string[] = [];
-    mocks.disposeAcpSessionManagerInstance.mockImplementation(async () => {
+    mocks.disposeAcpSessionManager.mockImplementation(async () => {
       events.push("acp-sessions");
     });
     const pluginServices = {
@@ -1188,16 +1182,13 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "test" });
 
     expect(events).toEqual(["acp-sessions", "plugin-services", "channel:discord"]);
-    expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledWith(
-      expect.anything(),
-      "gateway-shutdown",
-    );
+    expect(mocks.disposeAcpSessionManager).toHaveBeenCalledWith("gateway-shutdown");
     expect(pluginServices.stop).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledWith("discord");
   });
 
   it("continues plugin shutdown when ACP session disposal fails", async () => {
-    mocks.disposeAcpSessionManagerInstance.mockRejectedValue(new Error("ACP close failed"));
+    mocks.disposeAcpSessionManager.mockRejectedValue(new Error("ACP close failed"));
     const pluginServices = { stop: vi.fn(async () => undefined) };
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({ pluginServices: pluginServices as never }),
@@ -1212,7 +1203,7 @@ describe("createGatewayCloseHandler", () => {
   it("keeps plugin services alive until a slow ACP session disposal settles", async () => {
     vi.useFakeTimers();
     let releaseDisposal!: () => void;
-    mocks.disposeAcpSessionManagerInstance.mockReturnValue(
+    mocks.disposeAcpSessionManager.mockReturnValue(
       new Promise<undefined>((resolve) => {
         releaseDisposal = () => resolve(undefined);
       }),
@@ -1226,7 +1217,7 @@ describe("createGatewayCloseHandler", () => {
       const closePromise = close({ reason: "test" });
       await vi.advanceTimersByTimeAsync(5_001);
 
-      expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledOnce();
+      expect(mocks.disposeAcpSessionManager).toHaveBeenCalledOnce();
       expect(pluginServices.stop).not.toHaveBeenCalled();
 
       releaseDisposal();

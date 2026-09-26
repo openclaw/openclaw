@@ -32,6 +32,7 @@ import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-sto
 import {
   createOpenClawStateDatabaseAsyncLifecycle,
   getOpenClawDatabaseMaintenanceScope,
+  isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
   type OpenClawDatabaseMaintenanceScope,
   type OpenClawStateDatabaseAsyncResource,
@@ -164,12 +165,23 @@ function retainStateDatabaseClose(database: StateDatabaseHandle): void {
 }
 
 function ownMaintenanceStateDatabaseHandle(database: StateDatabaseHandle): void {
-  getOpenClawDatabaseMaintenanceScope()?.own(database.db, "shared-handles", () => {
+  getOpenClawDatabaseMaintenanceScope()?.own(database.db, "shared-handles", async () => {
+    const closingScope = getOpenClawDatabaseMaintenanceScope();
+    if (!closingScope || !isOpenClawDatabaseMaintenanceResourceOwned(database.db, closingScope)) {
+      return;
+    }
     if (
       cachedDatabases.get(database.path) === database ||
       retainedDatabaseHandles.get(database.db) === database
     ) {
-      retireOpenClawStateDatabaseHandle(database, false);
+      await cancelSqliteWalWriteAdmission(database.db);
+      if (
+        isOpenClawDatabaseMaintenanceResourceOwned(database.db, closingScope) &&
+        (cachedDatabases.get(database.path) === database ||
+          retainedDatabaseHandles.get(database.db) === database)
+      ) {
+        retireOpenClawStateDatabaseHandle(database, false);
+      }
     }
   });
 }
@@ -232,7 +244,7 @@ function closeOpenClawStateDatabaseHandle(
   const errors: unknown[] = [];
   openClawStateSnapshotOwners.release(database.db);
   try {
-    cancelSqliteWalWriteAdmission(database.db);
+    void cancelSqliteWalWriteAdmission(database.db);
     database.walMaintenance?.close(options);
   } catch (error) {
     errors.push(error);
@@ -296,14 +308,17 @@ function evictOpenClawStateDatabaseAfterCorruption(
 }
 
 /** Publish a fully opened handle and bind query corruption to its exact cache owner. */
-function publishOpenClawStateDatabase(database: OpenClawStateDatabase): OpenClawStateDatabase {
+function publishOpenClawStateDatabase(
+  database: OpenClawStateDatabase,
+  env: NodeJS.ProcessEnv,
+): OpenClawStateDatabase {
   const { db, path: pathname } = database;
   admitSqliteSchema(db);
   assertSupportedStateSchemaVersion(db, pathname);
-  const identity = asyncResources.publish(pathname);
+  const { identity, admission } = asyncResources.publish(pathname);
   databaseIdentities.set(db, identity);
   cachedDatabases.set(pathname, database);
-  registerStateDatabaseWalAdmission(database, identity);
+  registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
   ownMaintenanceStateDatabaseHandle(database);

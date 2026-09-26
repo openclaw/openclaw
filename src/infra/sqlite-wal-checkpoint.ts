@@ -251,6 +251,16 @@ export function createSqliteWalCheckpoint(
   };
 
   return {
+    adopt(this: void, received: SqliteWalCheckpointSnapshot): void {
+      if (snapshot && snapshot.observedAtNs >= received.observedAtNs) {
+        return;
+      }
+      snapshot = structuredClone(received);
+      if (options.databasePath) {
+        snapshot.health = observeSqliteWalCheckpointHealth(options.databasePath, snapshot.health);
+        notifyCheckpoint(options.databasePath, snapshot);
+      }
+    },
     checkpoint(this: void, mode: SqliteWalCheckpointMode): boolean {
       try {
         return recordCheckpoint(mode, checkpoint(database, mode));

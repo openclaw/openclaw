@@ -7,6 +7,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STATE_DATABASE_READ_ADMISSION_INVALIDATED = "STATE_DATABASE_READ_ADMISSION_INVALIDATED";
@@ -109,6 +110,12 @@ export function isOpenClawDatabaseMaintenanceResourceOwned(
   return maintenanceResources.claims.get(resource)?.scope === scope;
 }
 
+export function getOpenClawDatabaseMaintenanceResourceScope(
+  resource: object,
+): OpenClawDatabaseMaintenanceScope | undefined {
+  return maintenanceResources.claims.get(resource)?.scope;
+}
+
 /** A cached handle used by an independent caller remains with the ordinary cache owner. */
 export function observeOpenClawDatabaseMaintenanceResource(resource: object | undefined): void {
   if (!resource) {
@@ -123,6 +130,7 @@ export function observeOpenClawDatabaseMaintenanceResource(resource: object | un
   if (owner === claim.scope) {
     return;
   }
+  claim.scope.assertAdmission();
   claim.release();
   maintenanceResources.claims.delete(resource);
   if (owner) {
@@ -276,7 +284,13 @@ export function createOpenClawDatabaseMaintenanceScope(
       });
     },
     close() {
-      return (closing ??= maintenanceResources.current
+      if (closing) {
+        return closing;
+      }
+      // A disposer can reenter admission before its first awaited cleanup.
+      const completion = createDeferredCore();
+      closing = completion.promise;
+      void maintenanceResources.current
         .run({ scope, active: true }, async () => {
           while (pending.size || resources.size) {
             while (pending.size) {
@@ -299,9 +313,14 @@ export function createOpenClawDatabaseMaintenanceScope(
                 const batch = [...resources].filter(([, resource]) => resource.phase === phase);
                 const results = await Promise.allSettled(
                   batch.map(async ([key, resource]) => {
+                    const claim = maintenanceResources.claims.get(key);
                     await resource.close();
-                    resources.delete(key);
-                    maintenanceResources.claims.delete(key);
+                    if (resources.get(key) === resource) {
+                      resources.delete(key);
+                    }
+                    if (maintenanceResources.claims.get(key) === claim) {
+                      maintenanceResources.claims.delete(key);
+                    }
                   }),
                 );
                 // A disposer can admit tracked cleanup before rejecting. Settle
@@ -328,10 +347,11 @@ export function createOpenClawDatabaseMaintenanceScope(
           schemaMigrationChecks.clear();
           closed = true;
         })
-        .catch((error: unknown) => {
+        .then(completion.resolve, (error: unknown) => {
           closing = undefined;
-          throw error;
-        }));
+          completion.reject(error);
+        });
+      return completion.promise;
     },
   };
   if (parent) {
@@ -494,9 +514,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   // Keep closure creation off capture's warm branch: V8 otherwise allocates its
   // captured environment even when returning an already retained admission.
-  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
-    const record = resolve(databasePath);
-    assertOpen(record);
+  const captureRecord = (
+    record: IdentityRecord,
+    databasePath: string,
+  ): OpenClawStateDatabaseReadAdmission => {
     const previous = record.admissions.get(databasePath);
     if (previous) {
       return previous;
@@ -519,6 +540,11 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.admissions.set(databasePath, admission);
     return admission;
   };
+  const captureResolved = (databasePath: string): OpenClawStateDatabaseReadAdmission => {
+    const record = resolve(databasePath);
+    assertOpen(record);
+    return captureRecord(record, databasePath);
+  };
 
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
@@ -527,7 +553,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity;
     },
-    publish(pathname: string): DatabasePathIdentity {
+    publish(pathname: string): {
+      identity: DatabasePathIdentity;
+      admission: OpenClawStateDatabaseReadAdmission;
+    } {
       const resolvedPath = path.resolve(pathname);
       const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
@@ -549,7 +578,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       }
       bindPath(record, resolvedPath);
       bindPath(record, identity.canonicalPath);
-      return identity;
+      // Private native binding may publish while reads are sealed. Retain its
+      // generation now; every later worker use still checks the seal and lifetime.
+      return { identity, admission: captureRecord(record, resolvedPath) };
     },
     invalidate(pathname?: string): void {
       if (pathname === undefined) {

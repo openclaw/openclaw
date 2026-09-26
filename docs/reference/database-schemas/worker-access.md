@@ -26,6 +26,13 @@ or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread
 `readWithCanonicalSessionAdmission` validates session reads on the executing
 thread; invoke it inside the worker's admitted reader.
 
+Channel setup awaits a fresh policy read after the agent-selection prompt.
+Deferred plugin migration rows are read by the shared-state worker, and setup
+rechecks its config owner after the read before using the selected agent. Each
+policy read obtains current rows; it does not retain migration exclusions across
+later operations. The updater and plugin source-cleanup synchronous effect guards
+retain their existing fresh-read contracts in their CLI or child-process owners.
+
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and
@@ -33,6 +40,17 @@ transaction callback remain synchronous **inside the worker**. Complete
 asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, physical database identity, transaction/commit grants,
 and settlement of accepted write-capable work.
+
+Published agent and shared-state database timers dispatch periodic WAL checkpoints
+and bounded page reclamation through those same writers. The existing timer keeps
+its cadence and page budget, releases writer custody between units, and installs
+the worker's checkpoint health only while its original database owner is current.
+Native checkpoint work and file-size diagnostics run in the worker. Linux
+sidecar containment retains its synchronous scan at timer entry, before identity
+admission can refuse dispatch or close can clean up the original handle. Host
+admission and physical-identity checks remain on the host.
+Existing worker-local maintenance and synchronous offline/close checkpoints retain
+their owners; durability, schemas, retention, and update behavior are unchanged.
 
 Worker authority requests wait for the retained host owner's grant or refusal;
 host scheduling delays do not expire that authority. The host still checks current
