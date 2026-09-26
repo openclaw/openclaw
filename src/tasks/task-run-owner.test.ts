@@ -229,7 +229,7 @@ it.each(["deletion", "replacement", "run owner", "authority", "publication"] as 
             throw new Error("Expected the terminal task before retention");
           }
           expect(
-            await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Set(), () => {}),
+            await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
           ).toBe("pruned");
         } else if (change === "replacement") {
           const replacement = { ...task, createdAt: task.createdAt - 1 };
