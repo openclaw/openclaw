@@ -13,6 +13,7 @@ import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,
+  createWatchers,
   exitResult,
   fakeSupervisor,
   job,
