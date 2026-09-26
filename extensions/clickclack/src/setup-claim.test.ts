@@ -53,27 +53,9 @@ function claimResponse(extra: Record<string, unknown> = {}): Record<string, unkn
 
 describe("ClickClack setup-code claim", () => {
   it("claims over guarded HTTPS without bearer authentication", async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Response.json({
-        token: "test-token",
-        bot: {
-          id: "usr_bot",
-          handle: "openclaw",
-          display_name: "OpenClaw",
-        },
-        workspace: {
-          id: "wsp_1",
-          route_id: "clickclack",
-          slug: "default",
-          name: "ClickClack",
-        },
-        defaults: {
-          defaultTo: "channel:general",
-          allowFrom: ["*"],
-          agentActivity: true,
-        },
-      }),
-    );
+    const fetchMock = vi
+      .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(Response.json(claimResponse()));
 
     await expect(
       claimClickClackSetupCode({

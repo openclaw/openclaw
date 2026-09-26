@@ -10,39 +10,11 @@ import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";
 import { setClickClackRuntime } from "../runtime.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
-import { asyncDiscussionTestStore } from "./service-test-support.js";
+import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 type RemoteChannel = ClickClackChannel;
 type RemotePatch = Record<string, unknown>;
-
-function memoryStore<T>(): PluginStateSyncKeyedStore<T> {
-  const values = new Map<string, { value: T; createdAt: number }>();
-  return {
-    register: (key, value) => values.set(key, { value, createdAt: Date.now() }),
-    registerIfAbsent(key, value) {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, { value, createdAt: Date.now() });
-      return true;
-    },
-    lookup: (key) => values.get(key)?.value,
-    consume(key) {
-      const value = values.get(key)?.value;
-      values.delete(key);
-      return value;
-    },
-    delete: (key) => values.delete(key),
-    entries: () =>
-      Array.from(values, ([key, entry]) => ({
-        key,
-        value: entry.value,
-        createdAt: entry.createdAt,
-      })),
-    clear: () => values.clear(),
-  };
-}
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -195,7 +167,7 @@ describe("ClickClack durable room real-behavior proof", () => {
           if (existing) {
             return existing;
           }
-          const created = memoryStore<unknown>();
+          const created = createDiscussionMemoryStore<unknown>();
           stores.set(namespace, created);
           return created;
         }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
