@@ -271,6 +271,18 @@ export async function channelsCapabilitiesCommand(
   if (!configSnapshot) {
     return;
   }
+  // An explicit blank selector must not change scope. --account is absent because
+  // parseAccountSelector rejects it at option-parse time, before this runs.
+  for (const [option, value] of [
+    ["--channel", opts.channel],
+    ["--agent", opts.agent],
+    ["--target", opts.target],
+  ] as const) {
+    if (typeof value === "string" && !value.trim()) {
+      const message = `${option} must not be blank`;
+      throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
+    }
+  }
   let cfg = await resolveCapabilitiesRuntimeConfig(configSnapshot.config, runtime);
   const timeoutMs = Math.min(
     parseTimeoutMsWithFallback(opts.timeout, 10_000, { invalidType: "error" }),
