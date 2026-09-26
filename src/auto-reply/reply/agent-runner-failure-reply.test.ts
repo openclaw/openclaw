@@ -13,6 +13,7 @@ import {
   buildEmptyInteractiveReplyPayload,
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
+  buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 
@@ -231,7 +232,11 @@ describe("buildExternalRunFailureReply", () => {
       { message: "test error", error: new Error("test") },
       { isHeartbeat: true, useHeartbeatFailureCopy: false },
     );
-    expect(reply.text).not.toContain("heartbeat");
+    // Compare against the constants: the heartbeat sentence is capitalized, so a
+    // lowercase substring check would pass against either copy and prove nothing.
+    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.text).not.toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+    // Visibility follows the execution surface, so the notice still reaches the user.
     expect(reply.isGenericRunnerFailure).toBe(false);
   });
 
@@ -240,7 +245,7 @@ describe("buildExternalRunFailureReply", () => {
       { message: "test error", error: new Error("test") },
       { isHeartbeat: true, useHeartbeatFailureCopy: true },
     );
-    expect(reply.text).toContain("heartbeat");
+    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
   });
 
   it("falls back to isHeartbeat when useHeartbeatFailureCopy is undefined", () => {
@@ -248,7 +253,18 @@ describe("buildExternalRunFailureReply", () => {
       { message: "test error", error: new Error("test") },
       { isHeartbeat: true },
     );
-    expect(reply.text).toContain("heartbeat");
+    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+  });
+
+  it("keeps the terminal payload visible while switching to generic wording", () => {
+    const payload = buildTerminalAgentRunFailureReplyPayload({
+      isHeartbeat: true,
+      useHeartbeatFailureCopy: false,
+      replyExpectation: "optional",
+      visibleReplyDelivered: false,
+    });
+
+    expect(payload.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(payload.text).not.toBe(SILENT_REPLY_TOKEN);
   });
 });
-

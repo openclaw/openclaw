@@ -15,8 +15,6 @@ import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
-import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
-import { isRealHeartbeatWake } from "./heartbeat-wake-policy.js";
 
 export type NormalizedHeartbeatDelivery = {
   shouldSkip: boolean;
@@ -119,8 +117,13 @@ export function classifyHeartbeatAgentOutcome(params: {
     heartbeatTerminalToolFailure?: HeartbeatTerminalToolFailure;
     replyPayload?: ReplyPayload;
   };
-  wakeSource?: HeartbeatWakeSource;
   hasRelayableExecCompletion: boolean;
+  /**
+   * Whether this turn is the agent's own heartbeat check. An event wake borrows
+   * the heartbeat runner, so its generic failure text must not be relabeled as a
+   * heartbeat failure (#153543). Defaults to the historical relabeling.
+   */
+  useHeartbeatFailureCopy?: boolean;
   suppressUnmarkedSourceReplies: boolean;
   responsePrefix: string | undefined;
   ackMaxChars: number;
@@ -167,7 +170,7 @@ export function classifyHeartbeatAgentOutcome(params: {
           params.ackMaxChars,
           mode,
         );
-  if (agentRunFailed && isRealHeartbeatWake(params.wakeSource)) {
+  if (agentRunFailed && params.useHeartbeatFailureCopy !== false) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {
       normalized.text = replacement.text;

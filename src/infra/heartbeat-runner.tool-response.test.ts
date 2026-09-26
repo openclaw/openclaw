@@ -715,8 +715,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       }>(storePath);
 
       expect(failedResult).toEqual({ status: "failed", reason: "agent-runner-failure" });
-      expectTelegramSend(sendTelegram, { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, cfg });
-      expect(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT).not.toContain("/new");
+      // An exec-event wake borrows the heartbeat runner but is not a heartbeat
+      // check, so its failure reads as an ordinary run failure (#153543). It
+      // still delivers: visibility follows the execution surface, not the wording.
+      expectTelegramSend(sendTelegram, { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, cfg });
       expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
       expect(failedSessionStore[sessionKey]).toMatchObject({
         lastHeartbeatText: previousHeartbeatText,
