@@ -59,7 +59,7 @@ export const pluginInstanceState = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceState"),
   () => ({
     records: new WeakMap<PluginRecord | PluginInstanceResource, PluginInstanceOwner>(),
-    values: createPluginValueInstances(),
+    values: createPluginValueInstances<PluginInstanceHandle>(),
   }),
 );
 

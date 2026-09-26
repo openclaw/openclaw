@@ -1,8 +1,6 @@
-import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
-
-type OwnedValueState = {
-  instance?: PluginInstanceHandle;
-  originalInstance?: PluginInstanceHandle;
+type OwnedValueState<TInstance extends object> = {
+  instance?: TInstance;
+  originalInstance?: TInstance;
   original?: object;
 };
 
@@ -27,33 +25,33 @@ export class PluginCallToken extends PluginHostObject {
   }
 }
 
-// Private fields are installed on the returned object without invoking Proxy traps.
-// They cannot be discovered through reflection or forwarded by a foreign Proxy.
-class OwnedValue extends PluginHostObject {
-  #state: OwnedValueState;
-
-  constructor(value: object, state: OwnedValueState) {
-    super(value);
-    this.#state = state;
-  }
-
-  static get(value: unknown): OwnedValueState | undefined {
-    if (value === null || (typeof value !== "object" && typeof value !== "function")) {
-      return undefined;
-    }
-    return #state in value ? value.#state : undefined;
-  }
-}
-
 /** Installed once in the shared instance singleton, including its private-field brand. */
-export function createPluginValueInstances() {
-  const foreign = new WeakMap<object, PluginInstanceHandle>();
-  const install = (value: object): OwnedValueState => {
+export function createPluginValueInstances<TInstance extends object>() {
+  // Private fields are installed on the returned object without invoking Proxy traps.
+  // They cannot be discovered through reflection or forwarded by a foreign Proxy.
+  class OwnedValue extends PluginHostObject {
+    #state: OwnedValueState<TInstance>;
+
+    constructor(value: object, state: OwnedValueState<TInstance>) {
+      super(value);
+      this.#state = state;
+    }
+
+    static get(value: unknown): OwnedValueState<TInstance> | undefined {
+      if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+        return undefined;
+      }
+      return #state in value ? value.#state : undefined;
+    }
+  }
+
+  const foreign = new WeakMap<object, TInstance>();
+  const install = (value: object): OwnedValueState<TInstance> => {
     const current = OwnedValue.get(value);
     if (current) {
       return current;
     }
-    const state: OwnedValueState = { instance: foreign.get(value) };
+    const state: OwnedValueState<TInstance> = { instance: foreign.get(value) };
     if (state.instance) {
       foreign.delete(value);
     }
@@ -61,10 +59,10 @@ export function createPluginValueInstances() {
     return state;
   };
   return {
-    get(value: object): PluginInstanceHandle | undefined {
+    get(value: object): TInstance | undefined {
       return OwnedValue.get(value)?.instance ?? foreign.get(value);
     },
-    set(value: object, instance: PluginInstanceHandle) {
+    set(value: object, instance: TInstance) {
       const owned = OwnedValue.get(value);
       if (owned) {
         owned.instance = instance;
@@ -73,15 +71,15 @@ export function createPluginValueInstances() {
       }
       return this;
     },
-    setHost(value: object, instance: PluginInstanceHandle) {
+    setHost(value: object, instance: TInstance) {
       install(value).instance = instance;
       return this;
     },
-    getOriginal(value: object, instance: PluginInstanceHandle): object | undefined {
+    getOriginal(value: object, instance: TInstance): object | undefined {
       const owned = OwnedValue.get(value);
       return owned?.originalInstance === instance ? owned.original : undefined;
     },
-    setOriginal(value: object, original: object, instance: PluginInstanceHandle): void {
+    setOriginal(value: object, original: object, instance: TInstance): void {
       const owned = install(value);
       owned.originalInstance = instance;
       owned.original = original;
