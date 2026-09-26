@@ -1694,6 +1694,21 @@ describe("config io write", () => {
     },
   );
 
+  itWithHome("replaces a hardlinked root config without changing its other alias", async (home) => {
+    const { configPath, raw } = await writeConfigFixture(home, {
+      gateway: { mode: "local", port: 18789 },
+    });
+    const aliasPath = path.join(home, "shared-config.json");
+    await fs.link(configPath, aliasPath);
+
+    await createFastConfigIO(home).writeConfigFile({
+      gateway: { mode: "local", port: 19002 },
+    });
+
+    expect((await readPersistedConfig(configPath)).gateway?.port).toBe(19002);
+    await expect(fs.readFile(aliasPath, "utf-8")).resolves.toBe(raw);
+  });
+
   itWithHome("rejects a stale base snapshot before overwriting the root config", async (home) => {
     const { configPath } = await writeConfigFixture(home, {
       gateway: { mode: "local", port: 18789 },
