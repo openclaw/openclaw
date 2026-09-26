@@ -251,9 +251,6 @@ importers:
       '@google/genai':
         specifier: 2.23.0
         version: 2.23.0(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
-      '@grammyjs/runner':
-        specifier: 2.0.3
-        version: 2.0.3(grammy@1.46.0(supports-color@10.2.2))
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
         version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
@@ -368,9 +365,6 @@ importers:
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
-      ms:
-        specifier: 2.1.3
-        version: 2.1.3
       node-edge-tts:
         specifier: 1.2.10
         version: 1.2.10(supports-color@10.2.2)
@@ -389,9 +383,6 @@ importers:
       playwright-core:
         specifier: 1.63.0
         version: 1.63.0
-      pretty-ms:
-        specifier: 9.3.1
-        version: 9.3.1
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
@@ -492,9 +483,6 @@ importers:
       '@types/mdast':
         specifier: 4.0.4
         version: 4.0.4
-      '@types/ms':
-        specifier: 2.1.0
-        version: 2.1.0
       '@types/node':
         specifier: 26.6.1
         version: 26.6.1
@@ -2240,9 +2228,6 @@ importers:
 
   extensions/telegram:
     dependencies:
-      '@grammyjs/runner':
-        specifier: 2.0.3
-        version: 2.0.3(grammy@1.46.0(supports-color@10.2.2))
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
         version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
@@ -2915,9 +2900,6 @@ importers:
       markdown-it-emoji:
         specifier: 3.1.0
         version: 3.1.0
-      markdown-it-task-lists:
-        specifier: 2.1.1
-        version: 2.1.1
       parse5:
         specifier: 8.0.1
         version: 8.0.1
@@ -3913,12 +3895,6 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
-
-  '@grammyjs/runner@2.0.3':
-    resolution: {integrity: sha512-nckmTs1dPWfVQteK9cxqxzE+0m1VRvluLWB8UgFzsjg62w3qthPJt0TYtJBEdG7OedvfQq4vnFAyE6iaMkR42A==}
-    engines: {node: '>=12.20.0 || >=14.13.1'}
-    peerDependencies:
-      grammy: ^1.13.1
 
   '@grammyjs/transformer-throttler@1.2.1':
     resolution: {integrity: sha512-CpWB0F3rJdUiKsq7826QhQsxbZi4wqfz1ccKX+fr+AOC+o8K7ZvS+wqX0suSu1QCsyUq2MDpNiKhyL2ZOJUS4w==}
@@ -8308,9 +8284,6 @@ packages:
   markdown-it-emoji@3.1.0:
     resolution: {integrity: sha512-NhmMEH2ywduD4Nty1E8uB5NqfLhAT1VR0dyvoJyStKOqCzbZmVdn/+8wj7zpDsb/fLBikpCPsWwxqKlvMmbz4g==}
 
-  markdown-it-task-lists@2.1.1:
-    resolution: {integrity: sha512-TxFAc76Jnhb2OUu+n3yz9RMu4CwGfaT788br6HhEDlvWfdeJcLUsxk1Hgw2yJio0OXsxv7pyIPmvECY7bMbluA==}
-
   markdown-it@15.0.2:
     resolution: {integrity: sha512-q4IGxMv56jCqT4OCRCADBoDP3LO4MhmTXjFbphHPXs4g3j9Xg5RDnxqN8IF/3vIWEU+VCnUq+7JUg/cfy2E6Qw==}
     hasBin: true
@@ -11502,11 +11475,6 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
-
-  '@grammyjs/runner@2.0.3(grammy@1.46.0(supports-color@10.2.2))':
-    dependencies:
-      abort-controller: 3.0.0
-      grammy: 1.46.0(supports-color@10.2.2)
 
   '@grammyjs/transformer-throttler@1.2.1(grammy@1.46.0(supports-color@10.2.2))':
     dependencies:
@@ -15945,8 +15913,6 @@ snapshots:
       '@types/markdown-it': 14.2.0
 
   markdown-it-emoji@3.1.0: {}
-
-  markdown-it-task-lists@2.1.1: {}
 
   markdown-it@15.0.2:
     dependencies:

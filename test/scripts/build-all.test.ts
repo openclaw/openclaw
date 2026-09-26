@@ -868,6 +868,9 @@ describe("resolveBuildAllSteps", () => {
       const cwd = fs.realpathSync(
         fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-rebuild-")),
       );
+      // Artifact ownership must stop at this fixture, even inside another checkout.
+      fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ name: "openclaw" }));
+      fs.writeFileSync(path.join(cwd, "pnpm-workspace.yaml"), "packages: []\n");
       const childEnv = {
         OPENCLAW_BUILD_PRIVATE_QA: "1",
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts,
@@ -931,6 +934,9 @@ describe("resolveBuildAllSteps", () => {
         ]);
         expect(postbuild).not.toHaveBeenCalled();
         expect(fs.existsSync(path.join(cwd, ".artifacts/run-node-build.lock"))).toBe(false);
+        expect(fs.existsSync(path.join(cwd, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
+          false,
+        );
       } finally {
         fs.rmSync(cwd, { recursive: true, force: true });
       }

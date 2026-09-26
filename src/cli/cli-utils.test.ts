@@ -289,17 +289,67 @@ describe("parseDurationMs", () => {
     ["supports decimals", "0.5s", 500],
     ["parses composite hours+minutes", "1h30m", 5_400_000],
     ["parses composite with milliseconds", "2m500ms", 120_500],
+    ["normalizes surrounding whitespace and case", "  1H30M  ", 5_400_000],
+    ["accepts leading zeros", "0001.25s", 1250],
+    ["accepts zero", "0ms", 0],
+    ["rounds fractions of a millisecond", "0.5ms", 1],
+    ["rounds once after summing segments", "0.4ms0.4ms", 1],
+    ["allows repeated units in any order", "30m1h30m", 7_200_000],
   ] as const)("%s", (_name, input, expected) => {
     expect(parseDurationMs(input)).toBe(expected);
   });
 
-  it("rejects invalid composite strings", () => {
-    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
-    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  it.each([
+    ["ms", "1.5", 2],
+    ["s", "1.25", 1250],
+    ["m", "1.5", 90_000],
+    ["h", "0.25", 900_000],
+    ["d", "0.5", 43_200_000],
+  ] as const)("uses default unit %s only for bare numbers", (defaultUnit, input, expected) => {
+    expect(parseDurationMs(input, { defaultUnit })).toBe(expected);
+    expect(parseDurationMs("1s", { defaultUnit })).toBe(1000);
+  });
+
+  it.each([
+    "",
+    " ",
+    "-1s",
+    "+1s",
+    ".5s",
+    "1.s",
+    "1e3s",
+    "Infinity",
+    "NaN",
+    "1 seconds",
+    "1sec",
+    "1w",
+    "1y",
+    "1h 30m",
+    "1h30",
+    "1h-30m",
+  ])("rejects values outside the CLI duration grammar: %j", (input) => {
+    expect(() => parseDurationMs(input)).toThrow(/Invalid duration/);
+  });
+
+  it("retains the 100-character limit per token, including the default unit", () => {
+    const value = `${"0".repeat(97)}1`;
+    expect(parseDurationMs(`${value}ms`)).toBe(1);
+    expect(parseDurationMs(value)).toBe(1);
+    expect(parseDurationMs(`0${value}`, { defaultUnit: "s" })).toBe(1000);
+    expect(parseDurationMs("1ms".repeat(40))).toBe(40);
+    expect(() => parseDurationMs(`0${value}ms`)).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs(`0${value}`)).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs(`1s0${value}ms`)).toThrow(/Invalid duration/);
+  });
+
+  it("keeps safe integer results exact", () => {
+    expect(parseDurationMs("9007199254740991ms")).toBe(Number.MAX_SAFE_INTEGER);
+    expect(parseDurationMs("9007199254740990ms1ms")).toBe(Number.MAX_SAFE_INTEGER);
   });
 
   it("rejects unsafe millisecond results", () => {
     expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
     expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("99999999999999999999d")).toThrow(/Invalid duration/);
   });
 });

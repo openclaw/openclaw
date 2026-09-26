@@ -51,11 +51,6 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network", "realtime"]
     },
-    "@grammyjs/runner": {
-      "owner": "plugin:telegram",
-      "class": "plugin-runtime",
-      "risk": ["telegram-bot-api", "polling"]
-    },
     "@grammyjs/transformer-throttler": {
       "owner": "plugin:telegram",
       "class": "plugin-runtime",
@@ -240,11 +235,6 @@
       "class": "core-runtime",
       "risk": ["pattern-matching"]
     },
-    "ms": {
-      "owner": "core:duration-parsing",
-      "class": "core-runtime",
-      "risk": ["duration-parser"]
-    },
     "node-edge-tts": {
       "owner": "plugin:microsoft",
       "class": "plugin-runtime",
@@ -274,11 +264,6 @@
       "owner": "core:browser",
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
-    },
-    "pretty-ms": {
-      "owner": "core:duration-formatting",
-      "class": "core-runtime",
-      "risk": ["formatting"]
     },
     "quickjs-wasi": {
       "owner": "plugin:code-mode-quickjs",

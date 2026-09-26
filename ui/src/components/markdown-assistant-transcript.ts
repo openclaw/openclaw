@@ -66,7 +66,7 @@ export function installAssistantTranscriptRoleMarkdown(
   escapeHtml: (value: string) => string,
 ): void {
   md.use(markdownItAssistantTranscriptRoles, {
-    // The task-list plugin injects a trusted checkbox HTML token. It is visible
+    // The task-list rule injects a trusted checkbox HTML token. It is visible
     // UI structure, not text before the list item's semantic first character.
     isStructuralHtmlInline: (token) => token.meta?.taskListPlugin === true,
   });

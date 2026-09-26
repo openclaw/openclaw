@@ -1661,7 +1661,6 @@ src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
 src/agents/failover-error.ts	3
-src/agents/failover/retry-evidence.ts	1
 src/agents/fallback-skip-cache.ts	1
 src/agents/fast-mode.ts	1
 src/agents/harness/builtin-openclaw.ts	2
@@ -2105,7 +2104,6 @@ src/cli/nodes-cli/rpc.ts	2
 src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
-src/cli/parse-duration.ts	2
 src/cli/plugins-authoring-command.ts	8
 src/cli/plugins-command-helpers.ts	1
 src/cli/plugins-update-command.ts	5

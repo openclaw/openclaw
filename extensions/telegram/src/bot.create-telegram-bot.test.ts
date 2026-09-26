@@ -69,7 +69,6 @@ const {
   onSpy,
   replySpy,
   sendMessageSpy,
-  sequentializeSpy,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -209,11 +208,6 @@ async function dispatchSpooledNativeStop(
 }
 
 async function setupUpdateOffsetTracker(params: { lastUpdateId: number }) {
-  sequentializeSpy.mockImplementationOnce(
-    () => async (_ctx: unknown, next: () => Promise<void>) => {
-      await next();
-    },
-  );
   const onUpdateId = vi.fn<(updateId: number) => void | Promise<void>>();
   await createTelegramBot({
     token: "tok",
@@ -231,34 +225,6 @@ async function runTelegramMiddlewareChain(params: {
   finalHandler: (ctx: TelegramMiddlewareTestContext) => Promise<void>;
 }): Promise<void> {
   await runTelegramTestMiddlewareChain(middlewareUseSpy, params.ctx, params.finalHandler);
-}
-
-function installPerKeySequentializer(): void {
-  sequentializeSpy.mockImplementationOnce(() => {
-    const lanes = new Map<string, Promise<void>>();
-    return async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
-      const constraint = harness.sequentializeKey?.(ctx) ?? "default";
-      const keys = Array.isArray(constraint) ? constraint : [constraint];
-      const previous = Promise.all(keys.map((key) => lanes.get(key) ?? Promise.resolve()));
-      const current = previous.then(async () => {
-        await next();
-      });
-      const tracked = current.catch(() => undefined);
-      for (const key of keys) {
-        lanes.set(key, tracked);
-      }
-
-      try {
-        await current;
-      } finally {
-        for (const key of keys) {
-          if (lanes.get(key) === tracked) {
-            lanes.delete(key);
-          }
-        }
-      }
-    };
-  });
 }
 
 async function withTelegramSpooledReplayUpdate<T>(
@@ -386,6 +352,48 @@ describe("createTelegramBot", () => {
     expectBotClientFields({ apiRoot: "https://api.telegram.org" });
   });
 
+  it("acknowledges callbacks before waiting for their chat's active message handler", async () => {
+    await createTelegramBot({ token: "tok" });
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const callbackHandler = vi.fn(async () => {});
+    const message = runTelegramMiddlewareChain({
+      ctx: makePrivateTextContext({ updateId: 1, messageId: 1, chatId: 7, text: "first" }),
+      finalHandler: async () => {
+        started.resolve();
+        await release.promise;
+      },
+    });
+    const runs = [message];
+
+    try {
+      await started.promise;
+      const callback = runTelegramMiddlewareChain({
+        ctx: createTelegramCallbackContext({
+          id: "queued-callback",
+          data: "ordinary-action",
+          updateId: 2,
+          message: { chat: { id: 7, type: "private" } },
+        }),
+        finalHandler: callbackHandler,
+      });
+      runs.push(callback);
+      await runTelegramMiddlewareChain({
+        ctx: makePrivateTextContext({ updateId: 3, messageId: 3, chatId: 8, text: "other chat" }),
+        finalHandler: async () => {},
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledExactlyOnceWith("queued-callback");
+      expect(callbackHandler).not.toHaveBeenCalled();
+      release.resolve();
+      await Promise.all(runs);
+      expect(callbackHandler).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled(runs);
+    }
+  });
+
   it("keeps poll registry preparation failures retryable during durable replay", async () => {
     const readError = new Error("poll registry unavailable");
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() => ({
@@ -490,7 +498,6 @@ describe("createTelegramBot", () => {
 
   it("preserves same-chat reply order when a debounced run is still active", async () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
-    installPerKeySequentializer();
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const startedBodies: string[] = [];
@@ -567,7 +574,6 @@ describe("createTelegramBot", () => {
     };
     loadConfig.mockReturnValue(initialConfig);
     setRuntimeConfigSnapshot(initialConfig, initialConfig);
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     const sourceWork: Promise<unknown>[] = [];
@@ -644,7 +650,6 @@ describe("createTelegramBot", () => {
       agents: { defaults: { envelopeTimezone: "utc" } },
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(1736380800000);
     replySpy.mockResolvedValue(undefined);
@@ -717,7 +722,6 @@ describe("createTelegramBot", () => {
 
   it("cancels an expired fragment behind an earlier active message before releasing that message", async () => {
     configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const earlierStarted = createDeferred<void>();
     const releaseEarlier = createDeferred<void>();
@@ -781,8 +785,6 @@ describe("createTelegramBot", () => {
     async (stopText) => {
       configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "userTimezone" });
 
-      installPerKeySequentializer();
-
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const startedBodies: string[] = [];
       let reusedWork: Promise<unknown> | undefined;
@@ -842,7 +844,6 @@ describe("createTelegramBot", () => {
       messages: { inbound: { byChannel: { telegram: 3000 } } },
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     const sourceWork: Promise<unknown>[] = [];
@@ -913,7 +914,6 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     let sourceWork: Promise<unknown> | undefined;
@@ -970,7 +970,6 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     const sourceWork: Promise<unknown>[] = [];
@@ -1037,7 +1036,6 @@ describe("createTelegramBot", () => {
       messages: { inbound: { byChannel: { telegram: 3000 } } },
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     let sourceWork: Promise<unknown> | undefined;
@@ -1081,7 +1079,6 @@ describe("createTelegramBot", () => {
 
   it("stop cancels ordinary and forwarded batches queued behind an active turn", async () => {
     configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
-    installPerKeySequentializer();
     const attachmentPath = path.join(
       requireValue(process.env.OPENCLAW_STATE_DIR, "test state directory"),
       "caption.txt",
@@ -1198,7 +1195,6 @@ describe("createTelegramBot", () => {
       messages: { inbound: { byChannel: { telegram: 3000 } } },
       channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: false } } } },
     });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
     const preparationStarted = createDeferred<void>();
@@ -1256,7 +1252,6 @@ describe("createTelegramBot", () => {
 
   it("keeps separate text-batch replay settlements isolated when the next batch fails", async () => {
     configureOpenDm({ debounceMs: 300, timezone: "envelopeTimezone" });
-    installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const secondDispatchError = new Error("next batch failed before adoption");
     replySpy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(secondDispatchError);
@@ -1299,7 +1294,6 @@ describe("createTelegramBot", () => {
   it("retries deferred adoption after durable commit fails without settling buffered participants", async () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
-    installPerKeySequentializer();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const commitError = new Error("durable dispatch commit failed");
     const commitSpy = vi
@@ -1371,7 +1365,6 @@ describe("createTelegramBot", () => {
   it("serializes timeout settlement behind an in-flight durable adoption commit", async () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
-    installPerKeySequentializer();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     let markCommitStarted: (() => void) | undefined;
     let releaseCommit: (() => void) | undefined;
@@ -1471,7 +1464,6 @@ describe("createTelegramBot", () => {
   it("blocks buffered adoption after an exposed replay participant times out", async () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
-    installPerKeySequentializer();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const commitSpy = vi.spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay");
     let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
@@ -1692,8 +1684,6 @@ describe("createTelegramBot", () => {
         },
       },
     });
-
-    installPerKeySequentializer();
 
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     replySpy.mockResolvedValue(undefined);
@@ -3671,12 +3661,6 @@ describe("createTelegramBot", () => {
   });
 
   it("treats permanent command pagination edit failures as completed updates", async () => {
-    sequentializeSpy.mockImplementationOnce(
-      () => async (_ctx: unknown, next: () => Promise<void>) => {
-        await next();
-      },
-    );
-
     const onUpdateId = vi.fn();
     await createTelegramBot({
       token: "tok",

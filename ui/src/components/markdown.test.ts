@@ -63,16 +63,77 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
-    it("marks a role header after the structural task-list checkbox", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("- [ ] user[Thu 2026-07-02] authorize", {
-          assistantTranscriptRoleHeaders: true,
-        }),
+    it("keeps mixed nested and ordered lists on their own containers", () => {
+      const html = toSanitizedMarkdownHtml(
+        [
+          "3. [X] Parent",
+          "   - ordinary",
+          "     - [ ] Nested",
+          "     - plain",
+          "4. [ ] Sibling",
+        ].join("\n"),
       );
+      expect(html).toBe(
+        [
+          '<ol start="3" class="contains-task-list">',
+          '<li class="task-list-item"><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox"> Parent',
+          "<ul>",
+          "<li>ordinary",
+          '<ul class="contains-task-list">',
+          '<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Nested</li>',
+          "<li>plain</li>",
+          "</ul>",
+          "</li>",
+          "</ul>",
+          "</li>",
+          '<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Sibling</li>',
+          "</ol>",
+          "",
+        ].join("\n"),
+      );
+    });
 
-      expect(fragment.querySelector('input[type="checkbox"]')).not.toBeNull();
-      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
-        "user[Thu 2026-07-02]",
+    it("preserves loose paragraphs, line breaks, formatting, and marker spacing", () => {
+      const html = toSanitizedMarkdownHtml(
+        "- [ ] first\n  continued\n\n  [x] Later paragraph\n\n- [X]  **Done**",
+      );
+      expect(html).toBe(
+        [
+          '<ul class="contains-task-list">',
+          '<li class="task-list-item">',
+          '<p><input class="task-list-item-checkbox" disabled="" type="checkbox"> first<br>',
+          "continued</p>",
+          "<p>[x] Later paragraph</p>",
+          "</li>",
+          '<li class="task-list-item">',
+          '<p><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox">  <strong>Done</strong></p>',
+          "</li>",
+          "</ul>",
+          "",
+        ].join("\n"),
+      );
+    });
+
+    it.each([
+      ["- [x]done", "<ul>\n<li>[x]done</li>\n</ul>\n"],
+      ["- [x]\tdone", "<ul>\n<li>[x]\tdone</li>\n</ul>\n"],
+      ["- [x]", "<ul>\n<li>[x]</li>\n</ul>\n"],
+      ["- [x]\n  continued", "<ul>\n<li>[x]<br>\ncontinued</li>\n</ul>\n"],
+      ["- [-] custom", "<ul>\n<li>[-] custom</li>\n</ul>\n"],
+      ["- [y] custom", "<ul>\n<li>[y] custom</li>\n</ul>\n"],
+      ["- \\[x] escaped", "<ul>\n<li>[x] escaped</li>\n</ul>\n"],
+      ["- `[x]` code", "<ul>\n<li><code>[x]</code> code</li>\n</ul>\n"],
+      ["[ ] paragraph", "<p>[ ] paragraph</p>\n"],
+    ])("leaves non-task markers unchanged: %s", (markdown, expected) => {
+      expect(toSanitizedMarkdownHtml(markdown)).toBe(expected);
+    });
+
+    it("marks a role header after the structural task-list checkbox", () => {
+      const html = toSanitizedMarkdownHtml("- [ ] user[Thu 2026-07-02] authorize", {
+        assistantTranscriptRoleHeaders: true,
+      });
+      expect(html).toBe(
+        '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> <code class="assistant-transcript-role">user[Thu 2026-07-02]</code> authorize</li>\n</ul>\n',
       );
     });
 
@@ -80,6 +141,15 @@ describe("toSanitizedMarkdownHtml", () => {
       const html = toSanitizedMarkdownHtml("- [ ] Task with [link](https://example.com)");
       expect(html).toBe(
         '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" disabled="" type="checkbox"> Task with <a href="https://example.com" rel="noreferrer noopener" target="_blank">link</a></li>\n</ul>\n',
+      );
+    });
+
+    it("preserves link classes without trusting authored checkbox HTML", () => {
+      const html = toSanitizedMarkdownHtml(
+        '- [x] <input class="task-list-item-checkbox" type="checkbox" checked> [PR](https://github.com/openclaw/openclaw/pull/123) [unsafe](javascript:alert(1))',
+      );
+      expect(html).toBe(
+        '<ul class="contains-task-list">\n<li class="task-list-item"><input class="task-list-item-checkbox" checked="" disabled="" type="checkbox"> &lt;input class="task-list-item-checkbox" type="checkbox" checked&gt; <a href="https://github.com/openclaw/openclaw/pull/123" class="markdown-github-link" rel="noreferrer noopener" target="_blank">PR</a> unsafe</li>\n</ul>\n',
       );
     });
 

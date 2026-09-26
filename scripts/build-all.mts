@@ -3,7 +3,6 @@
 
 import type { SpawnSyncOptions } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import prettyMilliseconds from "pretty-ms";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
   finalizeBuildStepCache,
@@ -17,6 +16,7 @@ import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { formatDurationElapsed } from "./lib/format-duration.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import {
@@ -491,7 +491,7 @@ export function formatBuildAllDuration(durationMs: number) {
       : clampedMs < 10_000
         ? Math.round(clampedMs / 10) * 10
         : Math.round(clampedMs / 100) * 100;
-  return prettyMilliseconds(roundedMs, {
+  return formatDurationElapsed(roundedMs, {
     secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
   });
 }

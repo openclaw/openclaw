@@ -321,18 +321,10 @@ function getRichMessageText(params: RichMessageParams): string {
   return rich.markdown ?? rich.html ?? "";
 }
 
-const runnerHoisted = vi.hoisted(() => ({
-  sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
-    if (typeof next === "function") {
-      await next();
-    }
-  }),
-  sequentializeSpy: vi.fn(() => runnerHoisted.sequentializeMiddleware),
+const throttlerHoisted = vi.hoisted(() => ({
   throttlerSpy: vi.fn(() => "throttler"),
 }));
-export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
-export let sequentializeKey: ((ctx: unknown) => string | string[] | undefined) | undefined;
-export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
+export const throttlerSpy: AnyMock = throttlerHoisted.throttlerSpy;
 const telegramBotRuntimeForTest = {
   Bot: class {
     api = {
@@ -402,17 +394,9 @@ const telegramBotRuntimeForTest = {
       );
     }
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: ((keyFn: (ctx: unknown) => string | string[] | undefined) => {
-    sequentializeKey = keyFn;
-    return (
-      runnerHoisted.sequentializeSpy as unknown as () => ReturnType<
-        TelegramBotRuntimeForTest["sequentialize"]
-      >
-    )();
-  }) as unknown as TelegramBotRuntimeForTest["sequentialize"],
   apiThrottler: (() =>
     (
-      runnerHoisted.throttlerSpy as unknown as () => unknown
+      throttlerHoisted.throttlerSpy as unknown as () => unknown
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
@@ -568,14 +552,5 @@ beforeEach(() => {
     modelCatalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false }],
   });
   middlewareUseSpy.mockReset();
-  runnerHoisted.sequentializeMiddleware.mockReset();
-  runnerHoisted.sequentializeMiddleware.mockImplementation(async (_ctx, next) => {
-    if (typeof next === "function") {
-      await next();
-    }
-  });
-  sequentializeSpy.mockReset();
-  sequentializeSpy.mockImplementation(() => runnerHoisted.sequentializeMiddleware);
   botCtorSpy.mockReset();
-  sequentializeKey = undefined;
 });

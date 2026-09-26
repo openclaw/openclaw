@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createControlUiPrecompressedAssetVariants } from "../ui/vite.config.ts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(repoRoot, "ui/package.json"));
@@ -42,6 +43,29 @@ function resolveCommit(ref: string): string {
   return result.stdout.trim();
 }
 
+function declaredDependencyNames(root: string): string[] {
+  const file = path.join(root, "package.json");
+  if (!fs.existsSync(file)) {
+    return [];
+  }
+  const manifest: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!isRecord(manifest)) {
+    throw new Error(`Invalid package manifest: ${file}`);
+  }
+  const names: string[] = [];
+  for (const key of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    const entries = manifest[key];
+    if (entries === undefined) {
+      continue;
+    }
+    if (!isRecord(entries)) {
+      throw new Error(`Invalid ${key} in package manifest: ${file}`);
+    }
+    names.push(...Object.keys(entries));
+  }
+  return names;
+}
+
 function linkDependencies(baseRoot: string): void {
   const roots = ["", "ui"];
   for (const parent of ["packages", "extensions"]) {
@@ -50,6 +74,18 @@ function linkDependencies(baseRoot: string): void {
         roots.push(path.join(parent, entry.name));
       }
     }
+  }
+  if (
+    roots.some((root) => {
+      const candidate = new Set(declaredDependencyNames(path.join(repoRoot, root)));
+      return declaredDependencyNames(path.join(baseRoot, root)).some(
+        (name) => !candidate.has(name),
+      );
+    })
+  ) {
+    // A removal must not make the historical source unbuildable. Materialize
+    // its lockfile in this private archive without running historical hooks.
+    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts"], baseRoot);
   }
   const workspaceRoots = new Map(
     roots.map((root) => [fs.realpathSync(path.join(repoRoot, root)), root]),
@@ -74,6 +110,7 @@ function linkDependencies(baseRoot: string): void {
         const target = workspace === undefined ? installed : path.join(baseRoot, workspace);
         const destination = path.join(destinationRoot, "node_modules", name);
         fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.rmSync(destination, { recursive: true, force: true });
         fs.symlinkSync(target, destination, "junction");
       }
     }
@@ -114,8 +151,9 @@ function main(): void {
     run("tar", ["-xzf", archive, "-C", baseRoot]);
     linkDependencies(baseRoot);
 
-    // Both builds use the candidate's dependency installation. Calling Vite
-    // directly keeps historical policy out; one identity isolates source bytes.
+    // Both builds use the candidate's toolchain and shared dependencies; only
+    // base-only dependencies come from its lockfile. Calling Vite directly
+    // keeps historical policy out; one identity isolates source bytes.
     for (const root of [repoRoot, baseRoot]) {
       run(process.execPath, [viteBin, "build"], path.join(root, "ui"), buildEnv);
     }

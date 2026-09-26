@@ -96,7 +96,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
   if (
     moduleIdIncludesPackage(id, "highlight.js") ||
     moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "markdown-it-task-lists") ||
     moduleIdIncludesPackage(id, "dompurify") ||
     moduleIdIncludesPackage(id, "entities") ||
     moduleIdIncludesPackage(id, "linkify-it") ||

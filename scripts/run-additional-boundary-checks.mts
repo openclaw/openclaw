@@ -4,12 +4,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
-import prettyMilliseconds from "pretty-ms";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { formatDurationElapsed } from "./lib/format-duration.mts";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -490,7 +490,7 @@ function formatDuration(ms: number) {
     return "";
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
-  return prettyMilliseconds(Math.max(0, roundedMs), {
+  return formatDurationElapsed(Math.max(0, roundedMs), {
     unitCount: 1,
   });
 }

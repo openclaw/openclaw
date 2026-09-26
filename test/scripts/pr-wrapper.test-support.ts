@@ -55,7 +55,6 @@ export function linkPrWrapperDependencies(destination: string): void {
     "koffi",
     "kysely",
     "minimatch",
-    "ms",
     "p-map",
     "semver",
     "string-width",

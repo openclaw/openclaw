@@ -13,9 +13,9 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import prettyMilliseconds from "pretty-ms";
 import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
+import { formatDurationElapsed } from "../../lib/format-duration.mts";
 import {
   die,
   ensureValue,
@@ -558,13 +558,10 @@ function formatDuration(durationMs: number): string {
     return "0ms";
   }
   const roundedMs = Math.round(durationMs);
-  if (roundedMs < 1000) {
-    return prettyMilliseconds(roundedMs);
-  }
-  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
-    hideYear: true,
-    unitCount: 2,
-  });
+  return formatDurationElapsed(
+    roundedMs < 1000 ? roundedMs : Math.round(durationMs / 1000) * 1000,
+    { showYears: false, unitCount: 2 },
+  );
 }
 
 function readHarnessCheckoutVersion(): string {

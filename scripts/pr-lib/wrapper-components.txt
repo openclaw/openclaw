@@ -117,6 +117,7 @@ scripts/lib/direct-run.mjs
 scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts
 scripts/lib/failed-trailer.mts
+scripts/lib/format-duration.mts
 scripts/lib/gateway-server-test-plan.mts
 scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
@@ -642,6 +643,9 @@ src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
 src/infra/fixed-window-rate-limit.ts
+src/infra/format-time/duration-units.ts
+src/infra/format-time/format-duration-exact.ts
+src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
