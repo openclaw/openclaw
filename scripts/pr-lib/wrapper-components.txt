@@ -331,6 +331,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-policy-conflicts.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.worker-inference.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
 src/commands/doctor/shared/legacy-config-migrations.web-search.ts
 src/commands/doctor/shared/legacy-config-record-shared.ts
