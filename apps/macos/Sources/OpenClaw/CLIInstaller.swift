@@ -212,25 +212,26 @@ enum CLIInstaller {
         return fallbackStatus ?? .missing(location: self.managedExecutableLocation())
     }
 
-    static func managedStatus() async -> Status {
-        await self.managedStatus(expectedVersion: GatewayEnvironment.expectedGatewayVersionString())
+    static func managedStatus(managedExecutable: String? = nil) async -> Status {
+        await self.managedStatus(
+            expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+            managedExecutable: managedExecutable)
     }
 
-    private static func managedStatus(expectedVersion: String?) async -> Status {
-        let location = self.managedExecutableLocation()
+    private static func managedStatus(
+        expectedVersion: String?,
+        managedExecutable: String? = nil) async -> Status
+    {
+        let location = managedExecutable ?? self.managedExecutableLocation()
         guard FileManager.default.isExecutableFile(atPath: location) else {
             return .missing(location: location)
         }
 
         let preferredPaths = await CommandResolver.preferredPathsAsync()
-        let status = await self.status(
+        return await self.status(
             location: location,
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
-        if status.isReady {
-            self.rememberValidated(status, defaults: AppDefaults.standard)
-        }
-        return status
     }
 
     static func status(location: String) async -> Status {
@@ -381,6 +382,7 @@ enum CLIInstaller {
                 await statusHandler("Install failed: \(error.localizedDescription)")
                 return false
             }
+            self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
@@ -521,10 +523,11 @@ enum CLIInstaller {
         targetVersion: String,
         restartGateway: Bool = true,
         repair: Bool = false,
+        managedExecutable: String? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
-        let executable = self.managedExecutableLocation()
+        let executable = managedExecutable ?? self.managedExecutableLocation()
         await statusHandler(repair
             ? String(localized: "Repairing the OpenClaw Gateway update…")
             : String(format: String(localized: "Updating the OpenClaw Gateway to %@…"), targetVersion))
@@ -563,13 +566,16 @@ enum CLIInstaller {
             return .failure(message: message, details: details.map(self.limitDiagnostic))
         }
 
-        let managedStatus = await self.managedStatus(expectedVersion: targetVersion)
+        let managedStatus = await self.managedStatus(
+            expectedVersion: targetVersion,
+            managedExecutable: executable)
         guard case let .ready(_, installedVersion) = managedStatus else {
             let message = String(localized: "Gateway update finished, but verification failed.")
             await statusHandler(message)
             return .failure(message: message, details: managedStatus.message)
         }
 
+        self.rememberValidated(managedStatus, defaults: AppDefaults.standard)
         self.rememberInstallPolicy(.exact(targetVersion))
         NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
         await statusHandler(String(
