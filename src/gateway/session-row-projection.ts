@@ -366,7 +366,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     // Dirty keys retain failed background work for the next reader.
     void ensureMaterialized().catch(() => {});
   }
-  const { readSourceEntry, readChildLinks } = createSessionRowRelationReads({
+  const { readSourceEntry, readChildLinks, readPreparedSpawnedBy } = createSessionRowRelationReads({
+    env,
+    inOwnerContext,
+    isReady: () => !disposed && !topologyDirty,
+    preparedContext: () => metadata.readPrepared(epoch),
+    lookup,
     config: () => cfg,
     rows,
     byParent,
@@ -615,6 +620,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
+    readPreparedSpawnedBy,
     capture(query: records.Lookup) {
       if (disposed) {
         return undefined;

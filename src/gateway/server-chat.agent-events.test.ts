@@ -113,6 +113,7 @@ import {
 } from "./server-chat.js";
 import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -123,7 +124,9 @@ function waitForFast<T>(
 }
 
 describe("agent event handler", () => {
+  let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
   beforeEach(() => {
+    lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
     vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
@@ -158,6 +161,7 @@ describe("agent event handler", () => {
   });
 
   afterEach(() => {
+    lineageProjection?.dispose();
     vi.useRealTimers();
     resetAgentEventsForTest({ preserveListeners: true });
   });
@@ -189,6 +193,7 @@ describe("agent event handler", () => {
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
+    const projection = lineageProjection;
     const handler = createAgentEventHandler({
       broadcast,
       broadcastToConnIds,
@@ -211,6 +216,7 @@ describe("agent event handler", () => {
       resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
       updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
       resolveSessionActiveRunState: params?.resolveSessionActiveRunState,
+      getSessionRowProjection: () => projection,
     });
 
     return {
@@ -6882,6 +6888,12 @@ describe("agent event handler", () => {
 
   describe("spawnedBy enrichment in chat and agent broadcasts", () => {
     function mockSessionLineage(key: string, spawnedBy?: string) {
+      lineageProjection = createSessionRowProjectionFixture({
+        cfg: {},
+        store: {
+          [key]: { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
+        },
+      });
       mockSessionEntry(
         { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
         key,
@@ -7194,57 +7206,6 @@ describe("agent event handler", () => {
         spawnedBy: "agent:conductor:task:parent-gap",
       });
       expectPayloadDataFields(gapError[1], { reason: "seq gap", expected: 2, received: 5 });
-    });
-
-    it("projects repeated subagent lineage without loading full session rows", () => {
-      vi.mocked(loadGatewaySessionRow).mockClear();
-      mockSessionLineage("agent:coder:subagent:cache-test", "agent:conductor:task:parent-cache");
-
-      const { broadcast, handler, chatRunState } = createHarness({
-        resolveSessionKeyForRun: () => "agent:coder:subagent:cache-test",
-      });
-
-      registerChatRun(chatRunState, "run-cache", "agent:coder:subagent:cache-test", "client-cache");
-
-      emitAgentEvents(handler, "run-cache", [
-        ["assistant", { text: "chunk 1" }],
-        ["assistant", { text: "chunk 2" }],
-        ["lifecycle", { phase: "end" }],
-      ]);
-
-      expect(loadGatewaySessionRow).not.toHaveBeenCalled();
-
-      // All broadcasts still have correct spawnedBy
-      const chatCalls = chatBroadcastCalls(broadcast);
-      for (const [, payload] of chatCalls) {
-        expectPayloadFields(payload, {
-          spawnedBy: "agent:conductor:task:parent-cache",
-        });
-      }
-    });
-
-    it("caches null spawnedBy for eligible subagent sessions that lack a spawnedBy value", () => {
-      vi.mocked(loadGatewaySessionRow).mockClear();
-      mockSessionLineage("agent:coder:subagent:no-lineage");
-
-      const { broadcast, handler, chatRunState } = createHarness({
-        resolveSessionKeyForRun: () => "agent:coder:subagent:no-lineage",
-      });
-
-      registerChatRun(chatRunState, "run-null", "agent:coder:subagent:no-lineage", "client-null");
-
-      emitAgentEvents(handler, "run-null", [
-        ["assistant", { text: "chunk 1" }],
-        ["assistant", { text: "chunk 2" }],
-      ]);
-
-      expect(loadGatewaySessionRow).not.toHaveBeenCalled();
-      expect(loadSessionEntry).toHaveBeenCalledOnce();
-
-      const chatCalls = chatBroadcastCalls(broadcast);
-      for (const [, payload] of chatCalls) {
-        expect(payload).not.toHaveProperty("spawnedBy");
-      }
     });
   });
 });

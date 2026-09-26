@@ -17,6 +17,7 @@ import {
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   materializeSessionRow,
@@ -157,6 +158,13 @@ export function createSessionRowProjectionFixture(params: {
       };
     },
     readPreparedRowContext: () => rowContext,
+    readPreparedSpawnedBy(query) {
+      const row = describe(query);
+      return row
+        ? projectGatewaySessionRunState({ key: row.key, now: Date.now(), rowContext })
+            .subagentOwner || row.storedEntry?.spawnedBy
+        : undefined;
+    },
     capture: describe,
     findBySessionId: (query) =>
       [...rows.values()].filter(

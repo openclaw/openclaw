@@ -86,7 +86,6 @@ import {
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { loadGatewaySessionEntryReadOnly, type GatewaySessionRow } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -482,47 +481,17 @@ export function createAgentEventHandler({
     }
   };
 
-  // Native, ACP, and spawn-owned dashboard sessions can carry spawnedBy.
-  // Short-circuit everyone else so high-volume chat streams do not touch the
-  // session store. Results are cached per sessionKey because
-  // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
-  // path (delta, flush, final, agent, seq-gap).
-  const spawnedByCache = new Map<string, string | null>();
   const resolveSpawnedBy = (sessionKey: string): string | null => {
-    if (spawnedByCache.has(sessionKey)) {
-      return spawnedByCache.get(sessionKey)!;
-    }
-    // Non-lineage keys return null without polluting the cache; only eligible
-    // child-session results (positive or null) are worth memoising.
-    const isDashboardSession =
-      parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+    const parsed = parseAgentSessionKey(sessionKey);
+    const isDashboardSession = parsed?.rest.startsWith("dashboard:") === true;
     if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey) && !isDashboardSession) {
       return null;
     }
-    let result: string | null = null;
-    try {
-      const { entry, canonicalKey } = loadGatewaySessionEntryReadOnly(sessionKey, { clone: false });
-      if (entry) {
-        const rowContext = getSessionRowProjection?.()?.readPreparedRowContext();
-        result =
-          (rowContext
-            ? projectGatewaySessionRunState({
-                key: canonicalKey,
-                entry,
-                now: Date.now(),
-                rowContext,
-              }).subagentOwner
-            : undefined) ||
-          entry.spawnedBy ||
-          null;
-        if (getSessionRowProjection && !rowContext) {
-          // Pending projection facts must not make this temporary fallback permanent.
-          return result;
-        }
-      }
-    } catch {}
-    spawnedByCache.set(sessionKey, result);
-    return result;
+    const agentId =
+      parsed?.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), sessionKey);
+    return agentId
+      ? (getSessionRowProjection?.()?.readPreparedSpawnedBy({ key: sessionKey, agentId }) ?? null)
+      : null;
   };
 
   const buildSessionEventSnapshot = (
