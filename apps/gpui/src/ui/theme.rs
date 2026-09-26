@@ -97,6 +97,146 @@ impl Palette {
     }
 }
 
+/// Measured composer control geometry and typography from the Control UI.
+pub mod controls {
+    use gpui_kit::FontWeight;
+    pub const REM_SPACE_XS: f32 = 0.25;
+    pub const REM_SPACE_SM: f32 = 0.5;
+    pub const REM_SPACE_MD: f32 = 0.75;
+    pub const REM_SPACE_LG: f32 = 1.;
+    pub const SPACE_HAIRLINE: f32 = 1.;
+    pub const SPACE_TINY: f32 = 2.;
+    pub const SPACE_COMPACT: f32 = 3.;
+    pub const SPACE_XS: f32 = 4.;
+    pub const SPACE_SM: f32 = 6.;
+    pub const SPACE_SEARCH: f32 = 7.;
+    pub const SPACE_MD: f32 = 8.;
+    pub const SPACE_ROW: f32 = 9.;
+    pub const SPACE_INSET: f32 = 10.;
+    pub const SPACE_SECTION_Y: f32 = 11.;
+    pub const SPACE_LG: f32 = 12.;
+    pub const ICON_SMALL: f32 = 12.;
+    pub const ICON_META: f32 = 13.;
+    pub const ICON: f32 = 14.;
+    pub const ICON_TRIGGER: f32 = 15.;
+    pub const ICON_PROVIDER: f32 = 16.;
+    pub const ROW_ICON_SLOT: f32 = 18.;
+    pub const ROW_ACTION_SLOT: f32 = 22.;
+    pub const CHIP_HEIGHT: f32 = 30.;
+    pub const CHIP_MIN_WIDTH: f32 = 44.;
+    pub const CHIP_MAX_WIDTH: f32 = 260.;
+    pub const SEARCH_HEIGHT: f32 = 36.;
+    pub const SEARCH_INPUT_HEIGHT: f32 = 34.;
+    pub const MODEL_MENU_WIDTH: f32 = 338.;
+    pub const EFFORT_MENU_WIDTH: f32 = 328.;
+    pub const MENU_MAX_HEIGHT: f32 = 398.;
+    pub const EMPTY_HEIGHT: f32 = 112.;
+    pub const SEARCH_EMPTY_HEIGHT: f32 = 80.;
+    pub const ROW_MIN_HEIGHT: f32 = 40.;
+    pub const SECTION_HEIGHT: f32 = 32.;
+    pub const MENU_RADIUS: f32 = 17.5;
+    pub const ROW_RADIUS: f32 = 12.5;
+    pub const SEARCH_RADIUS: f32 = 10.;
+    pub const FALLBACK_ICON_RADIUS: f32 = 4.;
+    pub const TEXT_TINY: f32 = 9.;
+    pub const TEXT_META: f32 = 10.;
+    pub const TEXT_SECTION: f32 = 11.;
+    pub const TEXT_LABEL: f32 = 12.;
+    pub const TEXT_ROW: f32 = 13.;
+    pub const TEXT_CHIP: f32 = 14.;
+    pub const CHIP_LINE_HEIGHT: f32 = 18.9;
+    pub const META_LINE_HEIGHT: f32 = 13.;
+    pub const ICON_BUTTON_SIZE: f32 = 22.;
+    pub const POPOVER_OFFSET: f32 = 6.;
+    pub const SLIDER_HEIGHT: f32 = 26.;
+    pub const SLIDER_WIDTH: f32 = 292.;
+    pub const SLIDER_RADIUS: f32 = 13.;
+    pub const SLIDER_THUMB_WIDTH: f32 = 28.;
+    pub const SLIDER_THUMB_HEIGHT: f32 = 20.;
+    pub const SLIDER_THUMB_INSET: f32 = 3.;
+    pub const SLIDER_THUMB_RADIUS: f32 = 10.;
+    pub const SLIDER_DOT_SIZE: f32 = 4.;
+    pub const SLIDER_DOT_INSET: f32 = 12.;
+    pub const SLIDER_DOT_TOP: f32 = 11.;
+    pub const SLIDER_FOCUS_OUTSET: f32 = 2.;
+    pub const SLIDER_FOCUS_RADIUS: f32 = 12.;
+    pub const SLIDER_BOOST_BLUR: f32 = 12.;
+    pub const SLIDER_ULTRA_BLUR: f32 = 18.;
+    pub const SLIDER_GRADIENT_ANGLE: f32 = 90.;
+    pub const TOGGLE_WIDTH: f32 = 36.;
+    pub const TOGGLE_HEIGHT: f32 = 22.;
+    pub const TOGGLE_INNER_WIDTH: f32 = 34.;
+    pub const TOGGLE_INNER_HEIGHT: f32 = 20.;
+    pub const TOGGLE_THUMB_SIZE: f32 = 14.;
+    pub const TOGGLE_THUMB_INSET: f32 = 3.;
+    pub const TOGGLE_THUMB_ACTIVE: f32 = 17.;
+    pub const DISABLED_OPACITY: f32 = 0.5;
+    pub const UNANCHORED_OPACITY: f32 = 0.35;
+    pub const WEIGHT_BODY: FontWeight = FontWeight::NORMAL;
+    pub const WEIGHT_SCALE: FontWeight = FontWeight::MEDIUM;
+    pub const WEIGHT_LABEL: FontWeight = FontWeight::SEMIBOLD;
+    pub const WEIGHT_HEADING: FontWeight = FontWeight::BOLD;
+}
+
+#[derive(Clone, Copy)]
+pub struct ControlColors {
+    pub chip: Hsla,
+    pub menu: Hsla,
+    pub menu_border: Hsla,
+    pub search: Hsla,
+    pub search_border: Hsla,
+    pub selected: Hsla,
+    pub section_border: Hsla,
+    pub warning: Hsla,
+    pub slider_track: Hsla,
+    pub slider_fill: Hsla,
+    pub slider_dot: Hsla,
+    pub boost_center: Hsla,
+    pub ultra_center: Hsla,
+    pub boost_glow: Hsla,
+    pub ultra_glow: Hsla,
+    pub boost_border: Hsla,
+    pub ultra_border: Hsla,
+    pub toggle_active: Hsla,
+    pub toggle_inactive: Hsla,
+}
+
+impl Palette {
+    pub fn controls(self) -> ControlColors {
+        ControlColors {
+            chip: self.popover.blend(self.strong.opacity(0.65)),
+            menu: self.elevated.blend(self.card.opacity(0.04)),
+            menu_border: self.border_strong.opacity(0.64),
+            search: self.card.opacity(0.78),
+            search_border: self.border.opacity(0.78),
+            selected: self.text.opacity(0.08),
+            section_border: self.border.opacity(0.7),
+            warning: rgb(0xfbbf24).into(),
+            slider_track: self.elevated.blend(self.text.opacity(0.07)),
+            slider_fill: self.text.opacity(0.12),
+            slider_dot: self.text.opacity(0.28),
+            boost_center: Hsla::from(rgb(0xffffff)).blend(self.accent.opacity(0.6)),
+            ultra_center: Hsla::from(rgb(0xffffff)).blend(Hsla::from(rgb(0x14b8a6)).opacity(0.7)),
+            boost_glow: self.accent.opacity(0.24),
+            ultra_glow: self.accent.opacity(0.48),
+            boost_border: self.accent.opacity(0.45),
+            ultra_border: self.accent.opacity(0.75),
+            toggle_active: self.card.blend(self.accent.opacity(0.58)),
+            toggle_inactive: self.card.blend(self.text.opacity(0.12)),
+        }
+    }
+
+    pub fn provider_color(self, provider: &str) -> Hsla {
+        match provider {
+            "openai" => rgb(0x10a37f).into(),
+            "anthropic" | "claude-cli" => rgb(0xd97757).into(),
+            "google" => rgb(0x4285f4).into(),
+            "ollama" | "lmstudio" | "llama-cpp" | "opencode" => self.strong,
+            _ => self.muted,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum Appearance {
     #[default]

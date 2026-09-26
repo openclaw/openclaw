@@ -5,6 +5,8 @@ pub mod commands;
 pub mod composer;
 pub mod grouping;
 pub mod model_controls;
+pub mod model_picker;
+pub mod model_selection;
 pub mod panels;
 pub mod questions;
 pub mod sessions;

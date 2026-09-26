@@ -74,6 +74,18 @@ the session, before sending the first message. The controls own catalog fetching
 account selection, capability projection, and optimistic session updates; the
 creation owner continues to own draft submission and composer layout.
 
+Shared UI building blocks live in `src/ui/components`: composer chips, anchored
+control popovers, menu rows and surfaces, setting rows, provider icons, toggles,
+and a discrete slider. They use GPUI component/base widgets for interaction and
+`theme::controls` plus `Palette::controls()` for the measured Control UI styling.
+The slider uses the base slider's pointer state and exposes preview/commit
+callbacks; the application owns only the target and the settings mutation.
+
+Pure catalog, menu, and selection projections live in `src/model/model_controls.rs`,
+`model_picker.rs`, and `model_selection.rs`. The UI state owns scoped RPC requests,
+connection/target lifetimes, and pending mutations. Draft storage has one domain
+owner, and the composer no longer maintains a parallel model catalog.
+
 Files are checked against the Gateway's advertised attachment limits. Clipboard
 text longer than 1,000 UTF-16 units becomes a text-file attachment. Draft text and
 attachments remain in memory, isolated by window and conversation. Remote

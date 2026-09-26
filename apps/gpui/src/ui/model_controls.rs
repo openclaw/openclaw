@@ -1,7 +1,11 @@
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    components::*,
+    theme::{Palette, controls as t},
+};
 use crate::{
-    gateway::composer_rpc::{ModelChoice, ThinkingLevel},
-    model::{model_controls::*, sessions::SessionRow},
+    gateway::composer_rpc::ModelChoice,
+    model::{model_controls::*, model_picker::*},
 };
 use gpui_kit::{
     assets::IconName,
@@ -9,7 +13,6 @@ use gpui_kit::{
         Disableable, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         input::Input,
-        popover::Popover,
         tooltip::Tooltip,
     },
     prelude::FluentBuilder as _,
@@ -17,71 +20,11 @@ use gpui_kit::{
 };
 use serde_json::json;
 
-const CHAT_ONLY_HELP: &str = "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.";
-
-#[derive(Clone)]
-enum PickerAction {
-    Model(Box<PickerOption>),
-    Account(String),
-    CurrentAccount,
-    Automatic,
-    Loading,
-    MoreAccounts,
-    ManageAccounts,
-}
-
-#[derive(Clone)]
-struct PickerMenuRow {
-    key: String,
-    label: String,
-    description: Option<String>,
-    selected: bool,
-    disabled: bool,
-    action: PickerAction,
-}
-
-impl PickerMenuRow {
-    fn search_rank(&self, query: &str) -> Option<u8> {
-        let (keywords, provider, reference) = match &self.action {
-            PickerAction::Model(option) => (
-                format!(
-                    "{} {}",
-                    if option.is_default { "Default" } else { "" },
-                    option.runtime_label()
-                ),
-                provider_label(&option.provider),
-                option.value.as_str(),
-            ),
-            _ => (
-                self.description.clone().unwrap_or_default(),
-                "account".into(),
-                self.key.as_str(),
-            ),
-        };
-        picker_search_rank(&self.label, &keywords, &provider, reference, query)
-    }
-}
-
-enum PickerMenuEntry {
-    Provider(PickerGroup),
-    Accounts,
-    Row(PickerMenuRow),
-    AccountError(String),
-}
-
 struct PickerRowPresentation {
     highlight: bool,
     searching: bool,
     shortcut: Option<usize>,
     navigation_index: Option<usize>,
-}
-
-#[derive(Clone)]
-struct EffortDrag;
-impl Render for EffortDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
 }
 
 impl AppView {
@@ -99,7 +42,7 @@ impl AppView {
             .h_flex()
             .items_center()
             .min_w_0()
-            .gap(px(4.))
+            .gap(px(t::SPACE_XS))
             .child(self.model_picker(target, window, cx))
             .children(self.thinking_picker(target, cx))
             .into_any_element()
@@ -172,71 +115,9 @@ impl AppView {
 
     fn thinking_selection(&self) -> ThinkingState {
         let row = self.model_controls_row().unwrap_or_default();
-        let defaults: SessionRow =
+        let defaults =
             serde_json::from_value(self.model_controls.defaults.clone()).unwrap_or_default();
-        let matching_defaults = row
-            .model
-            .as_ref()
-            .is_none_or(|v| Some(v) == defaults.model.as_ref())
-            && row
-                .model_provider
-                .as_ref()
-                .is_none_or(|v| Some(v) == defaults.model_provider.as_ref())
-            && row
-                .agent_runtime
-                .as_ref()
-                .zip(defaults.agent_runtime.as_ref())
-                .is_none_or(|(a, b)| a.id == b.id);
-        let model = self.model_capabilities();
-        let owns_profile = |row: &SessionRow| {
-            row.thinking_levels.is_some()
-                || row.thinking_options.is_some()
-                || row.thinking_default.is_some()
-        };
-        let profile = if owns_profile(&row) {
-            Some(&row)
-        } else if matching_defaults && owns_profile(&defaults) {
-            Some(&defaults)
-        } else {
-            None
-        };
-        let levels = if let Some(profile) = profile {
-            profile.thinking_levels.clone().unwrap_or_else(|| {
-                profile
-                    .thinking_options
-                    .as_ref()
-                    .map(|options| {
-                        options
-                            .iter()
-                            .map(|id| ThinkingLevel {
-                                id: id.clone(),
-                                label: id.clone(),
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            })
-        } else {
-            model
-                .as_ref()
-                .and_then(|m| m.thinking_levels.clone())
-                .unwrap_or_default()
-        };
-        let default = profile
-            .and_then(|p| p.thinking_default.as_deref())
-            .or_else(|| {
-                if profile.is_none() {
-                    model.as_ref().and_then(|m| m.thinking_default.as_deref())
-                } else {
-                    None
-                }
-            });
-        thinking_state(
-            &levels,
-            default,
-            model.as_ref().and_then(|m| m.reasoning),
-            row.thinking_level.as_deref(),
-        )
+        project_thinking(&row, &defaults, self.model_capabilities().as_ref())
     }
 
     fn picker_selection_value(&self) -> String {
@@ -254,79 +135,41 @@ impl AppView {
     }
 
     fn picker_menu_entries(&self, target: &ModelControlsTarget, cx: &App) -> Vec<PickerMenuEntry> {
-        let row = self.model_controls_row().unwrap_or_default();
-        if row.model_selection_locked {
-            return Vec::new();
-        }
-        let query = self
-            .model_controls
-            .search
-            .read(cx)
-            .value()
-            .trim()
-            .to_lowercase();
-        let selection = self.picker_selection_value();
-        let runtime = self.model_runtime();
-        let disabled = self.model_controls_disabled_reason().is_some();
-        let pinned = self.model_is_pinned();
-        let mut entries = Vec::new();
-        for group in group_picker_options(&self.picker_options()) {
-            let expanded = self
+        let reference = self.model_controls_model_reference();
+        menu_entries(MenuProjection {
+            options: &self.picker_options(),
+            selection: &self.picker_selection_value(),
+            runtime: self.model_runtime().as_deref(),
+            query: &self.model_controls.search.read(cx).value(),
+            expanded_providers: &self.model_controls.expanded_providers,
+            locked: self
+                .model_controls_row()
+                .is_some_and(|row| row.model_selection_locked),
+            disabled: self.model_controls_disabled_reason().is_some(),
+            pinned: self.model_is_pinned(),
+            accounts_open: self.model_controls.accounts_open,
+            accounts: self
                 .model_controls
-                .expanded_providers
-                .contains(&group.provider);
-            if query.is_empty() {
-                entries.push(PickerMenuEntry::Provider(group.clone()));
-            }
-            if expanded || !query.is_empty() {
-                for option in group.options {
-                    entries.push(PickerMenuEntry::Row(PickerMenuRow {
-                        key: format!(
-                            "model:{}:{}",
-                            option.value,
-                            option.agent_runtime.as_deref().unwrap_or("base")
-                        ),
-                        label: option.display_label(),
-                        description: None,
-                        selected: option.selected(&selection, runtime.as_deref()),
-                        disabled: disabled || (!option.selectable(pinned) && !option.needs_auth()),
-                        action: PickerAction::Model(Box::new(option)),
-                    }));
-                }
-            }
-        }
-        if self.model_controls.catalog.account_selection.is_some() {
-            if query.is_empty() {
-                entries.push(PickerMenuEntry::Accounts);
-            }
-            if self.model_controls.accounts_open || !query.is_empty() {
-                entries.extend(
-                    self.account_rows(target)
-                        .into_iter()
-                        .map(PickerMenuEntry::Row),
-                );
-                if query.is_empty()
-                    && let Some(error) = &self.model_controls.accounts_error
-                {
-                    entries.push(PickerMenuEntry::AccountError(error.clone()));
-                }
-            }
-        }
-        if !query.is_empty() {
-            let mut ranked = entries
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    PickerMenuEntry::Row(row) => row.search_rank(&query).map(|rank| (rank, row)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            ranked.sort_by_key(|(rank, _)| *rank);
-            return ranked
-                .into_iter()
-                .map(|(_, row)| PickerMenuEntry::Row(row))
-                .collect();
-        }
-        entries
+                .catalog
+                .account_selection
+                .as_ref()
+                .map(|selection| AccountInventory {
+                    selection,
+                    accounts: &self.model_controls.accounts,
+                    auth: &self.model_controls.auth,
+                    model_reference: &reference,
+                    disabled: self.account_controls_disabled(target),
+                    automatic: target.session_key.is_none()
+                        && self
+                            .model_controls_draft_patch(target)
+                            .get("model")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|value| split_model_auth_profile(value).1.is_some()),
+                    loading: self.model_controls.accounts_loading,
+                    has_more: self.model_controls.account_next_cursor.is_some(),
+                }),
+            account_error: self.model_controls.accounts_error.as_deref(),
+        })
     }
 
     pub(super) fn reset_model_picker_highlight(&mut self, cx: &mut Context<Self>) {
@@ -469,8 +312,8 @@ impl AppView {
             .id("model-menu-content")
             .key_context("ModelPicker")
             .v_flex()
-            .w(px(338.))
-            .max_h(px(398.))
+            .w(px(t::MODEL_MENU_WIDTH))
+            .max_h(px(t::MENU_MAX_HEIGHT))
             .overflow_hidden()
             .track_focus(&self.model_controls.menu_focus)
             .capture_key_down(cx.listener(Self::model_picker_key_down))
@@ -508,37 +351,37 @@ impl AppView {
             menu = menu.child(
                 div()
                     .h_flex()
-                    .gap_2()
-                    .p_2()
-                    .text_size(px(12.))
+                    .gap(rems(t::REM_SPACE_SM))
+                    .p(rems(t::REM_SPACE_SM))
+                    .text_size(px(t::TEXT_LABEL))
                     .child(label.clone())
-                    .child(div().text_size(px(10.)).child("LOCKED")),
+                    .child(div().text_size(px(t::TEXT_META)).child("LOCKED")),
             );
         } else {
             menu = menu.child(
                 div()
                     .h_flex()
                     .items_center()
-                    .gap(px(7.))
-                    .m(px(8.))
-                    .px(px(10.))
-                    .h(px(36.))
+                    .gap(px(t::SPACE_SEARCH))
+                    .m(px(t::SPACE_MD))
+                    .px(px(t::SPACE_INSET))
+                    .h(px(t::SEARCH_HEIGHT))
                     .flex_shrink_0()
                     .border_1()
-                    .border_color(p.border.opacity(0.78))
-                    .rounded(px(10.))
-                    .bg(p.card.opacity(0.78))
+                    .border_color(p.controls().search_border)
+                    .rounded(px(t::SEARCH_RADIUS))
+                    .bg(p.controls().search)
                     .child(
                         Icon::new(IconName::Search)
-                            .size(px(14.))
+                            .size(px(t::ICON))
                             .text_color(p.muted),
                     )
                     .child(
                         Input::new(&self.model_controls.search)
                             .appearance(false)
                             .bordered(false)
-                            .text_size(px(12.))
-                            .h(px(34.))
+                            .text_size(px(t::TEXT_LABEL))
+                            .h(px(t::SEARCH_INPUT_HEIGHT))
                             .p_0()
                             .flex_1(),
                     ),
@@ -546,18 +389,18 @@ impl AppView {
             if let Some(error) = &self.model_controls.error {
                 menu = menu.child(
                     div()
-                        .px_3()
-                        .py_2()
-                        .text_size(px(12.))
+                        .px(rems(t::REM_SPACE_MD))
+                        .py(rems(t::REM_SPACE_SM))
+                        .text_size(px(t::TEXT_LABEL))
                         .text_color(p.muted)
                         .child(error.clone()),
                 );
             } else if options.is_empty() {
                 menu = menu.child(
                     div()
-                        .min_h(px(112.))
-                        .p_4()
-                        .text_size(px(12.))
+                        .min_h(px(t::EMPTY_HEIGHT))
+                        .p(rems(t::REM_SPACE_LG))
+                        .text_size(px(t::TEXT_LABEL))
                         .text_color(p.muted)
                         .child(if self.model_controls.loading {
                             "Loading models…"
@@ -573,9 +416,9 @@ impl AppView {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.model_controls.menu_scroll)
-            .px(px(7.))
-            .pb(px(7.))
-            .gap(px(2.));
+            .px(px(t::SPACE_SEARCH))
+            .pb(px(t::SPACE_SEARCH))
+            .gap(px(t::SPACE_TINY));
         let selectable_count = entries
             .iter()
             .filter(|entry| matches!(entry, PickerMenuEntry::Row(row) if !row.disabled))
@@ -593,9 +436,9 @@ impl AppView {
                 PickerMenuEntry::Provider(group) => self.provider_header(&group, disabled, cx),
                 PickerMenuEntry::Accounts => self.account_header(target, cx),
                 PickerMenuEntry::AccountError(error) => div()
-                    .px_2()
-                    .py_1()
-                    .text_size(px(12.))
+                    .px(rems(t::REM_SPACE_SM))
+                    .py(rems(t::REM_SPACE_XS))
+                    .text_size(px(t::TEXT_LABEL))
                     .text_color(p.danger)
                     .child(error)
                     .into_any_element(),
@@ -627,9 +470,9 @@ impl AppView {
         if !query.is_empty() && !has_rows {
             rows = rows.child(
                 div()
-                    .min_h(px(80.))
-                    .p_3()
-                    .text_size(px(12.))
+                    .min_h(px(t::SEARCH_EMPTY_HEIGHT))
+                    .p(rems(t::REM_SPACE_MD))
+                    .text_size(px(t::TEXT_LABEL))
                     .text_color(p.muted)
                     .child("No models match your search"),
             );
@@ -637,22 +480,12 @@ impl AppView {
         menu = menu.child(rows).children(self.context_control(target, cx));
         let control_target = target.clone();
         let owner = cx.entity().downgrade();
-        let trigger = Button::new("model-picker-trigger")
-            .accessibility_label(format!("Model: {label}"))
+        let trigger = composer_chip("model-picker-trigger", format!("Model: {label}"), p)
             .track_focus(&self.model_controls.trigger_focus)
-            .ghost()
-            .small()
-            .h(px(30.))
-            .px(px(8.))
-            .gap(px(6.))
-            .min_w(px(44.))
-            .max_w(px(260.))
-            .rounded_full()
-            .text_size(px(14.))
-            .font_weight(FontWeight::NORMAL)
-            .text_color(chip_color(p))
+            .min_w(px(t::CHIP_MIN_WIDTH))
+            .max_w(px(t::CHIP_MAX_WIDTH))
             .disabled(disabled)
-            .picker_tooltip(disabled_reason.unwrap_or_else(|| {
+            .element_tooltip(disabled_reason.unwrap_or_else(|| {
                 if restricted {
                     "Your administrator centrally configures the models available here.".into()
                 } else {
@@ -662,10 +495,10 @@ impl AppView {
         let mut content = div()
             .h_flex()
             .items_center()
-            .gap(px(4.))
+            .gap(px(t::SPACE_XS))
             .min_w_0()
-            .text_size(px(14.))
-            .line_height(px(18.9));
+            .text_size(px(t::TEXT_CHIP))
+            .line_height(px(t::CHIP_LINE_HEIGHT));
         if let Some(option) =
             label_option.filter(|_| trigger_status.is_none() && !locked_without_model)
         {
@@ -676,32 +509,36 @@ impl AppView {
                         .h_flex()
                         .items_center()
                         .flex_shrink_0()
-                        .gap(px(4.))
-                        .child(Icon::new(IconName::TriangleAlert).size(px(14.)))
+                        .gap(px(t::SPACE_XS))
+                        .child(Icon::new(IconName::TriangleAlert).size(px(t::ICON)))
                         .child("Chat only")
                         .tooltip(|window, cx| Tooltip::new(CHAT_ONLY_HELP).build(window, cx)),
                 );
             }
             if provider_icon_name(&option.provider).is_some() {
-                content = content.child(div().mr(px(2.)).flex_shrink_0().child(provider_icon(
-                    &option.provider,
-                    15.,
-                    true,
-                    p,
-                )));
+                content = content.child(
+                    div()
+                        .mr(px(t::SPACE_TINY))
+                        .flex_shrink_0()
+                        .child(provider_icon(&option.provider, t::ICON_TRIGGER, true, p)),
+                );
             }
         }
         content = content.child(div().min_w_0().truncate().child(label));
-        if let Some((windows, chosen, default)) = self.context_options()
+        if let Some(ContextSelection {
+            options: windows,
+            selected: chosen,
+            default,
+        }) = self.context_options()
             && chosen != default
             && let Some(option) = windows.iter().find(|o| o.id == chosen)
         {
             content = content.child(
                 div()
-                    .px_1()
+                    .px(rems(t::REM_SPACE_XS))
                     .rounded_full()
                     .bg(p.hover)
-                    .text_size(px(10.))
+                    .text_size(px(t::TEXT_META))
                     .child(option.label.clone()),
             );
         }
@@ -711,41 +548,40 @@ impl AppView {
             } else {
                 IconName::ChevronDown
             })
-            .size(px(12.))
+            .size(px(t::ICON_SMALL))
             .text_color(p.muted),
         );
-        Popover::new("model-picker")
-            .anchor(Anchor::BottomRight)
-            .bottom(px(6.))
-            .appearance(false)
-            .open(self.model_controls.model_open)
-            .track_focus(&self.model_controls.menu_focus)
-            .on_open_change(move |open, window, cx| {
-                let _ = owner.update(cx, |this, cx| {
-                    if this.model_controls_disabled_reason().is_some() {
-                        this.model_controls.model_open = false;
-                        return;
-                    }
-                    this.model_controls.model_open = *open;
-                    this.model_controls.effort_open = false;
-                    this.model_controls.accounts_open = false;
-                    this.model_controls.expanded_providers.clear();
-                    this.model_controls.highlight = 0;
-                    this.model_controls
-                        .menu_scroll
-                        .set_offset(point(px(0.), px(0.)));
-                    this.model_controls
-                        .search
-                        .update(cx, |search, cx| search.set_value("", window, cx));
-                    if *open {
-                        this.load_model_controls(control_target.clone(), cx);
-                    }
-                    cx.notify();
-                });
-            })
-            .trigger(trigger.child(content))
-            .child(menu_surface(p).child(menu))
-            .into_any_element()
+        control_popover(
+            "model-picker",
+            self.model_controls.model_open,
+            &self.model_controls.menu_focus,
+        )
+        .on_open_change(move |open, window, cx| {
+            let _ = owner.update(cx, |this, cx| {
+                if this.model_controls_disabled_reason().is_some() {
+                    this.model_controls.model_open = false;
+                    return;
+                }
+                this.model_controls.model_open = *open;
+                this.model_controls.effort_open = false;
+                this.model_controls.accounts_open = false;
+                this.model_controls.expanded_providers.clear();
+                this.model_controls.highlight = 0;
+                this.model_controls
+                    .menu_scroll
+                    .set_offset(point(px(0.), px(0.)));
+                this.model_controls
+                    .search
+                    .update(cx, |search, cx| search.set_value("", window, cx));
+                if *open {
+                    this.load_model_controls(control_target.clone(), cx);
+                }
+                cx.notify();
+            });
+        })
+        .trigger(trigger.child(content))
+        .child(menu_surface(p).child(menu))
+        .into_any_element()
     }
 
     fn model_option_row(
@@ -771,11 +607,20 @@ impl AppView {
         } else {
             ""
         };
-        let row = Button::new(SharedString::from(format!(
-            "choice-{}-{}",
-            option.value,
-            option.agent_runtime.as_deref().unwrap_or("base")
-        )))
+        let row = super::components::menu_row(
+            SharedString::from(format!(
+                "choice-{}-{}",
+                option.value,
+                option.agent_runtime.as_deref().unwrap_or("base")
+            )),
+            MenuRowStyle {
+                selected,
+                highlighted: presentation.highlight,
+                disabled: menu_row.disabled,
+                emphasized: true,
+            },
+            p,
+        )
         .accessibility_label(
             [
                 option.display_label(),
@@ -786,36 +631,20 @@ impl AppView {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join(". "),
-        )
-        .ghost()
-        .small()
-        .w_full()
-        .min_h(px(40.))
-        .h_auto()
-        .px(px(9.))
-        .py(px(6.))
-        .gap(px(8.))
-        .rounded(px(12.5))
-        .justify_start()
-        .text_size(px(13.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(p.text)
-        .disabled(menu_row.disabled)
-        .when(selected, |row| row.bg(p.text.opacity(0.08)))
-        .when(presentation.highlight, |row| row.bg(p.hover));
+        );
         let content = div()
             .h_flex()
             .items_center()
             .w_full()
-            .gap(px(8.))
-            .text_size(px(13.))
+            .gap(px(t::SPACE_MD))
+            .text_size(px(t::TEXT_ROW))
             .child(
                 div()
-                    .w(px(18.))
-                    .h(px(18.))
+                    .w(px(t::ROW_ICON_SLOT))
+                    .h(px(t::ROW_ICON_SLOT))
                     .flex_shrink_0()
                     .when(presentation.searching, |stem| {
-                        stem.child(provider_icon(&option.provider, 16., false, p))
+                        stem.child(provider_icon(&option.provider, t::ICON_PROVIDER, false, p))
                     }),
             );
         let mut copy = div()
@@ -827,10 +656,10 @@ impl AppView {
         if option.is_default {
             copy = copy.child(
                 div()
-                    .ml(px(6.))
+                    .ml(px(t::SPACE_SM))
                     .flex_shrink_0()
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(t::TEXT_TINY))
+                    .font_weight(t::WEIGHT_HEADING)
                     .text_color(p.muted)
                     .child("Default"),
             );
@@ -839,11 +668,11 @@ impl AppView {
         if !meta.is_empty() {
             copy = copy.child(
                 div()
-                    .ml(px(6.))
+                    .ml(px(t::SPACE_SM))
                     .min_w_0()
                     .truncate()
-                    .text_size(px(10.))
-                    .font_weight(FontWeight::NORMAL)
+                    .text_size(px(t::TEXT_META))
+                    .font_weight(t::WEIGHT_BODY)
                     .text_color(p.muted)
                     .child(meta),
             );
@@ -853,21 +682,25 @@ impl AppView {
                 div()
                     .h_flex()
                     .items_center()
-                    .gap(px(3.))
-                    .ml(px(6.))
+                    .gap(px(t::SPACE_COMPACT))
+                    .ml(px(t::SPACE_SM))
                     .min_w_0()
-                    .text_size(px(10.))
-                    .text_color(rgb(0xfbbf24))
-                    .child(Icon::new(IconName::TriangleAlert).size(px(12.)))
+                    .text_size(px(t::TEXT_META))
+                    .text_color(p.controls().warning)
+                    .child(Icon::new(IconName::TriangleAlert).size(px(t::ICON_SMALL)))
                     .child(div().truncate().child(status)),
             );
         }
         if option.supports_tools == Some(false) {
-            copy = copy.child(Icon::new(IconName::Info).size(px(16.)).text_color(p.muted));
+            copy = copy.child(
+                Icon::new(IconName::Info)
+                    .size(px(t::ICON_PROVIDER))
+                    .text_color(p.muted),
+            );
         }
         let content = content.child(copy).child(
             div()
-                .w(px(22.))
+                .w(px(t::ROW_ACTION_SLOT))
                 .flex_shrink_0()
                 .flex()
                 .justify_center()
@@ -875,7 +708,7 @@ impl AppView {
         );
         let help = model_option_help(option);
         row.child(content)
-            .picker_tooltip(if !help.is_empty() {
+            .element_tooltip(if !help.is_empty() {
                 help
             } else if status.is_empty() {
                 option.value.clone()
@@ -902,64 +735,18 @@ impl AppView {
     }
 
     fn provider_auth_label(&self, provider: &str) -> Option<(IconName, String)> {
-        let records: Vec<_> = self
-            .model_controls
-            .auth
-            .providers
-            .iter()
-            .filter(|p| provider_group(&p.provider) == provider)
-            .collect();
-        let profiles: Vec<_> = records.iter().flat_map(|p| p.profiles.iter()).collect();
-        let selected = self
-            .model_controls
-            .catalog
-            .account_selection
-            .as_ref()
-            .filter(|s| s.kind != "automatic")
-            .and_then(|s| s.auth_profile_id.as_deref());
-        let active = selected.and_then(|id| profiles.iter().find(|p| p.profile_id == id));
-        let subscriptions: Vec<_> = profiles
-            .iter()
-            .filter(|p| matches!(p.auth_type.as_str(), "oauth" | "token"))
-            .collect();
-        let has_api = records.iter().any(|p| p.api_key.is_some())
-            || profiles.iter().any(|p| p.auth_type == "api_key");
-        let usable = profiles
-            .iter()
-            .any(|p| matches!(p.status.as_str(), "ok" | "expiring" | "static"));
-        if records
-            .iter()
-            .any(|p| matches!(p.status.as_str(), "missing" | "expired"))
-            && !has_api
-            && !usable
-        {
-            if self
-                .picker_options()
-                .iter()
-                .any(|o| o.provider == provider && o.needs_auth())
-            {
-                return None;
-            }
-            return Some((IconName::TriangleAlert, "Sign in needed".into()));
-        }
-        if !subscriptions.is_empty() && active.is_none_or(|p| p.auth_type != "api_key") {
-            let label = if subscriptions.len() == 1 {
-                records
-                    .iter()
-                    .find_map(|p| p.usage.as_ref().and_then(|u| u.plan.clone()))
-                    .unwrap_or_else(|| "Subscription".into())
-            } else {
-                "Subscription".into()
-            };
-            let detail = (subscriptions.len() > 1)
-                .then(|| active.and_then(|p| p.email.clone()))
-                .flatten();
-            return Some((
-                IconName::CircleUser,
-                detail.map(|d| format!("{label} · {d}")).unwrap_or(label),
-            ));
-        }
-        has_api.then(|| (IconName::Key, "API".into()))
+        let auth = provider_auth_label(
+            provider,
+            &self.model_controls.auth,
+            self.model_controls.catalog.account_selection.as_ref(),
+            &self.picker_options(),
+        )?;
+        let icon = match auth.kind {
+            ProviderAuthKind::Missing => IconName::TriangleAlert,
+            ProviderAuthKind::Subscription => IconName::CircleUser,
+            ProviderAuthKind::Api => IconName::Key,
+        };
+        Some((icon, auth.label))
     }
 
     fn provider_header(
@@ -975,9 +762,9 @@ impl AppView {
         div()
             .h_flex()
             .items_center()
-            .gap(px(8.))
-            .px(px(10.))
-            .h(px(32.))
+            .gap(px(t::SPACE_MD))
+            .px(px(t::SPACE_INSET))
+            .h(px(t::SECTION_HEIGHT))
             .text_color(p.muted)
             .child(
                 Button::new(SharedString::from(format!("provider-{provider}")))
@@ -989,21 +776,21 @@ impl AppView {
                     .ghost()
                     .small()
                     .p_0()
-                    .h(px(32.))
+                    .h(px(t::SECTION_HEIGHT))
                     .flex_1()
                     .justify_start()
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(t::TEXT_SECTION))
+                    .font_weight(t::WEIGHT_HEADING)
                     .text_color(p.muted)
                     .child(
                         div()
                             .h_flex()
                             .items_center()
                             .w_full()
-                            .gap(px(8.))
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .child(provider_icon(&provider, 16., false, p))
+                            .gap(px(t::SPACE_MD))
+                            .text_size(px(t::TEXT_SECTION))
+                            .font_weight(t::WEIGHT_HEADING)
+                            .child(provider_icon(&provider, t::ICON_PROVIDER, false, p))
                             .child(group.label.clone())
                             .child(group.options.len().to_string())
                             .child(
@@ -1012,7 +799,7 @@ impl AppView {
                                 } else {
                                     IconName::ChevronDown
                                 })
-                                .size(px(12.)),
+                                .size(px(t::ICON_SMALL)),
                             ),
                     )
                     .disabled(disabled)
@@ -1034,11 +821,11 @@ impl AppView {
                 row.child(
                     div()
                         .h_flex()
-                        .gap(px(4.))
+                        .gap(px(t::SPACE_XS))
                         .items_center()
                         .min_w_0()
-                        .text_size(px(11.))
-                        .child(Icon::new(icon).size(px(13.)))
+                        .text_size(px(t::TEXT_SECTION))
+                        .child(Icon::new(icon).size(px(t::ICON_META)))
                         .child(div().truncate().child(label)),
                 )
             })
@@ -1047,9 +834,9 @@ impl AppView {
                     .ghost()
                     .xsmall()
                     .p_0()
-                    .size(px(22.))
-                    .icon(Icon::new(IconName::Settings).size(px(12.)))
-                    .picker_tooltip("Configure models")
+                    .size(px(t::ICON_BUTTON_SIZE))
+                    .icon(Icon::new(IconName::Settings).size(px(t::ICON_SMALL)))
+                    .element_tooltip("Configure models")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_model_settings(window, cx)),
                     ),
@@ -1072,127 +859,6 @@ impl AppView {
             || (target.session_key.is_none() && !account_write)
     }
 
-    fn account_rows(&self, target: &ModelControlsTarget) -> Vec<PickerMenuRow> {
-        let Some(selection) = self.model_controls.catalog.account_selection.as_ref() else {
-            return Vec::new();
-        };
-        let disabled = self.account_controls_disabled(target);
-        let reference = self.model_controls_model_reference();
-        let provider = reference
-            .split_once('/')
-            .map(|(p, _)| normalize_provider(p))
-            .unwrap_or_default();
-        let current = if selection.kind == "automatic" {
-            None
-        } else {
-            selection.auth_profile_id.as_deref()
-        };
-        let subscriptions = self
-            .model_controls
-            .auth
-            .providers
-            .iter()
-            .filter(|record| provider_group(&record.provider) == provider_group(&provider))
-            .flat_map(|record| record.profiles.iter())
-            .filter(|profile| matches!(profile.auth_type.as_str(), "oauth" | "token"))
-            .collect::<Vec<_>>();
-        let description = |profile_id: Option<&str>| {
-            let id = profile_id?;
-            if subscriptions.len() > 1
-                && let Some(email) = subscriptions
-                    .iter()
-                    .find(|profile| profile.profile_id == id)
-                    .and_then(|profile| profile.email.clone())
-            {
-                return Some(email);
-            }
-            let account = self
-                .model_controls
-                .accounts
-                .iter()
-                .find(|account| account.auth_profile_id == id)?;
-            self.model_controls
-                .accounts
-                .iter()
-                .any(|other| {
-                    other.auth_profile_id != id
-                        && other.provider == account.provider
-                        && other.label == account.label
-                })
-                .then(|| id.to_owned())
-        };
-        let mut rows = vec![PickerMenuRow {
-            key: "account:current".into(),
-            label: selection.label.clone(),
-            description: description(current),
-            selected: true,
-            disabled,
-            action: PickerAction::CurrentAccount,
-        }];
-        rows.extend(
-            self.model_controls
-                .accounts
-                .iter()
-                .filter(|account| {
-                    account.provider == provider
-                        && Some(account.auth_profile_id.as_str()) != current
-                })
-                .map(|account| PickerMenuRow {
-                    key: format!("account:account:{}", account.auth_profile_id),
-                    label: account.label.clone(),
-                    description: description(Some(&account.auth_profile_id)),
-                    selected: false,
-                    disabled,
-                    action: PickerAction::Account(account.auth_profile_id.clone()),
-                }),
-        );
-        if target.session_key.is_none()
-            && self
-                .model_controls_draft_patch(target)
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| split_model_auth_profile(value).1.is_some())
-        {
-            rows.push(PickerMenuRow {
-                key: "account:automatic".into(),
-                label: "Automatic".into(),
-                description: None,
-                selected: false,
-                disabled,
-                action: PickerAction::Automatic,
-            });
-        }
-        if self.model_controls.accounts_loading {
-            rows.push(PickerMenuRow {
-                key: "account:loading".into(),
-                label: "Loading…".into(),
-                description: None,
-                selected: false,
-                disabled: true,
-                action: PickerAction::Loading,
-            });
-        }
-        if self.model_controls.account_next_cursor.is_some() {
-            rows.push(PickerMenuRow {
-                key: "account:more".into(),
-                label: "Load more".into(),
-                description: None,
-                selected: false,
-                disabled: disabled || self.model_controls.accounts_loading,
-                action: PickerAction::MoreAccounts,
-            });
-        }
-        rows.push(PickerMenuRow {
-            key: "account:manage".into(),
-            label: "Manage saved accounts…".into(),
-            description: None,
-            selected: false,
-            disabled,
-            action: PickerAction::ManageAccounts,
-        });
-        rows
-    }
-
     fn account_header(&self, target: &ModelControlsTarget, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::get(cx);
         let label = self
@@ -1207,22 +873,22 @@ impl AppView {
             .ghost()
             .small()
             .w_full()
-            .min_h(px(32.))
-            .px(px(10.))
-            .py(px(3.))
-            .gap(px(8.))
+            .min_h(px(t::SECTION_HEIGHT))
+            .px(px(t::SPACE_INSET))
+            .py(px(t::SPACE_COMPACT))
+            .gap(px(t::SPACE_MD))
             .text_color(p.muted)
-            .text_size(px(11.))
-            .font_weight(FontWeight::BOLD)
+            .text_size(px(t::TEXT_SECTION))
+            .font_weight(t::WEIGHT_HEADING)
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .w_full()
-                    .gap(px(8.))
-                    .text_size(px(11.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(Icon::new(IconName::Users).size(px(16.)))
+                    .gap(px(t::SPACE_MD))
+                    .text_size(px(t::TEXT_SECTION))
+                    .font_weight(t::WEIGHT_HEADING)
+                    .child(Icon::new(IconName::Users).size(px(t::ICON_PROVIDER)))
                     .child("Account")
                     .child(
                         div()
@@ -1230,7 +896,7 @@ impl AppView {
                             .min_w_0()
                             .text_right()
                             .truncate()
-                            .font_weight(FontWeight::NORMAL)
+                            .font_weight(t::WEIGHT_BODY)
                             .child(label),
                     )
                     .child(
@@ -1239,7 +905,7 @@ impl AppView {
                         } else {
                             IconName::ChevronDown
                         })
-                        .size(px(12.)),
+                        .size(px(t::ICON_SMALL)),
                     ),
             )
             .disabled(self.account_controls_disabled(target))
@@ -1264,77 +930,76 @@ impl AppView {
         let p = Palette::get(cx);
         let choice = row.clone();
         let target = target.clone();
-        Button::new(SharedString::from(row.key.clone()))
-            .accessibility_label(match &row.description {
-                Some(description) => format!("{}. {description}", row.label),
-                None => row.label.clone(),
-            })
-            .ghost()
-            .small()
-            .w_full()
-            .min_h(px(40.))
-            .h_auto()
-            .px(px(9.))
-            .py(px(6.))
-            .rounded(px(12.5))
-            .disabled(row.disabled)
-            .when(presentation.highlight, |button| button.bg(p.hover))
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .w_full()
-                    .gap(px(8.))
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::NORMAL)
-                    .child(
-                        div()
-                            .size(px(18.))
-                            .flex_shrink_0()
-                            .when(presentation.searching, |stem| {
-                                stem.child(Icon::new(IconName::Users).size(px(16.)))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .min_w_0()
-                            .flex_1()
-                            .child(div().truncate().child(row.label.clone()))
-                            .when_some(row.description.clone(), |container, description| {
-                                container.child(
-                                    div()
-                                        .ml(px(6.))
-                                        .text_size(px(11.))
-                                        .text_color(p.muted)
-                                        .font_weight(FontWeight::NORMAL)
-                                        .truncate()
-                                        .child(description),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .w(px(22.))
-                            .flex_shrink_0()
-                            .flex()
-                            .justify_center()
-                            .child(picker_row_action(row.selected, presentation.shortcut, p)),
-                    ),
-            )
-            .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                if let Some(index) = presentation.navigation_index
-                    && this.model_controls.highlight != index
-                {
-                    this.model_controls.highlight = index;
-                    cx.notify();
-                }
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.activate_picker_row(&target, &choice, window, cx)
-            }))
-            .into_any_element()
+        menu_row(
+            SharedString::from(row.key.clone()),
+            MenuRowStyle {
+                selected: row.selected,
+                highlighted: presentation.highlight,
+                disabled: row.disabled,
+                emphasized: false,
+            },
+            p,
+        )
+        .accessibility_label(match &row.description {
+            Some(description) => format!("{}. {description}", row.label),
+            None => row.label.clone(),
+        })
+        .child(
+            div()
+                .h_flex()
+                .items_center()
+                .w_full()
+                .gap(px(t::SPACE_MD))
+                .text_size(px(t::TEXT_ROW))
+                .font_weight(t::WEIGHT_BODY)
+                .child(
+                    div()
+                        .size(px(t::ROW_ICON_SLOT))
+                        .flex_shrink_0()
+                        .when(presentation.searching, |stem| {
+                            stem.child(Icon::new(IconName::Users).size(px(t::ICON_PROVIDER)))
+                        }),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .min_w_0()
+                        .flex_1()
+                        .child(div().truncate().child(row.label.clone()))
+                        .when_some(row.description.clone(), |container, description| {
+                            container.child(
+                                div()
+                                    .ml(px(t::SPACE_SM))
+                                    .text_size(px(t::TEXT_SECTION))
+                                    .text_color(p.muted)
+                                    .font_weight(t::WEIGHT_BODY)
+                                    .truncate()
+                                    .child(description),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .w(px(t::ROW_ACTION_SLOT))
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_center()
+                        .child(picker_row_action(row.selected, presentation.shortcut, p)),
+                ),
+        )
+        .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+            if let Some(index) = presentation.navigation_index
+                && this.model_controls.highlight != index
+            {
+                this.model_controls.highlight = index;
+                cx.notify();
+            }
+        }))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.activate_picker_row(&target, &choice, window, cx)
+        }))
+        .into_any_element()
     }
 
     fn activate_picker_row(
@@ -1378,40 +1043,14 @@ impl AppView {
         cx.stop_propagation();
     }
 
-    fn context_options(
-        &self,
-    ) -> Option<(
-        Vec<crate::gateway::composer_rpc::ContextWindowOption>,
-        String,
-        String,
-    )> {
+    fn context_options(&self) -> Option<ContextSelection> {
         let row = self.model_controls_row()?;
         let draft = self
             .model_controls
             .target
             .as_ref()
-            .is_some_and(|t| t.session_key.is_none());
-        let model = draft.then(|| self.model_capabilities()).flatten();
-        let (options, default) = if draft && row.context_windows.is_none() {
-            let model = model?;
-            (
-                model.context_windows,
-                model.context_window_default.unwrap_or_default(),
-            )
-        } else {
-            (
-                row.context_windows.clone().unwrap_or_default(),
-                row.context_window_default.clone().unwrap_or_default(),
-            )
-        };
-        if options.len() < 2 {
-            return None;
-        }
-        let selected = row.context_window.unwrap_or_else(|| default.clone());
-        options
-            .iter()
-            .any(|o| o.id == selected)
-            .then_some((options, selected, default))
+            .is_some_and(|target| target.session_key.is_none());
+        context_selection(&row, draft, self.model_capabilities().as_ref())
     }
 
     fn context_control(
@@ -1419,7 +1058,11 @@ impl AppView {
         target: &ModelControlsTarget,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (mut options, selected, _) = self.context_options()?;
+        let ContextSelection {
+            mut options,
+            selected,
+            ..
+        } = self.context_options()?;
         let p = Palette::get(cx);
         let label = options.iter().find(|o| o.id == selected)?.label.clone();
         let disabled = self.model_controls_disabled_reason().is_some()
@@ -1433,38 +1076,46 @@ impl AppView {
             let next = options[usize::from(!active)].id.clone();
             let target = target.clone();
             row = row.child(
-                switch("context-window-toggle", active, disabled, p)
-                    .accessibility_label(format!("Context window: {label}"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.apply_model_control_patch(
-                            target.clone(),
-                            json!({"contextWindow":next}),
-                            cx,
-                        )
-                    })),
+                toggle(
+                    "context-window-toggle",
+                    "Context window",
+                    active,
+                    disabled,
+                    p,
+                )
+                .accessibility_label(format!("Context window: {label}"))
+                .on_change({
+                    let owner = cx.entity().downgrade();
+                    move |_, _, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.apply_model_control_patch(
+                                target.clone(),
+                                json!({"contextWindow":next}),
+                                cx,
+                            )
+                        });
+                    }
+                }),
             );
         } else {
-            row = row.child(
-                div()
-                    .h_flex()
-                    .gap_1()
-                    .children(options.into_iter().enumerate().map(|(index, option)| {
-                        let target = target.clone();
-                        Button::new(("context-window", index))
-                            .ghost()
-                            .xsmall()
-                            .label(option.label)
-                            .when(option.id == selected, |b| b.bg(p.hover))
-                            .disabled(disabled)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.apply_model_control_patch(
-                                    target.clone(),
-                                    json!({"contextWindow":option.id}),
-                                    cx,
-                                )
-                            }))
-                    })),
-            );
+            row = row.child(div().h_flex().gap(rems(t::REM_SPACE_XS)).children(
+                options.into_iter().enumerate().map(|(index, option)| {
+                    let target = target.clone();
+                    Button::new(("context-window", index))
+                        .ghost()
+                        .xsmall()
+                        .label(option.label)
+                        .when(option.id == selected, |b| b.bg(p.hover))
+                        .disabled(disabled)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.apply_model_control_patch(
+                                target.clone(),
+                                json!({"contextWindow":option.id}),
+                                cx,
+                            )
+                        }))
+                }),
+            ));
         }
         Some(row.into_any_element())
     }
@@ -1529,35 +1180,26 @@ impl AppView {
             thinking.label.trim_start_matches("Inherited: ").to_owned()
         };
         let owner = cx.entity().downgrade();
-        let trigger = Button::new("effort-trigger")
-            .accessibility_label(if thinking.options.is_empty() {
-                format!("Fast mode: {}", fast.label)
-            } else {
-                format!("Thinking level: {label}")
-            })
-            .ghost()
-            .small()
-            .h(px(30.))
-            .px(px(8.))
-            .gap(px(6.))
-            .rounded_full()
-            .text_size(px(14.))
-            .font_weight(FontWeight::NORMAL)
-            .text_color(chip_color(p))
+        let accessible_label = if thinking.options.is_empty() {
+            format!("Fast mode: {}", fast.label)
+        } else {
+            format!("Thinking level: {label}")
+        };
+        let trigger = composer_chip("effort-trigger", accessible_label, p)
             .disabled(disabled)
-            .picker_tooltip(format!("Thinking level: {label}"));
+            .element_tooltip(format!("Thinking level: {label}"));
         let mut content = div()
             .h_flex()
             .items_center()
-            .gap(px(4.))
-            .text_size(px(14.))
-            .line_height(px(18.9));
+            .gap(px(t::SPACE_XS))
+            .text_size(px(t::TEXT_CHIP))
+            .line_height(px(t::CHIP_LINE_HEIGHT));
         if fast.active {
             content = content.child(
                 div()
-                    .mr(px(2.))
+                    .mr(px(t::SPACE_TINY))
                     .flex_shrink_0()
-                    .child(filled_zap(14., p.accent)),
+                    .child(filled_zap(t::ICON, p.accent)),
             );
         }
         content = content.child(label).child(
@@ -1566,7 +1208,7 @@ impl AppView {
             } else {
                 IconName::ChevronDown
             })
-            .size(px(12.))
+            .size(px(t::ICON_SMALL))
             .text_color(p.muted),
         );
         if reserved {
@@ -1578,7 +1220,7 @@ impl AppView {
                     .into_any_element(),
             );
         }
-        let mut menu = div().v_flex().w(px(328.));
+        let mut menu = div().v_flex().w(px(t::EFFORT_MENU_WIDTH));
         if !thinking.options.is_empty() {
             let preview = self
                 .model_controls
@@ -1589,19 +1231,19 @@ impl AppView {
                 .unwrap_or_else(|| thinking.label.trim_start_matches("Inherited: ").into());
             let mut panel = div()
                 .v_flex()
-                .gap(px(4.))
-                .px(px(12.))
-                .pt(px(12.))
-                .pb(px(11.))
-                .bg(p.card.opacity(0.78))
+                .gap(px(t::SPACE_XS))
+                .px(px(t::SPACE_LG))
+                .pt(px(t::SPACE_LG))
+                .pb(px(t::SPACE_SECTION_Y))
+                .bg(p.controls().search)
                 .child(
                     div()
                         .h_flex()
                         .justify_between()
-                        .mb(px(10.))
-                        .gap(px(8.))
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .mb(px(t::SPACE_INSET))
+                        .gap(px(t::SPACE_MD))
+                        .text_size(px(t::TEXT_LABEL))
+                        .font_weight(t::WEIGHT_LABEL)
                         .child("Effort")
                         .child(div().text_color(p.accent).child(value)),
                 );
@@ -1612,11 +1254,11 @@ impl AppView {
                         div()
                             .h_flex()
                             .justify_between()
-                            .mx(px(6.))
-                            .mb(px(2.))
-                            .text_size(px(10.))
+                            .mx(px(t::SPACE_SM))
+                            .mb(px(t::SPACE_TINY))
+                            .text_size(px(t::TEXT_META))
                             .text_color(p.muted)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(t::WEIGHT_SCALE)
                             .child("Faster")
                             .child("Smarter"),
                     );
@@ -1655,37 +1297,51 @@ impl AppView {
                 p,
             )
             .child(
-                switch("fast-mode-toggle", fast.active, fast_disabled, p)
-                    .accessibility_label(format!("Fast responses: {}", fast.label))
-                    .picker_tooltip(if fast.supported {
-                        format!("Fast responses: {}", fast.label)
-                    } else {
-                        "Speed control is not supported for this model.".into()
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.apply_model_control_patch(target.clone(), json!({"fastMode":next}), cx)
-                    })),
+                toggle(
+                    "fast-mode-toggle",
+                    "Fast responses",
+                    fast.active,
+                    fast_disabled,
+                    p,
+                )
+                .accessibility_label(format!("Fast responses: {}", fast.label))
+                .element_tooltip(if fast.supported {
+                    format!("Fast responses: {}", fast.label)
+                } else {
+                    "Speed control is not supported for this model.".into()
+                })
+                .on_change({
+                    let owner = cx.entity().downgrade();
+                    move |_, _, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.apply_model_control_patch(
+                                target.clone(),
+                                json!({"fastMode":next}),
+                                cx,
+                            )
+                        });
+                    }
+                }),
             ),
         );
         Some(
-            Popover::new("effort-picker")
-                .anchor(Anchor::BottomRight)
-                .bottom(px(6.))
-                .appearance(false)
-                .open(self.model_controls.effort_open)
-                .track_focus(&self.model_controls.effort_focus)
-                .on_open_change(move |open, _, cx| {
-                    let _ = owner.update(cx, |this, cx| {
-                        this.model_controls.effort_open =
-                            *open && this.model_controls_disabled_reason().is_none();
-                        this.model_controls.model_open = false;
-                        this.model_controls.effort_preview = None;
-                        cx.notify();
-                    });
-                })
-                .trigger(trigger.child(content))
-                .child(menu_surface(p).child(menu))
-                .into_any_element(),
+            control_popover(
+                "effort-picker",
+                self.model_controls.effort_open,
+                &self.model_controls.effort_focus,
+            )
+            .on_open_change(move |open, _, cx| {
+                let _ = owner.update(cx, |this, cx| {
+                    this.model_controls.effort_open =
+                        *open && this.model_controls_disabled_reason().is_none();
+                    this.model_controls.model_open = false;
+                    this.model_controls.effort_preview = None;
+                    cx.notify();
+                });
+            })
+            .trigger(trigger.child(content))
+            .child(menu_surface(p).child(menu))
+            .into_any_element(),
         )
     }
 
@@ -1695,260 +1351,73 @@ impl AppView {
         disabled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = Palette::get(cx);
-        let count = thinking.options.len();
-        let selected = self
-            .model_controls
-            .effort_preview
-            .or(thinking.selected_index)
-            .unwrap_or(0);
-        let fraction = selected as f32 / (count - 1) as f32;
-        let bounds_cell = self.model_controls.effort_bounds.clone();
-        let ultra = thinking.options[selected].value == "ultra";
-        let anchored =
-            thinking.selected_index.is_some() || self.model_controls.effort_preview.is_some();
-        let boosted = anchored
-            && (ultra
-                || thinking.options.iter().rposition(|o| {
-                    o.label != "On"
-                        && matches!(
-                            o.value.as_str(),
-                            "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
-                        )
-                }) == Some(selected));
-        let thumb = if thinking.override_active || self.model_controls.effort_preview.is_some() {
-            p.strong
-        } else {
-            p.muted
-        };
-        let thumb = if anchored { thumb } else { thumb.opacity(0.35) };
-        let focus = self.model_controls.effort_focus.clone();
-        let track = div()
-            .id("thinking-slider")
-            .role(Role::Slider)
-            .aria_label("Thinking level")
-            .aria_numeric_value(selected as f64)
-            .aria_min_numeric_value(0.)
-            .aria_max_numeric_value((count - 1) as f64)
-            .aria_numeric_value_step(1.)
-            .aria_description(if thinking.override_active {
+        let maximum = thinking.options.iter().rposition(|option| {
+            option.label != "On"
+                && matches!(
+                    option.value.as_str(),
+                    "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+                )
+        });
+        let config = DiscreteSliderConfig {
+            stops: thinking
+                .options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| SliderStop {
+                    boost: if option.value == "ultra" {
+                        Some(SliderBoost::Ultra)
+                    } else if maximum == Some(index) {
+                        Some(SliderBoost::Maximum)
+                    } else {
+                        None
+                    },
+                })
+                .collect(),
+            selected: thinking.selected_index,
+            preview: self.model_controls.effort_preview,
+            inherited: !thinking.override_active,
+            disabled,
+            label: "Thinking level",
+            description: if thinking.override_active {
                 thinking.label.clone()
             } else {
                 format!("Default ({})", thinking.inherited_label)
-            })
-            .track_focus(&self.model_controls.effort_focus)
-            .tab_index(0)
-            .mx(px(6.))
-            .h(px(26.))
-            .w(px(292.))
-            .rounded_full()
-            .when(disabled, |d| d.opacity(0.5))
-            .when(boosted, |d| {
-                d.shadow(vec![BoxShadow {
-                    inset: false,
-                    color: p.accent.opacity(if ultra { 0.48 } else { 0.24 }),
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(if ultra { 18. } else { 12. }),
-                    spread_radius: px(0.),
-                }])
-            })
-            .child(
-                canvas(
-                    move |bounds, _, _| bounds_cell.set(bounds),
-                    move |bounds, _, window, _| {
-                        let track_bg = if boosted {
-                            p.accent
-                        } else {
-                            p.elevated.blend(p.text.opacity(0.07))
-                        };
-                        if boosted {
-                            let highlight = if ultra {
-                                rgb(0x14b8a6).into()
-                            } else {
-                                p.accent
-                            };
-                            let center = Hsla::from(rgb(0xffffff)).blend(Hsla {
-                                a: if ultra { 0.7 } else { 0.6 },
-                                ..highlight
-                            });
-                            let half = bounds.size.width / 2.;
-                            for (offset, from, to, left) in [
-                                (px(0.), p.accent, center, true),
-                                (half, center, p.accent, false),
-                            ] {
-                                let radii = Corners {
-                                    top_left: if left { px(13.) } else { px(0.) },
-                                    bottom_left: if left { px(13.) } else { px(0.) },
-                                    top_right: if left { px(0.) } else { px(13.) },
-                                    bottom_right: if left { px(0.) } else { px(13.) },
-                                };
-                                let rect = Bounds::new(
-                                    point(bounds.left() + offset, bounds.top()),
-                                    size(half, bounds.size.height),
-                                );
-                                window.paint_quad(
-                                    fill(
-                                        rect,
-                                        linear_gradient(
-                                            90.,
-                                            linear_color_stop(from, 0.),
-                                            linear_color_stop(to, 1.),
-                                        ),
-                                    )
-                                    .corner_radii(radii),
-                                );
-                            }
-                        } else {
-                            window.paint_quad(rounded_fill(bounds, px(13.), track_bg));
-                        }
-                        if !boosted && fraction > 0. {
-                            window.paint_quad(rounded_fill(
-                                Bounds::new(
-                                    bounds.origin,
-                                    size(bounds.size.width * fraction, bounds.size.height),
-                                ),
-                                px(13.),
-                                p.text.opacity(0.12),
-                            ));
-                        }
-                        if boosted {
-                            window.paint_quad(
-                                outline(
-                                    bounds,
-                                    p.accent.opacity(if ultra { 0.75 } else { 0.45 }),
-                                    BorderStyle::Solid,
-                                )
-                                .corner_radii(px(13.)),
-                            );
-                        }
-                        for index in 0..count {
-                            let x = bounds.left()
-                                + px(12.)
-                                + (bounds.size.width - px(24.)) * index as f32 / (count - 1) as f32;
-                            window.paint_quad(rounded_fill(
-                                Bounds::new(
-                                    point(x - px(2.), bounds.top() + px(11.)),
-                                    size(px(4.), px(4.)),
-                                ),
-                                px(2.),
-                                p.text.opacity(0.28),
-                            ));
-                        }
-                        let x = bounds.left() + (bounds.size.width - px(28.)) * fraction;
-                        let thumb_bounds =
-                            Bounds::new(point(x, bounds.top() + px(3.)), size(px(28.), px(20.)));
-                        window.paint_quad(rounded_fill(thumb_bounds, px(10.), thumb));
-                        if focus.is_focused(window) {
-                            window.paint_quad(
-                                outline(thumb_bounds.dilate(px(2.)), p.accent, BorderStyle::Solid)
-                                    .corner_radii(px(12.)),
-                            );
-                        }
-                    },
-                )
-                .size_full(),
-            );
-        track
-            .when(!disabled, |track| {
-                track
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            this.model_controls.effort_focus.focus(window, cx);
-                            this.model_controls.effort_dragging = true;
-                            this.preview_effort(event.position.x, cx);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_drag(EffortDrag, |drag, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.new(|_| drag.clone())
-                    })
-                    .on_drag_move(
-                        cx.listener(|this, event: &DragMoveEvent<EffortDrag>, _, cx| {
-                            this.preview_effort(event.event.position.x, cx)
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.commit_effort_preview(cx)),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.commit_effort_preview(cx)),
-                    )
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        let thinking = this.thinking_selection();
-                        let current = thinking.selected_index.unwrap_or(0);
-                        let last = thinking.options.len().saturating_sub(1);
-                        let next = match event.keystroke.key.as_str() {
-                            "left" | "down" => current.saturating_sub(1),
-                            "right" | "up" => (current + 1).min(last),
-                            "home" | "pagedown" => 0,
-                            "end" | "pageup" => last,
-                            _ => return,
-                        };
-                        this.model_controls.effort_preview = Some(next);
-                        this.model_controls.effort_dragging = true;
-                        this.commit_effort_preview(cx);
-                        window.prevent_default();
-                        cx.stop_propagation();
-                    }))
-                    .on_a11y_action(AccessibleAction::Increment, {
-                        let owner = cx.entity().downgrade();
-                        move |_, _, cx| {
-                            let _ = owner.update(cx, |this, cx| this.step_effort(1, cx));
-                        }
-                    })
-                    .on_a11y_action(AccessibleAction::Decrement, {
-                        let owner = cx.entity().downgrade();
-                        move |_, _, cx| {
-                            let _ = owner.update(cx, |this, cx| this.step_effort(-1, cx));
-                        }
-                    })
-            })
+            },
+        };
+        let target = self.model_controls.target.clone();
+        let preview_target = target.clone();
+        let id = SharedString::from(format!(
+            "thinking-slider:{}",
+            target
+                .as_ref()
+                .map(|target| json!([target.agent_id, target.session_key, target.draft_id]))
+                .unwrap_or_default()
+        ));
+        DiscreteSlider::new(id, config, &self.model_controls.effort_focus)
+            .on_preview(cx.listener(move |this, index, _, cx| {
+                if this.model_controls.target == preview_target {
+                    this.model_controls.effort_preview = Some(*index);
+                    cx.notify();
+                }
+            }))
+            .on_commit(cx.listener(move |this, index, _, cx| {
+                if this.model_controls.target == target {
+                    this.commit_effort(*index, cx);
+                }
+            }))
             .into_any_element()
     }
 
-    fn preview_effort(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        let bounds = self.model_controls.effort_bounds.get();
-        let count = self.thinking_selection().options.len();
-        if count < 2 {
-            return;
-        }
-        let fraction =
-            f32::from(x - bounds.left() - px(14.)) / f32::from(bounds.size.width - px(28.));
-        self.model_controls.effort_preview =
-            Some((fraction.clamp(0., 1.) * (count - 1) as f32).round() as usize);
-        cx.notify();
-    }
-    fn commit_effort_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.model_controls.effort_dragging {
-            return;
-        }
-        self.model_controls.effort_dragging = false;
-        let next = self.model_controls.effort_preview.take();
+    fn commit_effort(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.model_controls.effort_preview = None;
         let thinking = self.thinking_selection();
-        if let Some(stop) = next.and_then(|i| thinking.options.get(i))
+        if let Some(stop) = thinking.options.get(index)
             && (!thinking.override_active || thinking.value != stop.value)
             && let Some(target) = self.model_controls.target.clone()
         {
             self.apply_model_control_patch(target, json!({"thinkingLevel":stop.value}), cx);
         }
         cx.notify();
-    }
-    fn step_effort(&mut self, offset: isize, cx: &mut Context<Self>) {
-        let thinking = self.thinking_selection();
-        let last = thinking.options.len().saturating_sub(1);
-        self.model_controls.effort_preview = Some(
-            thinking
-                .selected_index
-                .unwrap_or(0)
-                .saturating_add_signed(offset)
-                .min(last),
-        );
-        self.model_controls.effort_dragging = true;
-        self.commit_effort_preview(cx);
     }
 
     fn model_picker_choices(&self, cx: &App) -> Vec<(usize, PickerMenuRow)> {
@@ -2110,268 +1579,3 @@ impl AppView {
         }
     }
 }
-
-fn model_option_help(option: &PickerOption) -> String {
-    let route = match (option.provider.as_str(), option.agent_runtime_id.as_deref()) {
-        (_, Some("claude-cli")) | ("claude-cli", None) => {
-            "Runs through Claude Code, using its native login or a selected saved account. An explicitly selected API-key account has separate API billing; CLI does not mean free or subscription-only."
-        }
-        ("anthropic", Some("openclaw")) => {
-            "Uses the configured Anthropic API connection with OpenClaw's runtime. API-key usage is billed separately from a Claude subscription."
-        }
-        ("anthropic", None) => {
-            "Anthropic models can use the API or Claude CLI, depending on their configured runtime and account. The provider name alone does not determine billing."
-        }
-        _ => "",
-    };
-    [
-        route,
-        if option.supports_tools == Some(false) {
-            CHAT_ONLY_HELP
-        } else {
-            ""
-        },
-    ]
-    .into_iter()
-    .filter(|part| !part.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-fn picker_row_action(selected: bool, shortcut: Option<usize>, p: Palette) -> AnyElement {
-    if selected {
-        Icon::new(IconName::Check)
-            .size(px(14.))
-            .text_color(p.accent)
-            .into_any_element()
-    } else if let Some(shortcut) = shortcut {
-        div()
-            .min_w(px(16.))
-            .h(px(18.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(11.))
-            .font_weight(FontWeight::NORMAL)
-            .text_color(p.muted)
-            .child(shortcut.to_string())
-            .into_any_element()
-    } else {
-        div().into_any_element()
-    }
-}
-
-fn chip_color(p: Palette) -> Hsla {
-    p.popover.blend(p.strong.opacity(0.65))
-}
-fn menu_surface(p: Palette) -> Div {
-    div()
-        .v_flex()
-        .bg(p.elevated.blend(p.card.opacity(0.04)))
-        .border_1()
-        .border_color(p.border_strong.opacity(0.64))
-        .rounded(px(17.5))
-        .shadow_lg()
-        .overflow_hidden()
-}
-fn setting_row(icon: IconName, title: &str, description: &str, p: Palette) -> Div {
-    div()
-        .h_flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(8.))
-        .px(px(12.))
-        .py(px(11.))
-        .border_t_1()
-        .border_color(p.border.opacity(0.7))
-        .child(if matches!(icon, IconName::Zap) {
-            filled_zap(16., p.accent)
-        } else {
-            Icon::new(icon)
-                .size(px(16.))
-                .text_color(p.accent)
-                .into_any_element()
-        })
-        .child(
-            div()
-                .v_flex()
-                .gap(px(1.))
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(title.to_owned()),
-                )
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .line_height(px(13.))
-                        .text_color(p.muted)
-                        .truncate()
-                        .child(description.to_owned()),
-                ),
-        )
-}
-fn switch(id: &'static str, active: bool, disabled: bool, p: Palette) -> Button {
-    Button::new(id)
-        .role(Role::Switch)
-        .toggled(active)
-        .accessibility_label(if id == "fast-mode-toggle" {
-            "Fast responses"
-        } else {
-            "Context window"
-        })
-        .ghost()
-        .p_0()
-        .w(px(36.))
-        .h(px(22.))
-        .flex_shrink_0()
-        .rounded_full()
-        .border_1()
-        .border_color(if active { p.accent } else { p.border_strong })
-        .bg(if active {
-            p.card.blend(p.accent.opacity(0.58))
-        } else {
-            p.card.blend(p.text.opacity(0.12))
-        })
-        .disabled(disabled)
-        .child(
-            div().relative().w(px(34.)).h(px(20.)).child(
-                div()
-                    .absolute()
-                    .top(px(3.))
-                    .left(px(if active { 17. } else { 3. }))
-                    .size(px(14.))
-                    .rounded_full()
-                    .bg(p.strong),
-            ),
-        )
-}
-
-fn provider_icon_name(provider: &str) -> Option<String> {
-    let name = match provider {
-        "acp-copilot" | "copilot-proxy" | "github-copilot" => "copilot",
-        "anthropic" | "claude-cli" => "claude",
-        "amazon-bedrock" | "aws-bedrock" => "bedrock",
-        "cloudflare-ai-gateway" => "cloudflare",
-        "google" | "google-gemini-cli" => "gemini",
-        "kilocode" => "kilo",
-        "kimi-coding" | "moonshot" => "kimi",
-        "llama-cpp" => "llamacpp",
-        "microsoft-foundry" => "microsoft",
-        "minimax-portal" => "minimax",
-        "ollama-cloud" => "ollama",
-        "openai" => "codex",
-        "opencode-go" => "opencodego",
-        "opencode-zen" => "opencode",
-        "qwen" | "qwen-token-plan" => "alibaba",
-        "stepfun-plan" => "stepfun",
-        "tencent-tokenhub" | "tencent-tokenplan" => "tencent",
-        "xai" => "grok",
-        "xiaomi" | "xiaomi-token-plan" => "mimo",
-        "vercel-ai-gateway" => "vercel",
-        "vertex-ai" => "vertexai",
-        "z-ai" => "zai",
-        other => other,
-    };
-    let path = format!("provider-icons/ProviderIcon-{name}.svg");
-    crate::assets::PROVIDER_ICONS
-        .iter()
-        .any(|(p, _)| *p == path)
-        .then_some(path)
-}
-fn provider_icon(provider: &str, size: f32, neutral: bool, p: Palette) -> AnyElement {
-    if let Some(path) = provider_icon_name(provider) {
-        let color = if neutral {
-            chip_color(p)
-        } else {
-            match provider {
-                "openai" => rgb(0x10a37f).into(),
-                "anthropic" | "claude-cli" => rgb(0xd97757).into(),
-                "google" => rgb(0x4285f4).into(),
-                "ollama" | "lmstudio" | "llama-cpp" | "opencode" => p.strong,
-                _ => p.muted,
-            }
-        };
-        svg()
-            .path(path)
-            .size(px(size))
-            .flex_shrink_0()
-            .text_color(color)
-            .into_any_element()
-    } else {
-        div()
-            .size(px(size))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.))
-            .bg(p.hover)
-            .text_size(px(9.))
-            .font_weight(FontWeight::BOLD)
-            .child(
-                provider
-                    .chars()
-                    .next()
-                    .unwrap_or('?')
-                    .to_uppercase()
-                    .to_string(),
-            )
-            .into_any_element()
-    }
-}
-
-fn rounded_fill(bounds: Bounds<Pixels>, radius: Pixels, color: Hsla) -> PaintQuad {
-    fill(bounds, color).corner_radii(radius)
-}
-
-fn filled_zap(size_px: f32, color: Hsla) -> AnyElement {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let mut path = PathBuilder::fill();
-            for (index, (x, y)) in [
-                (13., 2.),
-                (3., 14.),
-                (12., 14.),
-                (11., 22.),
-                (21., 10.),
-                (12., 10.),
-                (13., 2.),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let point = point(
-                    bounds.left() + bounds.size.width * (x / 24.),
-                    bounds.top() + bounds.size.height * (y / 24.),
-                );
-                if index == 0 {
-                    path.move_to(point);
-                } else {
-                    path.line_to(point);
-                }
-            }
-            if let Ok(path) = path.build() {
-                window.paint_path(path, color);
-            }
-        },
-    )
-    .size(px(size_px))
-    .flex_shrink_0()
-    .into_any_element()
-}
-
-// Search retires rows without pointer leave events. Element-owned tooltips retire with them.
-trait PickerTooltip: InteractiveElement + Sized {
-    fn picker_tooltip(mut self, text: impl Into<SharedString>) -> Self {
-        let text = text.into();
-        self.interactivity()
-            .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx));
-        self
-    }
-}
-impl PickerTooltip for Button {}
