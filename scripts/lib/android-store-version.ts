@@ -230,7 +230,6 @@ function storeHistory(snapshot: AndroidPlaySnapshot, refs: AndroidReleaseRef[]) 
         `Google Play versionCode ${code} has no v2 source record. Inspect the retained Android plan and uploaded AAB hashes, then perform authorized record-only recovery; do not re-upload.`,
       );
     }
-    records.set(code, legacyRelease(code));
   }
   return { records, liveCodes, legacyMaxVersionCode: legacyMax ?? Math.max(0, ...liveCodes) };
 }
@@ -262,7 +261,12 @@ function publicBaselines(
       );
     }
     const build = codes[0]!;
-    const record = records.get(Number(build))!;
+    const record = records.get(Number(build));
+    if (!record) {
+      throw new Error(
+        `Google Play ${trackName} versionCode ${build} has no recorded source identity. Verify that build's version and source before releasing.`,
+      );
+    }
     const expected = audience === "phone" ? record.versionCode : record.wearVersionCode;
     if (Number(build) !== expected) {
       throw new Error(
