@@ -111,6 +111,10 @@ a missing or failed probe leaves fields absent instead of rejecting the attachme
 The Gateway shares concurrent metadata inspections for the same local file and
 reuses successful results while that file is unchanged. Replacing or editing the
 file triggers a fresh inspection; failed probes remain retryable.
+Distinct files wait in a bounded inspection queue. If the queue is full, metadata
+reports temporary unavailability that you can retry, and playback remains
+preparing. Disconnected requests stop waiting, and queued probes with no remaining
+viewers are skipped.
 
 Gateway-managed assistant attachments use these per-file caps:
 

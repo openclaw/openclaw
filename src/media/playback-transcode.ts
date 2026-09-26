@@ -8,6 +8,7 @@ import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import pLimit from "p-limit";
+import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
@@ -15,7 +16,6 @@ import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import {
   probePlaybackMediaFileDescriptor,
@@ -115,6 +115,7 @@ type PlaybackSourceParams = {
   sourceStat: PlaybackSourceStat;
   mimeType: string;
   kind: PlaybackMediaKind;
+  signal?: AbortSignal;
 };
 
 type PlaybackTranscodeResolution =
@@ -140,6 +141,17 @@ type PlaybackInspection = MediaProbeResult &
       }
   );
 
+type PlaybackInspectionJob = {
+  result: Promise<PlaybackInspection>;
+  waiters: Set<AbortSignal | undefined>;
+};
+
+export class PlaybackInspectionBusyError extends Error {
+  constructor() {
+    super("Media inspection is busy. Retry shortly.");
+  }
+}
+
 const PLAYBACK_TRANSCODE_CACHE_VERSION = "v2";
 const MAX_PLAYBACK_TRANSCODE_JOBS = 2;
 const PLAYBACK_TRANSCODE_MAX_ALLOC_BYTES = 256 * 1024 * 1024;
@@ -148,10 +160,11 @@ const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
 const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32 } as const;
+const MAX_PENDING_PLAYBACK_INSPECTIONS = 32;
 const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
-const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
+const playbackInspectionJobs = new Map<string, PlaybackInspectionJob>();
 const limitPlaybackInspections = pLimit(2);
 const log = createSubsystemLogger("media/playback");
 
@@ -245,6 +258,7 @@ async function probePlaybackSource(
 }
 
 async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<PlaybackInspection> {
+  params.signal?.throwIfAborted();
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
   const source = playbackSourceIdentity(params);
@@ -309,12 +323,29 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     cachePlaybackInspection(cacheKey, inspection);
     return inspection;
   };
-  return await getOrCreatePromise(
-    playbackInspectionJobs,
-    cacheKey,
-    () => limitPlaybackInspections(computeInspection),
-    { evictOnSettled: true },
-  );
+  let job = playbackInspectionJobs.get(cacheKey);
+  if (!job) {
+    if (limitPlaybackInspections.pendingCount >= MAX_PENDING_PLAYBACK_INSPECTIONS) {
+      throw new PlaybackInspectionBusyError();
+    }
+    const waiters = new Set<AbortSignal | undefined>();
+    const result = limitPlaybackInspections(async () => {
+      if (![...waiters].some((signal) => !signal?.aborted)) {
+        throw createAbortError("Playback inspection abandoned");
+      }
+      return await computeInspection();
+    }).finally(() => {
+      playbackInspectionJobs.delete(cacheKey);
+    });
+    job = { result, waiters };
+    playbackInspectionJobs.set(cacheKey, job);
+  }
+  job.waiters.add(params.signal);
+  try {
+    return await racePromiseWithAbortSignal(job.result, params.signal);
+  } finally {
+    job.waiters.delete(params.signal);
+  }
 }
 
 /** Shares display metadata and playback classification by file identity. */
@@ -573,6 +604,7 @@ async function transcodePlaybackSource(params: {
 export async function resolvePlaybackTranscode(
   params: PlaybackSourceParams,
 ): Promise<PlaybackTranscodeResolution> {
+  params.signal?.throwIfAborted();
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
   if (!containerMode) {
@@ -594,6 +626,7 @@ export async function resolvePlaybackTranscode(
     extension: target.extension,
     maxBytes,
   });
+  params.signal?.throwIfAborted();
   if (cachedPath) {
     return {
       kind: "transcoded",
@@ -603,7 +636,16 @@ export async function resolvePlaybackTranscode(
     };
   }
 
-  const inspection = await inspectPlaybackSource(params);
+  let inspection: PlaybackInspection;
+  try {
+    inspection = await inspectPlaybackSource(params);
+  } catch (error) {
+    if (error instanceof PlaybackInspectionBusyError) {
+      return { kind: "preparing" };
+    }
+    throw error;
+  }
+  params.signal?.throwIfAborted();
   if (inspection.mode === "native") {
     return { kind: "passthrough" };
   }

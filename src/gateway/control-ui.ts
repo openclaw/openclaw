@@ -24,8 +24,8 @@ import {
 } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
+import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
-import type { MediaProbeResult } from "../media/media-probe.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
 import {
   replacePlaybackFileExtension,
@@ -51,6 +51,10 @@ import {
   buildAssistantMediaContentDisposition,
   resolveAssistantMediaFilename,
 } from "./assistant-media-content-disposition.js";
+import {
+  classifyAssistantMediaError,
+  type AssistantMediaAvailability,
+} from "./assistant-media-errors.js";
 import {
   resolveAssistantMediaPolicy,
   type AssistantMediaSession,
@@ -240,15 +244,6 @@ function normalizeAssistantMediaSource(source: string): string | null {
   return trimmed;
 }
 
-type AssistantMediaAvailability =
-  | ({
-      available: true;
-      mimeType?: string;
-      playback?: "native" | "transcode";
-      sizeBytes?: number;
-    } & MediaProbeResult)
-  | { available: false; reason: string; code: string };
-
 type AssistantMediaTicketPayload = {
   scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
   source: string;
@@ -337,53 +332,6 @@ function verifyAssistantMediaTicket(
   }
 }
 
-function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
-  if (err instanceof FsSafeError) {
-    switch (err.code) {
-      case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
-      case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
-      case "invalid-path":
-      case "path-mismatch":
-      case "symlink":
-        return { available: false, code: "invalid-file", reason: "Invalid file" };
-      default:
-        return {
-          available: false,
-          code: "attachment-unavailable",
-          reason: "Attachment unavailable",
-        };
-    }
-  }
-  if (err instanceof Error && "code" in err) {
-    const errorCode = (err as { code?: unknown }).code;
-    switch (typeof errorCode === "string" ? errorCode : "") {
-      case "unsupported-media-type":
-        return { available: false, code: "unsupported-media-type", reason: "Not an image" };
-      case "path-not-allowed":
-        return {
-          available: false,
-          code: "outside-allowed-folders",
-          reason: "Outside allowed folders",
-        };
-      case "invalid-file-url":
-      case "invalid-path":
-      case "unsafe-bypass":
-      case "network-path-not-allowed":
-      case "invalid-root":
-        return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
-      case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
-      case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
-      default:
-        break;
-    }
-  }
-  return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
-}
-
 type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
 
@@ -461,6 +409,7 @@ async function resolveAssistantMediaAvailability(
   policy: AssistantMediaPolicy,
   allowance: true | AssistantMediaFile | undefined,
   agentId: string | undefined,
+  signal: AbortSignal,
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
@@ -474,6 +423,7 @@ async function resolveAssistantMediaAvailability(
             sourceStat: opened.stat,
             mimeType,
             kind: mediaKind,
+            signal,
           })
         : undefined;
     return {
@@ -603,12 +553,18 @@ export async function handleControlUiAssistantMediaRequest(
     return current;
   };
   if (isMetaRequest) {
+    const requestAbort = createHttpRequestAbortSignal(res.req, res);
+    using _ = { [Symbol.dispose]: requestAbort.cleanup };
     const availability = await resolveAssistantMediaAvailability(
       source,
       policy,
       allowance,
       agentId,
+      requestAbort.signal,
     );
+    if (requestAbort.signal.aborted) {
+      return true;
+    }
     let current;
     try {
       current = assertCurrentPolicy();
@@ -650,6 +606,7 @@ export async function handleControlUiAssistantMediaRequest(
         sourceStat: opened.stat,
         mimeType: contentType,
         kind: mediaKind,
+        signal: byteStream.signal,
       });
       if (playback.kind === "preparing") {
         await byteStream.close();
@@ -691,7 +648,9 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   } catch {
     await byteStream?.close();
-    respondControlUiNotFound(res);
+    if (!res.destroyed && !res.writableEnded) {
+      respondControlUiNotFound(res);
+    }
     return true;
   }
 }

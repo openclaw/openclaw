@@ -50,7 +50,7 @@ import {
   withChannelReadAuthority,
 } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   createGatewayByteStream,
   createImmutableFileValidators,
@@ -1497,6 +1497,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
             sourceStat: opened.stat,
             mimeType: savedOriginalContentType,
             kind: mediaKind,
+            signal: params.abortSignal,
           });
           playback = metadata.playback;
         }
@@ -1581,11 +1582,6 @@ function sendStatus(res: ServerResponse, statusCode: number, body: string) {
   res.statusCode = statusCode;
   res.setHeader("content-type", "text/plain; charset=utf-8");
   res.end(body);
-}
-
-function buildManagedMediaContentDisposition(value: string | null, contentType: string): string {
-  const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
-  return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
 }
 
 export async function handleManagedOutgoingMediaHttpRequest(
@@ -1742,6 +1738,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
         sourceStat: opened.stat,
         mimeType: responseContentType,
         kind: mediaKind,
+        signal: byteStream.signal,
       });
       if (playback.kind === "preparing") {
         await byteStream.close();

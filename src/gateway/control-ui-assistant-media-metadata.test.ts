@@ -1,5 +1,5 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -21,22 +21,43 @@ afterEach(() => {
   runFfprobe.mockReset();
 });
 
-async function readMetadata(filePath: string) {
-  const { res, end } = makeMockHttpResponse();
-  const handled = await handleControlUiAssistantMediaRequest(
-    {
-      url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
-      method: "GET",
-      headers: {},
-      socket: { remoteAddress: "127.0.0.1" },
-    } as IncomingMessage,
-    res,
-    { auth: { mode: "token", token: "test-token", allowTailscale: false } },
-  );
-  expect(handled).toBe(true);
+function startMediaRequest(filePath: string, mode: "meta" | "playback" = "meta") {
+  const response = makeMockHttpResponse();
+  const { res } = response;
+  res.req.url = `/__openclaw__/assistant-media?${mode}=1&source=${encodeURIComponent(filePath)}&token=test-token`;
+  res.req.method = "GET";
+  Object.defineProperty(res.req.socket, "remoteAddress", { value: "127.0.0.1" });
+  const handled = handleControlUiAssistantMediaRequest(res.req, res, {
+    auth: { mode: "token", token: "test-token", allowTailscale: false },
+  });
+  return { ...response, handled };
+}
+
+async function readMetadataResponse({ res, end, handled }: ReturnType<typeof startMediaRequest>) {
+  expect(await handled).toBe(true);
   expect(res.statusCode).toBe(200);
   const payload: unknown = JSON.parse(String(end.mock.calls[0]?.[0] ?? ""));
   return payload;
+}
+
+async function readMetadata(filePath: string) {
+  return await readMetadataResponse(startMediaRequest(filePath));
+}
+
+function blockPlaybackProbes(codecName = "pcm_s16le") {
+  const started = createDeferred();
+  const gate = createDeferred();
+  runFfprobe.mockImplementation(async () => {
+    if (runFfprobe.mock.calls.length === 2) {
+      started.resolve();
+    }
+    await gate.promise;
+    return JSON.stringify({
+      format: { duration: "1" },
+      streams: [{ index: 0, codec_type: "audio", codec_name: codecName }],
+    });
+  });
+  return { started: started.promise, release: gate.resolve };
 }
 
 it("shares audio metadata probes, retries failures, and reinspects replacements", async () => {
@@ -141,5 +162,155 @@ it("retains exotic playback metadata while distinct files fill the inspection sl
   } finally {
     probeGate.resolve();
     await Promise.allSettled(requests);
+  }
+});
+
+it("bounds pending distinct inspections and returns retryable busy metadata on overflow", async () => {
+  const probes = blockPlaybackProbes();
+  const root = tempDirs.make("ui-media-burst-meta-", resolvePreferredOpenClawTmpDir());
+  const paths = Array.from({ length: 35 }, (_, index) => path.join(root, `${index}.caf`));
+  await Promise.all(paths.map((filePath) => fs.writeFile(filePath, Buffer.from("caff-original"))));
+  const requests = paths.slice(0, 2).map((filePath) => startMediaRequest(filePath));
+  try {
+    await probes.started;
+    const queueFull = createDeferred();
+    const overflowRequested = createDeferred();
+    const resolveMetadata = playback.resolvePlaybackMetadataForSource;
+    let queuedRequests = 0;
+    vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
+      const result = resolveMetadata(params);
+      if (++queuedRequests === 32) {
+        queueFull.resolve();
+      } else if (queuedRequests === 34) {
+        overflowRequested.resolve();
+      }
+      return result;
+    });
+    requests.push(...paths.slice(2, 34).map((filePath) => startMediaRequest(filePath)));
+    await queueFull.promise;
+    const shared = startMediaRequest(paths[2]!);
+    const overflow = startMediaRequest(paths[34]!);
+    requests.push(shared, overflow);
+    await overflowRequested.promise;
+    expect(runFfprobe).toHaveBeenCalledTimes(2);
+    probes.release();
+    const metadata = await Promise.all(requests.map(readMetadataResponse));
+    expect(metadata.at(-1)).toMatchObject({
+      available: false,
+      code: "attachment-unavailable",
+      retryable: true,
+      reason: expect.stringMatching(/busy/i),
+    });
+    for (const entry of metadata.slice(0, -1)) {
+      expect(entry).toMatchObject({ available: true, playback: "transcode", durationMs: 1000 });
+    }
+    expect(runFfprobe).toHaveBeenCalledTimes(34);
+    expect(await readMetadata(paths[34]!)).toMatchObject({
+      available: true,
+      playback: "transcode",
+      durationMs: 1000,
+    });
+    expect(runFfprobe).toHaveBeenCalledTimes(35);
+  } finally {
+    probes.release();
+    await Promise.allSettled(requests.map(({ handled }) => handled));
+  }
+});
+
+it("skips abandoned queued inspections while retaining shared and later live requests", async () => {
+  const probes = blockPlaybackProbes();
+  const root = tempDirs.make("ui-media-aborted-meta-", resolvePreferredOpenClawTmpDir());
+  const paths = ["first", "second", "abandoned", "shared", "later"].map((name) =>
+    path.join(root, `${name}.caf`),
+  );
+  await Promise.all(paths.map((filePath) => fs.writeFile(filePath, Buffer.from("caff-original"))));
+  const requests = paths.slice(0, 2).map((filePath) => startMediaRequest(filePath));
+  try {
+    await probes.started;
+    const queued = createDeferred();
+    const resolveMetadata = playback.resolvePlaybackMetadataForSource;
+    let queuedRequests = 0;
+    vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
+      const result = resolveMetadata(params);
+      if (++queuedRequests === 4) {
+        queued.resolve();
+      }
+      return result;
+    });
+    const abandoned = startMediaRequest(paths[2]!);
+    const sharedAbandoned = startMediaRequest(paths[3]!);
+    const sharedLive = startMediaRequest(paths[3]!);
+    const later = startMediaRequest(paths[4]!);
+    requests.push(abandoned, sharedAbandoned, sharedLive, later);
+    await queued.promise;
+    const closed = Promise.all([once(abandoned.res, "close"), once(sharedAbandoned.res, "close")]);
+    abandoned.res.destroy();
+    sharedAbandoned.res.destroy();
+    await closed;
+    probes.release();
+    for (const request of [...requests.slice(0, 2), sharedLive, later]) {
+      expect(await readMetadataResponse(request)).toMatchObject({
+        available: true,
+        playback: "transcode",
+        durationMs: 1000,
+      });
+    }
+    await Promise.all([abandoned.handled, sharedAbandoned.handled]);
+    expect(runFfprobe).toHaveBeenCalledTimes(4);
+  } finally {
+    probes.release();
+    await Promise.allSettled(requests.map(({ handled }) => handled));
+  }
+});
+
+it("skips a disconnected byte-playback inspection and serves later metadata", async () => {
+  const probes = blockPlaybackProbes("mp3");
+  const root = tempDirs.make("ui-media-aborted-playback-", resolvePreferredOpenClawTmpDir());
+  const paths = ["first", "second", "abandoned", "later"].map((name) =>
+    path.join(root, `${name}.mp3`),
+  );
+  await Promise.all(
+    paths.map((filePath) => fs.writeFile(filePath, Buffer.from("ID3audio-fixture"))),
+  );
+  const requests = paths.slice(0, 2).map((filePath) => startMediaRequest(filePath));
+  try {
+    await probes.started;
+    const playbackRequested = createDeferred();
+    const resolveTranscode = playback.resolvePlaybackTranscode;
+    vi.spyOn(playback, "resolvePlaybackTranscode").mockImplementation((params) => {
+      const result = resolveTranscode(params);
+      playbackRequested.resolve();
+      return result;
+    });
+    const abandoned = startMediaRequest(paths[2]!, "playback");
+    requests.push(abandoned);
+    await playbackRequested.promise;
+    const metadataQueued = createDeferred();
+    const resolveMetadata = playback.resolvePlaybackMetadataForSource;
+    vi.spyOn(playback, "resolvePlaybackMetadataForSource").mockImplementation((params) => {
+      const result = resolveMetadata(params);
+      metadataQueued.resolve();
+      return result;
+    });
+    const later = startMediaRequest(paths[3]!);
+    requests.push(later);
+    await metadataQueued.promise;
+    const closed = once(abandoned.res, "close");
+    abandoned.res.destroy();
+    await closed;
+    probes.release();
+    for (const request of [...requests.slice(0, 2), later]) {
+      expect(await readMetadataResponse(request)).toMatchObject({
+        available: true,
+        playback: "native",
+        durationMs: 1000,
+      });
+    }
+    expect(await abandoned.handled).toBe(true);
+    expect(abandoned.end).not.toHaveBeenCalled();
+    expect(runFfprobe).toHaveBeenCalledTimes(3);
+  } finally {
+    probes.release();
+    await Promise.allSettled(requests.map(({ handled }) => handled));
   }
 });
