@@ -110,7 +110,7 @@ type FirecrawlScrapeParams = {
   signal?: AbortSignal;
 };
 
-export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+function assertFirecrawlScrapeTargetAllowed(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -714,7 +714,6 @@ export async function runFirecrawlScrape(
 }
 
 export const testing = {
-  assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
   resolveEndpoint,

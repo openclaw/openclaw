@@ -460,7 +460,7 @@ describe("firecrawl tools", () => {
           entries: { firecrawl: { config: { webFetch: { apiKey: "firecrawl-cap-test" } } } },
         },
       } as OpenClawConfig,
-      url: "https://example.com/firecrawl-hard-cap",
+      url: "http://example.com/firecrawl-hard-cap",
       extractMode: "markdown",
       maxChars: 1_000_000,
     });
@@ -723,35 +723,40 @@ describe("firecrawl tools", () => {
     expect(capturedBody?.includeDomains).toBeUndefined();
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
-    expect(
-      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).toBeUndefined();
-
-    for (const blockedUrl of [
-      "http://localhost/admin",
-      "http://127.0.0.1/secret",
-      "http://10.0.0.5/secret",
-      "http://169.254.169.254/latest/meta-data/",
-      "http://metadata.google.internal/computeMetadata/v1/",
-      "file:///etc/passwd",
-    ]) {
-      expect(() => firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(blockedUrl)).toThrow(
-        /Blocked|non-HTTP/i,
-      );
-    }
-
-    try {
-      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("not-a-valid-url?token=secret");
-      expect.fail("Expected invalid URL to be blocked");
-    } catch (error) {
-      expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
-      expect((error as Error).message).not.toContain("token=secret");
-    }
-  });
-
-  it("rejects blocked scrape targets before cache lookup or network fetch", async () => {
-    const fetchSpy = vi.fn(async () => new Response("should not be called"));
+  it.each(
+    [
+      {
+        urls: ["not a url", "example.com", "not-a-valid-url?token=secret"],
+        message: /^Invalid URL supplied to Firecrawl scrape$/,
+      },
+      {
+        urls: ["ftp://example.com/file", "file:///etc/passwd"],
+        message: /^Blocked non-HTTP\(S\) protocol in Firecrawl scrape URL:/,
+      },
+      {
+        urls: [
+          "http://localhost",
+          "http://localhost/admin",
+          "http://127.0.0.1",
+          "http://127.0.0.1/secret",
+          "http://10.0.0.1",
+          "http://10.0.0.5/secret",
+          "http://192.168.1.1",
+          "http://172.16.0.1",
+          "http://[::1]",
+          "https://[::1]",
+          "http://[fc00::]",
+          "http://user:pass@127.0.0.1",
+          "http://169.254.169.254/latest/meta-data/",
+          "http://metadata.google.internal/computeMetadata/v1/",
+        ],
+        message: /^Blocked hostname or private\/internal IP in Firecrawl scrape URL:/,
+      },
+    ].flatMap(({ urls, message }) => urls.map((url) => ({ url, message }))),
+  )("rejects unsafe scrape target $url before network fetch", async ({ url, message }) => {
+    const fetchSpy = vi.fn(async () =>
+      Response.json({ success: true, data: { markdown: "unexpected target fetch" } }),
+    );
     global.fetch = fetchSpy as typeof fetch;
 
     await expect(
@@ -770,10 +775,13 @@ describe("firecrawl tools", () => {
             },
           },
         } as OpenClawConfig,
-        url: "http://169.254.169.254/latest/meta-data/",
+        url,
         extractMode: "markdown",
       }),
-    ).rejects.toThrow(/Blocked hostname or private\/internal IP/);
+    ).rejects.toMatchObject({
+      name: "SsrFBlockedError",
+      message: expect.stringMatching(message),
+    });
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });

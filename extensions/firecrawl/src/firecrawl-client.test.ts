@@ -8,50 +8,6 @@ beforeAll(async () => {
   ({ testing: firecrawlClient } = await import("./firecrawl-client.js"));
 });
 
-describe("Firecrawl target validation", () => {
-  it.each(["http://example.com"])("allows %s", (url) => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed(url)).not.toThrow();
-  });
-
-  it.each([
-    "not a url",
-    "ftp://example.com/file",
-    "file:///etc/passwd",
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://10.0.0.1",
-    "http://192.168.1.1",
-    "http://172.16.0.1",
-  ])("rejects unsafe target %s", (url) => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed(url)).toThrow();
-  });
-
-  it("rejects IPv6 loopback and private addresses", () => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://[::1]")).toThrow(
-      /Blocked/,
-    );
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("https://[::1]")).toThrow(
-      /Blocked/,
-    );
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://[fc00::]")).toThrow(
-      /Blocked/,
-    );
-  });
-
-  it("rejects URL with embedded credentials targeting a blocked host", () => {
-    // Credentials in the URL do not bypass the hostname/IP check.
-    expect(() =>
-      firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://user:pass@127.0.0.1"),
-    ).toThrow(/Blocked/);
-  });
-
-  it("rejects bare hostname strings without a scheme as invalid", () => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("example.com")).toThrow(
-      "Invalid URL",
-    );
-  });
-});
-
 describe("Firecrawl search payloads", () => {
   it("normalizes alternate result fields", () => {
     const result = firecrawlClient.resolveSearchItems(
