@@ -100,7 +100,11 @@ export function resolveDoctorSessionSqliteTargets(params: {
 }): { targets: SessionStoreTarget[]; knownTargets?: SessionStoreTarget[] } {
   if (params.store) {
     return {
-      targets: resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
+      targets: resolveSessionStoreTargets(
+        params.cfg,
+        { store: params.store, agent: params.agent, allAgents: params.allAgents },
+        { env: params.env },
+      ),
     };
   }
   const discoversHistory =
