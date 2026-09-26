@@ -174,6 +174,14 @@ pass until a newer completed checkpoint. Exact lifecycle removal and logical
 maintenance planning limit reference results to the generations they might
 delete. No new cache, index, schema, retention policy, or update step is required.
 
+ACP session listing scans metadata in the shared-state read worker and joins
+file-backed entries through the canonical session reader. The reader owns physical
+store selection, snapshot continuations, and cleanup; listing preserves row order,
+lifecycle filtering, complete entry metadata, and missing-store behavior. Cold
+configuration reads also use their asynchronous owner. Process-held incognito
+stores retain their existing native reader and remain separate migration work.
+Schemas, stored bytes, retention, public APIs, and update behavior are unchanged.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check
