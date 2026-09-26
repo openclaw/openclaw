@@ -97,6 +97,7 @@ function buildCacheKeys(params: {
   activationMetadataKey?: string;
   installs?: Record<string, PluginInstallRecord>;
   manifestRegistry?: PluginLoadOptions["manifestRegistry"];
+  metadataSnapshot?: PluginLoadOptions["metadataSnapshot"];
   discovery?: PluginLoadOptions["discovery"];
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
@@ -144,6 +145,7 @@ function buildCacheKeys(params: {
       entries: Object.entries(params.plugins.entries).map(([id, entry]) => [id, entry.enabled]),
     },
     registrationConfigKey: params.registrationConfigKey,
+    metadataSnapshot: resolveRuntimeBindingCacheId(params.metadataSnapshot),
     installs,
     // Supplied candidates own physical source selection even when ids/config match.
     // Keep the selection facts in the loader key instead of a second hook cache.
@@ -313,7 +315,8 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   // the process-owned generation; full snapshots cover narrower loads, while
   // scoped snapshots must match exactly to protect activation boundaries.
   const currentMetadataSnapshot =
-    options.installRecords === undefined &&
+    options.metadataSnapshot ??
+    (options.installRecords === undefined &&
     trustNormalized.loadPaths === normalized.loadPaths &&
     !shouldResolveRawConfigEnvVars &&
     (options.env === undefined || options.env === process.env)
@@ -330,7 +333,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
               pluginIds: onlyPluginIds,
             })
           : undefined))
-      : undefined;
+      : undefined);
   const preparedInstallRecords =
     currentMetadataSnapshot &&
     (options.manifestRegistry === undefined ||
@@ -359,6 +362,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     discoveryContext,
     plugins: trustNormalized,
     registrationConfigKey,
+    metadataSnapshot: currentMetadataSnapshot,
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},

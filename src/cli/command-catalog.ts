@@ -41,8 +41,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["agent"],
     policy: {
       configGuard: ({ argv }) => (hasFlag(argv, "--local") ? "run" : "skip"),
-      loadPlugins: ({ argv }) => hasFlag(argv, "--local"),
-      pluginRegistry: { scope: "all" },
+      // Local admission owns full registration after secrets and the selected workspace resolve.
+      loadPlugins: "never",
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },

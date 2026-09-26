@@ -18,6 +18,7 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
+import { resolveLocalAgentPluginRegistry } from "./runtime-local-plugin-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 type PreparedInboundRegistryInput = Pick<
@@ -183,7 +184,10 @@ export function prepareWorkspacePluginRegistries(
           (source) => {
             primaryRegistry = source;
           },
-        ));
+        ) ??
+        (input.loadRuntimePlugins
+          ? undefined
+          : resolveLocalAgentPluginRegistry(input, metadataSnapshot)));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   for (const registry of new Set([inboundPluginRegistry, baseRegistry])) {
     if (registry) {
@@ -205,9 +209,9 @@ export function prepareWorkspacePluginRegistries(
                   : basePluginIds !== undefined
                     ? { basePluginIds }
                     : {}),
-            ...(reusableGeneration?.pluginRegistry
-              ? { reusableRegistry: reusableGeneration.pluginRegistry }
-              : {}),
+            // Inbound preparation already admitted this exact context. Let the runtime
+            // planner check selected owners before acquiring another captured registry.
+            ...(baseRegistry ? { reusableRegistry: baseRegistry } : {}),
             config: input.config,
             env: input.env ?? process.env,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -216,7 +220,11 @@ export function prepareWorkspacePluginRegistries(
             ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
             selections: input.runtimePluginSelections,
             configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
-            ...(purpose ? { purpose } : {}),
+            ...(purpose
+              ? { purpose }
+              : !input.readOnly && !input.loadRuntimePlugins
+                ? { purpose: "agent" }
+                : {}),
           },
           (source) => {
             loadedPrimaryRegistry =

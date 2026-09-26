@@ -8,6 +8,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listChatChannels } from "./chat-meta.js";
 import { normalizeAnyChannelId as normalizeAnyChannelIdLight } from "./registry-normalize.js";
@@ -75,6 +76,19 @@ describe("channel registry helpers", () => {
 
     expect(normalizeAnyChannelId("exact-id")).toBe("exact-id");
     expect(normalizeAnyChannelIdLight("exact-id")).toBe("exact-id");
+  });
+
+  it("prefers a later scoped canonical id over an earlier scoped alias", () => {
+    const aliasOwner = createRegistryWithRegisteredChannel("alias-owner", ["exact-id"]).channels[0];
+    const exactOwner = createRegistryWithRegisteredChannel("exact-id").channels[0];
+    const scoped = createTestRegistry([
+      expectDefined(aliasOwner, "scoped alias channel"),
+      expectDefined(exactOwner, "scoped exact channel"),
+    ]);
+    withPluginRuntimeRegistryScope(scoped, () => {
+      expect(normalizeAnyChannelIdLight("exact-id")).toBe("exact-id");
+      expect(normalizeAnyChannelId("exact-id")).toBe("exact-id");
+    });
   });
 
   it("rebuilds registered channel lookups when the active registry changes", () => {

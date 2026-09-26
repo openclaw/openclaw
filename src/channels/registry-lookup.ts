@@ -4,6 +4,7 @@ import type {
   ActivePluginChannelRegistration,
   ActivePluginChannelRegistry,
 } from "../plugins/channel-registry-state.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
 
 type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
@@ -27,6 +28,22 @@ type RegisteredChannelPluginLookup = {
 };
 
 let registeredChannelPluginLookup: RegisteredChannelPluginLookup | undefined;
+
+/** Lookup an owned registry view without letting an earlier alias shadow a later id. */
+export function findChannelEntryInRegistry(
+  registry: Pick<PluginRegistry, "channels"> | undefined | null,
+  normalizedKey: string,
+): PluginRegistry["channels"][number] | undefined {
+  const entries = registry?.channels;
+  return (
+    entries?.find((entry) => normalizeOptionalLowercaseString(entry.plugin.id) === normalizedKey) ??
+    entries?.find((entry) =>
+      entry.plugin.meta?.aliases?.some(
+        (alias) => normalizeOptionalLowercaseString(alias) === normalizedKey,
+      ),
+    )
+  );
+}
 
 function setLookupEntry(
   map: Map<string, RegisteredChannelPluginEntry>,

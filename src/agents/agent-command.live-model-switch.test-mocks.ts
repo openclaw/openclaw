@@ -96,6 +96,7 @@ export function createTestRuntimePlugins(
 ) {
   return {
     withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+    withLocalAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
     loadAgentRuntimePluginRegistryHandle: () => createEmptyPluginRegistry(),
     acquireAgentRuntimePluginRegistry: async () => {
       const registry = createEmptyPluginRegistry();

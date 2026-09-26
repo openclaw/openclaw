@@ -9,6 +9,7 @@ import {
 } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { findChannelEntryInRegistry } from "../../channels/registry-lookup.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 
@@ -24,18 +25,7 @@ export function findChannelPluginInRegistry(
   if (!normalizedChannel) {
     return undefined;
   }
-  for (const entry of registry.channels) {
-    const plugin = entry?.plugin;
-    if (
-      normalizeOptionalLowercaseString(plugin?.id) === normalizedChannel ||
-      plugin?.meta?.aliases?.some(
-        (alias) => normalizeOptionalLowercaseString(alias) === normalizedChannel,
-      )
-    ) {
-      return plugin;
-    }
-  }
-  return undefined;
+  return findChannelEntryInRegistry(registry, normalizedChannel)?.plugin;
 }
 
 // Message CLI actions run against a scoped registry handle without process-root

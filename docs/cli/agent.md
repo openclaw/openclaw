@@ -332,7 +332,7 @@ These are observations, not statistical speed guarantees.
 - `--reply-to <target>`: delivery target override
 - `--reply-channel <channel>`: delivery channel override
 - `--reply-account <id>`: delivery account override
-- `--local`: run the embedded agent directly (after plugin registry preload)
+- `--local`: run the embedded agent directly (plugins register after local secrets and the selected agent workspace resolve)
 - `--deliver`: send the reply back to the selected channel/target
 - `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
 - `--json`: output JSON

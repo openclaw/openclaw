@@ -2,13 +2,20 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { listRegisteredChannelPluginIds } from "../channels/registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-core.js";
 export { normalizeMessageChannel } from "./message-channel-core.js";
 
 /** Lists built-in and registered plugin channel ids that can receive delivery. */
 export const listDeliverableMessageChannels = (): string[] =>
-  uniqueStrings([...CHANNEL_IDS, ...listRegisteredChannelPluginIds()]);
+  uniqueStrings([
+    ...CHANNEL_IDS,
+    ...(getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.channels.map(
+      ({ plugin }) => plugin.id,
+    ) ?? []),
+    ...listRegisteredChannelPluginIds(),
+  ]);
 
 /** Returns whether a normalized id is valid for Gateway routing. */
 export function isGatewayMessageChannel(value: string): boolean {
@@ -19,6 +26,9 @@ export function isGatewayMessageChannel(value: string): boolean {
 export function isDeliverableMessageChannel(value: string): boolean {
   return (
     CHANNEL_IDS.some((channelId) => channelId === value) ||
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.channels.some(
+      ({ plugin }) => plugin.id === value,
+    ) === true ||
     listRegisteredChannelPluginIds().includes(value)
   );
 }

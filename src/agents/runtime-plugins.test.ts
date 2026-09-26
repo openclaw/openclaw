@@ -422,7 +422,7 @@ describe("agent runtime plugin registries", () => {
     }
   });
 
-  it("reuses the current Gateway generation and loads only the imported-plugin delta", async () => {
+  it("borrows generic Gateway facts before loading the expanded selected registry", async () => {
     const { config, workspaceDir, metadataSnapshot, activeRegistry } =
       createGatewayRegistryFixture();
     const selectedRegistry = createEmptyPluginRegistry();

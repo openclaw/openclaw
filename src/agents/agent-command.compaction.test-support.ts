@@ -146,6 +146,7 @@ vi.mock("./runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return {
     withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+    withLocalAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
     loadAgentRuntimePluginRegistryHandle: () => createEmptyPluginRegistry(),
     acquireAgentRuntimePluginRegistry: async () => {
       const registry = createEmptyPluginRegistry();

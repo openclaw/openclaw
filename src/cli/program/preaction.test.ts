@@ -341,7 +341,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
-  it("loads plugins for text local agent runs", async () => {
+  it("defers full plugin registration to local admission for text agent runs", async () => {
     await runPreAction({
       parseArgv: ["agent"],
       processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi"],
@@ -352,12 +352,10 @@ describe("registerPreActionHooks", () => {
       measure: expect.any(Function),
       commandPath: ["agent"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "all",
-    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("loads plugins for json local agent runs", async () => {
+  it("defers full plugin registration to local admission for json agent runs", async () => {
     await runPreAction({
       parseArgv: ["agent"],
       processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi", "--json"],
@@ -369,9 +367,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["agent"],
       suppressDoctorStdout: true,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "all",
-    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses operator config and plugin startup for agent exec", async () => {

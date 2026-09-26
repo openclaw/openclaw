@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayPlugins } from "../gateway/server-plugins.js";
 import { collectConfiguredAgentModelProviderIds } from "./gateway-startup-plugin-providers.js";
@@ -33,6 +34,83 @@ function createManifestRegistry(
 }
 
 describe("configured Gateway model provider ownership", () => {
+  it("admits the implicit default but not unused model picker entries or API owners", () => {
+    const registry = createManifestRegistry([
+      { id: "default-owner", providers: [DEFAULT_PROVIDER] },
+      { id: "unused-owner", providers: ["unused"] },
+    ]);
+    expect(
+      collectConfiguredAgentModelProviderIds(
+        {
+          agents: { defaults: { models: { "unused/model": { alias: "unused-alias" } } } },
+        },
+        registry,
+      ),
+    ).toEqual(new Set([DEFAULT_PROVIDER]));
+    expect(
+      collectConfiguredAgentModelProviderIds(
+        {
+          agents: { defaults: { model: "custom/model" } },
+          models: {
+            providers: {
+              custom: { baseUrl: "https://custom.invalid", api: "openai-responses", models: [] },
+            },
+          },
+        },
+        registry,
+      ),
+    ).toEqual(new Set());
+  });
+
+  it("shares primary, alias, fallback and subagent chains without activating every model key", () => {
+    const ids = ["primary", "fallback", "subagent", "sub-fallback", "utility", "unused"];
+    const registry = createManifestRegistry(ids.map((id) => ({ id, providers: [id] })));
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "selected-alias", fallbacks: ["fallback/model"] },
+          subagents: { model: { primary: "subagent/model", fallbacks: ["sub-fallback/model"] } },
+          utilityModel: "utility/model",
+          models: { "primary/model": { alias: "selected-alias" }, "unused/model": {} },
+        },
+        entries: { agent: { models: { "unused/other": { alias: "unused-agent-alias" } } } },
+      },
+    };
+    expect(collectConfiguredAgentModelProviderIds(config, registry)).toEqual(
+      new Set(["primary", "fallback", "subagent", "sub-fallback", "utility"]),
+    );
+    // Per-agent empty fallbacks and utility disablement replace inherited policy.
+    config.agents!.entries!.agent = {
+      model: { primary: "primary/model", fallbacks: [] },
+      subagents: { model: { primary: "subagent/model", fallbacks: [] } },
+      utilityModel: "",
+    };
+    expect(collectConfiguredAgentModelProviderIds(config, registry)).toEqual(
+      new Set(["primary", "subagent"]),
+    );
+  });
+
+  it.each(["small", "small@utility:work", "utility/small"])(
+    "admits the explicit utility alias %s without enabling unused picker owners",
+    (utilityModel) => {
+      const registry = createManifestRegistry(
+        ["primary", "utility", "unused"].map((id) => ({ id, providers: [id] })),
+      );
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "primary/model",
+            utilityModel,
+            models: { "utility/model": { alias: "small" }, "unused/model": {} },
+          },
+        },
+      };
+      expect(collectConfiguredAgentModelProviderIds(config, registry)).toEqual(
+        new Set(["primary", "utility"]),
+      );
+    },
+  );
+
   it("does not inspect model catalogs when no agent model refs are configured", () => {
     const registry = createManifestRegistry([
       {
@@ -126,6 +204,8 @@ describe("selected CLI backend Gateway startup", () => {
       { id: "disabled-plugin", providers: ["disabled-cli"], cliBackends: ["disabled-cli"] },
       { id: "unused-plugin", providers: ["unused-cli"], cliBackends: ["unused-cli"] },
       { id: "http-plugin", providers: ["ordinary-http"], cliBackends: [] },
+      { id: "denied-plugin", providers: ["denied"], cliBackends: [] },
+      { id: "untrusted-plugin", providers: ["untrusted"], cliBackends: [] },
     ];
     const backendConfig = {
       command: process.execPath,
@@ -159,7 +239,11 @@ describe("selected CLI backend Gateway startup", () => {
           ? `module.exports = { id: "selected-plugin", register(api) {
               api.registerCliBackend({ id: "selected-cli", config: ${JSON.stringify(backendConfig)} });
             } };`
-          : `throw new Error("Unexpected startup runtime: ${owner.id}");`,
+          : owner.id === "http-plugin"
+            ? `module.exports = { id: "http-plugin", register(api) {
+                api.registerProvider({ id: "ordinary-http", label: "HTTP provider hooks", auth: [] });
+              } };`
+            : `throw new Error("Unexpected startup runtime: ${owner.id}");`,
       );
       return dir;
     });
@@ -178,7 +262,12 @@ describe("selected CLI backend Gateway startup", () => {
             ? { primary: "ordinary-http/auto", fallbacks: ["selected-cli/auto"] }
             : { primary: "selected-cli/auto", fallbacks: ["ordinary-http/auto"] },
         },
-        entries: { disabled: { model: "disabled-cli/auto" } },
+        entries: {
+          configured: {},
+          disabled: { model: "disabled-cli/auto" },
+          denied: { model: "denied/auto" },
+          untrusted: { model: "untrusted/auto" },
+        },
       },
       models: {
         providers: {
@@ -205,13 +294,15 @@ describe("selected CLI backend Gateway startup", () => {
         },
       },
       plugins: {
-        allow: owners.map((owner) => owner.id),
+        allow: owners.filter((owner) => owner.id !== "untrusted-plugin").map((owner) => owner.id),
+        deny: ["denied-plugin"],
         load: { paths: pluginPaths },
         entries: {
           "selected-plugin": { enabled: true },
           "disabled-plugin": { enabled: false },
           "unused-plugin": { enabled: true },
           "http-plugin": { enabled: true },
+          "denied-plugin": { enabled: true },
         },
         slots: { memory: "none" },
       },
@@ -234,7 +325,10 @@ describe("selected CLI backend Gateway startup", () => {
         loaded.pluginRegistry.plugins
           .filter((plugin) => plugin.status === "loaded")
           .map((plugin) => plugin.id),
-      ).toEqual(["selected-plugin"]);
+      ).toEqual(["selected-plugin", "http-plugin"]);
+      expect(loaded.pluginRegistry.providers.map(({ provider }) => provider.id)).toEqual([
+        "ordinary-http",
+      ]);
       expect(
         loaded.pluginRegistry.cliBackends.map(({ pluginId, backend }) => ({
           pluginId,

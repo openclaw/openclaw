@@ -338,21 +338,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   );
   const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
-  if (params.purpose === "model-catalog") {
-    for (const plugin of params.metadataSnapshot.plugins) {
-      for (const runtime of plugin.activation?.onAgentHarnesses ?? []) {
-        const owners = resolveAgentHarnessOwnerPluginIds({
-          runtime,
-          provider: "",
-          config,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: params.metadataSnapshot,
-        });
-        pluginIds.push(...owners);
-        forceActivatedPluginIds.push(...owners);
-      }
-    }
-  }
+  // Catalog workers own provider hooks only; the parent retains native picker harnesses.
   for (const selection of includeAgentOwners ? params.selections : []) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     const providerOwnerPluginIds = resolveSelectedProviderOwnerPluginIds({

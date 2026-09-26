@@ -11,6 +11,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
+  createPreparedModelCatalogWorker,
   getPreparedModelCatalogWorkerPoolSnapshot,
   PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
 } from "./prepared-model-catalog-worker.js";
@@ -30,6 +31,7 @@ import {
   closePreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimeClose,
 } from "./prepared-model-runtime.lifecycle.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
   loadCompletedFullCatalog,
@@ -631,6 +633,38 @@ describe("Gateway catalog worker pool", () => {
         expect(spawned).toHaveLength(1);
         const nextMarker = path.join(fixture.root, "next-environment-marker.txt");
         vi.stubEnv("OPENCLAW_WORKER_CATALOG_MARKER", nextMarker);
+        // A new request cannot rotate the shared worker while an earlier publication
+        // still owns its captured inventory, even with the same metadata identity.
+        const original = fixture.snapshots[0]!;
+        const unadmitted = createPreparedModelCatalogWorker({
+          agentFacts: {
+            input: {
+              agentId: original.agentId,
+              agentDir: original.agentDir,
+              config: fixture.config,
+              allowGatewaySubagentBinding: true,
+            },
+            env: { ...process.env },
+            authStore: { version: 1, profiles: {} },
+            credentials: {},
+            providerIds: [],
+            configuredModelRefs: [],
+            configuredRuntimeModels: [],
+            runtimeCapabilityModels: [],
+            configuredGeneratedCatalogPluginIds: [],
+            templateAuthStorage: AuthStorage.inMemory({}),
+          },
+          pluginMetadataSnapshot: original.metadataSnapshot,
+          pluginRegistry: original.pluginRegistry,
+          isCurrent: original.isCurrent,
+          retirementSignal: new AbortController().signal,
+        });
+        await expect(unadmitted.loadAuth({ providerIds: [] })).rejects.toThrow(
+          "Gateway catalog environment changed without retiring its plugin generation",
+        );
+        expect(original.isCurrent()).toBe(true);
+        expect(spawned).toHaveLength(1);
+        await loadPreparedModelRuntimeAuth(original, { providerIds: [] });
         const publish = () =>
           refreshPreparedModelRuntimeSnapshots(fixture.config, {
             catalogMode: "static",

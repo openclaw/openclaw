@@ -46,11 +46,11 @@ export class PluginInvocationScope {
   }
 
   private consumer(instance: PluginInstanceHandle): PluginInstanceConsumer | undefined {
-    this.assertOpen();
+    this.assertActive();
     return this.consumers.get(instance);
   }
 
-  private assertOpen(): void {
+  assertActive(): void {
     if (this.closed) {
       throw new Error("Plugin invocation scope is closed");
     }
@@ -59,13 +59,13 @@ export class PluginInvocationScope {
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
     const binding = this.bindings.get(instance);
     if (binding) {
-      this.assertOpen();
+      this.assertActive();
     }
     return binding;
   }
 
   run<T>(run: () => T): T {
-    this.assertOpen();
+    this.assertActive();
     return pluginInvocationContext.run(this, run);
   }
 
@@ -79,7 +79,7 @@ export class PluginInvocationScope {
 
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
-    this.assertOpen();
+    this.assertActive();
     const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys());
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks

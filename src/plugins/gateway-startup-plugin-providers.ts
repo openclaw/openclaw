@@ -1,19 +1,21 @@
 // Collects configured model, generation, voice, and memory provider ownership.
 import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
-  buildModelCatalogMergeKey,
-  parseModelCatalogRef,
-} from "@openclaw/model-catalog-core/model-catalog-refs";
-import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, listAgentIds } from "../agents/agent-scope-config.js";
+import { resolveConfiguredRuntimePluginSelections } from "../agents/configured-runtime-plugin-selections.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../agents/model-selection-resolve.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredTalkRealtimeProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
@@ -22,7 +24,6 @@ import type {
   ConfiguredVoiceProviderIds,
 } from "./gateway-startup-plugin-contracts.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
@@ -32,13 +33,6 @@ export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): R
   }
   const providerId = normalizeOptionalLowercaseString(search.provider);
   return providerId ? new Set([providerId]) : new Set();
-}
-
-function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
-  return listModelRefsFromConfigValue(value)
-    .map(parseModelCatalogRef)
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-    .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
 }
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
@@ -52,124 +46,52 @@ function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   );
 }
 
-type ManifestModelProviderLookup = {
-  modelApis: ReadonlyMap<string, string>;
-  providerIds: ReadonlySet<string>;
-  cliBackendIds: ReadonlySet<string>;
-};
-
-function buildManifestModelProviderLookup(
-  manifestRegistry: PluginManifestRegistry,
-  config: OpenClawConfig,
-  modelIdsByProvider: ReadonlyMap<string, ReadonlySet<string>>,
-): ManifestModelProviderLookup {
-  const providerFilters = [...modelIdsByProvider.keys()];
-  const mergeKeyFilter = new Set(
-    [...modelIdsByProvider].flatMap(([providerId, modelIds]) =>
-      [...modelIds].map((modelId) => buildModelCatalogMergeKey(providerId, modelId)),
-    ),
-  );
-  const modelApis = new Map(
-    planEffectiveModelCatalogRows({
-      registry: manifestRegistry,
-      config,
-      providerFilters,
-      mergeKeyFilter,
-    }).rows.flatMap((row) => (row.api ? [[row.mergeKey, row.api] as const] : [])),
-  );
-  return {
-    modelApis,
-    cliBackendIds: new Set(
-      manifestRegistry.plugins.flatMap((plugin) => plugin.cliBackends.map(normalizeProviderId)),
-    ),
-    providerIds: new Set(
-      manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
-    ),
-  };
-}
-
 export function collectConfiguredAgentModelProviderIds(
   config: OpenClawConfig,
   manifestRegistry: PluginManifestRegistry,
 ): ReadonlySet<string> {
-  const modelIdsByProvider = new Map<string, Set<string>>();
-  const addModelProviderRefs = (value: unknown) => {
-    for (const { providerId, modelId } of listModelProviderRefParts(value)) {
-      const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
-      modelIds.add(modelId);
-      modelIdsByProvider.set(providerId, modelIds);
+  const providerIds = new Set<string>();
+  for (const agentId of listAgentIds(config)) {
+    const selections = resolveConfiguredRuntimePluginSelections(config, agentId, {
+      manifestPlugins: manifestRegistry.plugins,
+      allowPluginNormalization: false,
+    });
+    for (const selection of selections) {
+      providerIds.add(selection.provider);
     }
-  };
-  const addModelMapProviderIds = (models: unknown) => {
-    if (!isRecord(models)) {
-      return;
+    // Explicit utility routing is a separate startup consumer; unused picker aliases are not.
+    const utility = readUtilityModelSetting(config, agentId);
+    if (utility.kind === "explicit") {
+      const context = {
+        cfg: config,
+        agentId,
+        defaultProvider: selections[0]?.provider ?? DEFAULT_PROVIDER,
+        manifestPlugins: manifestRegistry.plugins,
+        allowPluginNormalization: false,
+      };
+      const utilityRef = resolveModelRefFromString({
+        ...context,
+        raw: utility.modelRef,
+        aliasIndex: buildModelAliasIndex(context),
+      })?.ref;
+      if (utilityRef) {
+        providerIds.add(utilityRef.provider);
+      }
     }
-    for (const modelRef of Object.keys(models)) {
-      addModelProviderRefs(modelRef);
-    }
-  };
-
-  const defaults = config.agents?.defaults;
-  addModelProviderRefs(defaults?.model);
-  addModelProviderRefs(defaults?.utilityModel);
-  addModelMapProviderIds(defaults?.models);
-
-  for (const agent of listAgentEntries(config)) {
-    if (!isRecord(agent)) {
-      continue;
-    }
-    addModelProviderRefs(agent.model);
-    addModelProviderRefs(agent.utilityModel);
-    addModelMapProviderIds(agent.models);
   }
 
-  if (modelIdsByProvider.size === 0) {
-    return new Set();
+  if (providerIds.size === 0) {
+    return providerIds;
   }
-  const manifestModelProviders = buildManifestModelProviderLookup(
-    manifestRegistry,
-    config,
-    modelIdsByProvider,
+  // Core transports do not replace a selected provider's runtime hooks or CLI backend.
+  // Admit the declared owners now, as the immutable agent runtime plan requires,
+  // instead of discovering a missing owner and reloading the startup registry later.
+  const declaredProviderIds = new Set(
+    manifestRegistry.plugins.flatMap((plugin) =>
+      [...plugin.providers, ...plugin.cliBackends].map(normalizeProviderId),
+    ),
   );
-
-  return new Set(
-    [...modelIdsByProvider.entries()]
-      .filter(([providerId, modelIds]) => {
-        return [...modelIds].some((modelId) =>
-          configuredModelProviderNeedsRuntimePlugin({
-            config,
-            manifestModelProviders,
-            providerId,
-            modelId,
-          }),
-        );
-      })
-      .map(([providerId]) => providerId),
-  );
-}
-
-function configuredModelProviderNeedsRuntimePlugin(params: {
-  config: OpenClawConfig;
-  manifestModelProviders: ManifestModelProviderLookup;
-  providerId: string;
-  modelId: string;
-}): boolean {
-  // A model API hint cannot replace the runtime registration of a selected CLI backend.
-  if (params.manifestModelProviders.cliBackendIds.has(params.providerId)) {
-    return true;
-  }
-  const providerConfig = params.config.models?.providers?.[params.providerId];
-  const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
-  const modelApi =
-    configuredModel?.api ??
-    providerConfig?.api ??
-    params.manifestModelProviders.modelApis.get(
-      buildModelCatalogMergeKey(params.providerId, params.modelId),
-    );
-  if (typeof modelApi === "string") {
-    return !CORE_BUILT_IN_MODEL_APIS.has(modelApi);
-  }
-  return params.manifestModelProviders.providerIds.has(params.providerId);
+  return new Set([...providerIds].filter((providerId) => declaredProviderIds.has(providerId)));
 }
 
 export function manifestOwnsConfiguredModelProvider(params: {

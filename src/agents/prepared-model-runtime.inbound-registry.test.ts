@@ -592,7 +592,8 @@ describe("prepared reply dispatch runtime", () => {
     expect(getPreparedModelRuntimeSnapshot(dynamicInput)?.pluginRegistry).toBe(
       dynamicSelectedBefore,
     );
-    expect(configuredSelectedBefore).not.toBe(configuredRuntimeBefore?.inboundPluginRegistry);
+    // Covered configured selections borrow inbound callbacks; auth refresh keeps that owner.
+    expect(configuredSelectedBefore).toBe(configuredRuntimeBefore?.inboundPluginRegistry);
   });
 
   it("waits only the affected configured projection during an auth refresh", async () => {

@@ -41,6 +41,8 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  readonly registry: PluginRegistry;
+  assertActive: () => void;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 

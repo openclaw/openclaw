@@ -6,6 +6,7 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { normalizeChatChannelId } from "../../channels/ids.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -83,10 +84,49 @@ export type PreparedAgentCommandRuntimeContext = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
+/** A recipient route is considered only for a named agent and a concrete target. */
+export function isAgentCommandExplicitRecipientCandidate(opts: AgentCommandOpts): boolean {
+  const to = opts.to?.trim();
+  return Boolean(
+    opts.agentId?.trim() &&
+    to &&
+    opts.channel?.trim() &&
+    !opts.sessionKey?.trim() &&
+    !opts.sessionId?.trim() &&
+    classifySessionKeyShape(to) !== "agent",
+  );
+}
+
+/** Resolve the command's selected config before opening a local plugin lifetime. */
+export async function resolveAgentCommandPreparationConfig(
+  opts: AgentCommandOpts,
+  runtime: RuntimeEnv,
+  options?: { beforeLocalRegistry?: boolean },
+): Promise<OpenClawConfig> {
+  const builtInChannel = options?.beforeLocalRegistry ? normalizeChatChannelId(opts.channel) : null;
+  const recipientChannel = options?.beforeLocalRegistry
+    ? (builtInChannel ?? opts.channel?.trim().toLowerCase())
+    : resolveMessageChannel(opts.channel);
+  // External channel availability is only authoritative inside the local root.
+  // Before registration, scope secrets for stable built-in ids alone.
+  return await resolveAgentRuntimeConfig(runtime, {
+    runtimeTargetsChannelSecrets: opts.deliver === true,
+    runtimeChannelSecretScope:
+      opts.deliver !== true &&
+      isAgentCommandExplicitRecipientCandidate(opts) &&
+      recipientChannel &&
+      (!options?.beforeLocalRegistry || builtInChannel) &&
+      isDeliverableMessageChannel(recipientChannel)
+        ? { channel: recipientChannel, accountId: opts.accountId }
+        : undefined,
+  });
+}
+
 export async function prepareAgentCommandExecution(
   opts: AgentCommandOpts,
   runtime: RuntimeEnv,
   runtimeContext?: PreparedAgentCommandRuntimeContext,
+  preparedConfig?: OpenClawConfig,
 ) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
@@ -102,13 +142,9 @@ export async function prepareAgentCommandExecution(
       : undefined;
   const recipientChannel = resolveMessageChannel(opts.channel);
   const shouldResolveExplicitRecipientSession = Boolean(
-    !rawExplicitSessionKey &&
-    !requestedSessionId &&
-    !toSessionKey &&
-    opts.agentId?.trim() &&
+    isAgentCommandExplicitRecipientCandidate(opts) &&
     recipientChannel &&
-    isDeliverableMessageChannel(recipientChannel) &&
-    rawTo,
+    isDeliverableMessageChannel(recipientChannel),
   );
   if (!opts.to && !requestedSessionId && !rawExplicitSessionKey && !opts.agentId) {
     throw new Error(
@@ -116,13 +152,7 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const cfg = await resolveAgentRuntimeConfig(runtime, {
-    runtimeTargetsChannelSecrets: opts.deliver === true,
-    runtimeChannelSecretScope:
-      opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
-        ? { channel: recipientChannel, accountId: opts.accountId }
-        : undefined,
-  });
+  const cfg = preparedConfig ?? (await resolveAgentCommandPreparationConfig(opts, runtime));
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,

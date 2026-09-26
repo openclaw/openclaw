@@ -55,7 +55,6 @@ import {
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
-import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
   retainPreparedPluginRegistry,
@@ -174,13 +173,6 @@ async function prepareWorkerGeneration(
     },
     () => {},
   );
-  prepareOwnedPluginLoadContext(
-    value.input,
-    value.input.env,
-    pluginRegistry,
-    metadata,
-    value.preferBuiltPluginArtifacts,
-  );
   const pluginGeneration = Object.freeze({
     ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
     pluginMetadataSnapshot: metadata,
@@ -243,15 +235,8 @@ async function runCatalogRequest(
         reconstructedFingerprint,
       };
     }
-    // Cached registrations retain their code, while request lookups use this clone's
-    // config/environment objects and the synthetic-auth facts restored on them above.
-    prepareOwnedPluginLoadContext(
-      value.input,
-      value.input.env,
-      prepared.pluginGeneration.pluginRegistry,
-      prepared.pluginGeneration.pluginMetadataSnapshot,
-      value.preferBuiltPluginArtifacts,
-    );
+    // The loader owns the scoped registration facts. Requests carry their cloned
+    // config/auth inputs explicitly; attaching them must not rerun broad auto-enable.
     const pluginGenerationScope = {
       metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: prepared.pluginGeneration.pluginRegistry,
