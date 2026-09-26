@@ -14,7 +14,10 @@ import {
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";
-import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  retainGatewayRootWorkAdmissionContinuation,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND as TURN_MAINTENANCE_TASK_KIND,
@@ -540,6 +543,8 @@ export async function runContextEngineMaintenance(
     contextEngine.info.turnMaintenanceMode === "background";
 
   if (shouldDefer) {
+    const releaseAdmission = retainGatewayRootWorkAdmissionContinuation();
+    let deferred: Promise<void> | undefined;
     try {
       const sessionKey = normalizeOptionalString(params.sessionKey);
       if (!sessionKey) {
@@ -549,7 +554,7 @@ export async function runContextEngineMaintenance(
         return undefined;
       }
       // The scheduler takes resource custody synchronously before the foreground transfer callback.
-      const deferred = scheduleDeferredTurnMaintenance({
+      deferred = scheduleDeferredTurnMaintenance({
         ...params,
         contextEngine,
         sessionKey,
@@ -563,6 +568,14 @@ export async function runContextEngineMaintenance(
       }
     } catch (err) {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
+    } finally {
+      if (deferred && releaseAdmission) {
+        // Each coalesced caller's captured context can still be used by reruns or disposal.
+        // The shared completion owns release even if the transfer callback throws.
+        void deferred.then(releaseAdmission, releaseAdmission);
+      } else {
+        releaseAdmission?.();
+      }
     }
     return undefined;
   }
