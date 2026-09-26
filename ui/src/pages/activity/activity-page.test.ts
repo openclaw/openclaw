@@ -408,6 +408,7 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(firstPage.entries).toEqual([]);
     current().opts.onEvent?.(toolEvent("first-visit"));
     expect(firstPage.entries.map((entry) => entry.outputPreview)).toEqual(["first-visit output"]);
+    expect(source.eventLog).toEqual([]);
     firstPage.subscriptions.hostDisconnected();
 
     current().opts.onEvent?.(toolEvent("while-away"));

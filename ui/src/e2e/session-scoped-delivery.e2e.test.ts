@@ -91,6 +91,16 @@ suite.define(() => {
         for (const key of [first, second, narrated]) {
           await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
         }
+        await page.evaluate(() => {
+          const app = document.querySelector<
+            HTMLElement & { runtime: { context: ApplicationContext } }
+          >("openclaw-app");
+          if (!app) {
+            throw new Error("Control UI app is unavailable");
+          }
+          // This page-lifetime observer opts the delivery proof into diagnostic capture.
+          app.runtime.context.gateway.subscribeEventLog(() => undefined);
+        });
         const send = async (key: string, runId: string, text: string) => {
           await gateway.emitGatewayEvent("chat", {
             sessionKey: key,

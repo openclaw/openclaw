@@ -1,4 +1,3 @@
-import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
@@ -110,25 +109,6 @@ export function createLiveActivity(
     );
   };
 
-  const reduce = (
-    current: ActivityEntry[],
-    eventName: string,
-    payload: unknown,
-    receivedAt: number,
-  ): ActivityEntry[] => {
-    if (eventName !== "agent" && eventName !== "session.tool") {
-      return current;
-    }
-    const event = parseActivityEvent(payload, receivedAt);
-    if (
-      !event?.sessionKey ||
-      !subscriptions.has(currentWorkIdentity({ key: event.sessionKey, agentId: event.agentId }))
-    ) {
-      return current;
-    }
-    return updateToolActivity(current, event);
-  };
-
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
     if (revision === eventLogRevision) {
@@ -146,14 +126,28 @@ export function createLiveActivity(
       syncSubscriptions();
     }
   });
-  const stopEventLog = gateway.subscribeEventLog(() => {
-    if (!disposed) {
-      retireChangedContext();
+  const stopEvents = gateway.subscribeEvents((event) => {
+    if (disposed || (event.event !== "agent" && event.event !== "session.tool")) {
+      return;
     }
-  });
-  const stopEvents = gateway.subscribeEvents((event: GatewayEventFrame) => {
-    if (!disposed) {
-      publish(reduce(entries, event.event, event.payload, Date.now()));
+    const eventClient = gateway.snapshot.client;
+    const revision = gateway.eventLogRevision;
+    retireChangedContext();
+    if (
+      disposed ||
+      eventClient !== gateway.snapshot.client ||
+      revision !== gateway.eventLogRevision
+    ) {
+      return;
+    }
+    const activityEvent = parseActivityEvent(event.payload, Date.now());
+    if (
+      activityEvent?.sessionKey &&
+      subscriptions.has(
+        currentWorkIdentity({ key: activityEvent.sessionKey, agentId: activityEvent.agentId }),
+      )
+    ) {
+      publish(updateToolActivity(entries, activityEvent));
     }
   });
 
@@ -188,7 +182,6 @@ export function createLiveActivity(
       globalThis.removeEventListener("pagehide", handleVisibility);
       globalThis.removeEventListener("pageshow", handleVisibility);
       stopGateway();
-      stopEventLog();
       stopEvents();
       entries = [];
       snapshot = { entries, revision: snapshot.revision + 1, error: null };
