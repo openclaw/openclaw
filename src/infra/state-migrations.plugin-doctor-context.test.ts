@@ -332,7 +332,7 @@ describe("plugin doctor session identity evidence", () => {
         await queue.enqueue("retained", "must survive expired repair");
         active = false;
 
-        await expect(Promise.resolve().then(purge)).rejects.toThrow("repair owner expired");
+        await expect(Promise.resolve().then(() => purge())).rejects.toThrow("repair owner expired");
         expect((await queue.listPending()).map((entry) => entry.id)).toEqual(["retained"]);
       },
     );
