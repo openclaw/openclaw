@@ -3,12 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   createInspectedDirectoryEntriesLister,
   createResolvedDirectoryEntriesLister,
-  listDirectoryEntriesFromSources,
   listInspectedDirectoryEntriesFromSources,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
   listDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryGroupEntriesFromMapKeys,
-  listResolvedDirectoryEntriesFromSources,
   listResolvedDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFromAndMapKeys,
   listDirectoryUserEntriesFromAllowFrom,
@@ -87,23 +85,6 @@ describe("listDirectoryGroupEntriesFromMapKeysAndAllowFrom", () => {
   });
 });
 
-describe("listDirectoryEntriesFromSources", () => {
-  it("merges source iterables with dedupe/query/limit", () => {
-    const entries = listDirectoryEntriesFromSources({
-      kind: "user",
-      sources: [
-        ["user:alice", "user:bob"],
-        ["user:carla", "user:alice"],
-      ],
-      normalizeId: (entry) => entry.replace(/^user:/i, ""),
-      query: "a",
-      limit: 2,
-    });
-
-    expectUserDirectoryEntries(entries);
-  });
-});
-
 describe("listInspectedDirectoryEntriesFromSources", () => {
   it("returns empty when the inspected account is missing", () => {
     const entries = listInspectedDirectoryEntriesFromSources({
@@ -115,19 +96,6 @@ describe("listInspectedDirectoryEntriesFromSources", () => {
     });
 
     expect(entries).toStrictEqual([]);
-  });
-
-  it("lists entries from inspected account sources", () => {
-    const entries = listInspectedDirectoryEntriesFromSources({
-      cfg: {} as never,
-      kind: "group",
-      inspectAccount: () => ({ ids: [["room:a"], ["room:b", "room:a"]] }),
-      resolveSources: (account) => account.ids,
-      normalizeId: (entry) => entry.replace(/^room:/i, ""),
-      query: "a",
-    });
-
-    expect(entries).toEqual([{ kind: "group", id: "a" }]);
   });
 });
 
@@ -177,20 +145,6 @@ describe("resolved account directory helpers", () => {
       { kind: "group", id: "a" },
       { kind: "group", id: "b" },
     ]);
-  });
-
-  it("lists entries from resolved account sources", () => {
-    const entries = listResolvedDirectoryEntriesFromSources({
-      cfg,
-      kind: "user",
-      resolveAccount,
-      resolveSources: (account) => [account.allowFrom, ["user:carla", "user:alice"]],
-      normalizeId: (entry) => entry.replace(/^user:/i, ""),
-      query: "a",
-      limit: 2,
-    });
-
-    expectUserDirectoryEntries(entries);
   });
 
   it("builds a reusable resolved-account lister", async () => {

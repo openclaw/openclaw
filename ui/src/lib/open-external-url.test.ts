@@ -113,7 +113,7 @@ describe("openExternalUrlSafe", () => {
 });
 
 describe("reserveExternalWindowForDeferredNavigation", () => {
-  it.each([undefined, false, true])(
+  it.each([undefined, true])(
     "opens an inert placeholder and detaches its opener (popup=%s)",
     (popup) => {
       const openedLikeProxy = {

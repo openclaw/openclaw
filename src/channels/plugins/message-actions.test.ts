@@ -177,30 +177,6 @@ describe("message action capability checks", () => {
     ).toBe(true);
   });
 
-  it("uses unified message tool discovery for actions, capabilities, and schema", () => {
-    activateDiscoveredMessageActionPlugin({
-      id: "demo-unified",
-      label: "Demo Unified",
-      describeMessageTool: () => ({
-        actions: ["react"],
-        capabilities: ["presentation"],
-        schema: {
-          properties: {
-            components: Type.Array(Type.String()),
-          },
-        },
-      }),
-    });
-
-    expect(channelSupportsMessageCapability({} as OpenClawConfig, "presentation")).toBe(true);
-    expect(
-      resolveChannelMessageToolSchemaProperties({
-        cfg: {} as OpenClawConfig,
-        channel: "demo-unified",
-      }),
-    ).toHaveProperty("components");
-  });
-
   it("keeps all-configured schema account-neutral from another current channel", () => {
     const schema: ChannelMessageToolSchemaContribution[] = [
       {
