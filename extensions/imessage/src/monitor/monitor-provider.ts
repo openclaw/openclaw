@@ -98,10 +98,12 @@ import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.j
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
+import { createIMessageGroupActivationResolver } from "./group-activation.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
   warnGroupAllowlistMisconfigOnce,
 } from "./group-allowlist-warnings.js";
+import { mergeIMessageGroupAllowFromWithLegacyChatTargets } from "./group-allowlist.js";
 import {
   IMESSAGE_RECOVERY_MAX_AGE_MS,
   IMESSAGE_RECOVERY_MAX_ROWS,
@@ -110,7 +112,6 @@ import {
 } from "./inbound-dedupe.js";
 import {
   buildIMessageInboundContext,
-  mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
@@ -265,7 +266,7 @@ function describeIMessageInboundDropDiagnostic(params: {
       : "unknown";
   const mentionHint =
     params.reason === "no mention"
-      ? ` Mention the agent (default patterns come from its identity name/emoji), or set ${params.groupsConfigPath}["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
+      ? ` Mention the agent (default patterns come from its identity name/emoji). If the owner saved /activation mention, use /activation always to allow unmentioned messages; saved activation overrides group config. Otherwise set ${params.groupsConfigPath}["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
       : "";
   return (
     `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
@@ -353,6 +354,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const sentMessageCache = createSentMessageCache();
   const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
+  const resolveGroupActivation = createIMessageGroupActivationResolver(logVerbose);
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeStringEntries(opts.allowFrom ?? imessageCfg.allowFrom);
   const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
@@ -767,6 +769,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       storeAllowFrom,
       historyLimit,
       groupHistories,
+      resolveGroupActivation,
       echoCache: sentMessageCache,
       selfChatCache,
       reactionNotifications: isQuestionReaction ? "all" : imessageCfg.reactionNotifications,

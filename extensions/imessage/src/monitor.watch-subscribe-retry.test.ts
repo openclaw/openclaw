@@ -307,6 +307,8 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       if (reason === "no mention") {
         expect(diagnostics[0]).toContain('groups["456"].requireMention=false');
         expect(diagnostics[0]).toContain("identity");
+        expect(diagnostics[0]).toContain("/activation always");
+        expect(diagnostics[0]).toContain("saved activation overrides group config");
         const groupsPath =
           groupScope === "account"
             ? 'channels.imessage.accounts["default"].groups'

@@ -394,6 +394,20 @@ export type PluginRuntimeCore = {
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /**
+       * Read one persisted session entry off the main thread. Unlike synchronous
+       * getSessionEntry, this requires the routed agentId and resolved storePath;
+       * the session key alone does not select a store. The optional env is passed
+       * to the worker for the same agent context. Missing entries resolve to
+       * undefined. This read-only API does not hydrate skill-prompt references
+       * or support the synchronous reader's read-consistency option.
+       */
+      getSessionEntryInWorker: (
+        params: Pick<RuntimeSessionStoreReadParams, "sessionKey" | "env"> & {
+          agentId: string;
+          storePath: string;
+        },
+      ) => Promise<RuntimeSessionEntry | undefined>;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];

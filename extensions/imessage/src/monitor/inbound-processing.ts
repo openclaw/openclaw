@@ -54,6 +54,7 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
+import { mergeIMessageGroupAllowFromWithLegacyChatTargets } from "./group-allowlist.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -89,33 +90,6 @@ const matchIMessageIngressEntry: NonNullable<ChannelIngressIdentityDescriptor["m
   }
   return undefined;
 };
-
-function isIMessageConversationAllowTarget(entry: string): boolean {
-  const parsed = parseIMessageAllowTarget(entry);
-  return (
-    parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
-  );
-}
-
-// Shared by the runtime group gate below and the startup allowlist warning in
-// monitor-provider.ts so the warning only fires when the gate would actually
-// drop every group message.
-export function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
-  groupAllowFrom: string[];
-  allowFrom: string[];
-  allowLegacyConversationTargets?: boolean;
-}): string[] {
-  if (params.groupAllowFrom.length > 0 || !params.allowLegacyConversationTargets) {
-    return params.groupAllowFrom;
-  }
-  const legacyChatTargets = params.allowFrom.filter((entry) =>
-    isIMessageConversationAllowTarget(entry),
-  );
-  if (legacyChatTargets.length === 0) {
-    return params.groupAllowFrom;
-  }
-  return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
-}
 
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
   key: "imessage-sender",
@@ -397,6 +371,11 @@ export async function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  resolveGroupActivation?: (params: {
+    agentId: string;
+    sessionKey: string;
+    cfg: OpenClawConfig;
+  }) => Promise<boolean | undefined>;
   echoCache?: {
     has: (
       scope: string,
@@ -766,12 +745,20 @@ export async function resolveIMessageInboundDecision(params: {
     : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
-  const requireMention = resolveScopeRequireMention({
+  const configuredRequireMention = resolveScopeRequireMention({
     tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
     path: groupId ? [groupId] : [],
     requireMentionOverride: params.opts?.requireMention,
     overrideOrder: "before-config",
   });
+  const activationOverride = isGroup
+    ? await params.resolveGroupActivation?.({
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        cfg: params.cfg,
+      })
+    : undefined;
+  const requireMention = activationOverride ?? configuredRequireMention;
   const canDetectMention = mentionRegexes.length > 0;
 
   const commandAuthorized = commandAccess.authorized;

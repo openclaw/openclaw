@@ -51,6 +51,7 @@ export function installIMessageStateRuntimeForTest(): void {
   imessageTestEnv = createIMessageTestEnv();
   resetPluginStateStoreForTests();
   setIMessageRuntime({
+    agent: { session: createPluginRuntimeMock().agent.session },
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (

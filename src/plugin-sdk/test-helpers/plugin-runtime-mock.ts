@@ -32,6 +32,7 @@ import {
   type PluginRuntimeMockOverrides,
 } from "./plugin-runtime-mock-overrides.js";
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
+import { createPluginSessionReadRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginTasksRuntimeMock } from "./plugin-runtime-tasks-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
@@ -613,12 +614,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
             };
           },
         ) as PluginRuntime["agent"]["session"]["createSessionEntry"],
-        getSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["getSessionEntry"]>(
-          () => undefined,
-        ),
-        listSessionEntries: vi.fn<PluginRuntime["agent"]["session"]["listSessionEntries"]>(
-          () => [],
-        ),
+        ...createPluginSessionReadRuntimeMock(),
         patchSessionEntry: vi
           .fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>()
           .mockResolvedValue(null),

@@ -24,6 +24,7 @@ import {
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   patchSessionEntryCore as patchAccessorSessionEntry,
+  readSessionEntriesFromStoreInWorker,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
@@ -87,6 +88,22 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
+}
+
+async function getSessionEntryInWorker(
+  params: Pick<RuntimeSessionStoreReadParams, "sessionKey" | "env"> & {
+    agentId: string;
+    storePath: string;
+  },
+): Promise<SessionEntry | undefined> {
+  const result = await readSessionEntriesFromStoreInWorker({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    sessionKeys: [params.sessionKey],
+    lifecycleSessionKey: params.sessionKey,
+    ...(params.env !== undefined ? { env: params.env } : {}),
+  });
+  return result.entries.find((candidate) => candidate.sessionKey === params.sessionKey)?.entry;
 }
 
 function listSessionEntries(
@@ -701,6 +718,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveStorePath: resolveSessionStorePathCore,
     createSessionEntry,
     getSessionEntry,
+    getSessionEntryInWorker,
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,

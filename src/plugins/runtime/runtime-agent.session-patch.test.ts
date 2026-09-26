@@ -4,6 +4,25 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 describe("plugin runtime session patches", () => {
+  it("reads one exact session through the worker-backed runtime boundary", async () => {
+    await withOpenClawTestState({ label: "plugin-runtime-worker-read" }, async () => {
+      const runtime = createRuntimeAgent();
+      const scope = { agentId: "main", sessionKey: "agent:main:imessage:group:99" };
+      await runtime.session.upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: "worker-read", updatedAt: 100, groupActivation: "mention" },
+      });
+      const storePath = runtime.session.resolveStorePath(undefined, { agentId: scope.agentId });
+
+      await expect(
+        runtime.session.getSessionEntryInWorker({ ...scope, storePath }),
+      ).resolves.toMatchObject({
+        sessionId: "worker-read",
+        groupActivation: "mention",
+      });
+    });
+  });
+
   it("rejects a patch whose owner closes during asynchronous preparation", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-patch-owner" }, async () => {
       const runtime = createRuntimeAgent();
