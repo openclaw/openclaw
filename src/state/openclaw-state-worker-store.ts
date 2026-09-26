@@ -659,26 +659,23 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
       releaseOperation();
     }
   } catch (error) {
-    if (error instanceof Error) {
-      const hydrated = hydrateOpenClawStateWorkerError(error);
-      const failure = findOpenClawStateDatabaseFailure(hydrated, context.admission.databasePath);
-      if (
-        failure &&
-        !openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(
-          context.admission.databasePath,
-        )
-      ) {
-        try {
-          context.admission.assertCurrent();
-        } catch {
-          // A retired generation cannot publish a refusal against its replacement.
-          throw hydrated;
-        }
-        recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
+    const hydrated = hydrateOpenClawStateWorkerError(error);
+    const failure = findOpenClawStateDatabaseFailure(hydrated, context.admission.databasePath);
+    if (
+      failure &&
+      !openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(
+        context.admission.databasePath,
+      )
+    ) {
+      try {
+        context.admission.assertCurrent();
+      } catch {
+        // A retired generation cannot publish a refusal against its replacement.
+        throw hydrated;
       }
-      throw hydrated;
+      recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
     }
-    throw error;
+    throw hydrated;
   }
 }
 
@@ -718,9 +715,6 @@ async function inspectAdmittedOpenClawStateDatabase(
       releaseOperation();
     }
   } catch (error) {
-    if (error instanceof Error) {
-      throw hydrateOpenClawStateWorkerError(error);
-    }
-    throw error;
+    throw hydrateOpenClawStateWorkerError(error);
   }
 }

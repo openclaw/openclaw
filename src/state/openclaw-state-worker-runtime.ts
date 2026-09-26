@@ -159,14 +159,17 @@ export function executeSharedStateCommand(
   if (command.type === "deviceAuth.prepare") {
     return undefined;
   }
+  const stateOptions = () => ({
+    path: context.databasePath,
+    env: getSqliteWorkerStateContext().environment,
+  });
   if (isMcpOAuthWorkerCommand(command)) {
     return executeMcpOAuthWorkerCommand(open(), command);
   }
   if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
     const databaseOptions = {
       database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
+      ...stateOptions(),
     };
     return command.type === "execApprovals.commitAuthorizations"
       ? commitExecAuthorizationsInWorker(command.input, databaseOptions)
@@ -188,11 +191,7 @@ export function executeSharedStateCommand(
     return conversationBindings.readSelection(command.input, context.databasePath);
   }
   if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
-    return executeAuditWriterCommand(
-      command,
-      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-      open,
-    );
+    return executeAuditWriterCommand(command, stateOptions(), open);
   }
   if (
     command.type === "authProfiles.read" ||
@@ -200,10 +199,7 @@ export function executeSharedStateCommand(
     command.type === "authProfiles.personal"
   ) {
     const read = () => {
-      const options = {
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      };
+      const options = stateOptions();
       if (command.type === "authProfiles.sharedOwnership") {
         return readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, options);
       }
@@ -235,37 +231,24 @@ export function executeSharedStateCommand(
     return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
   }
   if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
-    return executePromotionCommand(
-      command,
-      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-      open,
-    );
+    return executePromotionCommand(command, stateOptions(), open);
   }
   if (command.type === "doctor.databaseBloat") {
-    return readSqliteDatabaseBloat({
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return readSqliteDatabaseBloat(stateOptions());
   }
   if (command.type === "telemetry.readState") {
-    return readTelemetryStateInWorker({
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return readTelemetryStateInWorker(stateOptions());
   }
   if (command.type === "telemetry.countRecentSessions") {
     return (
       withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) => countRecentTelemetrySessionsInDatabase(db, command.input.sinceMs),
-        { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+        stateOptions(),
       ) ?? 0
     );
   }
   if (command.type === "webPush.readPersistedVapidKeyPair") {
-    return readPersistedVapidKeyPairInDatabase({
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return readPersistedVapidKeyPairInDatabase(stateOptions());
   }
   if (
     command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
@@ -291,31 +274,20 @@ export function executeSharedStateCommand(
           database,
           relayId: command.input.relayId,
         })?.record,
-      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      stateOptions(),
     );
   }
   if (isTaskRegistryWorkerCommand(command)) {
-    return executeTaskRegistryCommand(
-      command,
-      {
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      },
-      open,
-    );
+    return executeTaskRegistryCommand(command, stateOptions(), open);
   }
   if (command.type === "doctor.workshopMigrationRecords.read") {
     return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
       ({ db }) => readWorkshopMigrationRecordsInDatabase(db, command.input.includeEvents),
-      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      stateOptions(),
     );
   }
   if (command.type === "modelCatalog.remote.read") {
-    const read = () =>
-      readRemoteModelCatalog({
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      });
+    const read = () => readRemoteModelCatalog(stateOptions());
     return command.input.artifactPreservingReadOnly
       ? withArtifactPreservingStateReads(read)
       : read();
@@ -331,32 +303,24 @@ export function executeSharedStateCommand(
     );
   }
   if (command.type === "updateRuns.reconcileInterrupted") {
-    return persistInterruptedUpdateObservation(
-      command.input,
-      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
   }
   if (
     command.type === "plugins.deferredMigrations.read" ||
     command.type === "plugins.deferredMigrations.completions.read"
   ) {
-    return readDeferredPluginMigrationsInWorker(command, {
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
+    return readDeferredPluginMigrationsInWorker(command, stateOptions());
   }
   if (command.type === "claws.install-schema-versions") {
     const read = command.input.artifactPreservingReadOnly
       ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
       : withExistingOpenClawStateDatabaseReadOnly;
-    return read(
-      ({ db, path: pathname }) => {
-        assertOpenClawStateDatabaseOwner(db, { pathname });
-        return readClawInstallSchemaVersionRows(db);
-      },
-      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-    );
+    return read(({ db, path: pathname }) => {
+      assertOpenClawStateDatabaseOwner(db, { pathname });
+      return readClawInstallSchemaVersionRows(db);
+    }, stateOptions());
   }
   if (command.type === "database.generationMatches") {
     // Unavailable inspection retains the known failure; only a stable mismatch expires it.
@@ -368,22 +332,19 @@ export function executeSharedStateCommand(
   if (isOnboardingRecommendationWriteCommand(command)) {
     return executeOnboardingRecommendationCommand(command, {
       database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
+      ...stateOptions(),
     });
   }
   if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
     return executeUserPreferenceCommand(command, {
       database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
+      ...stateOptions(),
     });
   }
   if (isUserProfileCommand(command)) {
     return executeUserProfileCommand(command, {
       database: open(),
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
+      ...stateOptions(),
     });
   }
   if (isPluginBlobWorkerCommand(command)) {
@@ -394,10 +355,10 @@ export function executeSharedStateCommand(
       ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
       : withExistingOpenClawStateDatabaseReadOnly;
     return (
-      read(({ db }) => readConfigHealthSnapshotInDatabase(db), {
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      }) ?? { state: {}, basis: {} }
+      read(({ db }) => readConfigHealthSnapshotInDatabase(db), stateOptions()) ?? {
+        state: {},
+        basis: {},
+      }
     );
   }
   if (isNodeWorkerJournalCommand(command)) {
@@ -409,10 +370,10 @@ export function executeSharedStateCommand(
         ? deviceAuth.readDeviceAuthTokenObservationFromDatabase(db, command.input)
         : deviceAuth.readOriginDeviceTokenObservationFromDatabase(db, command.input);
     return command.input.readOnly
-      ? (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => read(db), {
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        }) ?? { entry: null, expectedToken: null })
+      ? (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+          ({ db }) => read(db),
+          stateOptions(),
+        ) ?? { entry: null, expectedToken: null })
       : read(open().db);
   }
   const database = open();
@@ -481,8 +442,7 @@ export function executeSharedStateCommand(
   }
   const writeOptions = {
     database,
-    path: context.databasePath,
-    env: getSqliteWorkerStateContext().environment,
+    ...stateOptions(),
   };
   if (
     command.type === "nativeHookRelay.write" ||

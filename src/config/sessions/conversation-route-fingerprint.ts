@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ConversationRecord } from "./conversation-registry.js";
 import {
   parseConversationRouteContext,
@@ -28,21 +28,19 @@ export function resolveConversationRouteFingerprint(
   const context = route.routeContext
     ? parseConversationRouteContext(route.routeContext)
     : undefined;
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        route.channel,
-        route.accountId,
-        route.kind,
-        route.peerId,
-        route.target,
-        route.parentConversationRef ?? null,
-        route.threadId ?? null,
-        route.nativeChannelId ?? null,
-        route.nativeDirectUserId ?? null,
-        route.routeContextObserved === true,
-        context ?? null,
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      route.channel,
+      route.accountId,
+      route.kind,
+      route.peerId,
+      route.target,
+      route.parentConversationRef ?? null,
+      route.threadId ?? null,
+      route.nativeChannelId ?? null,
+      route.nativeDirectUserId ?? null,
+      route.routeContextObserved === true,
+      context ?? null,
+    ]),
+  );
 }

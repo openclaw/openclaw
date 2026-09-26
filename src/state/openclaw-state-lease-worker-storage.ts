@@ -12,11 +12,30 @@ import {
   withOpenClawStateLeasesWorkerAdmission,
   type createOpenClawStateLeaseWorkerOwner,
   type OpenClawStateLeaseWorkerAuthority,
+  type WorkerLeaseScope,
 } from "./openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
 
 type LeaseWorkerOwner = ReturnType<typeof createOpenClawStateLeaseWorkerOwner>;
+type LeaseWorkerOperation<T> = (
+  scope: Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">,
+  identity: OpenClawStateLeaseIdentity,
+) => Promise<T>;
+
+function admittedWorkerOperation<T>(
+  context: OpenClawStateWorkerContext,
+  operation: LeaseWorkerOperation<T>,
+) {
+  return async (admission: WorkerLeaseScope): Promise<T> => {
+    const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+    return runOpenClawStateWorkerOperation(
+      context,
+      (scope) => operation(scope, admission.identity),
+      { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
+    );
+  };
+}
 
 /** Preserve the original admission, maintenance scope and coordinator runtime. */
 export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWorkerContext) {
@@ -41,42 +60,31 @@ export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWork
       signal?: AbortSignal,
       observeExpiry = false,
     ): Promise<OpenClawStateLeaseAcquisition> {
-      return owner.runLifecycle("acquire", async (admission) => {
-        const { runOpenClawStateWorkerOperation } =
-          await import("./openclaw-state-worker-store.js");
-        return runOpenClawStateWorkerOperation(
-          context,
-          (scope) =>
-            scope.execute(
-              {
-                type: "stateLease.acquire",
-                input: {
-                  identity: admission.identity,
-                  leaseMs,
-                  operationLabel,
-                  ...(observeExpiry ? { observeExpiry: true as const } : {}),
-                },
+      return owner.runLifecycle(
+        "acquire",
+        admittedWorkerOperation(context, (scope, identity) =>
+          scope.execute(
+            {
+              type: "stateLease.acquire",
+              input: {
+                identity,
+                leaseMs,
+                operationLabel,
+                ...(observeExpiry ? { observeExpiry: true as const } : {}),
               },
-              { signal },
-            ),
-          { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
-        );
-      });
+            },
+            { signal },
+          ),
+        ),
+      );
     },
     verify(owner: LeaseWorkerOwner, signal?: AbortSignal): Promise<number> {
-      return owner.runLifecycle("verify", async (admission) => {
-        const { runOpenClawStateWorkerOperation } =
-          await import("./openclaw-state-worker-store.js");
-        return runOpenClawStateWorkerOperation(
-          context,
-          (scope) =>
-            scope.execute(
-              { type: "stateLease.verify", input: { identity: admission.identity } },
-              { signal },
-            ),
-          { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
-        );
-      });
+      return owner.runLifecycle(
+        "verify",
+        admittedWorkerOperation(context, (scope, identity) =>
+          scope.execute({ type: "stateLease.verify", input: { identity } }, { signal }),
+        ),
+      );
     },
     renew(
       owner: LeaseWorkerOwner,
@@ -84,22 +92,18 @@ export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWork
       operationLabel: string,
       signal?: AbortSignal,
     ): Promise<number> {
-      return owner.runLifecycle("renew", async (admission) => {
-        const { runOpenClawStateWorkerOperation } =
-          await import("./openclaw-state-worker-store.js");
-        return runOpenClawStateWorkerOperation(
-          context,
-          (scope) =>
-            scope.execute(
-              {
-                type: "stateLease.renew",
-                input: { identity: admission.identity, leaseMs, operationLabel },
-              },
-              { signal },
-            ),
-          { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
-        );
-      });
+      return owner.runLifecycle(
+        "renew",
+        admittedWorkerOperation(context, (scope, identity) =>
+          scope.execute(
+            {
+              type: "stateLease.renew",
+              input: { identity, leaseMs, operationLabel },
+            },
+            { signal },
+          ),
+        ),
+      );
     },
     startTimer(
       owner: LeaseWorkerOwner,
@@ -217,26 +221,13 @@ export function createOpenClawStateLeaseWorkerStorage(context: OpenClawStateWork
 export function runWithOpenClawStateLeaseWorker<T>(
   lease: OpenClawStateWorkerLeaseContext,
   context: OpenClawStateWorkerContext,
-  operation: (
-    scope: Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">,
-    identity: OpenClawStateLeaseIdentity,
-  ) => Promise<T>,
+  operation: LeaseWorkerOperation<T>,
   authority?: OpenClawStateLeaseWorkerAuthority,
 ): Promise<T> {
   return withOpenClawStateLeaseWorkerAdmission(
     lease,
     context.admission.databasePath,
-    async (admission) => {
-      const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
-      return runOpenClawStateWorkerOperation(
-        context,
-        (scope) => operation(scope, admission.identity),
-        {
-          assertCurrent: admission.assertCurrent,
-          createAdmission: admission.createAdmission,
-        },
-      );
-    },
+    admittedWorkerOperation(context, operation),
     authority,
   );
 }

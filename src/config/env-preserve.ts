@@ -56,32 +56,24 @@ function getArrayIdentityPathValue(value: unknown, path: ArrayIdentityPath): unk
   return current;
 }
 
-function findStableArrayIdentityPath(value: unknown): ArrayIdentityPath | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-  for (const key of ["id", "agentId"]) {
-    const child = value[key];
-    if (typeof child === "string" && !hasEnvVarRef(child)) {
-      return [key];
-    }
-  }
-  return undefined;
-}
-
 function resolveStableArrayIdentityMatch(params: {
   incoming: unknown[];
   parsed: unknown[];
   parsedIndex: number;
 }): { kind: "none" } | { kind: "invalid" } | { kind: "match"; incomingIndex: number } {
   const parsedItem = params.parsed[params.parsedIndex];
-  const identityPath = findStableArrayIdentityPath(parsedItem);
-  if (!identityPath) {
+  if (!isPlainObject(parsedItem)) {
     return { kind: "none" };
   }
-  const identityValue = getArrayIdentityPathValue(parsedItem, identityPath);
+  const identityKey = ["id", "agentId"].find(
+    (key) => typeof parsedItem[key] === "string" && !hasEnvVarRef(parsedItem[key]),
+  );
+  if (!identityKey) {
+    return { kind: "none" };
+  }
+  const identityValue = parsedItem[identityKey];
   const matchesIdentity = (item: unknown) =>
-    isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue);
+    isPlainObject(item) && isDeepStrictEqual(item[identityKey], identityValue);
   if (params.parsed.filter(matchesIdentity).length !== 1) {
     return { kind: "none" };
   }

@@ -1,4 +1,3 @@
-// Session key utilities normalize and classify persisted session keys.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -135,10 +134,8 @@ export function parseThreadSessionSuffix(
   }
 
   const lowerRaw = normalizeLowercaseStringOrEmpty(raw);
-  const threadMarker = ":thread:";
-  const threadIndex = lowerRaw.lastIndexOf(threadMarker);
-  const markerIndex = threadIndex;
-  const marker = threadMarker;
+  const marker = ":thread:";
+  const markerIndex = lowerRaw.lastIndexOf(marker);
 
   const baseSessionKey = markerIndex === -1 ? raw : raw.slice(0, markerIndex);
   const threadIdRaw = markerIndex === -1 ? undefined : raw.slice(markerIndex + marker.length);

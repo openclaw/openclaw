@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type {
   SessionDiffFile,
   SessionsDiffResult,
@@ -428,18 +429,15 @@ function sameMutationFingerprint(left: BigIntStats, right: BigIntStats): boolean
 }
 
 function hashBaselineDescriptor(candidate: BaselineCandidate, content: string): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      [
-        candidate.path,
-        candidate.oldPath ?? "",
-        candidate.status,
-        candidate.untracked === true ? "untracked" : "tracked",
-        content,
-      ].join("\0"),
-    )
-    .digest("hex");
+  return sha256Hex(
+    [
+      candidate.path,
+      candidate.oldPath ?? "",
+      candidate.status,
+      candidate.untracked === true ? "untracked" : "tracked",
+      content,
+    ].join("\0"),
+  );
 }
 
 async function fingerprintBaselineCandidate(params: {
