@@ -1,3 +1,4 @@
+import { parseJsonPreservingUnsafeIntegers } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
@@ -80,13 +81,34 @@ export function createStructuredOutputTool(params: {
       if (prior && prior.invalidAttempts >= 2) {
         return jsonResult({ status: "rejected", success: false, schemaError: prior.schemaError });
       }
+      const resultArg = (args as { result: unknown }).result;
       let validation: ReturnType<typeof validateJsonSchemaValue>;
       try {
         validation = validateJsonSchemaValue({
           schema: params.schema as JsonSchemaObject,
           cacheKey: `swarm-structured-output:${params.runId}`,
-          value: (args as { result: unknown }).result,
+          value: resultArg,
         });
+        // Some completions-style providers (e.g. dashscope/qwen) double-encode an
+        // object/array result as a JSON string rather than nesting it, since this
+        // tool's own parameter schema must permit `result` to be a string too.
+        // Retry once against the parsed value before treating it as a rejection.
+        if (!validation.ok && typeof resultArg === "string") {
+          try {
+            const parsedResult: unknown = parseJsonPreservingUnsafeIntegers(resultArg);
+            const reparsed = validateJsonSchemaValue({
+              // SAFETY: same params.schema already treated as JsonSchemaObject above.
+              schema: params.schema as JsonSchemaObject,
+              cacheKey: `swarm-structured-output:${params.runId}`,
+              value: parsedResult,
+            });
+            if (reparsed.ok) {
+              validation = reparsed;
+            }
+          } catch {
+            // Not JSON; keep the original validation failure.
+          }
+        }
       } catch (error) {
         throw new ToolInputError(
           `Invalid sessions_spawn outputSchema: ${error instanceof Error ? error.message : String(error)}`,
