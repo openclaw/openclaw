@@ -228,12 +228,13 @@ function createAnthropicCompactionWrapper(
     if (!compaction.enabled) {
       return underlying(model, context, options);
     }
-    return underlying(model, context, {
+    const requestOptions = {
       ...options,
       anthropicServerCompaction: true,
       anthropicCompactThreshold: compaction.threshold,
       headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
-    });
+    };
+    return underlying(model, context, requestOptions);
   };
 }
 
