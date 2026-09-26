@@ -16,7 +16,9 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
+import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -30,6 +32,50 @@ function databasePath(name = "state") {
 }
 
 describe("canonical shared-state resource drainage", () => {
+  it("reuses warm admission without resolving paths or allocating replacement tokens", () => {
+    const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
+    const pathname = databasePath();
+    writeFileSync(pathname, "");
+    const retained = lifecycle.capture(pathname);
+    const resolve = vi.spyOn(path, "resolve");
+    let reused = true;
+    let resolutions: number;
+    try {
+      for (let index = 0; index < 100; index++) {
+        const admission = lifecycle.capture(pathname);
+        admission.assertCurrent();
+        reused &&= admission === retained;
+      }
+      resolutions = resolve.mock.calls.length;
+    } finally {
+      resolve.mockRestore();
+    }
+    expect(resolutions).toBe(0);
+    expect(reused).toBe(true);
+    lifecycle.invalidate(pathname);
+    expect(retained.assertCurrent).toThrow(/admission changed/);
+    const renewed = lifecycle.capture(pathname);
+    expect(renewed).not.toBe(retained);
+    renewed.assertCurrent();
+  });
+
+  it("keeps captured schema scope lifetime separate from shared physical admission", () => {
+    const pathname = databasePath();
+    const ordinary = captureOpenClawStateReadContext(pathname);
+    const restricted = withExistingOpenClawStateSchema({ path: pathname }, () => {
+      const context = captureOpenClawStateReadContext(pathname);
+      writeFileSync(pathname, "");
+      const created = captureOpenClawStateDatabaseReadAdmission(pathname);
+      expect(context.admission.identity.key).toBe(created.identity.key);
+      expect(context.admission.identity.key).toMatch(/^file:/);
+      context.admission.assertCurrent();
+      return context;
+    });
+    expect(restricted.admission.assertCurrent).toThrow(/schema admission has ended/);
+    ordinary.admission.assertCurrent();
+    captureOpenClawStateReadContext(pathname).admission.assertCurrent();
+  });
+
   it.each(["missing", "directory"] as const)(
     "keeps unrelated owners while closing a never-admitted %s path",
     async (kind) => {

@@ -21,18 +21,25 @@ export function captureOpenClawStateReadContext(
   OpenClawStateWorkerContext,
   "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
 > {
-  const databasePath = path.resolve(pathname);
-  isExistingOpenClawStateSchema(databasePath);
   const existingSchemaPath = getExistingOpenClawStateSchemaPath();
-  const admission = captureOpenClawStateDatabaseReadAdmission(databasePath);
+  if (existingSchemaPath !== undefined) {
+    isExistingOpenClawStateSchema(pathname);
+  }
+  const capturedAdmission = captureOpenClawStateDatabaseReadAdmission(pathname);
+  let admission = capturedAdmission;
   let runInCapturedSchemaScope: OpenClawStateWorkerContext["runInCapturedSchemaScope"];
   if (existingSchemaPath !== undefined) {
     const inCapturedScope = AsyncLocalStorage.snapshot();
-    const assertCurrent = admission.assertCurrent;
-    admission.assertCurrent = () => {
-      assertCurrent();
-      // Queued dispatch may run outside this caller, but its captured scope must still be active.
-      inCapturedScope(getExistingOpenClawStateSchemaPath);
+    admission = {
+      databasePath: capturedAdmission.databasePath,
+      get identity() {
+        return capturedAdmission.identity;
+      },
+      assertCurrent() {
+        capturedAdmission.assertCurrent();
+        // Queued dispatch may run outside this caller, but its captured scope must still be active.
+        inCapturedScope(getExistingOpenClawStateSchemaPath);
+      },
     };
     runInCapturedSchemaScope = (operation) =>
       inCapturedScope(() => {
