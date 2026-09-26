@@ -774,6 +774,34 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
+  it("consumes malformed question callbacks without starting an agent turn", async () => {
+    resolveLineQuestionPostbackMock.mockClear();
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-question-malformed",
+          deliveryContext: { isRedelivery: false },
+          postback: {
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=9007199254740992",
+          },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
+    expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     { groupPolicy: "disabled", userId: "user-denied" },
     { groupPolicy: "allowlist", userId: "user-denied" },

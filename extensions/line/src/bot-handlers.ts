@@ -57,7 +57,11 @@ import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
 import { quotesLineBotMessage } from "./outbound-message-log.js";
-import { parseLineQuestionPostbackData, resolveLineQuestionPostback } from "./question-postback.js";
+import {
+  isLineQuestionPostbackData,
+  parseLineQuestionPostbackData,
+  resolveLineQuestionPostback,
+} from "./question-postback.js";
 import { getLineRuntime } from "./runtime.js";
 import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -667,6 +671,11 @@ async function handlePostbackEvent(
       text: lineQuestionOutcomeNotice(outcome.status),
       authorize,
     });
+    return;
+  }
+
+  // A malformed question callback must not fall through as an ordinary user message.
+  if (isLineQuestionPostbackData(data ?? "")) {
     return;
   }
 
