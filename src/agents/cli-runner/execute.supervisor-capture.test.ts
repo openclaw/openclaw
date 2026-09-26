@@ -493,6 +493,102 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
   });
 
+  it("renews Agent progress only for attributed semantic subagent records", async () => {
+    await withDiagnosticsEnabled(async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const parentId = "toolu_parent";
+      const line = (record: unknown) => `${JSON.stringify(record)}\n`;
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      const owner = createDiagnosticEmbeddedRunOwner(context.params);
+      context.params.diagnosticOwner = owner;
+      markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
+      const held = holdSupervisorRun();
+      const run = executePreparedCliRun(context);
+      try {
+        await held.entered;
+        const input = requireSupervisorSpawnInput();
+        input.onStdout?.(
+          line({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", id: parentId, name: "Agent", input: {} }],
+            },
+          }),
+        );
+        await waitForDiagnosticEventsDrained();
+        now += 800_000;
+        input.onStdout?.(
+          line({
+            type: "stream_event",
+            parent_tool_use_id: parentId,
+            event: {
+              type: "content_block_delta",
+              delta: { type: "thinking_delta", thinking: "still working" },
+            },
+          }),
+        );
+        input.onStdout?.(
+          line({
+            type: "assistant",
+            parent_tool_use_id: "toolu_other",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "toolu_child", name: "Read", input: {} }],
+            },
+          }),
+        );
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+          activeWorkKind: "tool_call",
+          activeToolName: "Agent",
+          activeToolCallId: parentId,
+          lastProgressReason: "tool:Agent:started",
+          lastProgressAgeMs: 800_000,
+        });
+
+        input.onStdout?.(
+          line({
+            type: "user",
+            parent_tool_use_id: parentId,
+            message: {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "toolu_child", content: "file" }],
+            },
+          }),
+        );
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+          activeToolName: "Agent",
+          activeToolCallId: parentId,
+          lastProgressReason: "tool:Agent:subagent_progress",
+          lastProgressAgeMs: 0,
+          activeToolAgeMs: 800_000,
+        });
+
+        now += 800_000;
+        input.onStdout?.("noise\n");
+        await waitForDiagnosticEventsDrained();
+        expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+          activeToolName: "Agent",
+          lastProgressReason: "tool:Agent:subagent_progress",
+          lastProgressAgeMs: 800_000,
+          activeToolAgeMs: 1_600_000,
+        });
+
+        input.onStdout?.(line({ type: "result", session_id: "session-agent", result: "done" }));
+        held.release();
+        await expect(run).resolves.toMatchObject({ text: "done" });
+      } finally {
+        held.release();
+        await Promise.allSettled([run]);
+        closeDiagnosticEmbeddedRunOwner(owner);
+        clock.mockRestore();
+      }
+    });
+  });
+
   it("passes native compaction as an argument and requires backend acknowledgement", async () => {
     const raw = `${JSON.stringify({ type: "system", subtype: "compacting" })}\n`;
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {

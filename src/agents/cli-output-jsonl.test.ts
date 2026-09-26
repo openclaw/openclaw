@@ -581,6 +581,72 @@ describe("parseCliJsonl", () => {
     );
   });
 
+  it("reports semantic subagent records without admitting them to the parent lane", () => {
+    const progress: string[] = [];
+    const toolStarts: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolUseStart: (delta) => toolStarts.push(delta.name),
+      onAttributedSubagentProgress: (parentToolUseId) => progress.push(parentToolUseId),
+    });
+    const parentId = "toolu_parent";
+    parser.push(
+      joinJsonlFrames(
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: parentId, name: "Agent", input: {} }],
+          },
+        },
+        {
+          type: "stream_event",
+          parent_tool_use_id: parentId,
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "still working" },
+          },
+        },
+        {
+          type: "assistant",
+          parent_tool_use_id: parentId,
+          message: {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "reading the tree" }],
+          },
+        },
+        {
+          type: "assistant",
+          parent_tool_use_id: "toolu_other",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "toolu_child", name: "Read", input: {} }],
+          },
+        },
+        {
+          type: "user",
+          parent_tool_use_id: parentId,
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu_child", content: "ok" }],
+          },
+        },
+        { type: "system", subtype: "task_progress", parent_tool_use_id: parentId },
+      ),
+    );
+    parser.finish();
+
+    expect(toolStarts).toEqual(["Agent"]);
+    expect(progress).toEqual([parentId, "toolu_other", parentId]);
+  });
+
   it.each([
     {
       name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",
