@@ -52,11 +52,20 @@ export function createQaSessionIdentityResolver() {
       // All three host-prepared utilities send one text user turn and a system
       // prompt, with no tools or retained conversation. Use the dispatcher's
       // normalized wire shape, but keep transport identity on the original request.
+      // Anthropic normalization can erase non-text history, so require the raw
+      // request to contain exactly one user turn before trusting that projection.
+      const rawMessages = request.body.messages;
+      const historyFree =
+        request.route !== "anthropic-messages" ||
+        (Array.isArray(rawMessages) &&
+          rawMessages.length === 1 &&
+          asOptionalRecord(rawMessages[0])?.role === "user");
       const { body, input } = normalized;
       const userInput = input.at(-1);
       const systemInput = input.slice(0, -1);
       const instructions = extractAllRequestTexts(systemInput, body);
       const standalone =
+        historyFree &&
         (body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0)) &&
         request.body.previous_response_id == null &&
         request.body.conversation == null &&

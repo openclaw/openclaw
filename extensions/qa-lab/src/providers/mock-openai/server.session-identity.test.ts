@@ -274,6 +274,9 @@ describe("QA transport session identity", () => {
 
   it.each([
     { role: "assistant", content: "Earlier answer" },
+    { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+    { role: "assistant", content: [{ type: "redacted_thinking", data: "synthetic" }] },
+    { role: "user", content: [] },
     { role: "assistant", content: [{ type: "tool_use", id: "prior", name: "read", input: {} }] },
     { role: "user", content: [{ type: "tool_result", tool_use_id: "prior", content: "result" }] },
     { role: "user", content: "Earlier request" },
