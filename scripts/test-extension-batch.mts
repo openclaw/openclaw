@@ -12,6 +12,10 @@ import {
 import { databaseWorkerExtensionTestFiles } from "../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
 import {
+  resolveCiTestRuntimePolicy,
+  resolveCiTestRuntimeSelections,
+} from "./lib/ci-test-runtime.mts";
+import {
   createExtensionTestProcessTargetChunks,
   listExtensionTestFilesForRoots,
   resolveExtensionBatchPlan,
@@ -182,9 +186,8 @@ function preparePlanGroup(
           ? splitExtensionTestProcessTargets(group.config, targets)
           : [targets]
         : createExtensionTestProcessTargetChunks(group.config, group.roots, vitestArgs);
-  return {
-    group,
-    invocations: targetChunks.map<VitestBatchRunParams & { env: NodeJS.ProcessEnv }>((chunk) => ({
+  const invocations = targetChunks.map<VitestBatchRunParams & { env: NodeJS.ProcessEnv }>(
+    (chunk) => ({
       args: relativizeExtensionVitestArgs(vitestArgs),
       config: group.config,
       env: createGroupEnv({
@@ -193,8 +196,10 @@ function preparePlanGroup(
         watchMode: resolveExplicitVitestMode(["run", ...vitestArgs]) === "watch",
       }),
       targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
-    })),
-  };
+    }),
+  );
+  const bunInvocations: typeof invocations = [];
+  return { group, invocations, bunInvocations };
 }
 
 function combineSinglePluginGroups(
@@ -224,6 +229,7 @@ function combineSinglePluginGroups(
   return [
     {
       group: { ...owner.group, config },
+      bunInvocations: preparedGroups.flatMap((group) => group.bunInvocations),
       invocations:
         targets.length === 0
           ? []
@@ -266,7 +272,7 @@ async function runPlanGroup(
       break;
     }
     console.log(
-      `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${invocation.targets.length} targets${invocations.length > 1 ? `, chunk ${index + 1}/${invocations.length}` : ""})`,
+      `[test-extension-batch] ${invocation.config}${invocation.env.OPENCLAW_VITEST_RUNTIME === "bun" ? " [bun]" : ""}: ${group.extensionIds.join(", ")} (${invocation.targets.length} targets${invocations.length > 1 ? `, chunk ${index + 1}/${invocations.length}` : ""})`,
     );
     const exitCode = await runGroup(invocation);
     if (exitCode !== 0 && finalExitCode === 0) {
@@ -289,7 +295,10 @@ export async function runExtensionBatchPlan(
     vitestArgs?: string[];
   } = {},
 ) {
-  const env = params.env ?? process.env;
+  const suppliedEnv = params.env ?? process.env;
+  const runtimePolicy = resolveCiTestRuntimePolicy(suppliedEnv);
+  const env =
+    runtimePolicy === "dual" ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" } : suppliedEnv;
   const vitestArgs = params.vitestArgs ?? [];
   // Single-plugin CLI historically leaves exact exclusions to Vitest.
   const exactExcludePaths =
@@ -320,10 +329,44 @@ export async function runExtensionBatchPlan(
   );
   // Admit the whole selection before report or runtime preparation can import code.
   assertTestHomeSelection(env, homeMode);
+  if (runtimePolicy === "dual") {
+    for (const leaf of leafGroups) {
+      leaf.bunInvocations = leaf.invocations.flatMap((invocation) =>
+        resolveCiTestRuntimeSelections(
+          {
+            configs: [invocation.config],
+            includePatterns: invocation.targets.map((target) =>
+              path.posix.join("extensions", target),
+            ),
+            vitestArgs: invocation.args,
+            env: invocation.env,
+          },
+          runtimePolicy,
+        )
+          .filter((selection) => selection.runtime === "bun")
+          .map((selection) =>
+            Object.assign({}, invocation, {
+              targets:
+                selection.includePatterns?.map((file) => relativizeExtensionVitestPath(file)) ??
+                invocation.targets,
+              env: {
+                ...invocation.env,
+                ...selection.env,
+                OPENCLAW_VITEST_RUNTIME: "bun",
+                [FS_MODULE_CACHE_PATH_ENV_KEY]: `${path.resolve(invocation.env[FS_MODULE_CACHE_PATH_ENV_KEY]!)}-bun`,
+              },
+            }),
+          ),
+      );
+    }
+  }
   const preparedGroups =
     batchPlan.extensionCount === 1
       ? combineSinglePluginGroups(leafGroups, vitestArgs, env, homeMode)
       : leafGroups;
+  for (const group of preparedGroups) {
+    group.invocations = [...group.invocations, ...group.bunInvocations];
+  }
   const invocations = preparedGroups.flatMap((group) => group.invocations);
   const reports = await createVitestReportOwner(
     invocations.map((invocation) => ({

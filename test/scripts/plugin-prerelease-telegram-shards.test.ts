@@ -28,7 +28,9 @@ type PluginPrereleaseMatrixRow = {
   check_name: string;
   extensions_csv: string;
   includePatterns: string[];
+  requires_bun?: boolean;
   task: string;
+  test_runtime_policy?: "dual" | "node";
   vitest_config: string;
 };
 
@@ -61,7 +63,7 @@ function listTelegramRunnableTestFiles(worker = false) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function runPluginPrereleaseManifest(cwd = process.cwd()) {
+function runPluginPrereleaseManifest(cwd = process.cwd(), fullReleaseValidation = false) {
   const workflow = readPluginPrereleaseWorkflow();
   const manifestStep = workflow.jobs.preflight.steps.find(
     (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
@@ -82,7 +84,7 @@ function runPluginPrereleaseManifest(cwd = process.cwd()) {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       EXPECTED_SHA: "",
-      FULL_RELEASE_VALIDATION: "false",
+      FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
       GITHUB_OUTPUT: outputPath,
     };
     delete env.OPENCLAW_VITEST_INCLUDE_FILE;
@@ -116,7 +118,7 @@ describe("plugin prerelease Telegram extension shards", () => {
       path.dirname(fileURLToPath(FROZEN_TARGET_EXTENSION_PLAN_URL)),
       "../..",
     );
-    const matrix = runPluginPrereleaseManifest(fixtureRoot);
+    const matrix = runPluginPrereleaseManifest(fixtureRoot, true);
     const batchRows = matrix.include.filter((row) => row.task === "extensions-batch");
 
     expect(existsSync(FROZEN_TARGET_TELEGRAM_CONFIG_URL)).toBe(true);
@@ -126,6 +128,9 @@ describe("plugin prerelease Telegram extension shards", () => {
       "checks-node-extensions-shard-2",
     ]);
     expect(batchRows.map((row) => row.extensions_csv)).toEqual(["alpha,telegram", "zeta"]);
+    expect(
+      batchRows.every((row) => row.test_runtime_policy === "node" && row.requires_bun === false),
+    ).toBe(true);
     expect(
       batchRows
         .flatMap((row) => row.extensions_csv.split(","))

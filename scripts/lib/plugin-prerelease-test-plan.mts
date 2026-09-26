@@ -1,5 +1,7 @@
 // Defines the plugin prerelease validation surface and matching test lanes.
+import { ciTestShardRequiresBun } from "./ci-test-runtime.mts";
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mts";
+import type { ExtensionTestPlanGroup } from "./extension-test-plan.mts";
 
 type PrereleaseSurfaceEntry = { surfaces: readonly string[] };
 
@@ -142,6 +144,33 @@ function coveredSurfaces(entries: readonly PrereleaseSurfaceEntry[]): string[] {
         .filter((surface) => typeof surface === "string" && surface.length > 0),
     ),
   ].toSorted((a, b) => a.localeCompare(b));
+}
+
+/** Keep each release batch on Node and add only its qualified Bun groups. */
+export function resolvePluginPrereleaseExtensionRuntime({
+  planGroups,
+  fullReleaseValidation,
+  vitestArgs = [],
+}: {
+  planGroups: readonly Pick<ExtensionTestPlanGroup, "config" | "roots">[];
+  fullReleaseValidation: boolean;
+  vitestArgs?: readonly string[];
+}): { test_runtime_policy: "dual" | "node"; requires_bun: boolean } {
+  const requiresBun =
+    fullReleaseValidation &&
+    ciTestShardRequiresBun(
+      {
+        groups: planGroups.map(({ config, roots }) => ({
+          configs: [config],
+          includePatterns: roots.map((root) =>
+            /\.test\.tsx?$/u.test(root) ? root : `${root}/**/*.test.ts`,
+          ),
+          vitestArgs,
+        })),
+      },
+      "dual",
+    );
+  return { test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun };
 }
 
 /** Build the plugin prerelease plan from Docker lanes and static checks. */

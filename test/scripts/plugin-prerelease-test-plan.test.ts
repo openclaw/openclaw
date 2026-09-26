@@ -11,6 +11,7 @@ import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docke
 import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
+  resolvePluginPrereleaseExtensionRuntime,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
@@ -157,6 +158,66 @@ function runPluginSummary(params: {
 }
 
 describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
+  it.each([
+    {
+      name: "ordinary plugin validation",
+      fullReleaseValidation: false,
+      memory: true,
+      vitestArgs: [],
+      requiresBun: false,
+    },
+    {
+      name: "full release memory and database-worker groups",
+      fullReleaseValidation: true,
+      memory: true,
+      vitestArgs: [],
+      requiresBun: true,
+    },
+    {
+      name: "full release with an exact exclusion",
+      fullReleaseValidation: true,
+      memory: true,
+      vitestArgs: ["--exclude=extensions/memory-lancedb/config.test.ts"],
+      requiresBun: true,
+    },
+    {
+      name: "full release with an explicit report",
+      fullReleaseValidation: true,
+      memory: true,
+      vitestArgs: ["--reporter=json", "--outputFile=report.json"],
+      requiresBun: false,
+    },
+    {
+      name: "full release database-worker groups",
+      fullReleaseValidation: true,
+      memory: false,
+      vitestArgs: [],
+      requiresBun: false,
+    },
+  ])(
+    "selects runtime setup for $name",
+    ({ fullReleaseValidation, memory, vitestArgs, requiresBun }) => {
+      const planGroups = [
+        {
+          config: "test/vitest/vitest.extension-database-workers.config.ts",
+          roots: ["extensions/memory-lancedb/index.test.ts"],
+        },
+        ...(memory
+          ? [
+              {
+                config: "test/vitest/vitest.extension-memory.config.ts",
+                roots: ["extensions/memory-lancedb"],
+              },
+            ]
+          : []),
+      ];
+
+      expect(
+        resolvePluginPrereleaseExtensionRuntime({ planGroups, fullReleaseValidation, vitestArgs }),
+      ).toEqual({ test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun });
+    },
+  );
+
   it("runs the package and Docker product lanes through the existing scheduler", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
 
@@ -826,6 +887,18 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
+    expect(
+      extensionShard.steps.find(
+        (step: WorkflowStep) => step.name === "Setup pinned Bun test runtime",
+      ),
+    ).toMatchObject({
+      if: "matrix.requires_bun == true",
+      uses: "./.github/actions/setup-test-bun",
+    });
+    expect(
+      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").env
+        .OPENCLAW_CI_TEST_RUNTIME_POLICY,
+    ).toBe("${{ matrix.test_runtime_policy || 'node' }}");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
     expect(inspector.needs).toEqual(["resolve_target", "preflight"]);
     expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'");
@@ -966,6 +1039,36 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(result.status, result.stderr).toBe(0);
     for (const [lane, scheduled] of Object.entries(expected)) {
       expect(output).toContain(`run_plugin_prerelease_${lane}=${scheduled}\n`);
+    }
+    if (phase === "independent") {
+      const matrixLine = expectDefined(
+        output.split("\n").find((line) => line.startsWith("plugin_prerelease_extension_matrix=")),
+        "extension matrix output",
+      );
+      const matrix = JSON.parse(matrixLine.slice(matrixLine.indexOf("=") + 1)) as {
+        include: {
+          extensions_csv: string;
+          requires_bun?: boolean;
+          task: string;
+          test_runtime_policy?: string;
+        }[];
+      };
+      const bunRows = matrix.include.filter((row) => row.requires_bun);
+      expect(
+        bunRows
+          .flatMap((row) => row.extensions_csv.split(",").filter((id) => id.startsWith("memory-")))
+          .toSorted(),
+      ).toEqual(["memory-lancedb", "memory-wiki"]);
+      expect(
+        bunRows.every(
+          (row) => row.task === "extensions-batch" && row.test_runtime_policy === "dual",
+        ),
+      ).toBe(true);
+      expect(
+        matrix.include
+          .filter((row) => row.task === "extensions-batch" && !row.requires_bun)
+          .every((row) => row.test_runtime_policy === "node"),
+      ).toBe(true);
     }
   });
 
