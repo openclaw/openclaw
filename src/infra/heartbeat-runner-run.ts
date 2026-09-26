@@ -8,9 +8,11 @@ import {
 } from "../auto-reply/reply/reply-operation-run-state.js";
 import { withReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { deliveryContextKey } from "../utils/delivery-context.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-config.js";
 import { createHeartbeatDispatch, deliverHeartbeatDispatch } from "./heartbeat-dispatch.js";
+import { isExecCompletionEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog } from "./heartbeat-log.js";
 import {
@@ -23,9 +25,23 @@ import {
   resolveHeartbeatWakeStage,
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
+import {
+  resolveHeartbeatRunPrompt,
+  shouldSkipConsumedExecWake,
+} from "./heartbeat-runner-prompt.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
-import { getHeartbeatWakeAbortSignal, type HeartbeatRunResult } from "./heartbeat-wake.js";
+import {
+  getHeartbeatWakeAbortSignal,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+  HEARTBEAT_SKIP_PREEMPTED,
+  type HeartbeatRunResult,
+} from "./heartbeat-wake.js";
 import { markSessionEventWakeWorkStarted } from "./session-event-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import {
+  peekSelectedSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
@@ -34,10 +50,11 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   }
   // Preparation can admit isolated work; later busy skips must retain the occurrence.
   markSessionEventWakeWorkStarted();
-  const prepared = await prepareHeartbeatRunStage(wake);
-  if (prepared.kind === "skipped") {
-    return { status: "skipped", reason: prepared.reason };
+  const preparation = await prepareHeartbeatRunStage(wake);
+  if (preparation.kind === "skipped") {
+    return { status: "skipped", reason: preparation.reason };
   }
+  let prepared = preparation;
   const { cfg, agentId, heartbeat, startedAt } = wake;
   const { delivery, visibility, sender, runSessionKey, suppressOriginatingContext } = prepared;
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
@@ -74,6 +91,64 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     const { dispatchInboundMessageWithRoutedChannelDispatcher } =
       await import("../auto-reply/dispatch.js");
     await typing?.onReplyStart();
+    // Preparation can yield while process polling acknowledges a completion.
+    // Recheck original occurrences; a same-text successor belongs to a later wake.
+    const currentPreflight = {
+      ...wake.preflight,
+      pendingEventEntries: peekSelectedSystemEventEntries(
+        resolveSystemEventQueueKey(wake.preflight.session.sessionKey, agentId),
+        wake.preflight.pendingEventEntries,
+      ),
+    };
+    if (shouldSkipConsumedExecWake(currentPreflight, wake.scheduledTasks)) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT };
+    }
+    const target = heartbeat?.target;
+    if (
+      prepared.inspectsRunQueue &&
+      (target === undefined || target === "owner" || target === "last") &&
+      deliveryContextKey(
+        resolveSystemEventDeliveryContext(currentPreflight.pendingEventEntries),
+      ) !== deliveryContextKey(wake.preflight.turnSourceDeliveryContext)
+    ) {
+      // A consumed occurrence owned this route. Let the wake owner retry with
+      // fresh routing instead of sending surviving work to its old destination.
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_PREEMPTED,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED };
+    }
+    const internalProjection = currentPreflight.pendingEventEntries.some((event) =>
+      isExecCompletionEvent(event.text),
+    )
+      ? prepared.internalProjection
+      : undefined;
+    prepared = {
+      ...prepared,
+      internalProjection,
+      ...resolveHeartbeatRunPrompt({
+        cfg,
+        heartbeat,
+        preflight: currentPreflight,
+        canRelayToUser:
+          visibility.showAlerts &&
+          ((delivery.channel !== "none" && Boolean(delivery.to)) ||
+            internalProjection !== undefined),
+        startedAt,
+        scheduledTasks: wake.scheduledTasks,
+        heartbeatScratchContent: wake.preflight.heartbeatScratchContent,
+        useHeartbeatResponseTool: prepared.useHeartbeatResponseTool,
+      }),
+    };
+    // Successful outcome handling must consume the same selection sent to the agent.
+    policy.prepared = prepared;
     const heartbeatContext = {
       Body: appendCronStyleCurrentTimeLine(prepared.prompt, cfg, startedAt),
       From: sender,
