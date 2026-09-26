@@ -1,13 +1,18 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   objectFieldEquals,
   readFixtureLog,
   startTuiFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-fixture-test-support.js";
+
+const lifetime = createFixtureLifetime();
+// A timed-out callback may still write release files. Join its body and the PTY
+// cleanup before removing those inputs.
+afterEach(() => lifetime.cleanup());
 
 const cancelKeys = [
   { key: "\x1b", name: "Escape" },
@@ -16,49 +21,51 @@ const cancelKeys = [
   { key: "\x1b[27;5;99~", name: "modifyOtherKeys Ctrl+C" },
 ];
 
-it("returns to the editor as soon as a model is selected, before the update finishes", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "openclaw-picker-selection-"));
-  const releasePath = path.join(directory, "release-patch");
-  const fixture = await startTuiFixture({
-    env: {
-      TERM_PROGRAM: "vscode",
-      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
-      OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH: releasePath,
-      OPENCLAW_TUI_PTY_COLS: "100",
-      OPENCLAW_TUI_PTY_ROWS: "30",
-    },
-  });
-  const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
-    waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
-  try {
-    await fixture.run.waitForOutput("local ready", 20_000);
-    await fixture.run.write("/models\r", { delay: false });
-    await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
-    await fixture.run.write("\x1b[B\r", { delay: false });
-    await fixture.waitForLogEntry((entry) => entry.method === "patchSession");
+it(
+  "returns to the editor as soon as a model is selected, before the update finishes",
+  () =>
+    lifetime.run(async () => {
+      const directory = lifetime.createTempDir("openclaw-picker-selection-");
+      const releasePath = path.join(directory, "release-patch");
+      const fixture = await lifetime.acquire(() =>
+        startTuiFixture({
+          env: {
+            TERM_PROGRAM: "vscode",
+            OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+            OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH: releasePath,
+            OPENCLAW_TUI_PTY_COLS: "100",
+            OPENCLAW_TUI_PTY_ROWS: "30",
+          },
+        }),
+      );
+      const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
+        waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
+      await fixture.run.waitForOutput("local ready", 20_000);
+      await fixture.run.write("/models\r", { delay: false });
+      await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
+      await fixture.run.write("\x1b[B\r", { delay: false });
+      await fixture.waitForLogEntry((entry) => entry.method === "patchSession");
 
-    const message = "draft after model selection";
-    await fixture.run.write("\r" + message, { delay: false });
-    const rows = await waitForRows((frame) => frame.some((row) => row.includes(message)));
-    const patches = (await readFixtureLog(fixture.logPath)).filter(
-      (entry) => entry.method === "patchSession",
-    );
-    console.log("[picker-selection-frame] " + JSON.stringify({ rows, patches }));
-    expect(patches).toHaveLength(1);
-    expect(rows.some((row) => row.trimStart().startsWith("search:"))).toBe(false);
+      const message = "draft after model selection";
+      await fixture.run.write("\r" + message, { delay: false });
+      const rows = await waitForRows((frame) => frame.some((row) => row.includes(message)));
+      const patches = (await readFixtureLog(fixture.logPath)).filter(
+        (entry) => entry.method === "patchSession",
+      );
+      console.log("[picker-selection-frame] " + JSON.stringify({ rows, patches }));
+      expect(patches).toHaveLength(1);
+      expect(rows.some((row) => row.trimStart().startsWith("search:"))).toBe(false);
 
-    await writeFile(releasePath, "release");
-    await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2", 20_000);
-    await fixture.run.write("\r", { delay: false });
-    await fixture.waitForLogEntry(
-      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-    );
-    await waitForRows((frame) => frame.some((row) => row.includes("PTY_RESPONSE: " + message)));
-  } finally {
-    await fixture.cleanup();
-    await rm(directory, { recursive: true, force: true });
-  }
-}, 30_000);
+      await writeFile(releasePath, "release");
+      await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2", 20_000);
+      await fixture.run.write("\r", { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      );
+      await waitForRows((frame) => frame.some((row) => row.includes("PTY_RESPONSE: " + message)));
+    }),
+  30_000,
+);
 
 it.each(
   ["/models", "/sessions"].flatMap((command) =>
@@ -66,27 +73,29 @@ it.each(
   ),
 )(
   "returns to chat from $command with $name",
-  async ({ command, key, name }) => {
-    const fixture = await startTuiFixture({
-      env: {
-        TERM_PROGRAM: "vscode",
-        TMUX: undefined,
-        KITTY_WINDOW_ID: undefined,
-        GHOSTTY_RESOURCES_DIR: undefined,
-        WEZTERM_PANE: undefined,
-        ITERM_SESSION_ID: undefined,
-        WT_SESSION: undefined,
-        WARP_SESSION_ID: undefined,
-        WARP_TERMINAL_SESSION_UUID: undefined,
-        TERMINAL_EMULATOR: undefined,
-        OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
-        OPENCLAW_TUI_PTY_COLS: "100",
-        OPENCLAW_TUI_PTY_ROWS: "30",
-      },
-    });
-    const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
-      waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
-    try {
+  ({ command, key, name }) =>
+    lifetime.run(async () => {
+      const fixture = await lifetime.acquire(() =>
+        startTuiFixture({
+          env: {
+            TERM_PROGRAM: "vscode",
+            TMUX: undefined,
+            KITTY_WINDOW_ID: undefined,
+            GHOSTTY_RESOURCES_DIR: undefined,
+            WEZTERM_PANE: undefined,
+            ITERM_SESSION_ID: undefined,
+            WT_SESSION: undefined,
+            WARP_SESSION_ID: undefined,
+            WARP_TERMINAL_SESSION_UUID: undefined,
+            TERMINAL_EMULATOR: undefined,
+            OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+            OPENCLAW_TUI_PTY_COLS: "100",
+            OPENCLAW_TUI_PTY_ROWS: "30",
+          },
+        }),
+      );
+      const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
+        waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
       await fixture.run.waitForOutput("local ready", 20_000);
       if (name === "Kitty Ctrl+C") {
         await fixture.run.write("\x1b[?1u", { delay: false });
@@ -147,9 +156,6 @@ it.each(
       );
       await fixture.run.write("/exit\r", { delay: false });
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-    } finally {
-      await fixture.cleanup();
-    }
-  },
+    }),
   30_000,
 );

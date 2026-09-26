@@ -1,7 +1,22 @@
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 const STARTUP_TIMEOUT_MS = 60_000;
 const OUTPUT_TIMEOUT_MS = 120_000;
+
+// Join admitted work before its inputs are removed; retain every rejection.
+export async function settleFixtureWork(work: readonly Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(work);
+  await runQaGatewayFixture(
+    async () => {},
+    ...results.map((result) => () => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }),
+  );
+}
 
 type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
 
@@ -18,6 +33,36 @@ export function registerIdempotentCleanup(
   const registeredCleanup = createIdempotentCleanup(cleanup);
   registerCleanup(registeredCleanup);
   return registeredCleanup;
+}
+
+export async function startLocalModeFixture<T extends object>(
+  registerCleanup: CleanupRegistrar,
+  setup: (lifetime: ReturnType<typeof createFixtureLifetime>, tempDir: string) => Promise<T>,
+  ownerRoot?: string,
+): Promise<T & { cleanup: () => Promise<void> }> {
+  const lifetime = createFixtureLifetime(ownerRoot);
+  let closed = false;
+  const cleanup = registerIdempotentCleanup(registerCleanup, () => {
+    // Close publication synchronously, before the lifetime starts draining.
+    closed = true;
+    return lifetime.cleanup();
+  });
+  try {
+    const fixture = await lifetime.run(async () => {
+      const tempDir = lifetime.createTempDir("openclaw-tui-pty-local-");
+      return { ...(await setup(lifetime, tempDir)), cleanup };
+    });
+    if (closed) {
+      throw new Error("local TUI PTY fixture setup completed after cleanup started");
+    }
+    return fixture;
+  } catch (error) {
+    // Only a verified drain releases roots and claims. Opaque acquisition and
+    // failed disposal remain retained by the canonical lifetime owner.
+    return await runQaGatewayFixture(async () => {
+      throw error;
+    }, cleanup);
+  }
 }
 
 type ObservedChatTerminal = {

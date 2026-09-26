@@ -1,5 +1,7 @@
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { createIdempotentCleanup, settleFixtureWork } from "./tui-pty-local-test-support.js";
 
 type DelayedGatewayRpcRequest = {
   type: "req";
@@ -27,19 +29,57 @@ export async function startGatewayRpcDelayProxy(
   );
   const requests: DelayedGatewayRpcRequest[] = [];
   const sockets = new Set<WebSocket>();
+  const handlers: Promise<void>[] = [];
+  let stopping = false;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
 
+  const stop = createIdempotentCleanup(async () => {
+    stopping = true;
+    for (const gate of gates.values()) {
+      gate.release.resolve();
+    }
+    const socketsClosed = settleFixtureWork(
+      [...sockets].map(
+        (socket) =>
+          new Promise<void>((resolve) => {
+            if (socket.readyState === WebSocket.CLOSED) {
+              resolve();
+              return;
+            }
+            socket.once("close", resolve);
+            socket.close();
+          }),
+      ),
+    );
+    void socketsClosed.catch(() => {});
+    await runQaGatewayFixture(
+      () => new Promise<void>((resolve) => server.close(() => resolve())),
+      () => socketsClosed,
+      () => settleFixtureWork(handlers),
+    );
+  });
+
   server.on("connection", (downstream) => {
+    if (stopping) {
+      downstream.close();
+      return;
+    }
     const upstream = new WebSocket(targetUrl);
     sockets.add(downstream);
     sockets.add(upstream);
     const queued: Array<{ data: RawData; isBinary: boolean }> = [];
     upstream.on("open", () => {
+      if (stopping) {
+        return;
+      }
       for (const message of queued.splice(0)) {
         upstream.send(message.data, { binary: message.isBinary });
       }
     });
     downstream.on("message", (data, isBinary) => {
+      if (stopping) {
+        return;
+      }
       try {
         const frame = JSON.parse(decodeGatewayFrame(data)) as Partial<DelayedGatewayRpcRequest>;
         if (
@@ -61,7 +101,10 @@ export async function startGatewayRpcDelayProxy(
       }
     });
     upstream.on("message", (data, isBinary) => {
-      void (async () => {
+      if (stopping) {
+        return;
+      }
+      const handler = (async () => {
         try {
           const frame = JSON.parse(decodeGatewayFrame(data)) as { type?: unknown; id?: unknown };
           if (frame.type === "res" && typeof frame.id === "string") {
@@ -78,6 +121,9 @@ export async function startGatewayRpcDelayProxy(
           downstream.send(data, { binary: isBinary });
         }
       })();
+      handlers.push(handler);
+      // Observe now; stop() joins these handlers and reports their rejections.
+      void handler.catch(() => {});
     });
     downstream.on("close", () => upstream.close());
     upstream.on("close", () => downstream.close());
@@ -85,32 +131,31 @@ export async function startGatewayRpcDelayProxy(
     upstream.on("error", () => downstream.close());
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("listening", resolve);
-    server.once("error", reject);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Gateway RPC delay proxy did not bind");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Gateway RPC delay proxy did not bind");
+    }
+    return {
+      url: `ws://127.0.0.1:${address.port}`,
+      requests,
+      waitForRequest: async (method: string) => {
+        const gate = gates.get(method);
+        if (!gate) {
+          throw new Error(`Gateway RPC method is not delayed: ${method}`);
+        }
+        await gate.seen.promise;
+      },
+      release: (method: string) => gates.get(method)?.release.resolve(),
+      stop,
+    };
+  } catch (error) {
+    return await runQaGatewayFixture(async () => {
+      throw error;
+    }, stop);
   }
-  return {
-    url: `ws://127.0.0.1:${address.port}`,
-    requests,
-    waitForRequest: async (method: string) => {
-      const gate = gates.get(method);
-      if (!gate) {
-        throw new Error(`Gateway RPC method is not delayed: ${method}`);
-      }
-      await gate.seen.promise;
-    },
-    release: (method: string) => gates.get(method)?.release.resolve(),
-    stop: async () => {
-      for (const socket of sockets) {
-        socket.close();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
-  };
 }

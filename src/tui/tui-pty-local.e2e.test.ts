@@ -48,6 +48,8 @@ import {
   createFreshSession,
   lastOutputIndexAfter,
   registerIdempotentCleanup,
+  settleFixtureWork,
+  startLocalModeFixture,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
 import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
@@ -346,8 +348,14 @@ async function startRoutedMockModelServer(
       .filter(([, behavior]) => behavior.holdFirstResponse)
       .map(([modelId]) => [modelId, createDeferred()] as const),
   );
+  const handlers: Promise<void>[] = [];
+  let stopping = false;
   const server = createServer((req, res) => {
-    void (async () => {
+    if (stopping) {
+      res.destroy();
+      return;
+    }
+    const handler = (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
         writeJson(res, 200, { ok: true });
@@ -403,42 +411,61 @@ async function startRoutedMockModelServer(
       }
       writeJson(res, 404, { error: "not found" });
     })();
+    handlers.push(handler);
+    // Observe now; stop() joins these handlers and reports their rejections.
+    void handler.catch(() => {});
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+  const stop = createIdempotentCleanup(async () => {
+    stopping = true;
+    // Release owned gates before closing ingress and joining the admitted handlers.
+    for (const gate of firstResponseGates.values()) {
+      gate.resolve();
+    }
+    await runQaGatewayFixture(
+      async () => {
+        if (!server.listening) {
+          server.closeAllConnections();
+          return;
+        }
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+          server.closeAllConnections();
+        });
+      },
+      () => settleFixtureWork(handlers),
+    );
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("mock model server did not bind");
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("mock model server did not bind");
+    }
+    return {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      requests: (modelId) => (modelId ? (requestsByModel.get(modelId) ?? []) : requests),
+      rejectedRequests: () => rejectedRequests,
+      allowValidResponses: (modelId) => {
+        const behavior = behaviors[modelId];
+        if (behavior) {
+          behavior.invalidEditLoop = false;
+        }
+      },
+      releaseFirstResponse: (modelId) => {
+        firstResponseGates.get(modelId)?.resolve();
+      },
+      stop,
+    };
+  } catch (error) {
+    return await runQaGatewayFixture(async () => {
+      throw error;
+    }, stop);
   }
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requests: (modelId) => (modelId ? (requestsByModel.get(modelId) ?? []) : requests),
-    rejectedRequests: () => rejectedRequests,
-    allowValidResponses: (modelId) => {
-      const behavior = behaviors[modelId];
-      if (behavior) {
-        behavior.invalidEditLoop = false;
-      }
-    },
-    releaseFirstResponse: (modelId) => {
-      firstResponseGates.get(modelId)?.resolve();
-    },
-    stop: async () => {
-      // Never leave a held request owning the shared server during failure cleanup.
-      for (const gate of firstResponseGates.values()) {
-        gate.resolve();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        // Aborted local runs can leave a provider keep-alive open. Force-close
-        // test-owned connections so cleanup does not wait for idle expiry.
-        server.closeAllConnections();
-      });
-    },
-  };
 }
 
 async function startMockModelServer(
@@ -516,28 +543,6 @@ function buildLocalModeConfig(params: {
   } satisfies OpenClawConfig;
 }
 
-async function cleanupLocalModeResources(params: {
-  run?: PtyRun;
-  mockModel: MockModelServer;
-  tempDir: string;
-}) {
-  const settled = await Promise.allSettled([
-    ...(params.run ? [params.run.dispose()] : []),
-    params.mockModel.stop(),
-  ]);
-  const failures = settled.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  try {
-    await rm(params.tempDir, { recursive: true, force: true });
-  } catch (error) {
-    failures.push(error);
-  }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "local TUI PTY fixture cleanup failed");
-  }
-}
-
 async function startLocalModeTui(
   registerCleanup: CleanupRegistrar,
   opts: {
@@ -559,41 +564,42 @@ async function startLocalModeTui(
   } = {},
 ) {
   const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-local-"));
-  const workspaceDir = path.join(tempDir, "workspace");
-  const homeDir = path.join(tempDir, "home");
-  const stateDir = path.join(tempDir, "state");
-  const xdgConfigHome = path.join(tempDir, "xdg-config");
-  const xdgDataHome = path.join(tempDir, "xdg-data");
-  const xdgCacheHome = path.join(tempDir, "xdg-cache");
-  const configPath = path.join(tempDir, "openclaw.json");
-  let env: NodeJS.ProcessEnv = {
-    HOME: homeDir,
-    OPENCLAW_HOME: homeDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
-    OPENCLAW_AGENT_DIR: undefined,
-    OPENCLAW_SKIP_PROVIDERS: undefined,
-    XDG_CONFIG_HOME: xdgConfigHome,
-    XDG_DATA_HOME: xdgDataHome,
-    XDG_CACHE_HOME: xdgCacheHome,
-    OPENCLAW_THEME: "dark",
-    OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-    NO_COLOR: undefined,
-  };
-  const mockModel = await startMockModelServer(replyText, {
-    invalidEditLoop: opts.invalidEditLoop,
-    holdFirstResponse: opts.holdFirstResponse,
-    followupReplyText: opts.followupReplyText,
-  });
-  let config: OpenClawConfig = buildLocalModeConfig({
-    workspaceDir,
-    providerBaseUrl: mockModel.baseUrl,
-    toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
-  });
-  let run: PtyRun;
-  try {
+  return await startLocalModeFixture(registerCleanup, async (lifetime, tempDir) => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const homeDir = path.join(tempDir, "home");
+    const stateDir = path.join(tempDir, "state");
+    const xdgConfigHome = path.join(tempDir, "xdg-config");
+    const xdgDataHome = path.join(tempDir, "xdg-data");
+    const xdgCacheHome = path.join(tempDir, "xdg-cache");
+    const configPath = path.join(tempDir, "openclaw.json");
+    let env: NodeJS.ProcessEnv = {
+      HOME: homeDir,
+      OPENCLAW_HOME: homeDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "500",
+      OPENCLAW_AGENT_DIR: undefined,
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+      XDG_CONFIG_HOME: xdgConfigHome,
+      XDG_DATA_HOME: xdgDataHome,
+      XDG_CACHE_HOME: xdgCacheHome,
+      OPENCLAW_THEME: "dark",
+      OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
+      NO_COLOR: undefined,
+    };
+    const { mockModel } = await lifetime.acquire(async () => {
+      const mockModel = await startMockModelServer(replyText, {
+        invalidEditLoop: opts.invalidEditLoop,
+        holdFirstResponse: opts.holdFirstResponse,
+        followupReplyText: opts.followupReplyText,
+      });
+      return { mockModel, cleanup: () => mockModel.stop() };
+    });
+    let config: OpenClawConfig = buildLocalModeConfig({
+      workspaceDir,
+      providerBaseUrl: mockModel.baseUrl,
+      toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
+    });
     config =
       (await opts.prepareConfig?.({
         config,
@@ -601,7 +607,7 @@ async function startLocalModeTui(
         stateDir,
       })) ?? config;
     env = (await opts.prepareEnv?.({ env, tempDir, stateDir })) ?? env;
-    await Promise.all([
+    await settleFixtureWork([
       mkdir(workspaceDir, { recursive: true }),
       mkdir(homeDir, { recursive: true }),
       mkdir(stateDir, { recursive: true }),
@@ -611,50 +617,30 @@ async function startLocalModeTui(
       writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8"),
     ]);
 
-    run = await startRuntimePty(
-      process.execPath,
-      buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]),
-      {
-        cwd: process.cwd(),
-        env,
-        exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-        outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-      },
-    );
-  } catch (error) {
-    let cleanupFailure: unknown;
-    try {
-      await cleanupLocalModeResources({ mockModel, tempDir });
-    } catch (cleanupError) {
-      cleanupFailure = cleanupError;
-    }
-    if (cleanupFailure !== undefined) {
-      const cleanupDetail =
-        cleanupFailure instanceof Error
-          ? cleanupFailure.message
-          : typeof cleanupFailure === "string"
-            ? cleanupFailure
-            : "unknown cleanup error";
-      throw new Error(`local TUI PTY fixture cleanup failed: ${cleanupDetail}`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-
-  const cleanup = createIdempotentCleanup(async () => {
-    await cleanupLocalModeResources({ run, mockModel, tempDir });
+    // A native constructor can fail after spawning but before returning a handle.
+    // Unreturned acquisitions retain the inputs and pending resource claim.
+    const { run } = await lifetime.acquire(async () => {
+      const run = await startRuntimePty(
+        process.execPath,
+        buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]),
+        {
+          cwd: process.cwd(),
+          env,
+          exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+        },
+      );
+      return { run, cleanup: () => run.dispose() };
+    });
+    return {
+      kind: "local" as const,
+      run,
+      mockModel,
+      configPath,
+      env,
+      stateDir,
+    };
   });
-  registerCleanup(cleanup);
-  return {
-    kind: "local" as const,
-    run,
-    mockModel,
-    configPath,
-    env,
-    stateDir,
-    cleanup,
-  };
 }
 
 type SharedGatewayFixture = {
@@ -1758,7 +1744,7 @@ describe("TUI PTY real backends", () => {
         prepareConfig: async ({ config, tempDir }) => {
           const pluginDir = path.join(tempDir, "auth-plugin");
           await mkdir(pluginDir, { recursive: true });
-          await Promise.all([
+          await settleFixtureWork([
             writeFile(
               path.join(pluginDir, "package.json"),
               `${JSON.stringify(
@@ -2337,31 +2323,34 @@ export default {
           path.join(shared.gateway.stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
           { readOnly: true },
         );
-        const sqliteRows = db
-          .prepare(
-            `SELECT node.session_key AS sessionKey, COUNT(*) AS eventCount
+        try {
+          const sqliteRows = db
+            .prepare(
+              `SELECT node.session_key AS sessionKey, COUNT(*) AS eventCount
              FROM session_nodes AS node
              JOIN transcript_events AS event ON event.session_id = node.current_session_id
              WHERE event.event_json LIKE ?
              GROUP BY node.session_key
              ORDER BY node.session_key`,
-          )
-          .all(`%${next[0]}%`);
-        db.close();
-        expect(sqliteRows).toEqual([{ sessionKey, eventCount: 1 }]);
-        const requests = shared.mockModel.requests(scenario.modelId).slice(requestOffset);
-        expect(requests).toHaveLength(2);
-        const secondRequestBody = JSON.stringify(requests[1]?.body);
-        expect(secondRequestBody).toContain(initial[0]);
-        expect(secondRequestBody).toContain(scenario.replyText);
-        expect(secondRequestBody).toContain(next[0]);
-        console.log(
-          `[behavior-evidence] tui-startup-session-gate ${JSON.stringify({
-            sentKey: sessionKey,
-            headerSession: sessionKey,
-            sqliteRows,
-          })}`,
-        );
+            )
+            .all(`%${next[0]}%`);
+          expect(sqliteRows).toEqual([{ sessionKey, eventCount: 1 }]);
+          const requests = shared.mockModel.requests(scenario.modelId).slice(requestOffset);
+          expect(requests).toHaveLength(2);
+          const secondRequestBody = JSON.stringify(requests[1]?.body);
+          expect(secondRequestBody).toContain(initial[0]);
+          expect(secondRequestBody).toContain(scenario.replyText);
+          expect(secondRequestBody).toContain(next[0]);
+          console.log(
+            `[behavior-evidence] tui-startup-session-gate ${JSON.stringify({
+              sentKey: sessionKey,
+              headerSession: sessionKey,
+              sqliteRows,
+            })}`,
+          );
+        } finally {
+          db.close();
+        }
         await resumed.run.write("/exit\r", { delay: false });
         expect((await resumed.run.waitForExit()).exitCode).toBe(0);
       } finally {

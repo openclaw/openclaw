@@ -53,8 +53,8 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     // Boot every suite PTY concurrently: tsx+TUI startup dominates this file's
     // wall time. The env-specific fixtures never receive input, so their tests
     // only await readiness output and stay attributable to their own `it`.
-    // allSettled (not all) so a failed boot still assigns the survivors for
-    // afterAll cleanup instead of leaking their PTY processes.
+    // allSettled (not all) keeps every startup outcome available before reporting
+    // the first failure; the shared owner retains each startup through cleanup.
     const boots = await Promise.allSettled([
       startTuiFixture(),
       startTuiFixture({
@@ -95,17 +95,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
   }, STARTUP_TEST_TIMEOUT_MS);
 
-  afterAll(async () => {
-    await disposeActiveTuiFixtures();
-    for (const started of [
-      fixture,
-      compactFooterFixture,
-      thinkingOverrideFixture,
-      slowStartupFixture,
-    ]) {
-      await (started as Awaited<ReturnType<typeof startTuiFixture>> | undefined)?.cleanup();
-    }
-  }, STARTUP_TEST_TIMEOUT_MS);
+  afterAll(disposeActiveTuiFixtures, STARTUP_TEST_TIMEOUT_MS);
 
   it("renders local ready on startup", () => {
     expect(fixture.run.visibleOutput()).toContain("local ready");

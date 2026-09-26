@@ -1,9 +1,9 @@
 // Keeps fake-terminal test-only logs and opaque-session fixtures independently bounded.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { transform } from "esbuild";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { TUI_PTY_FALLBACK_FIXTURE } from "./tui-fallback-fixture-test-support.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
@@ -12,6 +12,7 @@ import {
   waitForFixtureLogEntry,
   type FixtureLogEntry,
 } from "./tui-pty-harness-assertion-test-support.js";
+import { createIdempotentCleanup } from "./tui-pty-local-test-support.js";
 import {
   createTuiReconnectRelease,
   TUI_PTY_RECONNECT_FIXTURE,
@@ -25,18 +26,31 @@ import {
 } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
-import { startRuntimePty, type PtyRun } from "./tui-pty-test-support.js";
+import { startRuntimePty } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
 
-const activeRuns: PtyRun[] = [];
+const activeFixtures = new Set<() => Promise<void>>();
+let pendingDisposal: Promise<void> | undefined;
 const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 
-export async function disposeActiveTuiFixtures(): Promise<void> {
-  for (const run of activeRuns.splice(0)) {
-    await run.dispose();
-  }
+export function disposeActiveTuiFixtures(): Promise<void> {
+  return (pendingDisposal ??= (async () => {
+    // Start every release before joining: one failed fixture must not skip its siblings.
+    const settled = await Promise.allSettled([...activeFixtures].map((cleanup) => cleanup()));
+    const errors = settled.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "TUI PTY fixture cleanup failed");
+    }
+  })().finally(() => {
+    pendingDisposal = undefined;
+  }));
 }
 
 export async function startTuiFixture(
@@ -48,49 +62,96 @@ export async function startTuiFixture(
     holdReconnect?: boolean;
   } = {},
 ) {
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
-  const configPath = path.join(tempDir, "openclaw.json");
-  await writeFile(configPath, "{}\n");
-  const scriptPath = await writeTuiPtyFixtureScript(tempDir);
-  const logPath = path.join(tempDir, "fixture-log.jsonl");
-  const startupRelease = createTuiStartupRelease(tempDir, opts);
-  const reconnectRelease = createTuiReconnectRelease(tempDir, opts.holdReconnect);
-  const execPath = opts.execPath ?? process.execPath;
-  const run = await startRuntimePty(
-    execPath,
-    resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath),
-    {
-      activeRuns,
-      cwd: process.cwd(),
-      env: {
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_THEME: "dark",
-        OPENCLAW_TUI_PTY_LOG_PATH: logPath,
-        NO_COLOR: undefined,
-        ...opts.env,
-        ...startupRelease.env,
-        ...reconnectRelease.env,
-      },
-      exitTimeoutMs: EXIT_TIMEOUT_MS,
-      outputTimeoutMs: OUTPUT_TIMEOUT_MS,
-    },
-  );
+  if (pendingDisposal) {
+    throw new Error("TUI PTY fixtures are closing");
+  }
+  const lifetime = createFixtureLifetime();
+  let closed = false;
+  // Keep a rejected drain visible; a later cleanup call cannot certify an earlier failure.
+  const cleanup = createIdempotentCleanup(async () => {
+    closed = true;
+    await lifetime.cleanup();
+    activeFixtures.delete(cleanup);
+  });
+  activeFixtures.add(cleanup);
 
-  startupRelease.wrapDispose(run);
-  reconnectRelease.wrapDispose(run);
+  try {
+    const fixture = await lifetime.acquire(async (rejectAfterCleanup) => {
+      let disposeRun: (() => Promise<void>) | undefined;
+      let launchStarted = false;
+      try {
+        const tempDir = lifetime.createTempDir("openclaw-tui-pty-");
+        const configPath = path.join(tempDir, "openclaw.json");
+        await writeFile(configPath, "{}\n");
+        const scriptPath = await writeTuiPtyFixtureScript(tempDir);
+        const logPath = path.join(tempDir, "fixture-log.jsonl");
+        const startupRelease = createTuiStartupRelease(tempDir, opts);
+        const reconnectRelease = createTuiReconnectRelease(tempDir, opts.holdReconnect);
+        const execPath = opts.execPath ?? process.execPath;
+        const args = resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath);
+        const ptyOptions = {
+          cwd: process.cwd(),
+          env: {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_THEME: "dark",
+            OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+            NO_COLOR: undefined,
+            ...opts.env,
+            ...startupRelease.env,
+            ...reconnectRelease.env,
+          },
+          exitTimeoutMs: EXIT_TIMEOUT_MS,
+          outputTimeoutMs: OUTPUT_TIMEOUT_MS,
+        };
+        launchStarted = true;
+        const run = await startRuntimePty(execPath, args, ptyOptions);
+        disposeRun = () => run.dispose();
+        startupRelease.wrapDispose(run);
+        reconnectRelease.wrapDispose(run);
 
-  return {
-    run,
-    logPath,
-    releaseStartup: startupRelease.releaseStartup,
-    releaseReconnect: reconnectRelease.releaseReconnect,
-    waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
-    cleanup: async () => {
-      await run.dispose();
-      await rm(tempDir, { recursive: true, force: true });
-    },
-  };
+        return {
+          run,
+          logPath,
+          releaseStartup: startupRelease.releaseStartup,
+          releaseReconnect: reconnectRelease.releaseReconnect,
+          waitForLogEntry: async (
+            predicate: (entry: FixtureLogEntry) => boolean,
+            timeoutMs?: number,
+          ) =>
+            await waitForFixtureLogEntry(
+              logPath,
+              predicate,
+              timeoutMs ?? OUTPUT_TIMEOUT_MS,
+              run.output,
+            ),
+          cleanup: disposeRun,
+        };
+      } catch (cause) {
+        // Rejected native construction may have spawned a child without returning its handle.
+        // Retain that uncertainty instead of deleting inputs on an inferred rollback.
+        if (launchStarted && !disposeRun) {
+          throw cause;
+        }
+        return rejectAfterCleanup(cause, async () => {
+          await disposeRun?.();
+        });
+      }
+    });
+    // Timed-out setup may resume after teardown has adopted its acquisition.
+    if (closed) {
+      throw new Error("TUI PTY fixture closed during startup");
+    }
+    return { ...fixture, cleanup };
+  } catch (cause) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError([cause, cleanupError], "TUI PTY fixture startup cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw cause;
+  }
 }
 
 export async function writeTuiPtyFixtureScript(dir: string) {
