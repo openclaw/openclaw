@@ -312,35 +312,49 @@ describe("buildTimeoutAbortSignal", () => {
     const parent = new AbortController();
     const reason = new Error("caller stopped after headers");
     let fetchSignal: AbortSignal | null | undefined;
+    let releaseBody: (() => void) | undefined;
+    let bodySettled: Promise<unknown> | undefined;
     const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-      fetchSignal = init?.signal;
+      const signal = init?.signal;
+      fetchSignal = signal;
       return new Response(
         new ReadableStream({
           start(controller) {
-            fetchSignal?.addEventListener("abort", () => controller.error(fetchSignal?.reason), {
-              once: true,
-            });
+            const onAbort = () => controller.error(signal?.reason);
+            releaseBody = () => {
+              signal?.removeEventListener("abort", onAbort);
+              controller.error(reason);
+            };
+            signal?.addEventListener("abort", onAbort, { once: true });
           },
         }),
       );
     });
 
-    const response = await fetchWithTimeout(
-      "https://example.com/v1/audio",
-      { signal: parent.signal },
-      25,
-      fetchFn,
-    );
-    const body = response.text();
+    try {
+      const response = await fetchWithTimeout(
+        "https://example.com/v1/audio",
+        { signal: parent.signal },
+        25,
+        fetchFn,
+      );
+      const body = response.text();
+      bodySettled = Promise.allSettled([body]);
 
-    await vi.advanceTimersByTimeAsync(25);
-    expect(fetchSignal?.aborted).toBe(false);
-    expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(25);
+      expect(fetchSignal?.aborted).toBe(false);
+      expect(warn).not.toHaveBeenCalled();
 
-    parent.abort(reason);
+      parent.abort(reason);
 
-    await expect(body).rejects.toBe(reason);
-    expect(fetchSignal?.reason).toBe(reason);
+      await expect(body).rejects.toBe(reason);
+      expect(fetchSignal?.reason).toBe(reason);
+    } finally {
+      parent.abort(reason);
+      // Release the fixture even when caller-abort forwarding is broken.
+      releaseBody?.();
+      await bodySettled;
+    }
   });
 
   it("accepts a null RequestInit signal", async () => {

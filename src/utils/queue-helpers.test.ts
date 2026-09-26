@@ -225,38 +225,44 @@ describe("drainNextQueueItem", () => {
       },
       { inFlight },
     );
-    await Promise.resolve();
+    const firstDrainSettled = Promise.allSettled([firstDrain]);
+    try {
+      await Promise.resolve();
 
-    for (let index = 2; index <= 8; index += 1) {
-      const item = { id: `m${index}` };
-      const shouldEnqueue = applyQueueDropPolicy({
-        queue,
-        summarize: (queued) => queued.id,
-        inFlight,
-        onDrop: (items) => {
-          dropped.push(...items.map((queued) => queued.id));
-        },
-      });
-      if (shouldEnqueue) {
-        queue.items.push(item);
+      for (let index = 2; index <= 8; index += 1) {
+        const item = { id: `m${index}` };
+        const shouldEnqueue = applyQueueDropPolicy({
+          queue,
+          summarize: (queued) => queued.id,
+          inFlight,
+          onDrop: (items) => {
+            dropped.push(...items.map((queued) => queued.id));
+          },
+        });
+        if (shouldEnqueue) {
+          queue.items.push(item);
+        }
       }
+
+      release();
+      await firstDrain;
+      while (
+        await drainNextQueueItem(
+          queue.items,
+          async (item) => {
+            delivered.push(item.id);
+          },
+          { inFlight },
+        )
+      ) {}
+
+      expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
+      expect(dropped).toEqual(["m2", "m3", "m4", "m5"]);
+      expect(queue.items).toEqual([]);
+    } finally {
+      release();
+      await firstDrainSettled;
     }
-
-    release();
-    await firstDrain;
-    while (
-      await drainNextQueueItem(
-        queue.items,
-        async (item) => {
-          delivered.push(item.id);
-        },
-        { inFlight },
-      )
-    ) {}
-
-    expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
-    expect(dropped).toEqual(["m2", "m3", "m4", "m5"]);
-    expect(queue.items).toEqual([]);
   });
 
   it("skips in-flight items when selecting drop victims", () => {
