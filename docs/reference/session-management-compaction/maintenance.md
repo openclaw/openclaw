@@ -72,6 +72,12 @@ Every new archive records a structured reason automatically. Explicit archive ac
 
 Normal Gateway writes flow through the session accessor, which serializes per-agent SQLite mutations through the runtime writer path. Runtime code should prefer the accessor helpers in `src/config/sessions/session-accessor.ts`; legacy `sessions.json` helpers are migration and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for a selected legacy store and always stays local (as does `--dry-run`). `maxEntries` cleanup is batched for production-sized stores, so the unarchived population may briefly exceed the configured cap before the next high-water cleanup rewrites it down. Reads never prune or cap entries during Gateway startup. Ordinary entry writes arm a coalesced background pass at the next age boundary, with a 30-minute periodic recheck while that database connection remains open, so retention can run without further traffic. Unchanged age/count facts let writes skip maintenance candidate scans. `openclaw sessions cleanup --enforce` applies the cap immediately and prunes old unreferenced legacy transcript, checkpoint, and trajectory artifacts even with no disk budget configured.
 
+Background plans prepare outside the writer transaction, then recheck selected rows,
+transcript versions, and session protection before committing. Unrelated writes do
+not cancel the plan. Conflicting inputs receive at most three immediate planning
+attempts before maintenance pauses until a later write; settled refusals retain the
+worker connection. Retention policies and stored data formats are unchanged.
+
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
 
 Migration recovery originals and exact pre-Doctor recovery files are separate

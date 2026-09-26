@@ -911,7 +911,6 @@
     <string name="native_79b1916f9fedb270" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Native Codex-model"</string>
     <string name="native_79d3a1f108e8d9c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meegeleverd"</string>
     <string name="native_79d3d8a05bab3172" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s beschikbaar"</string>
-    <string name="native_79e675583adc1ab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Goedkeuring Knooppunt In Afwachting"</string>
     <string name="native_7a1058bb81879dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway in afwachting"</string>
     <string name="native_7a13d46682b4c94b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Maak verbinding met de gateway om deze sessie te openen."</string>
     <string name="native_7a211017043ea5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Authenticatie vereist"</string>
@@ -1473,7 +1472,6 @@
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stop"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nog geen overeenkomende gesprekken."</string>
     <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bronnen"</string>
-    <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"De koppeling met Gateway is gelukt.\nKeur de knooppuntfuncties van deze telefoon goed via een beheerdersinterface."</string>
     <string name="native_cbb96d163f80c1f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"De geselecteerde afbeelding kon niet worden gelezen."</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Deze skill is geïnstalleerd maar voldoet momenteel niet aan de voorwaarden om te worden uitgevoerd. Gebruik de desktop of de CLI voor configuratiewijzigingen."</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spraakherkenning bezet"</string>

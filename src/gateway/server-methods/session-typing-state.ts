@@ -30,9 +30,7 @@ type SessionTypingState = {
 
 function clearSessionTypingStateValue(state: SessionTypingState): void {
   for (const entry of state.broadcasts.values()) {
-    if (entry.timer) {
-      clearTimeout(entry.timer);
-    }
+    clearTimeout(entry.timer);
   }
   state.broadcasts.clear();
   for (const entry of state.connections.values()) {
@@ -73,10 +71,7 @@ function rememberTypingBroadcast(key: string, state: TypingBroadcastState): void
   if (!oldestKey) {
     return;
   }
-  const oldest = typingBroadcastState.get(oldestKey);
-  if (oldest?.timer) {
-    clearTimeout(oldest.timer);
-  }
+  clearTimeout(typingBroadcastState.get(oldestKey)?.timer);
   typingBroadcastState.delete(oldestKey);
 }
 
@@ -90,9 +85,7 @@ export function broadcastTypingThrottled(params: {
 }): boolean {
   const previous = typingBroadcastState.get(params.key);
   if (!previous || params.now - previous.at >= params.intervalMs) {
-    if (previous?.timer) {
-      clearTimeout(previous.timer);
-    }
+    clearTimeout(previous?.timer);
     const emitted = params.emit();
     rememberTypingBroadcast(params.key, {
       at: params.now,
@@ -102,9 +95,7 @@ export function broadcastTypingThrottled(params: {
   }
 
   if (params.signature === previous.signature && previous.pending?.signature !== params.signature) {
-    if (previous.timer) {
-      clearTimeout(previous.timer);
-    }
+    clearTimeout(previous.timer);
     delete previous.pending;
     delete previous.timer;
     if (!params.typing) {
