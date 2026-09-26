@@ -64,3 +64,10 @@ export function ensureSkillWorkshopStore(options: SkillWorkshopStoreOptions = {}
 export function readStoredProposal(proposalId: string, options: SkillWorkshopStoreOptions = {}) {
   return executeSkillWorkshopOperation("workshop.proposal.read", proposalId, options);
 }
+
+export function purgeRejectedStoredProposal(
+  proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
+) {
+  return executeSkillWorkshopOperation("workshop.proposal.purge", proposalId, options);
+}

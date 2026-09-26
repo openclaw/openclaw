@@ -47,6 +47,41 @@ afterEach(async () => {
 });
 
 describe("skill_workshop terminal lifecycle", () => {
+  it("requires an exact revision to purge a rejected proposal", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-purge-");
+    const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main", env: testState.env });
+    const created = await tool.execute("create-purge", {
+      action: "create",
+      name: "Discard Me",
+      description: "Disposable proposal",
+      proposal_content: "# Discard Me\n",
+    });
+    const { id, revisionHash } = created.details as { id: string; revisionHash: string };
+    await expect(
+      tool.execute("purge-pending", {
+        action: "purge",
+        proposal_id: id,
+        expected_revision_hash: revisionHash,
+      }),
+    ).rejects.toThrow("Only rejected proposals can be purged");
+    await tool.execute("reject-purge", { action: "reject", proposal_id: id });
+    await expect(
+      tool.execute("purge-no-hash", { action: "purge", proposal_id: id }),
+    ).rejects.toThrow();
+    const inspected = await tool.execute("inspect-purge", { action: "inspect", proposal_id: id });
+    const rejectedRevision = (inspected.details as { revisionHash: string }).revisionHash;
+    await expect(
+      tool.execute("purge-rejected", {
+        action: "purge",
+        proposal_id: id,
+        expected_revision_hash: rejectedRevision,
+      }),
+    ).resolves.toMatchObject({ details: { proposalId: id, purged: true } });
+    await expect(
+      fs.access(path.join(testState.stateDir, "skill-workshop", "proposals", id)),
+    ).rejects.toThrow();
+  });
+
   it("disposes of proposals without reading damaged draft artifacts", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-damaged-drafts-");
     const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main", env: testState.env });

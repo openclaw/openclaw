@@ -35,6 +35,7 @@ type WorkshopOperation<Input, Output> = {
 export type SkillWorkshopExecutionOperations = {
   "workshop.schema.ensure": WorkshopOperation<undefined, void>;
   "workshop.proposal.read": WorkshopOperation<string, StoredSkillProposal | null>;
+  "workshop.proposal.purge": WorkshopOperation<string, void>;
   "workshop.proposals.list": WorkshopOperation<
     ListStoredSkillProposalsInput,
     StoredSkillProposal[]

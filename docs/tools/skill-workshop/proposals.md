@@ -102,25 +102,30 @@ omitted with directions to the operator workflow; binary supporting content is
 not injected into model context.
 
 For Workshop proposals, omit `target`. The tool uses one required `action`:
-`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
+`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | purge | quarantine | history | restore_collection`.
+
+`purge` permanently removes an already-rejected proposal, its retained draft,
+and its event history. It does not remove active skills. Use it only after an
+explicit operator request, passing the reviewed proposal ID and exact revision
+hash. The CLI equivalent is `openclaw skills workshop purge <proposal-id>`.
 Other Workshop parameters apply depending on the action:
 
-| Parameter                  | Used by                                                          | Notes                                                                 |
-| -------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise  |
-| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                         |
-| `skill_name`               | `read`, `prepare_patch`, `patch`, `update`                       | Existing skill name or key                                            |
-| `old_string`               | `prepare_patch`, `patch`                                         | Exact current text; prepare it when the complete skill cannot be read |
-| `new_string`               | `patch`                                                          | Replacement for the exact current text                                |
-| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body       |
-| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                          |
-| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                     |
-| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                       |
-| `artifact_path`            | `inspect`                                                        | `PROPOSAL.md` or one listed support-file path                         |
-| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                    |
-| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                                |
-| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                              |
-| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                           |
+| Parameter                  | Used by                                                                   | Notes                                                                 |
+| -------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `revise`                                             | Required for `create`; resolves a pending proposal by name otherwise  |
+| `description`              | `create`, `update`, `revise`                                              | Max 160 bytes                                                         |
+| `skill_name`               | `read`, `prepare_patch`, `patch`, `update`                                | Existing skill name or key                                            |
+| `old_string`               | `prepare_patch`, `patch`                                                  | Exact current text; prepare it when the complete skill cannot be read |
+| `new_string`               | `patch`                                                                   | Replacement for the exact current text                                |
+| `proposal_content`         | `create`, `update`, `revise`                                              | Required for create/update; omit on revise to preserve the body       |
+| `support_files`            | `create`, `update`, `revise`                                              | Array of `{ path, content }`                                          |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                              | Free-text context                                                     |
+| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `purge`, `quarantine` | Target proposal                                                       |
+| `artifact_path`            | `inspect`                                                                 | `PROPOSAL.md` or one listed support-file path                         |
+| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `purge`, `quarantine`                      | Rejects a stale orchestration step                                    |
+| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`                     | External run or experiment correlation                                |
+| `reason`                   | `apply`, `reject`, `quarantine`                                           | Optional                                                              |
+| `query`, `status`, `limit` | `list`                                                                    | Filter/paginate; `limit` max 50, default 20                           |
 
 `read` and `prepare_patch` return the resolved `skillName`. Reuse that name as
 `skill_name` in follow-up calls; a metadata `skillKey` can match a different

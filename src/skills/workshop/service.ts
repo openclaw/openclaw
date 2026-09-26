@@ -1,5 +1,7 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import {
   assertInsideSkillsRoot,
   readWorkspaceSkillFile,
@@ -17,7 +19,10 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { resolveDraftedSkillDescription, resolveSkillProposalName } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { nextProposalVersion, prepareSkillProposalDraft } from "./proposal-draft.js";
-import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
+import {
+  createSkillProposalGenerationDraftFile,
+  resolveSkillWorkshopStateDir,
+} from "./proposal-generation.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertExpectedRevisionHash,
@@ -31,11 +36,12 @@ import {
 } from "./service-propose.js";
 import { readRequiredProposal } from "./service-query.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
-import { captureSkillWorkshopStoreOptions } from "./store-client.js";
+import { captureSkillWorkshopStoreOptions, purgeRejectedStoredProposal } from "./store-client.js";
 import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
 import {
   hashSkillProposalContent,
   readSkillProposalRecord,
+  readSkillProposalRollback,
   replaceSkillProposalDraft,
   updateSkillProposalRecord,
   withSkillProposalTargetLock,
@@ -264,6 +270,44 @@ export async function rejectSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
   return await markProposal(input, "rejected");
+}
+
+/** Explicit operator purge; never touches a live skill or a pending proposal. */
+export async function purgeRejectedSkillProposal(
+  input: SkillProposalActionInput,
+): Promise<{ proposalId: string; purged: true }> {
+  const store = proposalStoreOptions(input.env, input.agentId, input.config);
+  const scope = input.agentId ? { agentId: input.agentId } : {};
+  const initial = await readSkillProposalRecord(input.proposalId, store, scope, {
+    config: input.config,
+  });
+  if (!initial) throw new Error(`Skill proposal not found: ${input.proposalId}`);
+  return await withSkillProposalTargetLock(
+    initial,
+    async () => {
+      const current = await readSkillProposalRecord(input.proposalId, store, scope, {
+        config: input.config,
+        reconcile: false,
+      });
+      if (!current || current.status !== "rejected") {
+        throw new Error("Only rejected proposals can be purged.");
+      }
+      assertExpectedRevisionHash(hashSkillProposalRevision(current), input.expectedRevisionHash);
+      if (await readSkillProposalRollback(current.id, store)) {
+        throw new Error("Proposal has unfinished apply recovery and cannot be purged.");
+      }
+      await removePathWithinRoot({
+        rootDir: resolveSkillWorkshopStateDir(store),
+        relativePath: path.join("skill-workshop", "proposals", current.id),
+        recursive: true,
+      });
+      // Keep the rejected record until artifact removal succeeds, so a failed
+      // filesystem operation remains visible and retryable.
+      await purgeRejectedStoredProposal(current.id, store);
+      return { proposalId: current.id, purged: true };
+    },
+    store,
+  );
 }
 
 export async function quarantineSkillProposal(
