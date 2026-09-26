@@ -530,6 +530,26 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
+  it("admits a signed Talk file share with a numeric byte size", async () => {
+    await withQueue(async (queue) => {
+      const { body } = createSignedFileSharedActivityRequest({ fileSize: 1_234_567 });
+      const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            attachment: expect.objectContaining({ declaredSizeBytes: 1_234_567 }),
+          }),
+          expect.any(Object),
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
   it("durably admits canonical native Talk voice-message activities", async () => {
     await withQueue(async (queue) => {
       const { body } = createSignedVoiceMessageActivityRequest();

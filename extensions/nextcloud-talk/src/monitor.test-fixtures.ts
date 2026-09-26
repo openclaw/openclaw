@@ -31,7 +31,10 @@ export function createSignedCreateMessageRequest(params?: { backend?: string }) 
 }
 
 /** Redacted Talk 23 / Nextcloud 33 file-bearing message Activity fixture. */
-export function createSignedFileSharedActivityRequest(params?: { backend?: string }) {
+export function createSignedFileSharedActivityRequest(params?: {
+  backend?: string;
+  fileSize?: string | number;
+}) {
   const payload = {
     type: "Activity",
     actor: { type: "Person", id: "users/alice", name: "Alice" },
@@ -47,7 +50,7 @@ export function createSignedFileSharedActivityRequest(params?: { backend?: strin
             type: "file",
             id: "9001",
             name: "receipt.pdf",
-            size: "24576",
+            size: params?.fileSize ?? "24576",
             path: "receipt.pdf",
             link: "https://nextcloud.example/s/redacted-share-token",
             etag: "redacted-etag",

@@ -57,10 +57,12 @@ export type ParsedNextcloudTalkFileShare = {
 };
 
 function parseDeclaredSizeBytes(value: unknown): number | undefined {
-  if (typeof value !== "string" || !/^\d+$/u.test(value.trim())) {
-    return undefined;
-  }
-  const parsed = Number(value);
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^\d+$/u.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
