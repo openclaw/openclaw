@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
+import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
@@ -98,10 +100,13 @@ function idleActiveWorkInspectors(): GatewayActiveWorkInspectors {
 
 describe("update campaign apply exception boundary", () => {
   let testState: OpenClawTestState;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
+    scheduler = createTestGatewayScheduler("fake-timers");
+    createGatewayUpdateLifecycle(scheduler);
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-update-campaign-apply-",
@@ -119,7 +124,8 @@ describe("update campaign apply exception boundary", () => {
     delete fault.at;
     delete fault.error;
     const { resetUpdateAvailableStateForTest } = await import("./update-startup.js");
-    resetUpdateAvailableStateForTest();
+    resetUpdateAvailableStateForTest(scheduler);
+    await scheduler.stop();
     vi.useRealTimers();
     closeOpenClawStateDatabaseForTest();
     await testState.cleanup();

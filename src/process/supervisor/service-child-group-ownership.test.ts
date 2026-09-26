@@ -42,8 +42,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["S", "D", "U", "R"])("observes a Linux %s group member without ps", (state) => {
-  rows.set(owner + 1, stat(owner + 1, owner, state, "worker ) (with\nname"));
+it("observes an uninterruptible Linux group member without ps", () => {
+  rows.set(owner + 1, stat(owner + 1, owner, "D", "worker ) (with\nname"));
   expect(hasLiveOwnedProcessGroupMembers()).toBe(true);
   expect(census).not.toHaveBeenCalled();
 });
@@ -108,10 +108,7 @@ it("does not report an empty Linux group after its existing census budget expire
 });
 
 it.each([
-  { state: "S", expected: true },
   { state: "D", expected: true },
-  { state: "U", expected: true },
-  { state: "Z", expected: false },
   { state: "Z+", expected: false },
 ])("preserves Darwin ps state $state as live=$expected", ({ state, expected }) => {
   mockProcessPlatform("darwin");

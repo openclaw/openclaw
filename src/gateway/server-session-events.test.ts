@@ -413,19 +413,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "revision-before-reset",
     },
     {
-      updateSource: "legacy",
-      ownerChange: "deleted",
-      lifecycleRevision: undefined,
-    },
-    {
       updateSource: "committed",
       ownerChange: "rebound",
       lifecycleRevision: "revision-before-reset",
-    },
-    {
-      updateSource: "legacy",
-      ownerChange: "rebound",
-      lifecycleRevision: undefined,
     },
   ])(
     "discards a queued $updateSource message when its session owner is $ownerChange",

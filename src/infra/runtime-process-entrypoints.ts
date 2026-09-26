@@ -30,6 +30,8 @@ export const runtimeProcessEntrypoints = {
   authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
   agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
   workspaceMemory: runtimeProcessEntrypoint("worker/memory-worker-entry"),
+  localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),
+  identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
   workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),

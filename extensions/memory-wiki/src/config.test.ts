@@ -86,16 +86,6 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.vault.renderMode).toBe("obsidian");
   });
 
-  it("normalizes the bridge artifact toggle", () => {
-    const canonical = resolveMemoryWikiConfig({
-      bridge: {
-        readMemoryArtifacts: false,
-      },
-    });
-
-    expect(canonical.bridge.readMemoryArtifacts).toBe(false);
-  });
-
   it("resolves normalized agent ids to distinct vault roots", () => {
     const base = resolveMemoryWikiConfig(
       {

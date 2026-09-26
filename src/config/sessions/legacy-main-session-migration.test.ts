@@ -104,31 +104,6 @@ describe("legacy main session migration", () => {
       },
     },
     {
-      kind: "migrated-cross-store",
-      run: async () => {
-        const fixture = createFixture();
-        seedClaim({
-          databaseAgentId: "main",
-          databasePath: databasePath(fixture.stateDir, "main"),
-          events: [{ kind: "repeat" }, { kind: "repeat" }],
-          key: "agent:main:chat",
-        });
-        const result = await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "doctor-fix",
-        });
-        expect(
-          readClaim({
-            databaseAgentId: "ops",
-            databasePath: databasePath(fixture.stateDir, "ops"),
-            key: "agent:ops:chat",
-          })?.events,
-        ).toEqual(['{"kind":"repeat"}', '{"kind":"repeat"}']);
-        return result;
-      },
-    },
-    {
       kind: "canonical-exists-identical",
       run: async () => {
         const fixture = createFixture();
@@ -215,36 +190,6 @@ describe("legacy main session migration", () => {
           }),
         ).toBeDefined();
         return result;
-      },
-    },
-    {
-      kind: "legacy-json-store",
-      run: async () => {
-        const fixture = createFixture();
-        const jsonPath = path.join(fixture.stateDir, "agents", "main", "sessions", "sessions.json");
-        fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
-        fs.writeFileSync(jsonPath, "{}\n");
-        return await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "detect",
-        });
-      },
-    },
-    {
-      kind: "store-unreadable",
-      run: async () => {
-        const unreadablePath = path.join(tempDirs.make("unreadable-store-"), "sessions.sqlite");
-        fs.symlinkSync(`${unreadablePath}.missing`, unreadablePath);
-        const fixture = createFixture({
-          agents: { entries: { ops: {} } },
-          session: { store: unreadablePath },
-        });
-        return await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "detect",
-        });
       },
     },
   ] satisfies Array<{

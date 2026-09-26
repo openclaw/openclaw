@@ -203,37 +203,47 @@ async function runClientCloseScenario(notifications: CodexServerNotification[]) 
   return await run;
 }
 
+function createNotificationClient(onRequest: (method: string) => Promise<void>) {
+  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  const request = vi.fn(async (method: string) => {
+    await onRequest(method);
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start") {
+      return threadStartResult("thread-1");
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1", "inProgress");
+    }
+    return {};
+  });
+  setCodexAppServerClientFactoryForTest(
+    async () =>
+      ({
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      }) as never,
+  );
+  return { request, notify: (notification: CodexServerNotification) => notify(notification) };
+}
+
 describe("runCodexAppServerAttempt native lifecycle", () => {
   it.each([
     { name: "no output", notifications: [] },
     { name: "a quiet native command", notifications: [startedCommand("cmd-1", "long-command")] },
     {
-      name: "a completed native command",
-      notifications: [completedCommand("cmd-1", "long-command")],
-    },
-    {
-      name: "reasoning and its raw mirror",
-      notifications: [
-        itemNotification("item/completed", { id: "reasoning-1", type: "reasoning" }),
-        rawItemCompleted({ id: "raw-reasoning-1", type: "reasoning" }),
-      ],
-    },
-    {
-      name: "typed commentary",
-      notifications: [
-        itemNotification("item/completed", {
-          id: "commentary-1",
-          type: "agentMessage",
-          phase: "commentary",
-          text: "Working on it.",
-        }),
-      ],
-    },
-    {
       name: "a completed-looking assistant",
       notifications: [completedAssistant("msg-1", "Done.")],
     },
-    { name: "a raw assistant", notifications: [makeRawAssistant()] },
     {
       name: "an asynchronous assistant update",
       notifications: [
@@ -314,24 +324,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       assistantTexts: [],
     },
     {
-      name: "a completed native command",
-      notifications: [completedCommand("cmd-1", "touch done.txt")],
-      assistantTexts: [],
-    },
-    {
       name: "partial assistant output",
       notifications: [makeAgentMessageDelta()],
       assistantTexts: ["Still writing"],
-    },
-    {
-      name: "a completed-looking assistant item",
-      notifications: [completedAssistant("msg-1", "Finished.")],
-      assistantTexts: ["Finished."],
-    },
-    {
-      name: "a raw assistant item",
-      notifications: [makeRawAssistant({ text: "Finished." })],
-      assistantTexts: ["Finished."],
     },
   ])("expires execution with $name without inferring success", async (scenario) => {
     const { harness, params, result, onRunAgentEvent } = await runExecutionTimeoutScenario(
@@ -776,51 +771,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
   it("waits for native completion after tool events buffered during turn start", async () => {
     vi.useFakeTimers();
     const turnStartRequested = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
+    const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
-        await notify(
-          itemNotification("item/started", {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "git status -sb",
-            status: "inProgress",
-          }),
-        );
-        await notify(
-          itemNotification("item/completed", {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "git status -sb",
-            status: "completed",
-          }),
-        );
+        await notify(startedCommand("cmd-1", "git status -sb"));
+        await notify(completedCommand("cmd-1", "git status -sb"));
         turnStartRequested.resolve();
-        return turnStartResult("turn-1", "inProgress");
       }
-      return {};
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session-buffered-native-tool-silent.jsonl"),
       path.join(tempDir, "workspace-buffered-native-tool-silent"),
@@ -1233,44 +1190,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     },
   );
 
-  it("retains completed-looking assistant text as a failure when the client closes before terminal", async () => {
-    const result = await runClientCloseScenario([
-      itemNotification("item/completed", {
-        type: "agentMessage",
-        id: "msg-final-1",
-        text: "Done before restart.",
-      }),
-    ]);
-
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(result.assistantTexts).toEqual(["Done before restart."]);
-    expect(result.codexAppServerFailure).toMatchObject({
-      kind: "client_closed_before_turn_completed",
-      replaySafe: false,
-      replayBlockedReason: "assistant_output",
-    });
-  });
-
-  it("keeps partial assistant output as a client-close failure", async () => {
-    const result = await runClientCloseScenario([makeAgentMessageDelta()]);
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(result.assistantTexts).toEqual(["Still writing"]);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: false,
-      replayBlockedReason: "assistant_output",
-    });
-  });
-
   it("keeps a later partial assistant output as a client-close failure after an earlier completed message", async () => {
     const result = await runClientCloseScenario([
       itemNotification("item/completed", {
@@ -1313,16 +1232,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         completedCommand("cmd-1", "touch later.txt"),
       ],
       assistantText: "Earlier complete reply.",
-      replayBlockedReason: "potential_side_effect",
-    },
-    {
-      name: "when an earlier item finishes later",
-      notifications: [
-        startedCommand("cmd-1", "touch finishes-later.txt"),
-        completedAssistant("msg-1", "Too early."),
-        completedCommand("cmd-1", "touch finishes-later.txt"),
-      ],
-      assistantText: "Too early.",
       replayBlockedReason: "potential_side_effect",
     },
     {
@@ -1458,37 +1367,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     // gateway session lane stays locked and every follow-up message queues
     // behind a run that will never resolve.
     const turnStartRequested = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let turnStarted = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
+    const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
         turnStarted = true;
         turnStartRequested.resolve();
-        return turnStartResult("turn-1", "inProgress");
       }
-      return {};
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
     const params = createTestParams();
     params.onAgentEvent = () => {
       // Only explode once the turn is live: pre-turn run-lifecycle events

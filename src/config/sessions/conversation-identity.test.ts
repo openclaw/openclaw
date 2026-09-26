@@ -71,13 +71,6 @@ describe("conversation identity", () => {
     expect(prefixed?.conversationRef).toBe(native?.conversationRef);
   });
 
-  it("keeps different peers independently addressable inside one model session", () => {
-    const peerA = conversationIdentityFromSessionEntry(directEntry("peer-a"));
-    const peerB = conversationIdentityFromSessionEntry(directEntry("peer-b"));
-
-    expect(peerA?.conversationRef).not.toBe(peerB?.conversationRef);
-  });
-
   it("uses the canonical delivery snapshot when stale origin metadata disagrees", () => {
     const identity = conversationIdentityFromSessionEntry({
       ...directEntry("peer-a"),

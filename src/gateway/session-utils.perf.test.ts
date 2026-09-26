@@ -694,6 +694,11 @@ describe("session list resolver cache", () => {
           store,
           storePath: path.join(stateDir, "sessions.json"),
         });
+        // Measure resident row work independently of asynchronous identity-file admission.
+        const identityRuntime = await import("../agents/identity-file-runtime.js");
+        const identityReads = vi
+          .spyOn(identityRuntime, "prepareIdentityFile")
+          .mockResolvedValue({ kind: "missing" });
         let workMs = 0;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
         const readInputs = rowProjection.readSessionRowInputs;
@@ -725,6 +730,7 @@ describe("session list resolver cache", () => {
             expect(workMs).toBe(0);
           }
         } finally {
+          identityReads.mockRestore();
           rows.mockRestore();
           clock.mockRestore();
           projection.dispose();

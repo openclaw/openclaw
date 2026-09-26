@@ -47,10 +47,8 @@ import {
   type TalkAgentConsultAuthority,
 } from "./client-gateway-control.js";
 
-function createRunner(
-  registerRun = vi.fn(),
-  authority: TalkAgentConsultAuthority = { senderIsOwner: false, toolsAllow: ["read"] },
-  options: { ownerConnId?: string; isRunCurrent?: (runId: string) => boolean } = {},
+function createConsultRunner(
+  overrides: Partial<Parameters<typeof createTalkClientAgentConsultRunner>[0]> = {},
 ) {
   return createTalkClientAgentConsultRunner({
     config,
@@ -61,12 +59,19 @@ function createRunner(
       canonicalKey: "agent:researcher:talk",
       storePath: "/tmp/sessions",
     },
-    authority,
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
-    registerRun,
-    ...options,
+    registerRun: vi.fn(),
+    ...overrides,
   });
+}
+
+function createRunner(
+  registerRun = vi.fn(),
+  authority: TalkAgentConsultAuthority = { senderIsOwner: false, toolsAllow: ["read"] },
+  options: { ownerConnId?: string; isRunCurrent?: (runId: string) => boolean } = {},
+) {
+  return createConsultRunner({ registerRun, authority, ...options });
 }
 
 describe("Talk client agent consult admission", () => {
@@ -211,19 +216,9 @@ describe("Talk client agent consult admission", () => {
         clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
         return { payloads: [] };
       });
-      const runner = createTalkClientAgentConsultRunner({
-        config,
+      const runner = createConsultRunner({
         context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
-        sessionTarget: {
-          agentId: "researcher",
-          sessionKey: "main",
-          canonicalKey: "agent:researcher:talk",
-          storePath: "/tmp/sessions",
-        },
         ownerConnId: "connection-owner",
-        getVoiceSessionId: () => "voice-session",
-        initialItems: [],
-        registerRun: vi.fn(),
         isRunCurrent,
       });
 
@@ -301,20 +296,10 @@ describe("Talk client agent consult admission", () => {
       clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
       return { payloads: [] };
     });
-    const runner = createTalkClientAgentConsultRunner({
-      config,
+    const runner = createConsultRunner({
       context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
-      sessionTarget: {
-        agentId: "researcher",
-        sessionKey: "main",
-        canonicalKey: "agent:researcher:talk",
-        storePath: "/tmp/sessions",
-      },
       ownerConnId: "connection-owner",
       authority,
-      getVoiceSessionId: () => "voice-session",
-      initialItems: [],
-      registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
     runner.runPrompt.adoptCompletionClaims();
@@ -427,19 +412,9 @@ describe("Talk client agent consult admission", () => {
         suppress: false,
       };
     });
-    const runner = createTalkClientAgentConsultRunner({
-      config,
+    const runner = createConsultRunner({
       context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
-      sessionTarget: {
-        agentId: "researcher",
-        sessionKey: "main",
-        canonicalKey: "agent:researcher:talk",
-        storePath: "/tmp/sessions",
-      },
       ownerConnId: "connection-owner",
-      getVoiceSessionId: () => "voice-session",
-      initialItems: [],
-      registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
     runner.runPrompt.adoptCompletionClaims();
@@ -506,19 +481,8 @@ describe("Talk client agent consult admission", () => {
       outbound();
       throw new Error("unexpected outbound enqueue");
     });
-    const runner = createTalkClientAgentConsultRunner({
-      config,
-      context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
-      sessionTarget: {
-        agentId: "researcher",
-        sessionKey: "main",
-        canonicalKey: "agent:researcher:talk",
-        storePath: "/tmp/sessions",
-      },
+    const runner = createConsultRunner({
       ownerConnId: "connection-owner",
-      getVoiceSessionId: () => "voice-session",
-      initialItems: [],
-      registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
     runner.runPrompt.adoptCompletionClaims();
@@ -561,19 +525,8 @@ describe("Talk client agent consult admission", () => {
       await params.agentRuntime.runEmbeddedAgent(coreParams);
       return { text: "done" };
     });
-    const runner = createTalkClientAgentConsultRunner({
-      config,
-      context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
-      sessionTarget: {
-        agentId: "researcher",
-        sessionKey: "main",
-        canonicalKey: "agent:researcher:talk",
-        storePath: "/tmp/sessions",
-      },
+    const runner = createConsultRunner({
       ownerConnId: "connection-owner",
-      getVoiceSessionId: () => "voice-session",
-      initialItems: [],
-      registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
     runner.runPrompt.adoptCompletionClaims();
@@ -661,18 +614,9 @@ describe("Talk client agent consult admission", () => {
         suppress: false,
       };
     });
-    const runner = createTalkClientAgentConsultRunner({
-      config,
+    const runner = createConsultRunner({
       context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
-      sessionTarget: {
-        agentId: "researcher",
-        sessionKey: "main",
-        canonicalKey: "agent:researcher:talk",
-        storePath: "/tmp/sessions",
-      },
       ownerConnId: "connection-owner",
-      getVoiceSessionId: () => "voice-session",
-      initialItems: [],
       registerRun,
       isRunCurrent: () => true,
     });
@@ -792,19 +736,9 @@ describe("Talk client agent consult admission", () => {
       clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
       return { payloads: [] };
     });
-    const runner = createTalkClientAgentConsultRunner({
-      config,
+    const runner = createConsultRunner({
       context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
-      sessionTarget: {
-        agentId: "researcher",
-        sessionKey: "main",
-        canonicalKey: "agent:researcher:talk",
-        storePath: "/tmp/sessions",
-      },
       ownerConnId: "connection-owner",
-      getVoiceSessionId: () => "voice-session",
-      initialItems: [],
-      registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
     const readiness = vi.fn(() => ready.promise);

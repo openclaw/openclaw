@@ -6,10 +6,12 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   createAlwaysConfiguredPluginConfig,
-  createActionHubPluginFixture,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
@@ -27,54 +29,48 @@ function readMediaAccess(call: Record<string, unknown>): Record<string, unknown>
   return requireRecord(call.mediaAccess);
 }
 
+function registerPolicyPlugin(id = "policydest", accountIds?: string[]) {
+  const handleAction = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
+    async ({ mediaAccess }) =>
+      jsonResult({
+        ok: true,
+        hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+      }),
+  );
+  setTestPlugin(
+    {
+      ...createChannelTestPluginBase({
+        id,
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: {
+          ...createAlwaysConfiguredPluginConfig(),
+          ...(accountIds ? { listAccountIds: () => accountIds } : {}),
+        },
+      }),
+      messaging: { targetResolver: { looksLikeId: () => true } },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction,
+      },
+    } satisfies ChannelPlugin,
+    id,
+  );
+  return handleAction;
+}
+
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
-
-    beforeEach(() => {
-      setTestPlugin(actionHubPlugin, "actionhub");
-      handleAction.mockClear();
-    });
-
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
     it("uses requester session channel policy for host-media reads", async () => {
-      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
-        jsonResult({
-          ok: true,
-          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
-        }),
-      );
-      const policyPlugin: ChannelPlugin = {
-        id: "policydest",
-        meta: {
-          id: "policydest",
-          label: "Policy Destination",
-          selectionLabel: "Policy Destination",
-          docsPath: "/channels/policydest",
-          blurb: "Policy destination test plugin.",
-        },
-        capabilities: { chatTypes: ["direct", "channel"], media: true },
-        config: createAlwaysConfiguredPluginConfig(),
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: ({ action }) => action === "send",
-          handleAction: handlePolicyCheckedAction,
-        },
-      };
-
-      setTestPlugin(policyPlugin, "policydest");
+      const handlePolicyCheckedAction = registerPolicyPlugin();
 
       await runMessageAction({
         cfg: {
@@ -113,36 +109,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("uses requester username policy for host-media reads", async () => {
-      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
-        jsonResult({
-          ok: true,
-          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
-        }),
-      );
-      const policyPlugin: ChannelPlugin = {
-        id: "policydest",
-        meta: {
-          id: "policydest",
-          label: "Policy Destination",
-          selectionLabel: "Policy Destination",
-          docsPath: "/channels/policydest",
-          blurb: "Policy destination username test plugin.",
-        },
-        capabilities: { chatTypes: ["direct", "channel"], media: true },
-        config: createAlwaysConfiguredPluginConfig(),
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: ({ action }) => action === "send",
-          handleAction: handlePolicyCheckedAction,
-        },
-      };
-
-      setTestPlugin(policyPlugin, "policydest");
+      const handlePolicyCheckedAction = registerPolicyPlugin();
 
       await runMessageAction({
         cfg: {
@@ -181,39 +148,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("uses requester account policy for host-media reads when destination account differs", async () => {
-      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
-        jsonResult({
-          ok: true,
-          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
-        }),
-      );
-      const policyPlugin: ChannelPlugin = {
-        id: "policydest",
-        meta: {
-          id: "policydest",
-          label: "Policy Destination",
-          selectionLabel: "Policy Destination",
-          docsPath: "/channels/policydest",
-          blurb: "Policy destination account test plugin.",
-        },
-        capabilities: { chatTypes: ["direct", "channel"], media: true },
-        config: {
-          ...createAlwaysConfiguredPluginConfig(),
-          listAccountIds: () => ["destination"],
-        },
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: ({ action }) => action === "send",
-          handleAction: handlePolicyCheckedAction,
-        },
-      };
-
-      setTestPlugin(policyPlugin, "policydest");
+      const handlePolicyCheckedAction = registerPolicyPlugin("policydest", ["destination"]);
 
       await runMessageAction({
         cfg: {
@@ -271,39 +206,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("falls back to the resolved account policy when requester account is unavailable", async () => {
-      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
-        jsonResult({
-          ok: true,
-          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
-        }),
-      );
-      const policyPlugin: ChannelPlugin = {
-        id: "policychat",
-        meta: {
-          id: "policychat",
-          label: "Policy Chat",
-          selectionLabel: "Policy Chat",
-          docsPath: "/channels/policychat",
-          blurb: "Policy chat account fallback test plugin.",
-        },
-        capabilities: { chatTypes: ["direct", "channel"], media: true },
-        config: {
-          ...createAlwaysConfiguredPluginConfig(),
-          listAccountIds: () => ["source"],
-        },
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: ({ action }) => action === "send",
-          handleAction: handlePolicyCheckedAction,
-        },
-      };
-
-      setTestPlugin(policyPlugin, "policychat");
+      const handlePolicyCheckedAction = registerPolicyPlugin("policychat", ["source"]);
 
       await runMessageAction({
         cfg: {

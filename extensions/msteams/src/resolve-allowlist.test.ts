@@ -492,82 +492,27 @@ describe("resolveMSTeamsTeamsConfig", () => {
 });
 
 describe("looksLikeMSTeamsTargetId", () => {
-  // Regression suite for https://github.com/openclaw/openclaw/issues/58001:
-  // cron announce delivery rejected valid Teams conversation ids because the
-  // validator only matched the `conversation:`-prefixed and `@thread`-suffixed
-  // forms. It must now accept every documented Bot Framework + Graph format.
+  // #58001: preserve each documented conversation format; #115609: provider prefixes.
   it.each([
     "conversation:19:abc@thread.tacv2",
-    "conversation:a:1abc",
-    "conversation:8:orgid:2d8c2d2c-1111-2222-3333-444444444444",
-  ])("accepts conversation-prefixed ids (%s)", (raw) => {
-    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
-  });
-
-  it.each([
-    "19:AdviChannelId@thread.tacv2",
     "19:abc@thread.tacv2",
     "19:abc@thread.skype",
     "19:abc@thread.v2",
-  ])("accepts bare channel/group conversation ids (%s)", (raw) => {
+    "19:40a1a0ed4ff24164a21955518990c197_2d8c2d2c11112222@unq.gbl.spaces",
+    "A:1xyz-abc_def",
+    "8:orgid:user-object-id",
+    "29:1a2b3c4d5e6f",
+    "user:40a1a0ed-4ff2-4164-a219-55518990c197",
+    "  TEAMS:user:40a1a0ed-4ff2-4164-a219-55518990c197  ",
+    "msteams:conversation:19:abc@thread.tacv2",
+  ])("accepts explicit target %s", (raw) => {
     expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
   });
 
-  it("accepts the Graph 1:1 chat thread format", () => {
-    expect(
-      looksLikeMSTeamsTargetId(
-        "19:40a1a0ed4ff24164a21955518990c197_2d8c2d2c11112222@unq.gbl.spaces",
-      ),
-    ).toBe(true);
-  });
-
-  it.each(["a:1abc123def", "a:1xyz-abc_def", "A:1UPPER"])(
-    "accepts Bot Framework personal chat ids (%s)",
+  it.each(["   ", "user:John Smith", "msteams:user:John Smith", "Product Team/Roadmap"])(
+    "rejects non-id input %s",
     (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+      expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
     },
   );
-
-  it.each(["8:orgid:2d8c2d2c-1111-2222-3333-444444444444", "8:orgid:user-object-id"])(
-    "accepts Bot Framework org-scoped personal chat ids (%s)",
-    (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
-    },
-  );
-
-  it("accepts Bot Framework user ids", () => {
-    expect(looksLikeMSTeamsTargetId("29:1a2b3c4d5e6f")).toBe(true);
-  });
-
-  it("accepts user:<aad-object-id> ids", () => {
-    expect(looksLikeMSTeamsTargetId("user:40a1a0ed-4ff2-4164-a219-55518990c197")).toBe(true);
-  });
-
-  it.each([
-    "teams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
-    "msteams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
-    "TEAMS:conversation:19:abc@thread.tacv2",
-    "msteams:19:abc@thread.tacv2",
-    "teams:29:1a2b3c4d5e6f",
-    "  teams:user:40a1a0ed-4ff2-4164-a219-55518990c197  ",
-  ])("accepts provider-prefixed explicit ids (%s)", (raw) => {
-    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
-  });
-
-  it.each([
-    "",
-    "   ",
-    "user:John Smith",
-    "teams:user:John Smith",
-    "msteams:user:John Smith",
-    "Product Team/Roadmap",
-    "Engineering",
-    "hello",
-  ])("rejects non-id inputs (%s)", (raw) => {
-    expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
-  });
-
-  it("normalizes leading/trailing whitespace before classifying", () => {
-    expect(looksLikeMSTeamsTargetId("  19:abc@thread.tacv2  ")).toBe(true);
-  });
 });

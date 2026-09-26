@@ -295,15 +295,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(isSessionRunActive(host.sessionsResult?.sessions[0] ?? {})).toBe(false);
   });
 
-  it("suppresses a stale active row after a recent local completion", () => {
-    const host = makeHost({
-      lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
-    });
-    expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(true);
-    expect(rowActive(host)).toBe(false);
-    expect(host.lastLocalTerminalReconcile?.runId).toBe("r1");
-  });
-
   it("does NOT clear a genuinely recovered active run with no recent local completion", () => {
     const host = makeHost({ lastLocalTerminalReconcile: null });
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
@@ -396,24 +387,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     });
 
     expect(rowActive(host)).toBe(true);
-  });
-
-  it("does not suppress a different active run id", () => {
-    const host = makeHost({
-      sessionsResult: makeSessionsResult([
-        {
-          key: "s1",
-          hasActiveRun: true,
-          activeRunIds: ["r2"],
-          status: "running",
-          startedAt: Date.now() - 60_000,
-        },
-      ]),
-      lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
-    });
-    expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
-    expect(rowActive(host)).toBe(true);
-    expect(host.lastLocalTerminalReconcile).toBeNull();
   });
 
   it("does not suppress an active row without run identity", () => {

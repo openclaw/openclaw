@@ -2,9 +2,7 @@ import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
@@ -14,6 +12,8 @@ import {
 } from "../infra/sqlite-wal-checkpoint.js";
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
+  SQLITE_WORKER_OPERATION_CLEANUP,
+  SQLITE_WORKER_PREPARE_ADMITTED,
   type SqliteWorkerCloseReceipt,
   type SqliteWorkerCommand,
   type SqliteWorkerPreparedBackend,
@@ -159,6 +159,18 @@ function openAgentDatabaseBackend(
   let identity: AgentDatabaseExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
   let startupJournalRequested = false;
+  let publicationStartupJournal: boolean | undefined;
+  const readRequestPreparation = () => {
+    const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+    if (
+      !isRecord(attachment) ||
+      attachment.kind !== "agent-execution" ||
+      typeof attachment.startupJournal !== "boolean"
+    ) {
+      throw new Error("Agent execution requires its request-local preparation facts");
+    }
+    return attachment.startupJournal;
+  };
   // This request-local flag is installed only for the synchronous native command below.
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
@@ -318,11 +330,12 @@ function openAgentDatabaseBackend(
   let transcript:
     | {
         initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
+        initializeInWorker: typeof import("../config/sessions/session-transcript-initialization.worker.js").initializeSessionTranscriptInWorker;
         assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
       }
     | undefined;
   let replacements:
-    | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
+    | typeof import("../config/sessions/session-entry-replacement.worker.js")
     | undefined;
   let entryPatch:
     | typeof import("../config/sessions/session-accessor.sqlite-entry-mutation.js")
@@ -337,6 +350,18 @@ function openAgentDatabaseBackend(
       assertFileIdentity();
       return current.db;
     },
+    assertCleanupCurrent() {
+      if (
+        !database ||
+        !identity ||
+        !database.db.isOpen ||
+        database.db.location() !== identity.nativeLocation ||
+        getOpenClawAgentDatabaseIfOpen(options) !== database
+      ) {
+        throw new Error("Agent cleanup lost its retained native database");
+      }
+      assertFileIdentity();
+    },
     admit,
   });
   let closed = false;
@@ -349,6 +374,7 @@ function openAgentDatabaseBackend(
   const executeCommand = (command: SqliteWorkerCommand<AgentDatabaseOperations>) => {
     if (
       command.type === "database.domain.bind" ||
+      command.type === "database.domain.publish" ||
       command.type === "database.domain.execute" ||
       command.type === "database.domain.close"
     ) {
@@ -428,76 +454,15 @@ function openAgentDatabaseBackend(
       const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
         transcript.assertIdentity;
       assertIdentity(command.input);
-      const initialize = transcript.initialize;
-      const opened = openWriter();
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== opened.db) {
-            throw new Error("Session transcript lost its canonical database owner");
-          }
-          admit("transaction");
-          const publication: SessionTranscriptInitializationPublication = {
-            kind: "session-transcript-initialized",
-            sessionKey: command.input.sessionKey,
-          };
-          initialize(
-            current,
-            { agentId: input.agentId, path: input.databasePath, ...command.input },
-            command.input.cwd,
-            {
-              onPlaceholderInserted: ({ sessionId }) => {
-                publication.placeholder = { sessionId };
-              },
-            },
-          );
-          deferSqliteWorkerCommitReceipt(current.db, publication);
-          admit("commit", publication);
-          return publication;
-        },
-        options,
-        { operationLabel: "session.entry.create-with-transcript" },
-      );
+      return transcript.initializeInWorker(openWriter(), options, command.input, admit);
     }
     if (command.type === "session.entries.replace" && replacements) {
-      const opened = openWriter();
-      const replace = replacements.commitSessionEntryReplacementsInDatabase;
-      const preparePublication = replacements.prepareSessionEntryReplacementPublication;
-      return runOpenClawAgentWriteTransaction(
-        (current) => {
-          if (current.db !== opened.db) {
-            throw new Error("Session replacement lost its canonical database owner");
-          }
-          admit("transaction");
-          const result = replace(current, command.input, () => {
-            const initialization = command.input.initializeTranscript;
-            if (!initialization) {
-              return;
-            }
-            try {
-              if (!transcript) {
-                throw new Error("Session transcript initialization was not prepared");
-              }
-              const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-                transcript.assertIdentity;
-              assertIdentity(initialization);
-              transcript.initialize(
-                current,
-                { agentId: input.agentId, path: input.databasePath, ...initialization },
-                initialization.cwd,
-              );
-            } catch (error) {
-              throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
-                name: "SessionTranscriptInitializationError",
-              });
-            }
-          });
-          const publication = preparePublication(result);
-          deferSqliteWorkerCommitReceipt(current.db, publication);
-          admit("commit", publication);
-          return result;
-        },
+      return replacements.commitSessionEntryReplacementsInWorker(
+        openWriter(),
         options,
-        { operationLabel: "session.entry-replacements" },
+        command.input,
+        transcript,
+        admit,
       );
     }
     if (command.type === "session.providerReview.compare" && providerReview) {
@@ -585,23 +550,23 @@ function openAgentDatabaseBackend(
         return Promise.all([
           import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
           import("../config/sessions/session-accessor.sqlite-scope.js"),
+          import("../config/sessions/session-transcript-initialization.worker.js"),
           command.type === "session.entries.replace"
-            ? import("../config/sessions/session-accessor.sqlite-replacement-state.js")
+            ? import("../config/sessions/session-entry-replacement.worker.js")
             : undefined,
-        ]).then(([header, scope, replacement]) => {
+        ]).then(([header, scope, worker, replacement]) => {
           replacements = replacement ?? replacements;
           transcript = {
             initialize: header.ensureTranscriptHeader,
+            initializeInWorker: worker.initializeSessionTranscriptInWorker,
             assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
           };
         });
       }
       if (command.type === "session.entries.replace") {
-        return import("../config/sessions/session-accessor.sqlite-replacement-state.js").then(
-          (module) => {
-            replacements = module;
-          },
-        );
+        return import("../config/sessions/session-entry-replacement.worker.js").then((module) => {
+          replacements = module;
+        });
       }
       if (command.type === "session.providerReview.compare") {
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {
@@ -610,12 +575,36 @@ function openAgentDatabaseBackend(
       }
       if (
         command.type === "database.domain.bind" ||
+        command.type === "database.domain.publish" ||
         command.type === "database.domain.execute" ||
         command.type === "database.domain.close"
       ) {
         return domain.prepare(command);
       }
       return undefined;
+    },
+    [SQLITE_WORKER_PREPARE_ADMITTED](command) {
+      if (command.type !== "database.domain.publish") {
+        return undefined;
+      }
+      publicationStartupJournal = readRequestPreparation();
+      startupJournalRequested = publicationStartupJournal;
+      try {
+        return domain.preparePublication(command.input);
+      } finally {
+        startupJournalRequested = false;
+      }
+    },
+    [SQLITE_WORKER_OPERATION_CLEANUP](command) {
+      if (command.type === "database.domain.publish") {
+        startupJournalRequested = publicationStartupJournal ?? false;
+        try {
+          domain.cleanupPublication(command.input.id);
+        } finally {
+          startupJournalRequested = false;
+          publicationStartupJournal = undefined;
+        }
+      }
     },
     assertSettled() {
       if (openingFailure) {
@@ -632,15 +621,14 @@ function openAgentDatabaseBackend(
     },
     execute(command) {
       assertOpen();
-      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
-      if (
-        !isRecord(attachment) ||
-        attachment.kind !== "agent-execution" ||
-        typeof attachment.startupJournal !== "boolean"
-      ) {
-        throw new Error("Agent execution requires its request-local preparation facts");
+      if (command.type === "database.domain.publish") {
+        if (publicationStartupJournal === undefined) {
+          throw new Error("Agent publication lost its request-local preparation facts");
+        }
+        startupJournalRequested = publicationStartupJournal;
+      } else {
+        startupJournalRequested = readRequestPreparation();
       }
-      startupJournalRequested = attachment.startupJournal;
       try {
         return executeCommand(command);
       } finally {

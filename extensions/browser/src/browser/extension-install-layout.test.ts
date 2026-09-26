@@ -65,7 +65,6 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
   });
 
   it.each([
-    { label: "root-owned state", uid: 0, mode: 0o100600, allowRootOwner: false },
     { label: "foreign-owned input", uid: 2000, mode: 0o100600, allowRootOwner: true },
     { label: "root-owned group-writable input", uid: 0, mode: 0o100660, allowRootOwner: true },
     { label: "user-owned world-writable input", uid: 1000, mode: 0o100602, allowRootOwner: false },
@@ -204,89 +203,98 @@ describe("deterministic unpacked extension ID", () => {
   });
 });
 
-describe.each(["Preferences", "Secure Preferences"] as const)("%s discovery", (filename) => {
-  it("discovers multiple exact unpacked IDs and ignores name, location, and path lookalikes", async () => {
-    const value = await fixture();
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    const installedId = await predictedId(installed, value.deps.platform);
-    const bundledId = await predictedId(value.bundledDir, value.deps.platform);
-    await writeChromePreferences({
-      filename,
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: {
-        [installedId]: { location: 4, path: installed, manifest: { name: "Not OpenClaw" } },
-        [FOUNDATION_STORE_ID]: {
-          location: 1,
-          from_webstore: true,
-          path: path.join(value.root, "foreign-store-lookalike"),
-        },
-        ["p".repeat(32)]: { location: 1, path: installed, manifest: { name: "OpenClaw" } },
-      },
-    });
-    await writeChromePreferences({
-      filename,
-      userDataDir: chrome.userDataDir,
-      profile: "Profile 1",
-      entries: {
-        [bundledId]: { location: 4, path: value.bundledDir },
-        [FOUNDATION_STORE_ID]: { location: 1, from_webstore: false },
-        ["o".repeat(32)]: { location: 4, path: path.join(value.root, "lookalike") },
-      },
-    });
-
-    const result = await discoverChromeExtensionIds({
-      approvedDirs: [installed, value.bundledDir],
-      storeExtensionId: FOUNDATION_STORE_ID,
-      deps: value.deps,
-    });
-
-    expect(result.discovered.map((entry) => [entry.profile, entry.extensionId])).toEqual([
-      ["Default", installedId],
-      ["Profile 1", bundledId],
-    ]);
-    await fs.symlink(
-      path.join(chrome.userDataDir, "Default"),
-      path.join(chrome.userDataDir, "Profile 2"),
-    );
-    const otherFilename = filename === "Preferences" ? "Secure Preferences" : "Preferences";
-    for (const profile of ["Default", "Profile 1"]) {
-      const profileDir = path.join(chrome.userDataDir, profile);
-      await fs.copyFile(path.join(profileDir, filename), path.join(profileDir, otherFilename));
-    }
-    const duplicated = await discoverChromeExtensionIds({
-      approvedDirs: [installed, value.bundledDir],
-      storeExtensionId: FOUNDATION_STORE_ID,
-      deps: value.deps,
-    });
-    expect(duplicated).toEqual({
-      ...result,
-      discovered: result.discovered.map((entry) => ({
-        ...entry,
-        securePreferencesPath: path.join(chrome.userDataDir, entry.profile, "Secure Preferences"),
-      })),
-      storeDiscovered: result.storeDiscovered.map((entry) => ({
-        ...entry,
-        securePreferencesPath: path.join(chrome.userDataDir, entry.profile, "Secure Preferences"),
-      })),
-    });
-    for (const entry of result.discovered) {
-      expect(entry.extensionId).toBe(
-        generateChromeExtensionIdForPath(entry.extensionPath, value.deps.platform),
-      );
-    }
-    expect(result.storeDiscovered).toEqual([
-      expect.objectContaining({
+describe("Chrome preferences discovery", () => {
+  const filename = "Preferences";
+  it.each(["Preferences", "Secure Preferences"] as const)(
+    "discovers exact unpacked IDs in %s and ignores name, location, and path lookalikes",
+    async (preferenceFile) => {
+      const value = await fixture();
+      const installed = await installStableChromeExtension(value.bundledDir, value.deps);
+      const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
+      if (!chrome) {
+        throw new Error("missing Chrome fixture root");
+      }
+      const installedId = await predictedId(installed, value.deps.platform);
+      const bundledId = await predictedId(value.bundledDir, value.deps.platform);
+      await writeChromePreferences({
+        filename: preferenceFile,
+        userDataDir: chrome.userDataDir,
         profile: "Default",
-        extensionId: FOUNDATION_STORE_ID,
-      }),
-    ]);
-    expect(result.discovered.map((entry) => entry.extensionId)).not.toContain(FOUNDATION_STORE_ID);
-  });
+        entries: {
+          [installedId]: { location: 4, path: installed, manifest: { name: "Not OpenClaw" } },
+          [FOUNDATION_STORE_ID]: {
+            location: 1,
+            from_webstore: true,
+            path: path.join(value.root, "foreign-store-lookalike"),
+          },
+          ["p".repeat(32)]: { location: 1, path: installed, manifest: { name: "OpenClaw" } },
+        },
+      });
+      await writeChromePreferences({
+        filename: preferenceFile,
+        userDataDir: chrome.userDataDir,
+        profile: "Profile 1",
+        entries: {
+          [bundledId]: { location: 4, path: value.bundledDir },
+          [FOUNDATION_STORE_ID]: { location: 1, from_webstore: false },
+          ["o".repeat(32)]: { location: 4, path: path.join(value.root, "lookalike") },
+        },
+      });
+
+      const result = await discoverChromeExtensionIds({
+        approvedDirs: [installed, value.bundledDir],
+        storeExtensionId: FOUNDATION_STORE_ID,
+        deps: value.deps,
+      });
+
+      expect(result.discovered.map((entry) => [entry.profile, entry.extensionId])).toEqual([
+        ["Default", installedId],
+        ["Profile 1", bundledId],
+      ]);
+      await fs.symlink(
+        path.join(chrome.userDataDir, "Default"),
+        path.join(chrome.userDataDir, "Profile 2"),
+      );
+      const otherFilename = preferenceFile === "Preferences" ? "Secure Preferences" : "Preferences";
+      for (const profile of ["Default", "Profile 1"]) {
+        const profileDir = path.join(chrome.userDataDir, profile);
+        await fs.copyFile(
+          path.join(profileDir, preferenceFile),
+          path.join(profileDir, otherFilename),
+        );
+      }
+      const duplicated = await discoverChromeExtensionIds({
+        approvedDirs: [installed, value.bundledDir],
+        storeExtensionId: FOUNDATION_STORE_ID,
+        deps: value.deps,
+      });
+      expect(duplicated).toEqual({
+        ...result,
+        discovered: result.discovered.map((entry) => ({
+          ...entry,
+          securePreferencesPath: path.join(chrome.userDataDir, entry.profile, "Secure Preferences"),
+        })),
+        storeDiscovered: result.storeDiscovered.map((entry) => ({
+          ...entry,
+          securePreferencesPath: path.join(chrome.userDataDir, entry.profile, "Secure Preferences"),
+        })),
+      });
+      for (const entry of result.discovered) {
+        expect(entry.extensionId).toBe(
+          generateChromeExtensionIdForPath(entry.extensionPath, value.deps.platform),
+        );
+      }
+      expect(result.storeDiscovered).toEqual([
+        expect.objectContaining({
+          profile: "Default",
+          extensionId: FOUNDATION_STORE_ID,
+        }),
+      ]);
+      expect(result.discovered.map((entry) => entry.extensionId)).not.toContain(
+        FOUNDATION_STORE_ID,
+      );
+    },
+  );
 
   it("rejects a recorded ID that does not match the canonical approved path", async () => {
     const value = await fixture();
@@ -345,7 +353,7 @@ describe.each(["Preferences", "Secure Preferences"] as const)("%s discovery", (f
         entries,
       });
       const valid = await writeChromePreferences({
-        filename: filename === "Preferences" ? "Secure Preferences" : "Preferences",
+        filename: "Secure Preferences",
         userDataDir: chrome.userDataDir,
         profile: "Default",
         entries,

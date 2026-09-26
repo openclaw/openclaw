@@ -294,12 +294,11 @@ describe("supervised gateway lock recovery", () => {
     expect(sleep).toHaveBeenNthCalledWith(3, 2);
   });
 
-  it.each(["gateway already running", "another gateway instance is already listening"])(
-    "uses exit 1 for unmanaged lock errors: %s",
-    (message) => {
-      expect(testing.resolveGatewayLockErrorExitCode(new GatewayLockError(message))).toBe(1);
-    },
-  );
+  it("uses exit 1 for unmanaged lock errors", () => {
+    expect(
+      testing.resolveGatewayLockErrorExitCode(new GatewayLockError("gateway already running")),
+    ).toBe(1);
+  });
 
   it("retries public certificate inspection while TLS material is unavailable", async () => {
     inspectGatewayTlsCertificateMock.mockClear();

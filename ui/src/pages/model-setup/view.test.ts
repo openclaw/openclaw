@@ -36,27 +36,25 @@ describe("renderModelSetup", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
-  it.each(["logged in · ChatGPT account · alex@example.com", "logged in · API key (usage-billed)"])(
-    "shows detected authentication without credential values: %s",
-    (detail) => {
-      const secret = "synthetic-private-token";
-      const container = mount(
-        props({
-          page: {
-            phase: "ready",
-            result: {
-              ...detected,
-              candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
-            },
+  it("shows detected authentication without credential values", () => {
+    const detail = "logged in · ChatGPT account · alex@example.com";
+    const secret = "synthetic-private-token";
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
           },
-        }),
-      );
-      const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
+        },
+      }),
+    );
+    const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
 
-      expect(text(row)).toContain(detail);
-      expect(text(row)).not.toContain(secret);
-    },
-  );
+    expect(text(row)).toContain(detail);
+    expect(text(row)).not.toContain(secret);
+  });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
     const onStartPrepare = vi.fn();

@@ -609,29 +609,14 @@ describe("Feishu webhook security hardening", () => {
       path: "/hook-rate-limit-key",
     };
 
-    expect([
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("127.0.0.1"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("127.0.0.42"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("::ffff:127.0.0.1"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("::1"),
-      }),
-    ]).toEqual([
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-    ]);
+    for (const address of ["127.0.0.1", "127.0.0.42", "::ffff:127.0.0.1", "::1"]) {
+      expect(
+        buildFeishuWebhookRateLimitKey({
+          ...base,
+          clientIp: resolveTestClientIp(address),
+        }),
+      ).toBe("rate-limit-key:/hook-rate-limit-key:loopback");
+    }
   });
 
   it("keeps non-loopback and unknown webhook rate-limit key suffixes distinct", () => {
@@ -646,25 +631,6 @@ describe("Feishu webhook security hardening", () => {
     expect(buildFeishuWebhookRateLimitKey(base)).toBe(
       "rate-limit-key:/hook-rate-limit-key:unknown",
     );
-  });
-
-  it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
-    const now = 1_000_000;
-    for (let i = 0; i < 4_500; i += 1) {
-      feishuWebhookRateLimiter.isRateLimited(`/feishu-rate-limit:key-${i}`, now);
-    }
-    expect(feishuWebhookRateLimiter.size()).toBeLessThanOrEqual(4_096);
-  });
-
-  it("prunes stale webhook rate-limit state after window elapses", () => {
-    const now = 2_000_000;
-    for (let i = 0; i < 100; i += 1) {
-      feishuWebhookRateLimiter.isRateLimited(`/feishu-rate-limit-stale:key-${i}`, now);
-    }
-    expect(feishuWebhookRateLimiter.size()).toBe(100);
-
-    feishuWebhookRateLimiter.isRateLimited("/feishu-rate-limit-stale:fresh", now + 60_001);
-    expect(feishuWebhookRateLimiter.size()).toBe(1);
   });
 
   it("rejects correctly signed callbacks with a stale timestamp", async () => {

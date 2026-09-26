@@ -204,21 +204,6 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("prints SSH hint when browser cannot open", async () => {
-    mockSnapshot("shhhh");
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({
-      ok: false,
-      reason: "ssh",
-    });
-    formatControlUiSshHintMock.mockReturnValue("ssh hint");
-
-    await dashboardCommand(runtime);
-
-    expect(openUrlMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
-  });
-
   it("preserves Gateway TLS after remote browser delivery fails", async () => {
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
     mockSnapshot("shhhh", {
@@ -241,6 +226,7 @@ describe("dashboardCommand", () => {
       basePath: "/control",
       tlsEnabled: true,
     });
+    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
   it("reports opener failure without claiming the host has no GUI", async () => {
@@ -255,24 +241,6 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
     );
-  });
-
-  it("prints the SSH hint when browser and clipboard delivery fail after support detection", async () => {
-    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
-    mockSnapshot("shhhh");
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(false);
-    formatControlUiSshHintMock.mockReturnValue("ssh hint");
-
-    await dashboardCommand(runtime);
-
-    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
-      port: 18789,
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
   it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
@@ -301,27 +269,10 @@ describe("dashboardCommand", () => {
       expect(line).not.toContain(secretToken);
       expect(line).not.toContain("#token=");
     }
-  });
-
-  it("guides user to manual auth when delivery channels both fail (CVE-safe)", async () => {
-    const secretToken = "super-secret-bearer-token";
-    mockSnapshot(secretToken);
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
-    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
-
-    await dashboardCommand(runtime);
-
-    const allLogs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
-
-    // CVE: token value and fragment marker must not appear in logs.
-    expect(allLogs).not.toContain(secretToken);
-    expect(allLogs).not.toContain("#token=");
-
-    // UX: user must be pointed to where their token lives so they can self-recover.
-    expect(allLogs).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
-    // UX: hint must name the URL fragment key so the user knows the syntax.
-    expect(allLogs).toContain("key `token`");
+    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("ssh hint without token");
+    expectLogWith("OPENCLAW_GATEWAY_TOKEN");
+    expectLogWith("key `token`");
   });
 
   it("respects --no-open and tells user the pairing URL is in clipboard", async () => {

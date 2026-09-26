@@ -1,8 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-/**
- * Browser control service lifecycle for plugin-managed, in-process operation.
- */
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -79,7 +76,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   return state;
 }
 
-/** Starts Browser control without binding the HTTP server when config enables it. */
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
@@ -102,5 +98,4 @@ export async function stopBrowserControlService(): Promise<void> {
   }
 }
 
-/** Re-export Browser control context accessors for gateway-local dispatch. */
 export { createBrowserControlContext, getBrowserControlState };
