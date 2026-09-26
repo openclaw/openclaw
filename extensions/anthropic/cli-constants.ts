@@ -92,6 +92,9 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = manifest.modelCatalog.providers
 export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
   ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1),
 );
+export const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS.map(
+  (id) => `anthropic/${id}`,
+);
 
 /** Provider-owned aliases shared by setup, pricing, and native CLI selectors. */
 export const CLAUDE_MODEL_ID_ALIASES: ReadonlyMap<string, string> = new Map(

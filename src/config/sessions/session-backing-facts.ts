@@ -3,7 +3,7 @@ import {
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
-import { readSelectedSessionEntryMetadataInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
@@ -40,7 +40,7 @@ export function readSessionBackingFactsInDatabase(
   sessionKeys: readonly string[],
   continuation?: CanonicalSessionReaderContinuation,
 ): SessionBackingFacts {
-  return readSelectedSessionEntryMetadataInDatabase(database, sessionKeys, continuation).map(
+  return readSelectedSessionEntriesInDatabase(database, sessionKeys, { continuation }).map(
     ({ sessionKey, entry }) => ({
       sessionKey,
       entry: {

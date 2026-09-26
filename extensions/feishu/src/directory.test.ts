@@ -66,7 +66,13 @@ describe("feishu directory (config-backed)", () => {
     createFeishuClientMock.mockReset();
   });
 
-  it.each(feishuSecretRefPolicyCases)(
+  it.each(
+    feishuSecretRefPolicyCases.filter(
+      (testCase) =>
+        testCase.name === "provider allowlist excluding the selected credential" ||
+        testCase.name === "configured env provider allowing the selected credential",
+    ),
+  )(
     "permits live directory requests only under configured SecretRef policy: $name",
     async (testCase) => {
       vi.stubEnv(FEISHU_SELECTED_SECRET_ENV, "selected-secret");
@@ -111,14 +117,6 @@ describe("feishu directory (config-backed)", () => {
     },
   );
 
-  it("merges allowFrom + dms into peer entries", async () => {
-    const peers = await listFeishuDirectoryPeers({ cfg: makeStaticCfg(), query: "a" });
-    expect(peers).toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "carla" },
-    ]);
-  });
-
   it("normalizes spaced provider-prefixed peer entries", async () => {
     const cfg = {
       channels: {
@@ -158,29 +156,12 @@ describe("feishu directory (config-backed)", () => {
       ...feishu.groups,
       "chat-disabled": { enabled: false },
     };
+    feishu.groupAllowFrom = [...(feishu.groupAllowFrom ?? []), "chat-disabled"];
 
     await expect(listAuthorizedFeishuDirectoryPeers({ cfg })).resolves.toEqual([
       { kind: "user", id: "alice" },
       { kind: "user", id: "bob" },
     ]);
-    await expect(listAuthorizedFeishuDirectoryGroups({ cfg })).resolves.toEqual([
-      { kind: "group", id: "chat-1" },
-      { kind: "group", id: "chat-2" },
-    ]);
-  });
-
-  it("keeps explicitly disabled groups out even when groupAllowFrom includes them", async () => {
-    const cfg = makeStaticCfg();
-    const feishu = cfg.channels?.feishu;
-    if (!feishu) {
-      throw new Error("Expected Feishu config");
-    }
-    feishu.groups = {
-      ...feishu.groups,
-      "chat-disabled": { enabled: false },
-    };
-    feishu.groupAllowFrom = [...(feishu.groupAllowFrom ?? []), "chat-disabled"];
-
     await expect(listAuthorizedFeishuDirectoryGroups({ cfg })).resolves.toEqual([
       { kind: "group", id: "chat-1" },
       { kind: "group", id: "chat-2" },

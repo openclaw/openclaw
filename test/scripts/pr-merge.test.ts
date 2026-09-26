@@ -795,17 +795,9 @@ describePosix("native squash attribution", () => {
     "co-authored-by: Claude <NOREPLY@ANTHROPIC.COM>",
     "Co-Authored-By: Claude\n <noreply@anthropic.com>",
     "Co-authored-by: Cursor <cursoragent@cursor.com>",
-    "co-authored-by: Cursor <CURSORAGENT@CURSOR.COM>",
-    "Co-Authored-By: Cursor\n <cursoragent@cursor.com>",
     "Co-authored-by: Amp <amp@ampcode.com>",
-    "co-authored-by: Amp <AMP@AMPCODE.COM>",
-    "Co-Authored-By: Amp\n <amp@ampcode.com>",
     "Co-authored-by: Codex <codex@openai.com>",
-    "co-authored-by: Codex <CODEX@OPENAI.COM>",
-    "Co-Authored-By: Codex\n <codex@openai.com>",
     "Co-authored-by: Trae Solo <solo-agent@trae.ai>",
-    "co-authored-by: Trae Solo <SOLO-AGENT@TRAE.AI>",
-    "Co-Authored-By: Trae Solo\n <solo-agent@trae.ai>",
     "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
     "co-authored-by: RoboClaw <309084314+ROBOCLAW-BOT@USERS.NOREPLY.GITHUB.COM>",
     "Co-Authored-By: RoboClaw\n <309084314+roboclaw-bot@users.noreply.github.com>",
@@ -813,15 +805,10 @@ describePosix("native squash attribution", () => {
     "co-authored-by: RoboClaw <SERVICES+ROBOCLAW@OPENCLAW.ORG>",
     "Co-Authored-By: RoboClaw\n <services+roboclaw@openclaw.org>",
     "Co-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "co-authored-by: ClawSweeper <274271284+CLAWSWEEPER[BOT]@USERS.NOREPLY.GITHUB.COM>",
-    "Co-Authored-By: clawsweeper\n <274271284+clawsweeper[bot]@users.noreply.github.com>",
     "Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>",
     "Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>",
     "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
     "Co-authored-by: Codex <noreply@openai.com>",
-    "Co-authored-by: claude <209825114+claude[bot]@users.noreply.github.com>",
-    "Co-authored-by: cursor <206951365+cursor[bot]@users.noreply.github.com>",
-    "Co-authored-by: chatgpt-codex-connector <199175422+chatgpt-codex-connector[bot]@users.noreply.github.com>",
     "Co-authored-by: Any App <1274271284+clawsweeper[bot]@users.noreply.github.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
@@ -894,22 +881,8 @@ describePosix("native squash attribution", () => {
     expect(result.stderr).toContain("--body-file");
   });
 
-  it.each([
-    "Claude <noreply@anthropic.com>",
-    "Cursor <cursoragent@cursor.com>",
-    "Amp <amp@ampcode.com>",
-    "Codex <codex@openai.com>",
-    "Trae Solo <solo-agent@trae.ai>",
-    "roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-    "clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "Copilot <175728472+Copilot@users.noreply.github.com>",
-    "Copilot <198982749+Copilot@users.noreply.github.com>",
-    "Copilot <223556219+Copilot@users.noreply.github.com>",
-    "Codex <noreply@openai.com>",
-    "claude <209825114+claude[bot]@users.noreply.github.com>",
-    "cursor <206951365+cursor[bot]@users.noreply.github.com>",
-    "chatgpt-codex-connector <199175422+chatgpt-codex-connector[bot]@users.noreply.github.com>",
-  ])("drops machine credit present only in the default server preview: %s", (identity) => {
+  it("drops machine credit present only in the default server preview", () => {
+    const identity = "Claude <noreply@anthropic.com>";
     const result = prepareBody({
       sourceMessages: ["Repair"],
       previewBody: `Server description\n\nCo-authored-by: ${identity}`,

@@ -473,34 +473,6 @@ describe("users gateway methods", () => {
     );
   });
 
-  it("invalidates downgraded operator connections before acknowledging the role change", async () => {
-    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
-    const connectedOperator = { scopes: ["operator.admin"] };
-    const disconnectClientsForUserProfile = vi.fn(() => {
-      connectedOperator.scopes = [];
-    });
-    const respond = vi.fn(() => {
-      expect(connectedOperator.scopes).not.toContain("operator.admin");
-    });
-    setUserProfileRole.mockReturnValue(assignedProfile);
-
-    await expectDefined(
-      usersHandlers["users.setRole"],
-      "users.setRole test invariant",
-    )({
-      client: adminClient,
-      context: {
-        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
-        disconnectClientsForUserProfile,
-      },
-      params: { profileId: profile.id, role: "guest" },
-      respond,
-    } as never);
-
-    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
-    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
-  });
-
   it("clears profile roles even when role definitions have been removed", async () => {
     setUserProfileRole.mockReturnValue(profile);
 

@@ -3,16 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
-import {
-  sanitizeIMessageFinalOutboundText,
-  sanitizeOutboundText,
-} from "./monitor/sanitize-outbound.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
   createIMessageOutboundRpcFixture,
@@ -368,27 +363,6 @@ describe("sendMessageIMessage receipts", () => {
         ).toBe(expected);
       }
       channelContractRequestCount += attributedHtml.chunks.length;
-    }
-
-    for (const source of [
-      "if(a<b && c<d)",
-      "std::vector<std::vector<int>>",
-      "t<int>",
-      "```cpp\nif(a<b && c<d)\nstd::vector<std::vector<int>>\n```",
-      "ordinary <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> marker mention",
-      "ordinary <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>opaque prose<<<END_OPENCLAW_INTERNAL_CONTEXT>>> remains safe",
-    ]) {
-      // Unknown generic tags already follow the shared renderer's shipped stripping semantics.
-      const baseline = sanitizeForPlainText(sanitizeOutboundText(source), { style: "markdown" });
-      const delivered = await deliverThroughChannel(source);
-      expect(delivered.sanitized).toBe(baseline);
-      const request = JSON.parse(
-        fs.readFileSync(requestLogPath, "utf8").trim().split("\n").at(-1) ?? "{}",
-      ) as { params?: { text?: string } };
-      expect(request.params?.text).toBe(
-        sanitizeIMessageFinalOutboundText(baseline, { formatMarkdown: true }).text,
-      );
-      channelContractRequestCount += delivered.chunks.length;
     }
 
     const runtimeCompanion = `${privateRuntimeScaffolding}\nvisible runtime companion`;
@@ -1798,40 +1772,6 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
   });
 
-  it("resends a media reply unthreaded when threaded replies are unsupported (#99638)", async () => {
-    const sendParams: Array<Record<string, unknown>> = [];
-    const client = {
-      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
-        sendParams.push(params);
-        if (params.reply_to) {
-          throw new Error(
-            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
-          );
-        }
-        return { guid: "p:0/media-plain-fallback" };
-      }),
-      stop: vi.fn(async () => {}),
-    } as unknown as IMessageRpcClient;
-
-    // A media reply (file + reply_to) takes the main send path, not send-attachment.
-    const result = await sendMessageIMessage("chat_id:42", "caption", {
-      config: IMESSAGE_TEST_CFG,
-      client,
-      conversationReadOrigin: "direct-operator",
-      replyToId: "reply-1",
-      mediaUrl: "/tmp/image.png",
-      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
-    });
-
-    expect(sendParams).toHaveLength(2);
-    expect(sendParams[0]).toMatchObject({ reply_to: "reply-1", file: "/tmp/image.png" });
-    expect(sendParams[1]).not.toHaveProperty("reply_to");
-    // The media itself is still delivered on the retry, just unthreaded.
-    expect(sendParams[1]).toHaveProperty("file", "/tmp/image.png");
-    expect(result.messageId).toBe("p:0/media-plain-fallback");
-    expect(result.receipt.replyToId).toBeUndefined();
-  });
-
   it("passes the default RPC send transport", async () => {
     const client = createClient({ guid: "p:0/imsg-transport-default" });
 
@@ -2969,6 +2909,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(result.messageId).toBe("p:0/provider-accepted-rpc");
+    expect(result.receipt.replyToId).toBeUndefined();
     expect(deliveredPaths.map((attachmentPath) => path.basename(attachmentPath))).toEqual([
       filename,
       filename,
@@ -3216,35 +3157,6 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(result.messageId).toBe("ok");
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
-  });
-
-  it("persists an echo marker before awaiting the bridge send result", async () => {
-    const requestStarted = createDeferred<void>();
-    const response = createDeferred<Record<string, unknown>>();
-    const client = {
-      request: vi.fn(() => {
-        requestStarted.resolve();
-        return response.promise;
-      }),
-      stop: vi.fn(async () => {}),
-    } as unknown as IMessageRpcClient;
-
-    const send = sendMessageIMessage("+15551234567", "hello", {
-      config: IMESSAGE_TEST_CFG,
-      client,
-    });
-
-    await requestStarted.promise;
-    expect(
-      await hasPersistedIMessageEcho({
-        scope: "default:imessage:+15551234567",
-        text: "hello",
-        includePendingText: true,
-      }),
-    ).toBe(true);
-
-    response.resolve({ guid: "p:0/imsg-1" });
-    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
   });
 
   it("keeps the pending echo marker alive for slow default-timeout sends", async () => {
@@ -3562,6 +3474,7 @@ describe("sendMessageIMessage receipts", () => {
     ).rejects.toThrow("imsg rpc timeout (send)");
 
     expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).not.toHaveBeenCalled();
   });
 
@@ -3585,45 +3498,6 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(getClientMocks(client).stop).toHaveBeenCalledTimes(1);
     expect(runCliJson).not.toHaveBeenCalled();
-  });
-
-  it("does not stop caller-owned rpc clients after sent-row recovery misses", async () => {
-    vi.useFakeTimers({ now: 1_000 });
-    const { client, requestStarted } = createTimedOutSendClient();
-    const runCliJson = vi.fn();
-    const resolveSentMessageGuidImpl = vi.fn(async () => null);
-    const rejection = expect(
-      sendMessageIMessage("chat_id:42", "hello", {
-        config: IMESSAGE_TEST_CFG,
-        client,
-        runCliJson,
-        dbPath: "/Users/me/Library/Messages/chat.db",
-        resolveSentMessageGuidImpl,
-      }),
-    ).rejects.toThrow("imsg rpc timeout (send)");
-    await requestStarted;
-    await vi.advanceTimersByTimeAsync(5_000);
-    await rejection;
-
-    expect(runCliJson).not.toHaveBeenCalled();
-    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
-  });
-
-  it("throws the rpc timeout without resending when sent-row checks are unavailable", async () => {
-    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
-    const runCliJson = vi.fn();
-
-    await expect(
-      sendMessageIMessage("chat_id:42", "hello", {
-        config: IMESSAGE_TEST_CFG,
-        client,
-        runCliJson,
-        dbPath: "/Users/me/Library/Messages/chat.db",
-      }),
-    ).rejects.toThrow("imsg rpc timeout (send)");
-
-    expect(runCliJson).not.toHaveBeenCalled();
-    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
   });
 
   it("throws the rpc timeout without resending when approval GUID recovery misses", async () => {

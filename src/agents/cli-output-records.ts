@@ -33,13 +33,6 @@ export function isClaudeStreamJsonDialect(params: {
   return isClaudeCliProvider(params.providerId);
 }
 
-export function isStreamJsonDialect(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-}): boolean {
-  return supportsCliJsonlToolEvents(params);
-}
-
 /** Returns whether JSONL output carries correlated provider tool events. */
 export function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
@@ -50,14 +43,6 @@ export function supportsCliJsonlToolEvents(params: {
     isClaudeCliProvider(params.providerId) ||
     isGeminiStreamJsonDialect(params)
   );
-}
-
-export function isClaudeStreamJsonResult(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parsed: Record<string, unknown>;
-}): boolean {
-  return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
 }
 
 export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
@@ -217,12 +202,7 @@ function unwrapNestedCliResultText(raw: string): string {
     }
     try {
       const parsed = JSON.parse(trimmed);
-      if (
-        !isRecord(parsed) ||
-        typeof parsed.type !== "string" ||
-        parsed.type !== "result" ||
-        typeof parsed.result !== "string"
-      ) {
+      if (!isRecord(parsed) || parsed.type !== "result" || typeof parsed.result !== "string") {
         return text;
       }
       // Claude can wrap a result payload inside repeated JSON-string result envelopes.
@@ -328,10 +308,6 @@ function readClaudeTurnStop(
   // classification (an API failure must stay failover-able, not terminal).
   if (
     parsed.type !== "result" ||
-    !terminalReason ||
-    terminalReason === "completed" ||
-    terminalReason === "max_turns" ||
-    terminalReason === "background_requested" ||
     !CLAUDE_TURN_STOP_REASONS.has(terminalReason) ||
     unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
     collectExplicitCliErrorText(parsed)
@@ -544,7 +520,7 @@ export function parseClaudeCliJsonlResult(params: {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
-  if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
+  if (params.parsed.type === "result") {
     const terminalFailure = isClaudeStreamJsonDialect(params)
       ? readClaudeTerminalFailure(params.parsed)
       : undefined;
@@ -561,13 +537,12 @@ export function parseClaudeCliJsonlResult(params: {
     if (typeof params.parsed.result !== "string") {
       return null;
     }
-    const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
-    if (resultText) {
-      return { text: resultText, sessionId: params.sessionId, usage: params.usage };
-    }
-    // Claude may finish with an empty result after tool-only work. Keep the
-    // resolved session handle and usage instead of dropping them.
-    return { text: "", sessionId: params.sessionId, usage: params.usage };
+    // Tool-only turns may have an empty result and still carry continuity and usage.
+    return {
+      text: unwrapNestedCliResultText(params.parsed.result).trim(),
+      sessionId: params.sessionId,
+      usage: params.usage,
+    };
   }
   return null;
 }

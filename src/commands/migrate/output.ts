@@ -26,12 +26,7 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
   return lines;
 }
 
-type ItemGroup = {
-  kind: string;
-  heading: string;
-};
-
-const ITEM_GROUPS: ItemGroup[] = [
+const ITEM_GROUPS = [
   { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
@@ -49,17 +44,13 @@ type FormatMode = "preview" | "result";
 function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   const lines: string[] = [];
   const buckets = new Map<string, MigrationItem[]>();
-  const other: MigrationItem[] = [];
   for (const item of plan.items) {
-    if (KNOWN_KINDS.has(item.kind)) {
-      const list = buckets.get(item.kind) ?? [];
-      list.push(item);
-      buckets.set(item.kind, list);
-    } else {
-      other.push(item);
-    }
+    const kind = KNOWN_KINDS.has(item.kind) ? item.kind : "other";
+    const items = buckets.get(kind) ?? [];
+    items.push(item);
+    buckets.set(kind, items);
   }
-  for (const group of ITEM_GROUPS) {
+  for (const group of [...ITEM_GROUPS, { kind: "other", heading: "Other:" }]) {
     const items = buckets.get(group.kind);
     if (!items || items.length === 0) {
       continue;
@@ -67,13 +58,6 @@ function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
     lines.push("");
     lines.push(theme.heading(group.heading));
     for (const item of items) {
-      lines.push(formatMigrationItem(item, mode));
-    }
-  }
-  if (other.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Other:"));
-    for (const item of other) {
       lines.push(formatMigrationItem(item, mode));
     }
   }

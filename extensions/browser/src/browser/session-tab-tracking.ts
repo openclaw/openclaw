@@ -2,7 +2,6 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import type { BrowserTabOwnership } from "./client.types.js";
 import {
   clearDurableTabAliases,
-  clearVolatileTabAliases,
   forgetVolatileTabAlias,
   hasDurableTabAlias,
   hasDurableTabExact,
@@ -73,14 +72,14 @@ function normalizeProfileAliases(values?: Array<string | undefined>): string[] {
 }
 
 function resolveInteractionIdentity(params: SessionTabParams): InteractionIdentity | undefined {
-  const sessionKey = params.sessionKey?.trim();
+  const sessionKey = normalizeOptionalLowercaseString(params.sessionKey);
   const targetId = params.targetId?.trim();
   if (!sessionKey || !targetId) {
     return undefined;
   }
   const profile = normalizeOptionalLowercaseString(params.profile);
   return {
-    sessionKey: normalizeOptionalLowercaseString(sessionKey) ?? "",
+    sessionKey,
     targetId,
     route: params.route ?? { kind: "browser-control" },
     ...(profile ? { profile } : {}),
@@ -131,25 +130,6 @@ export function readDurableTabs(onWarn?: (message: string) => void): DurableTab[
   return tabs;
 }
 
-function deleteVolatileMatching(
-  identity: Pick<InteractionIdentity, "sessionKey" | "targetId" | "route" | "profile">,
-): void {
-  const state = volatileTabsBySession();
-  const tabs = state.get(identity.sessionKey);
-  if (!tabs) {
-    return;
-  }
-  for (const [key, tab] of tabs) {
-    if (volatileSessionTabTargetKey(tab) === volatileSessionTabTargetKey(identity)) {
-      tabs.delete(key);
-      clearVolatileTabAliases(identity.sessionKey, key);
-    }
-  }
-  if (tabs.size === 0) {
-    state.delete(identity.sessionKey);
-  }
-}
-
 export function resolveVolatile(identity: InteractionIdentity):
   | {
       tab: VolatileTab;
@@ -175,11 +155,7 @@ export function resolveVolatile(identity: InteractionIdentity):
     }
     return undefined;
   }
-  if (target.sessionKey !== identity.sessionKey) {
-    forgetVolatileTabAlias(identity);
-    return undefined;
-  }
-  const tab = tabs?.get(target.tabKey);
+  const tab = target.sessionKey === identity.sessionKey ? tabs?.get(target.tabKey) : undefined;
   if (!tab) {
     forgetVolatileTabAlias(identity);
     return undefined;
@@ -256,10 +232,8 @@ export function trackSessionBrowserTab(params: SessionTabParams & { now?: number
   }
   const profile = identity.profile;
   const storageKey = browserSessionTabStorageKey({
+    ...ownership,
     sessionKey: identity.sessionKey,
-    nativeTargetId: ownership.nativeTargetId,
-    profileFingerprint: ownership.profileFingerprint,
-    browserInstanceFingerprint: ownership.browserInstanceFingerprint,
   });
   let persistedProfileAliases: string[] = [];
   updateBrowserSessionTab(storageKey, (current) => {
@@ -289,7 +263,7 @@ export function trackSessionBrowserTab(params: SessionTabParams & { now?: number
   });
   rememberDurableTabAliases(identity, params.aliases ?? [], storageKey, persistedProfileAliases);
   activeDurableStorageKeys().add(storageKey);
-  deleteVolatileMatching(identity);
+  deleteVolatileSessionTab(identity.sessionKey, volatileSessionTabTargetKey(identity));
 }
 
 function canonicalCandidate(
@@ -297,27 +271,15 @@ function canonicalCandidate(
   identity: InteractionIdentity,
 ): DurableTab | undefined {
   const ownership = durableOwnership(params);
-  if (!ownership) {
-    const mappedKey = resolveDurableTabAlias(identity);
-    if (mappedKey) {
-      const mappedRecord = parseBrowserSessionTabRecord(
-        getBrowserSessionTabStore().lookup(mappedKey),
-      );
-      if (mappedRecord) {
-        return { ...mappedRecord, kind: "durable", storageKey: mappedKey };
-      }
-    }
+  if (ownership && !identity.profile) {
     return undefined;
   }
-  if (!identity.profile) {
+  const key = ownership
+    ? browserSessionTabStorageKey({ ...ownership, sessionKey: identity.sessionKey })
+    : resolveDurableTabAlias(identity);
+  if (!key) {
     return undefined;
   }
-  const key = browserSessionTabStorageKey({
-    sessionKey: identity.sessionKey,
-    nativeTargetId: ownership.nativeTargetId,
-    profileFingerprint: ownership.profileFingerprint,
-    browserInstanceFingerprint: ownership.browserInstanceFingerprint,
-  });
   const record = parseBrowserSessionTabRecord(getBrowserSessionTabStore().lookup(key));
   return record ? { ...record, kind: "durable", storageKey: key } : undefined;
 }
@@ -335,10 +297,7 @@ export function touchSessionBrowserTab(params: SessionTabParams & { now?: number
       .get(identity.sessionKey)
       ?.set(volatile.tabKey, { ...volatile.tab, lastUsedAt: now });
   }
-  if (isVolatileRoute(identity.route)) {
-    return;
-  }
-  if (!getOptionalBrowserSessionTabStore()) {
+  if (isVolatileRoute(identity.route) || !getOptionalBrowserSessionTabStore()) {
     return;
   }
   const candidate = canonicalCandidate(params, identity);

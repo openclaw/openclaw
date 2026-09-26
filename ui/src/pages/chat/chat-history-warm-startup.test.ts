@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -19,7 +20,11 @@ import {
 } from "./chat-pane.test-support.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
-import type { ChatMessageCache, ChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { markPrewarmedChatSnapshotReady, prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -40,9 +45,9 @@ function mountPane(
   key = sessionKey,
   connectedAtMount = false,
   snapshotStore?: SessionSnapshotStore,
+  memory: ChatMessageCache = new Map(),
 ) {
   const read = createDeferred<ChatSessionSnapshot | null>();
-  const memory: ChatMessageCache = new Map();
   const store = snapshotStore ?? new SessionSnapshotStore(memory);
   if (!snapshotStore) {
     vi.spyOn(store, "read").mockReturnValue(read.promise);
@@ -134,6 +139,52 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it.each(["unchanged", "refreshed", "deadline", "ordinary-refresh"] as const)(
+    "hydrates both splits when the sibling is %s",
+    async (ordering) => {
+      const memory: ChatMessageCache = new Map();
+      const store = new SessionSnapshotStore(memory);
+      const firstRead = createDeferred<ChatSessionSnapshot | null>();
+      const secondRead = createDeferred<ChatSessionSnapshot | null>();
+      vi.spyOn(store, "read")
+        .mockReturnValueOnce(firstRead.promise)
+        .mockReturnValueOnce(secondRead.promise);
+      const first = mountPane(true, sessionKey, false, store, memory);
+      const second = mountPane(true, sessionKey, false, store, memory);
+      const { sessions } = connectSessionOwner(first);
+      second.connect();
+      second.state.client = first.client;
+      second.state.sessions = sessions;
+      const currentCursor = ordering === "unchanged" ? stored.deltaCursor : "live-cursor";
+      first.request.mockImplementation(async (_method, params) =>
+        asOptionalRecord(params)?.cursor === currentCursor
+          ? {
+              kind: "delta",
+              messages: [],
+              deltaCursor: currentCursor,
+              sessionInfo: first.liveResult.sessionInfo,
+            }
+          : first.liveResult,
+      );
+      const loading = [first.start(), second.start()];
+      firstRead.resolve(stored);
+      await loading[0];
+      if (ordering === "deadline") {
+        await vi.advanceTimersByTimeAsync(300);
+      } else if (ordering === "ordinary-refresh") {
+        await loadChatHistory(second.state, { deferBranches: true });
+      }
+      secondRead.resolve(ordering === "unchanged" ? stored : null);
+      await Promise.all(loading);
+      const expectedMessages = ordering === "unchanged" ? stored.messages : liveMessages;
+      expect(first.state.chatMessages).toEqual(expectedMessages);
+      expect(second.state.chatMessages).toEqual(expectedMessages);
+      expect(readChatSessionSnapshot(memory, second.state, { sessionKey })?.messages).toEqual(
+        expectedMessages,
+      );
+    },
+  );
+
   it("waits for hydration after a long offline mount and shares the cursor startup between callers", async () => {
     const h = mountPane();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -323,6 +374,7 @@ describe("first chat startup snapshot ordering", () => {
     const loading = h.start();
     expect(h.request).not.toHaveBeenCalled();
     record.resolve({
+      cursorMatchesSnapshot: true,
       savedAt: Date.now(),
       sessionKey,
       sessionId: stored.sessionId,
@@ -357,6 +409,7 @@ describe("first chat startup snapshot ordering", () => {
     );
     await loading;
     record.resolve({
+      cursorMatchesSnapshot: true,
       savedAt: Date.now(),
       sessionKey,
       sessionId: stored.sessionId,

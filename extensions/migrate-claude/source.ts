@@ -1,4 +1,3 @@
-// Migrate Claude plugin module implements source behavior.
 import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -255,41 +254,39 @@ export async function discoverClaudeSource(input?: string): Promise<ClaudeSource
     ...(homeDir && (await isDirectory(homeDir)) ? { homeDir } : {}),
     ...(homeProjectsDir && (await isDirectory(homeProjectsDir)) ? { homeProjectsDir } : {}),
     ...(projectDir ? { projectDir } : {}),
-    ...(userSettingsPath && (await exists(userSettingsPath)) ? { userSettingsPath } : {}),
-    ...(userLocalSettingsPath && (await exists(userLocalSettingsPath))
-      ? { userLocalSettingsPath }
-      : {}),
-    ...(userClaudeJsonPath && (await exists(userClaudeJsonPath)) ? { userClaudeJsonPath } : {}),
-    ...(userMemoryPath && (await exists(userMemoryPath)) ? { userMemoryPath } : {}),
-    ...(userSkillsDir && (await isDirectory(userSkillsDir)) ? { userSkillsDir } : {}),
-    ...(userCommandsDir && (await isDirectory(userCommandsDir)) ? { userCommandsDir } : {}),
-    ...(userAgentsDir && (await isDirectory(userAgentsDir)) ? { userAgentsDir } : {}),
-    ...(desktopConfigPath && (await exists(desktopConfigPath)) ? { desktopConfigPath } : {}),
   };
+  for (const [key, candidate, probe] of [
+    ["userSettingsPath", userSettingsPath, exists],
+    ["userLocalSettingsPath", userLocalSettingsPath, exists],
+    ["userClaudeJsonPath", userClaudeJsonPath, exists],
+    ["userMemoryPath", userMemoryPath, exists],
+    ["userSkillsDir", userSkillsDir, isDirectory],
+    ["userCommandsDir", userCommandsDir, isDirectory],
+    ["userAgentsDir", userAgentsDir, isDirectory],
+    ["desktopConfigPath", desktopConfigPath, exists],
+  ] as const) {
+    if (candidate && (await probe(candidate))) {
+      source[key] = candidate;
+    }
+  }
 
   if (projectDir) {
-    const projectSettingsPath = path.join(projectDir, ".claude", "settings.json");
-    const projectLocalSettingsPath = path.join(projectDir, ".claude", "settings.local.json");
-    const projectMcpPath = path.join(projectDir, ".mcp.json");
-    const projectMemoryPath = path.join(projectDir, "CLAUDE.md");
-    const projectDotClaudeMemoryPath = path.join(projectDir, ".claude", "CLAUDE.md");
-    const projectLocalMemoryPath = path.join(projectDir, "CLAUDE.local.md");
-    const projectRulesDir = path.join(projectDir, ".claude", "rules");
-    const projectSkillsDir = path.join(projectDir, ".claude", "skills");
-    const projectCommandsDir = path.join(projectDir, ".claude", "commands");
-    const projectAgentsDir = path.join(projectDir, ".claude", "agents");
-    Object.assign(source, {
-      ...((await exists(projectSettingsPath)) ? { projectSettingsPath } : {}),
-      ...((await exists(projectLocalSettingsPath)) ? { projectLocalSettingsPath } : {}),
-      ...((await exists(projectMcpPath)) ? { projectMcpPath } : {}),
-      ...((await exists(projectMemoryPath)) ? { projectMemoryPath } : {}),
-      ...((await exists(projectDotClaudeMemoryPath)) ? { projectDotClaudeMemoryPath } : {}),
-      ...((await exists(projectLocalMemoryPath)) ? { projectLocalMemoryPath } : {}),
-      ...((await isDirectory(projectRulesDir)) ? { projectRulesDir } : {}),
-      ...((await isDirectory(projectSkillsDir)) ? { projectSkillsDir } : {}),
-      ...((await isDirectory(projectCommandsDir)) ? { projectCommandsDir } : {}),
-      ...((await isDirectory(projectAgentsDir)) ? { projectAgentsDir } : {}),
-    });
+    for (const [key, candidate, probe] of [
+      ["projectSettingsPath", path.join(projectDir, ".claude", "settings.json"), exists],
+      ["projectLocalSettingsPath", path.join(projectDir, ".claude", "settings.local.json"), exists],
+      ["projectMcpPath", path.join(projectDir, ".mcp.json"), exists],
+      ["projectMemoryPath", path.join(projectDir, "CLAUDE.md"), exists],
+      ["projectDotClaudeMemoryPath", path.join(projectDir, ".claude", "CLAUDE.md"), exists],
+      ["projectLocalMemoryPath", path.join(projectDir, "CLAUDE.local.md"), exists],
+      ["projectRulesDir", path.join(projectDir, ".claude", "rules"), isDirectory],
+      ["projectSkillsDir", path.join(projectDir, ".claude", "skills"), isDirectory],
+      ["projectCommandsDir", path.join(projectDir, ".claude", "commands"), isDirectory],
+      ["projectAgentsDir", path.join(projectDir, ".claude", "agents"), isDirectory],
+    ] as const) {
+      if (await probe(candidate)) {
+        source[key] = candidate;
+      }
+    }
     for (const file of PROJECT_ARCHIVE_FILES) {
       await addArchivePath(
         archivePaths,

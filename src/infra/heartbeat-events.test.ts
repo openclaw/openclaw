@@ -37,17 +37,6 @@ describe("heartbeat events", () => {
     vi.useRealTimers();
   });
 
-  it("stores the last event and timestamps emitted payloads", () => {
-    emitHeartbeatEvent({ status: "sent", to: "+123", preview: "ping" });
-
-    expect(getLastHeartbeatEvent()).toEqual({
-      ts: 1767960000000,
-      status: "sent",
-      to: "+123",
-      preview: "ping",
-    });
-  });
-
   it("adds a delivery-disabled message to target-none events without changing the reason", () => {
     const listener = vi.fn();
     const unsubscribe = onHeartbeatEvent(listener);

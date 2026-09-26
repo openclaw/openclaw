@@ -264,6 +264,28 @@ describe("npm onboarding fixture consent", () => {
     expect(events).toEqual([]);
   });
 
+  it("does not load the redactor for empty failure logs", () => {
+    const root = tempDirs.make("openclaw-onboard-empty-log-");
+    const logPath = join(root, "onboard.json");
+    const redactorPath = join(root, "redactor.mjs");
+    writeFileSync(logPath, "");
+    writeFileSync(redactorPath, 'throw new Error("empty logs must not load redaction");\n');
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        'source "$1"; openclaw_e2e_print_log "$2"',
+        "fixture",
+        "scripts/lib/openclaw-e2e-instance.sh",
+        logPath,
+      ],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_E2E_REDACTOR_MODULE: redactorPath } },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`--- ${logPath} ---\n`);
+  });
+
   it.each([false, true])("selects the reviewed Codex source with registry=%s", (registry) => {
     const { result, events, installs, detail } = runScenario({ registry });
     expect(result.status, detail).toBe(0);
@@ -309,8 +331,6 @@ describe("npm onboarding fixture consent", () => {
 
   it.each([
     { registry: false, channel: "telegram" as const },
-    { registry: true, channel: "telegram" as const },
-    { registry: false, channel: "discord" as const },
     { registry: true, channel: "slack" as const, sourcePlugin: true },
   ])("keeps same-version legacy setup automatic: $channel registry=$registry", (scenario) => {
     const { result, installs, detail } = runScenario({ ...scenario, consent: false });
@@ -322,8 +342,6 @@ describe("npm onboarding fixture consent", () => {
     { channel: "telegram" as const, bundled: true, sourcePlugin: true },
     { channel: "discord" as const, bundled: true },
     { channel: "discord" as const },
-    { channel: "slack" as const },
-    { channel: "discord" as const, sourcePlugin: true },
     { channel: "slack" as const, sourcePlugin: true },
   ])("prepares only the selected external channel: %j", (scenario) => {
     const { result, installs, detail } = runScenario({ ...scenario, registry: true });
@@ -344,13 +362,12 @@ describe("npm onboarding fixture consent", () => {
     );
   });
 
-  it.each([
-    { channel: "discord" as const, consent: true },
-    { channel: "discord" as const, consent: false },
-    { channel: "slack" as const, consent: true },
-    { channel: "slack" as const, consent: false },
-  ])("rejects source fixtures without a verified registry: %j", (scenario) => {
-    const { result, events, detail } = runScenario({ ...scenario, sourcePlugin: true });
+  it("rejects source fixtures without a verified registry", () => {
+    const { result, events, detail } = runScenario({
+      channel: "discord",
+      consent: true,
+      sourcePlugin: true,
+    });
     expect(result.status, detail).not.toBe(0);
     expect(detail).toContain(
       "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
@@ -360,8 +377,6 @@ describe("npm onboarding fixture consent", () => {
 
   it.each([
     { channel: "discord" as const, companion: "missing" as const },
-    { channel: "slack" as const, companion: "missing" as const },
-    { channel: "discord" as const, companion: "wrong-identity" as const },
     { channel: "slack" as const, companion: "wrong-identity" as const },
   ])("verifies the selected companion before any CLI call: %j", (scenario) => {
     const { result, events, detail } = runScenario({

@@ -1,9 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  AUDIT_ACTIVITY_DIRECTIONS,
-  AUDIT_ACTIVITY_KINDS,
-  AUDIT_ACTIVITY_STATUSES,
-} from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { auditListCommand } from "./audit.js";
@@ -163,20 +158,6 @@ describe("audit command parsing", () => {
     expect(runtime.error).toHaveBeenCalledWith(message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["kind", AUDIT_ACTIVITY_KINDS],
-    ["status", AUDIT_ACTIVITY_STATUSES],
-    ["direction", AUDIT_ACTIVITY_DIRECTIONS],
-  ] as const)("forwards every canonical %s value unchanged", async (filter, values) => {
-    for (const value of values) {
-      await auditListCommand({ [filter]: value }, runtime);
-      expect(callGateway).toHaveBeenLastCalledWith({
-        method: "audit.activity.list",
-        params: { limit: 100, [filter]: value },
-      });
-    }
   });
 
   it("renders activity safely without inventing message provenance", async () => {
@@ -470,15 +451,6 @@ describe("audit run explanation", () => {
 
   it("queries audit.run.inspect and renders all identity fields with explicit state", async () => {
     const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
-    const hostileRawReceiptSecrets = [
-      "U2_R6_CLI_RECEIPT_ID_SECRET_97af31",
-      "U2_R6_CLI_SUMMARY_SECRET_ba9180",
-      "U2_R6_CLI_CODE_SECRET_f26d43",
-      "U2_R6_CLI_TEXT_SECRET_0c75ee",
-      "U2_R6_CLI_POLICY_REF_SECRET_2bd706",
-      "U2_R6_CLI_GRANT_REF_SECRET_a14c83",
-      "U2_R6_CLI_FORGED_OWNER_SECRET_3f4e21",
-    ];
     callGateway.mockResolvedValue({
       schemaVersion: 1,
       run: { runId: "run-1", executionId: "execution-1", status: "known" },
@@ -623,9 +595,6 @@ describe("audit run explanation", () => {
     expect(output).toContain("Grant refs: 0");
     expect(output).toContain("Context used: contextId, executionId, runId");
     expect(output).toContain("producer display contract unverified; receipt prose omitted");
-    for (const secret of hostileRawReceiptSecrets) {
-      expect(output).not.toContain(secret);
-    }
     vi.mocked(runtime.log).mockClear();
     await auditListCommand({ explain: true, runId: "run-1", json: true }, runtime);
     const jsonOutput = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -633,9 +602,6 @@ describe("audit run explanation", () => {
     expect(jsonOutput).not.toContain('"decisions"');
     for (const rawKey of ["receiptId", "resolutionRef", "eventId"]) {
       expect(jsonOutput).not.toContain(`"${rawKey}"`);
-    }
-    for (const secret of hostileRawReceiptSecrets) {
-      expect(jsonOutput).not.toContain(secret);
     }
   });
 

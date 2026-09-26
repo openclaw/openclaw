@@ -1,12 +1,6 @@
 // Zalouser tests share isolated durable-ingress state and raw zca-js envelopes.
-import fs from "node:fs/promises";
-import path from "node:path";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
 import type { createZalouserIngressMonitor } from "./ingress.js";
 import type { ZaloInboundMessage } from "./types.js";
@@ -62,34 +56,17 @@ export function createRawZalouserMessageFromNormalized(message: ZaloInboundMessa
 export async function withZalouserIngressTestQueue<T>(
   fn: (queue: ZalouserTestQueue) => Promise<T>,
 ): Promise<T> {
-  const createdDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalouser-ingress-"),
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-zalouser-ingress-" },
+    ({ stateDir }) =>
+      fn(
+        createChannelIngressQueueForTests<ZalouserTestIngressPayload>({
+          channelId: "zalouser",
+          accountId: "default",
+          stateDir,
+        }),
+      ),
   );
-  const stateDir = await fs.realpath(createdDir);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  const queue = createChannelIngressQueueForTests<ZalouserTestIngressPayload>({
-    channelId: "zalouser",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    return await fn(queue);
-  } finally {
-    // Agent close releases leases through shared state; closing shared state first
-    // can reopen it during teardown and leave Windows handles under the state dir.
-    // Both closes must run before OPENCLAW_STATE_DIR is restored: cached agent
-    // databases captured the child env, and lease release after restoration would
-    // write through the parent fixture's shared state instead.
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-  }
 }
 
 export async function waitForZalouserIngressVerdict(

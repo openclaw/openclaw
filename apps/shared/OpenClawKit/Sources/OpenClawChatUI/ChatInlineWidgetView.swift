@@ -770,8 +770,8 @@ private func makeChatInlineWidgetWebView(
     return webView
 }
 
-#if os(iOS)
-private struct ChatInlineWidgetWebView: UIViewRepresentable {
+@MainActor
+private struct ChatInlineWidgetWebView {
     let resource: OpenClawChatWidgetResource
     let loadGeneration: UUID
     let allowsScripts: Bool
@@ -786,74 +786,60 @@ private struct ChatInlineWidgetWebView: UIViewRepresentable {
             onSnapshot: self.onSnapshot)
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeWebView(coordinator: ChatInlineWidgetNavigationDelegate) -> WKWebView {
         makeChatInlineWidgetWebView(
             resource: self.resource,
             allowsScripts: self.allowsScripts,
-            coordinator: context.coordinator)
+            coordinator: coordinator)
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        context.coordinator.onSnapshot = self.onSnapshot
-        if context.coordinator.resource != self.resource {
-            context.coordinator.resource = self.resource
+    func updateWebView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
+        coordinator.onSnapshot = self.onSnapshot
+        if coordinator.resource != self.resource {
+            coordinator.resource = self.resource
             webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
-        context.coordinator.snapshotCapture.capture(
+        coordinator.snapshotCapture.capture(
             self.snapshotRequest,
             from: webView,
             generation: self.loadGeneration,
             resource: self.resource,
-            onSnapshot: context.coordinator.onSnapshot)
+            onSnapshot: coordinator.onSnapshot)
     }
 
-    static func dismantleUIView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
+    static func dismantleWebView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
         coordinator.snapshotCapture.invalidate()
         webView.stopLoading()
         webView.navigationDelegate = nil
     }
 }
-#elseif os(macOS)
-private struct ChatInlineWidgetWebView: NSViewRepresentable {
-    let resource: OpenClawChatWidgetResource
-    let loadGeneration: UUID
-    let allowsScripts: Bool
-    let snapshotRequest: ChatInlineWidgetSnapshotRequest?
-    let onFailure: @MainActor @Sendable () -> Void
-    let onSnapshot: @MainActor @Sendable (ChatInlineWidgetSnapshotOutcome) -> Void
 
-    func makeCoordinator() -> ChatInlineWidgetNavigationDelegate {
-        ChatInlineWidgetNavigationDelegate(
-            resource: self.resource,
-            onFailure: self.onFailure,
-            onSnapshot: self.onSnapshot)
+#if os(iOS)
+extension ChatInlineWidgetWebView: UIViewRepresentable {
+    func makeUIView(context: Context) -> WKWebView {
+        self.makeWebView(coordinator: context.coordinator)
     }
 
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        self.updateWebView(webView, coordinator: context.coordinator)
+    }
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
+        self.dismantleWebView(webView, coordinator: coordinator)
+    }
+}
+#elseif os(macOS)
+extension ChatInlineWidgetWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
-        makeChatInlineWidgetWebView(
-            resource: self.resource,
-            allowsScripts: self.allowsScripts,
-            coordinator: context.coordinator)
+        self.makeWebView(coordinator: context.coordinator)
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.onSnapshot = self.onSnapshot
-        if context.coordinator.resource != self.resource {
-            context.coordinator.resource = self.resource
-            webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
-        }
-        context.coordinator.snapshotCapture.capture(
-            self.snapshotRequest,
-            from: webView,
-            generation: self.loadGeneration,
-            resource: self.resource,
-            onSnapshot: context.coordinator.onSnapshot)
+        self.updateWebView(webView, coordinator: context.coordinator)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
-        coordinator.snapshotCapture.invalidate()
-        webView.stopLoading()
-        webView.navigationDelegate = nil
+        self.dismantleWebView(webView, coordinator: coordinator)
     }
 }
 #endif

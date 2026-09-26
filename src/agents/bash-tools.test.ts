@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
-import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
+import { findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
@@ -351,22 +351,6 @@ const readTotalLines = (details: unknown) => (details as { totalLines?: number }
 const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
 const readProcessStatusOrRunning = (details: unknown) =>
   readProcessStatus(details) ?? PROCESS_STATUS_RUNNING;
-const expectTextContainsValues = (
-  text: string,
-  values: string[] | undefined,
-  shouldContain: boolean,
-) => {
-  if (!values) {
-    return;
-  }
-  for (const value of values) {
-    if (shouldContain) {
-      expect(text).toContain(value);
-    } else {
-      expect(text).not.toContain(value);
-    }
-  }
-};
 type ProcessSessionSummary = { sessionId: string; name?: string };
 const hasSession = (sessions: ProcessSessionSummary[], sessionId: string) =>
   sessions.some((session) => session.sessionId === sessionId);
@@ -492,27 +476,6 @@ async function readProcessLog(sessionId: string, options: ProcessLogWindow = {})
   });
 }
 
-const LONG_LOG_LINE_COUNT = 201;
-type LongLogExpectationCase = LabeledCase & {
-  options?: ProcessLogWindow;
-  firstLine: string;
-  lastLine?: string;
-  mustContain?: string[];
-  mustNotContain?: string[];
-};
-type ShortLogExpectationCase = LabeledCase & {
-  lines: string[];
-  options: ProcessLogWindow;
-  expectedText: string;
-  expectedTotalLines: number;
-};
-type ProcessLogSnapshot = {
-  text: string;
-  normalizedText: string;
-  lines: string[];
-  totalLines: number | undefined;
-};
-const EXPECTED_TOTAL_LINES_THREE = 3;
 type DisallowedElevationCase = LabeledCase & {
   defaultLevel: "off" | "on";
   overrides?: Partial<ExecToolConfig>;
@@ -562,32 +525,6 @@ const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
     expectedOutputIncludes: "hi",
   }),
 ];
-const SHORT_LOG_EXPECTATION_CASES: ShortLogExpectationCase[] = [
-  withLabel("logs line-based slices and defaults to last lines", {
-    lines: ["one", "two", "three"],
-    options: { limit: 2 },
-    expectedText: "two\nthree",
-    expectedTotalLines: EXPECTED_TOTAL_LINES_THREE,
-  }),
-  withLabel("supports line offsets for log slices", {
-    lines: ["alpha", "beta", "gamma"],
-    options: { offset: 1, limit: 1 },
-    expectedText: "beta",
-    expectedTotalLines: EXPECTED_TOTAL_LINES_THREE,
-  }),
-];
-const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
-  withLabel("applies default tail only when no explicit log window is provided", {
-    firstLine: "line-2",
-    mustContain: ["showing last 200 of 201 lines", "line-2", "line-201"],
-  }),
-  withLabel("keeps offset-only log requests unbounded by default tail mode", {
-    options: { offset: 30 },
-    firstLine: "line-31",
-    lastLine: "line-201",
-    mustNotContain: ["showing last 200"],
-  }),
-];
 const expectNotifyNoopEvents = (
   events: string[],
   expectNotification: boolean,
@@ -623,29 +560,6 @@ const runDisallowedElevationCase = async ({
   }
   expect(readTextContent(result.content) ?? "").toContain(expectedOutputIncludes);
 };
-const runShortLogExpectationCase = async ({
-  lines,
-  options,
-  expectedText,
-  expectedTotalLines,
-}: ShortLogExpectationCase) => {
-  const snapshot = await readBackgroundLogSnapshot(lines, options);
-  expect(snapshot.normalizedText).toBe(expectedText);
-  expect(snapshot.totalLines).toBe(expectedTotalLines);
-};
-const readBackgroundLogSnapshot = async (
-  lines: string[],
-  options: ProcessLogWindow = {},
-): Promise<ProcessLogSnapshot> => {
-  const sessionId = seedFinishedLogSession(lines);
-  const log = await readProcessLog(sessionId, options);
-  return {
-    text: readTextContent(log.content) ?? "",
-    normalizedText: readNormalizedTextContent(log.content),
-    lines: readTrimmedLines(log.content),
-    totalLines: readTotalLines(log.details),
-  };
-};
 const seedFinishedLogSession = (lines: string[]) => {
   const session: ProcessSession = {
     id: `seeded-log-${nextCallId()}`,
@@ -671,25 +585,6 @@ const seedFinishedLogSession = (lines: string[]) => {
   markBackgrounded(session);
   markExited(session, 0, null, PROCESS_STATUS_COMPLETED);
   return session.id;
-};
-const runLongLogExpectationCase = async ({
-  options,
-  firstLine,
-  lastLine,
-  mustContain,
-  mustNotContain,
-}: LongLogExpectationCase) => {
-  const snapshot = await readBackgroundLogSnapshot(
-    Array.from({ length: LONG_LOG_LINE_COUNT }, (_value, index) => `line-${index + 1}`),
-    options,
-  );
-  expect(snapshot.lines[0]).toBe(firstLine);
-  if (lastLine) {
-    expect(snapshot.lines[snapshot.lines.length - 1]).toBe(lastLine);
-  }
-  expect(snapshot.totalLines).toBe(LONG_LOG_LINE_COUNT);
-  expectTextContainsValues(snapshot.text, mustContain, true);
-  expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
 const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool(defaults);
@@ -748,12 +643,49 @@ describe("exec tool backgrounding", () => {
     runDisallowedElevationCase,
   );
 
-  it.each<ShortLogExpectationCase>(SHORT_LOG_EXPECTATION_CASES)(
-    "$label",
-    runShortLogExpectationCase,
-  );
+  it.each([
+    {
+      name: "logs line-based slices and defaults to last lines",
+      lines: ["one", "two", "three"],
+      options: { limit: 2 },
+      expectedText: "two\nthree",
+    },
+    {
+      name: "supports line offsets for log slices",
+      lines: ["alpha", "beta", "gamma"],
+      options: { offset: 1, limit: 1 },
+      expectedText: "beta",
+    },
+  ])("$name", async ({ lines, options, expectedText }) => {
+    const log = await readProcessLog(seedFinishedLogSession(lines), options);
+    expect(readNormalizedTextContent(log.content)).toBe(expectedText);
+    expect(readTotalLines(log.details)).toBe(3);
+  });
 
-  it.each<LongLogExpectationCase>(LONG_LOG_EXPECTATION_CASES)("$label", runLongLogExpectationCase);
+  it("applies default tail only when no explicit log window is provided", async () => {
+    const sessionId = seedFinishedLogSession(
+      Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`),
+    );
+    const log = await readProcessLog(sessionId);
+    expect(readTrimmedLines(log.content)[0]).toBe("line-2");
+    expect(readTotalLines(log.details)).toBe(201);
+    for (const expected of ["showing last 200 of 201 lines", "line-2", "line-201"]) {
+      expect(readTextContent(log.content)).toContain(expected);
+    }
+  });
+
+  it("keeps offset-only log requests unbounded by default tail mode", async () => {
+    const sessionId = seedFinishedLogSession(
+      Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`),
+    );
+    const log = await readProcessLog(sessionId, { offset: 30 });
+    const lines = readTrimmedLines(log.content);
+    expect(lines[0]).toBe("line-31");
+    expect(lines.at(-1)).toBe("line-201");
+    expect(readTotalLines(log.details)).toBe(201);
+    expect(readTextContent(log.content)).not.toContain("showing last 200");
+  });
+
   it("scopes process sessions by scopeKey", async () => {
     const alphaTools = createScopedToolSet(SCOPE_KEY_ALPHA);
     const betaTools = createScopedToolSet(SCOPE_KEY_BETA);
@@ -933,56 +865,8 @@ describe("exec PATH handling", () => {
 });
 
 describe("findPathKey", () => {
-  it("returns PATH when key is uppercase", () => {
-    expect(findPathKey({ PATH: "/usr/bin" })).toBe("PATH");
-  });
-
-  it("returns Path when key is mixed-case (Windows style)", () => {
-    expect(findPathKey({ Path: "C:\\Windows\\System32" })).toBe("Path");
-  });
-
-  it("returns PATH as default when no PATH-like key exists", () => {
-    expect(findPathKey({ HOME: "/home/user" })).toBe("PATH");
-  });
-
   it("prefers uppercase PATH when both PATH and Path exist", () => {
     expect(findPathKey({ PATH: "/usr/bin", Path: "C:\\Windows" })).toBe("PATH");
-  });
-});
-
-describe("applyPathPrepend with case-insensitive PATH key", () => {
-  it("prepends to Path key on Windows-style env (no uppercase PATH)", () => {
-    const env: Record<string, string> = { Path: "C:\\Windows\\System32" };
-    applyPathPrepend(env, ["C:\\custom\\bin"]);
-    // Should write back to the same `Path` key, not create a new `PATH`
-    expect(env.Path).toContain("C:\\custom\\bin");
-    expect(env.Path).toContain("C:\\Windows\\System32");
-    expect("PATH" in env).toBe(false);
-  });
-
-  it("preserves all existing entries when prepending via Path key", () => {
-    // Use platform-appropriate paths and delimiters
-    const delim = path.delimiter;
-    const existing = isWin
-      ? ["C:\\Windows\\System32", "C:\\Windows", "C:\\Program Files\\nodejs"]
-      : ["/usr/bin", "/usr/local/bin", "/opt/node/bin"];
-    const prepend = isWin ? ["C:\\custom\\bin"] : ["/custom/bin"];
-    const existingPath = existing.join(delim);
-    const env: Record<string, string> = { Path: existingPath };
-    applyPathPrepend(env, prepend);
-    const parts = expectDefined(env.Path, "env.Path test invariant").split(delim);
-    expect(parts[0]).toBe(prepend[0]);
-    for (const entry of existing) {
-      expect(parts).toContain(entry);
-    }
-  });
-
-  it("respects requireExisting option with Path key", () => {
-    const env: Record<string, string> = { HOME: "/home/user" };
-    applyPathPrepend(env, ["C:\\custom\\bin"], { requireExisting: true });
-    // No Path/PATH key exists, so nothing should be written
-    expect("PATH" in env).toBe(false);
-    expect("Path" in env).toBe(false);
   });
 });
 

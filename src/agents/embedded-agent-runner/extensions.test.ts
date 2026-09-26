@@ -196,8 +196,8 @@ describe("buildEmbeddedExtensionFactories", () => {
     const cfg = {
       agents: {
         defaults: {
-          decisionModel: "openai/gpt-5-mini",
           experimental: { decisionAssistance: true },
+          decisionModel: "fixture/default",
           compaction: {
             mode: "safeguard",
             semanticCuration: {

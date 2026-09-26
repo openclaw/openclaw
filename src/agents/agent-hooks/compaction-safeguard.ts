@@ -758,7 +758,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           })()
         : undefined;
     const observeSemanticSummary = async (summary: string) => {
-      if (!semanticSnapshot) {
+      if (!semanticSnapshot || getCurrentCompactionSemanticMode(ctx.sessionManager) !== "shadow") {
         return;
       }
       if (getCurrentCompactionSemanticMode(ctx.sessionManager) !== "shadow") {

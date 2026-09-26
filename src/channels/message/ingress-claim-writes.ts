@@ -1,7 +1,7 @@
 /** Bounded claim-token-fenced writes for durable ingress settlement. */
 import { sleepWithAbort } from "@openclaw/retry";
 import { IngressAdoptionLostError, isIngressAdoptionLostError } from "./ingress-drain-state.js";
-import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
+import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.types.js";
 import {
   DEFAULT_INGRESS_RETRY_BASE_MS,
   DEFAULT_INGRESS_RETRY_MAX_MS,

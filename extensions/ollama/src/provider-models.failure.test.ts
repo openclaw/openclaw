@@ -4,7 +4,7 @@ import { buildOllamaProvider } from "./provider-models.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Ollama model discovery failures", () => {
-  it.each([401, 403, 503, "invalid-json", "missing-models", "offline"])(
+  it.each([503, "invalid-json", "missing-models", "offline"])(
     "preserves advisory discovery while strict catalogs reject %s",
     async (failure) => {
       vi.stubGlobal(

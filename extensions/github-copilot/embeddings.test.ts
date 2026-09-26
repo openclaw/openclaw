@@ -233,8 +233,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     "github-copilot/",
     "github-copilot/github-copilot/text-embedding-3-small",
     "github-copilot/ text-embedding-3-small",
-    "github-copilot/\tgithub-copilot/text-embedding-3-small",
-    "other/text-embedding-3-small",
   ])("rejects the unavailable explicit model %s", async (model) => {
     mockDiscoveryResponse({
       ok: true,

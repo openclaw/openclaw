@@ -95,7 +95,7 @@ struct ChatSourcePreviewProjector {
         var runs: [String: [Entry]] = [:]
         var previews: [UUID: [ChatSourcePreview]] = [:]
         for message in messages {
-            guard let runID = Self.nonBlank(message.transcriptRunID) else { continue }
+            guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptRunID) else { continue }
             let entry: Entry = if let cached = self.entries[message.id], cached.message == message {
                 cached
             } else {
@@ -135,18 +135,20 @@ struct ChatSourcePreviewProjector {
             let message = entry.message
             guard ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased()),
                   !message.content.contains(where: {
-                      ($0.isToolCall || $0.isToolResult) && Self.nonBlank($0.runId).map {
+                      ($0.isToolCall || $0.isToolResult) && ChatPayloadDecoding.trimmedNonEmptyString($0.runId).map {
                           $0 != message.transcriptRunID
                       } == true
                   })
             else { continue }
             for call in message.content where call.isToolCall {
-                if let id = Self.nonBlank(call.id ?? message.toolCallId), let name = Self.nonBlank(call.name) {
+                if let id = ChatPayloadDecoding.trimmedNonEmptyString(call.id ?? message.toolCallId),
+                   let name = ChatPayloadDecoding.trimmedNonEmptyString(call.name)
+                {
                     callNames[id] = name
                 }
             }
             for result in entry.results {
-                let envelopeName = Self.nonBlank(message.toolName)
+                let envelopeName = ChatPayloadDecoding.trimmedNonEmptyString(message.toolName)
                 let invocationName = result.callID.flatMap { callNames[$0] }
                 guard let name = invocationName ?? envelopeName,
                       ["web_search", "web_fetch"].contains(name),
@@ -210,7 +212,7 @@ struct ChatSourcePreviewProjector {
         }
         guard message.role.lowercased() == "assistant" else { return [] }
         return message.content.filter(\.isToolResult).compactMap { block in
-            guard Self.nonBlank(block.runId).map({ $0 == runID }) ?? true,
+            guard ChatPayloadDecoding.trimmedNonEmptyString(block.runId).map({ $0 == runID }) ?? true,
                   !ChatToolActivity.resultIsError(block.isError, text: block.text)
             else { return nil }
             return Self.result(
@@ -233,7 +235,10 @@ struct ChatSourcePreviewProjector {
               let external = payload["externalContent"]?.dictionaryValue,
               let source = external["source"]?.stringValue,
               external["untrusted"]?.boolValue == true, external["wrapped"]?.boolValue == true
-        else { return Result(callID: Self.nonBlank(callID), name: Self.nonBlank(name), candidates: []) }
+        else { return Result(
+            callID: ChatPayloadDecoding.trimmedNonEmptyString(callID),
+            name: ChatPayloadDecoding.trimmedNonEmptyString(name),
+            candidates: []) }
         var candidates: [Candidate] = []
         if source == "web_search" {
             let isResults = payload["kind"]?.stringValue == "results"
@@ -260,7 +265,10 @@ struct ChatSourcePreviewProjector {
                 title: payload["title"]?.stringValue,
                 excerpt: payload["text"]?.stringValue)]
         }
-        return Result(callID: Self.nonBlank(callID), name: Self.nonBlank(name), candidates: candidates)
+        return Result(
+            callID: ChatPayloadDecoding.trimmedNonEmptyString(callID),
+            name: ChatPayloadDecoding.trimmedNonEmptyString(name),
+            candidates: candidates)
     }
 
     private static func citations(in message: OpenClawChatMessage) -> [URL] {
@@ -314,11 +322,6 @@ struct ChatSourcePreviewProjector {
             : paragraphs(document)
         guard let text = paragraphs.first(where: { $0.count >= (source == "web_fetch" ? 60 : 1) }) else { return nil }
         return text.count > 280 ? String(text.prefix(279)).trimmingCharacters(in: .whitespacesAndNewlines) + "…" : text
-    }
-
-    private static func nonBlank(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
-        return value
     }
 
     fileprivate static func url(_ value: String?) -> URL? {

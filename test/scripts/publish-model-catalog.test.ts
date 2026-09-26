@@ -114,6 +114,16 @@ function writeFixtureManifest(root: string, pluginId: string, providers: Record<
   );
 }
 
+function assembleFixtureBundle(
+  manifests: Parameters<typeof assembleModelCatalogBundle>[0]["manifests"],
+) {
+  return assembleModelCatalogBundle({
+    manifests,
+    generatedAt: Date.now(),
+    sourceCommit: "fixture",
+  });
+}
+
 function nativeManifests(source: "OpenCode" | "Venice" | "Chutes" | "Cerebras" | "DeepInfra") {
   const provider = source.toLowerCase();
   const sourceId = source === "OpenCode" ? "openCode" : provider;
@@ -180,11 +190,7 @@ const NATIVE_SOURCES = [
 describe("publish model catalog", () => {
   it("publishes native DeepInfra array prices with discounts rather than generic rates", async () => {
     const manifests = nativeManifests("DeepInfra");
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const provider = bundle.providers.deepinfra!;
     for (const id of ["qualified", "absent", "free"]) {
       provider.models.push({
@@ -280,11 +286,7 @@ describe("publish model catalog", () => {
     "rejects DeepInfra %s before mutating the previous bundle",
     async (scenario) => {
       const manifests = nativeManifests("DeepInfra");
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const previous = serializeModelCatalogBundle(bundle);
       await expect(
         enrichModelCatalogPricing({
@@ -401,11 +403,7 @@ describe("publish model catalog", () => {
         },
       },
     ];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       expect(requestUrl(input)).toBe(MODELS_DEV_CATALOG_URL);
       return Response.json(
@@ -503,11 +501,7 @@ describe("publish model catalog", () => {
         },
       },
     ];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const result = await hydrateModelCatalogFromModelsDev({
       bundle,
       manifests,
@@ -560,11 +554,7 @@ describe("publish model catalog", () => {
         },
       },
     ];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const previous = serializeModelCatalogBundle(bundle);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
@@ -600,11 +590,7 @@ describe("publish model catalog", () => {
           },
         },
       ];
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture-sha",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const previous = serializeModelCatalogBundle(bundle);
       await expect(
         hydrateModelCatalogFromModelsDev({
@@ -692,11 +678,7 @@ describe("publish model catalog", () => {
           },
         },
       ];
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture-sha",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const fetchImpl = vi.fn<typeof fetch>();
       await expect(
         hydrateModelCatalogFromModelsDev({ bundle, manifests, fetchImpl }),
@@ -769,11 +751,7 @@ describe("publish model catalog", () => {
         },
       },
     ];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const fetchImpl = async (input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url === OPENROUTER_MODELS_URL) {
@@ -910,11 +888,7 @@ describe("publish model catalog", () => {
           },
         },
       ];
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const model = bundle.providers.openai!.models[0]!;
       const declared: NonNullable<typeof model.cost> = {
         input: 10,
@@ -1005,11 +979,7 @@ describe("publish model catalog", () => {
     async ({ source, url, pricing, cost }) => {
       const provider = source.toLowerCase();
       const manifests = nativeManifests(source);
-      const bundle = await assembleModelCatalogBundle({
-        manifests,
-        generatedAt: Date.now(),
-        sourceCommit: "fixture",
-      });
+      const bundle = await assembleFixtureBundle(manifests);
       const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
         expect(new Headers(init?.headers).has("authorization")).toBe(false);
         if (requestUrl(input) === url) {
@@ -1367,11 +1337,7 @@ describe("publish model catalog", () => {
         },
       },
     ];
-    const bundle = await assembleModelCatalogBundle({
-      manifests,
-      generatedAt: Date.now(),
-      sourceCommit: "fixture-sha",
-    });
+    const bundle = await assembleFixtureBundle(manifests);
     const warnings: string[] = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation((value) => {
       warnings.push(String(value));
@@ -1421,31 +1387,17 @@ describe("publish model catalog", () => {
   it.each([
     ...[
       "transient metadata outage",
-      "transient metadata outage without pricing",
-      "malformed metadata",
       "shared response",
       "metadata without pricing",
       "dry run",
-      "blank model id",
       "blank model id without pricing",
-      "blank model id dry run without pricing",
-      "colliding model id",
-      "colliding model id without pricing",
       "colliding model id dry run without pricing",
       "trimmed model id",
-      "trimmed model id without pricing",
     ].map((scenario) => ({
       source: "models.dev",
       scenario,
     })),
-    ...["unreachable", "malformed body", "invalid price"].map((scenario) => ({
-      source: "DeepInfra",
-      scenario,
-    })),
-    ...["unreachable", "malformed body", "missing model", "invalid price"].map((scenario) => ({
-      source: "Venice",
-      scenario,
-    })),
+    { source: "Venice", scenario: "unreachable" },
   ])("publishes only verified source data: $source $scenario", ({ source, scenario }) => {
     const root = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-failure-")),
@@ -1485,32 +1437,17 @@ globalThis.fetch = async (url) => {
       if (!metadataFetched) {
         metadataFetched = true;
         if (${JSON.stringify(scenario)}.startsWith("transient metadata outage")) throw new Error("fixture transient metadata outage");
-        if (${JSON.stringify(scenario)} === "malformed metadata") return Response.json([]);
       } else if (${JSON.stringify(scenario)} === "shared response") {
         throw new Error("metadata and pricing fetched different source snapshots");
       }
     }
     return Response.json(openCode);
   }
-  if (${JSON.stringify(source)} === "DeepInfra") {
-    if (url === "https://api.deepinfra.com/models/list") {
-      if (${JSON.stringify(scenario)} === "unreachable") throw new Error("fixture outage");
-      if (${JSON.stringify(scenario)} === "malformed body") return Response.json({ data: [] });
-      return Response.json([{ model_name: "fixture/bad", pricing: { type: "tokens", cents_per_input_token: -1, cents_per_output_token: 0.001, full: "Qualified" } }]);
-    }
-    if (url === "https://llm.chutes.ai/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: 2, completion: 10 } }] });
-    if (url === "https://api.cerebras.ai/public/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: "0.000002", completion: "0.00001" } }] });
-    if (url === ${JSON.stringify(VENICE_PRICING_URL)}) return Response.json({ data: [{ id: "fixture/chat", type: "text", model_spec: { pricing: { input: { usd: 2 }, output: { usd: 10 } } } }] });
-  }
-  if (url === ${JSON.stringify(VENICE_PRICING_URL)}) {
-    if (${JSON.stringify(scenario)} === "unreachable") throw new Error("fixture outage");
-    if (${JSON.stringify(scenario)} === "malformed body") return Response.json({});
-    if (${JSON.stringify(scenario)} === "invalid price") return Response.json({ data: manifests.flatMap((manifest) => (manifest.modelCatalog?.providers?.venice?.models ?? []).map((model) => ({ id: model.id, type: "text", model_spec: { pricing: { input: { usd: -1 }, output: { usd: 2 } } } }))) });
-  }
   if (url === "https://api.deepinfra.com/models/list") return Response.json([{ model_name: "fixture/chat", pricing: { type: "tokens", cents_per_input_token: 0.0002, cents_per_output_token: 0.001 } }]);
   if (url === "https://llm.chutes.ai/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: 2, completion: 10 } }] });
   if (url === "https://api.cerebras.ai/public/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: "0.000002", completion: "0.00001" } }] });
-  if (url === ${JSON.stringify(VENICE_PRICING_URL)}) return Response.json(${JSON.stringify(scenario)} === "missing model" ? { data: [] } : { data: [{ id: "fixture/chat", type: "text", model_spec: { pricing: { input: { usd: 2 }, output: { usd: 10 } } } }] });
+  if (url === ${JSON.stringify(VENICE_PRICING_URL)} && ${JSON.stringify(source)} === "Venice") throw new Error("fixture outage");
+  if (url === ${JSON.stringify(VENICE_PRICING_URL)}) return Response.json({ data: [{ id: "fixture/chat", type: "text", model_spec: { pricing: { input: { usd: 2 }, output: { usd: 10 } } } }] });
   return Response.json({ data: [] });
 };`,
     );

@@ -1,9 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../cron/run-history-detail.js";
+import { readCronRunHistoryPageForTests } from "../cron/run-history.test-support.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import { cronRunLogEntryToTaskDetail, cronRunStatusToTaskStatus } from "../cron/task-run-detail.js";
-import { readCronTaskRunHistoryPage } from "../cron/task-run-history.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -131,7 +131,7 @@ describe("cron run-log task import", () => {
                 ?, ?, ?, ?, ?, ?, ?, ?)`,
           );
           for (const [index, mirrored] of entries.slice(4).entries()) {
-            const mirroredStatus = cronRunStatusToTaskStatus(mirrored);
+            const mirroredStatus = cronRunStorageStatus(mirrored);
             insertMirrored.run(
               `already-mirrored-${index}`,
               jobId,
@@ -146,7 +146,7 @@ describe("cron run-log task import", () => {
               mirrored.error ?? null,
               mirrored.summary ?? null,
               mirroredStatus === "succeeded" ? "succeeded" : null,
-              JSON.stringify(cronRunLogEntryToTaskDetail(mirrored, { storeKey })),
+              JSON.stringify(cronRunLogEntryToDetail(mirrored, { storeKey })),
             );
           }
           fixture
@@ -187,7 +187,7 @@ describe("cron run-log task import", () => {
           malformed: 1,
           skipped: false,
         });
-        const ledgerEntries = readCronTaskRunHistoryPage({
+        const ledgerEntries = readCronRunHistoryPageForTests({
           storeKey,
           jobId,
           limit: 50,

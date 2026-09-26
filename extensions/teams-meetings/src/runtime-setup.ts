@@ -1,16 +1,16 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode } from "./config.js";
-import { assertTeamsMeetingsAudioAvailable } from "./transports/chrome.js";
-import { TEAMS_MEETINGS_BROWSER_NODE_ADAPTER } from "./transports/teams-meetings-platform-constants.js";
+import { teamsMeetingsChrome } from "./transports/chrome.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./transports/teams-meetings-platform-adapter.js";
 
 export const getTeamsMeetingsSetupStatus = MeetingPlatformAdapter.createRuntimeSetup<
   TeamsMeetingsConfig,
   TeamsMeetingsMode
 >({
-  assertAudioDeviceAvailable: assertTeamsMeetingsAudioAvailable,
+  assertAudioDeviceAvailable: teamsMeetingsChrome.assertAudioDeviceAvailable,
   captionsMessage: (mode) =>
     mode === "transcribe"
-      ? "Teams caption scraping is disabled pending live selector validation; transcript snapshots are empty"
+      ? "Teams live-caption capture is enabled and ready"
       : "Caption scraping is not used by talk-back modes",
   connectedNodeMessage: (node) => `Connected Teams meeting node ready: ${node}`,
   guestJoinCheck: (config) => {
@@ -25,5 +25,5 @@ export const getTeamsMeetingsSetupStatus = MeetingPlatformAdapter.createRuntimeS
     };
   },
   missingNodeIdMessage: "Connected Microsoft Teams meetings node did not include a node id.",
-  nodeAdapter: TEAMS_MEETINGS_BROWSER_NODE_ADAPTER,
+  nodeAdapter: TEAMS_MEETINGS_PLATFORM_ADAPTER,
 });

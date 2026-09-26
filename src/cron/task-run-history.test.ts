@@ -2,26 +2,37 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
+import { cronTaskRecordToRunLogEntry } from "../tasks/cron-task-record.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { seedTaskRegistryRowsForTests } from "../test-utils/task-registry-sqlite.js";
+import {
+  cronQuietTriggerDetail,
+  cronRunLogEntryToDetail,
+  cronRunStorageStatus,
+  cronRunRecordToTriggerEval,
+  parseCronRunLogEntryObject,
+} from "./run-history-detail.js";
+import {
+  normalizeCronRunJobId,
+  projectCronRunHistoryPage,
+  type ReadCronRunHistoryPageOptions,
+} from "./run-history.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
-import {
-  cronQuietTriggerTaskDetail,
-  cronRunLogEntryToTaskDetail,
-  cronRunStatusToTaskStatus,
-  cronTaskRecordToRunLogEntry,
-  cronTaskRecordToTriggerEval,
-  parseCronRunLogEntryObject,
-} from "./task-run-detail.js";
+import { readCronRunRecords } from "./store/read-only.js";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const JOB_ID = "history-job";
+
+async function readCronRunHistoryPage(options: ReadCronRunHistoryPageOptions) {
+  const jobId = options.jobId ? normalizeCronRunJobId(options.jobId) : undefined;
+  return projectCronRunHistoryPage(await readCronRunRecords(options.storeKey, jobId), options);
+}
 
 function taskFromEntry(entry: CronRunLogEntry, index: number, storeKey: string): TaskRecord {
   return {
@@ -35,7 +46,7 @@ function taskFromEntry(entry: CronRunLogEntry, index: number, storeKey: string):
     agentId: "main",
     runId: `cron:${entry.jobId}:${entry.runAtMs ?? entry.ts}`,
     task: JOB_ID,
-    status: cronRunStatusToTaskStatus(entry),
+    status: cronRunStorageStatus(entry),
     deliveryStatus: "not_applicable",
     notifyPolicy: "silent",
     createdAt: entry.runAtMs ?? entry.ts,
@@ -44,7 +55,7 @@ function taskFromEntry(entry: CronRunLogEntry, index: number, storeKey: string):
     lastEventAt: entry.ts,
     error: entry.error,
     terminalSummary: entry.summary,
-    detail: cronRunLogEntryToTaskDetail(entry, { storeKey }),
+    detail: cronRunLogEntryToDetail(entry, { storeKey }),
   };
 }
 
@@ -77,7 +88,7 @@ describe("cron task run history", () => {
     "cron: isolated agent run stalled before execution start (last phase: preparing)",
   ])("classifies the watchdog timeout %j as a timed-out task", (error) => {
     expect(
-      cronRunStatusToTaskStatus({
+      cronRunStorageStatus({
         ts: 100,
         jobId: JOB_ID,
         action: "finished",
@@ -89,7 +100,7 @@ describe("cron task run history", () => {
 
   it("does not classify unrelated errors as watchdog timeouts", () => {
     expect(
-      cronRunStatusToTaskStatus({
+      cronRunStorageStatus({
         ts: 100,
         jobId: JOB_ID,
         action: "finished",
@@ -107,7 +118,7 @@ describe("cron task run history", () => {
     "maps execution ok with completion $completionStatus to task status $expected",
     ({ completionStatus, expected }) => {
       expect(
-        cronRunStatusToTaskStatus({
+        cronRunStorageStatus({
           ts: 100,
           jobId: JOB_ID,
           action: "finished",
@@ -126,6 +137,7 @@ describe("cron task run history", () => {
         const storePath = state.path("cron", "jobs.json");
         let now = Date.parse("2026-07-12T12:00:00.000Z");
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
           storePath,
           cronEnabled: true,
           cronConfig: { triggers: { enabled: true } },
@@ -191,7 +203,7 @@ describe("cron task run history", () => {
             });
             now += 10_000;
           }
-          const ledger = readCronTaskRunHistoryPage({
+          const ledger = await readCronRunHistoryPage({
             storeKey: cronStoreKey(storePath),
             limit: 50,
             sortDir: "asc",
@@ -317,7 +329,7 @@ describe("cron task run history", () => {
             entries.map((entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)]),
           ).values(),
         );
-        const ledger = readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 50 });
+        const ledger = await readCronRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 50 });
         const expected = entries
           .map((entry, index) => cronTaskRecordToRunLogEntry(taskFromEntry(entry, index, storeKey)))
           .toReversed();
@@ -407,7 +419,7 @@ describe("cron task run history", () => {
         );
 
         expect(
-          readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 1, offset: 1 }),
+          await readCronRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 1, offset: 1 }),
         ).toMatchObject({
           entries: [expect.objectContaining({ ts: 200 })],
           total: 3,
@@ -417,13 +429,15 @@ describe("cron task run history", () => {
           nextOffset: 2,
         });
         expect(
-          readCronTaskRunHistoryPage({
-            storeKey,
-            jobId: JOB_ID,
-            query: "needle",
-            status: "error",
-            limit: 50,
-          }).entries,
+          (
+            await readCronRunHistoryPage({
+              storeKey,
+              jobId: JOB_ID,
+              query: "needle",
+              status: "error",
+              limit: 50,
+            })
+          ).entries,
         ).toEqual([expect.objectContaining({ ts: 200, error: "needle failure" })]);
       },
     );
@@ -456,12 +470,12 @@ describe("cron task run history", () => {
           ]).values(),
         );
 
-        expect(readCronTaskRunHistoryPage({ storeKey: storeA, jobId: JOB_ID })).toMatchObject({
+        expect(await readCronRunHistoryPage({ storeKey: storeA, jobId: JOB_ID })).toMatchObject({
           entries: [expect.objectContaining({ summary: "store a" })],
           total: 1,
           hasMore: false,
         });
-        expect(readCronTaskRunHistoryPage({ storeKey: storeB, jobId: JOB_ID })).toMatchObject({
+        expect(await readCronRunHistoryPage({ storeKey: storeB, jobId: JOB_ID })).toMatchObject({
           entries: [expect.objectContaining({ error: "store b" })],
           total: 1,
           hasMore: false,
@@ -554,13 +568,13 @@ describe("cron task run history", () => {
       1,
       "/internal/cron/store",
     );
-    task.detail = cronQuietTriggerTaskDetail("/internal/cron/store", {
+    task.detail = cronQuietTriggerDetail("/internal/cron/store", {
       fired: false,
       stateChanged: true,
       state: { ready: false },
     });
 
-    expect(cronTaskRecordToTriggerEval(task)).toEqual({
+    expect(cronRunRecordToTriggerEval(task)).toEqual({
       fired: false,
       stateChanged: true,
       state: { ready: false },
@@ -572,7 +586,7 @@ describe("cron task run history", () => {
     // External tooling may prefix-match serialized detail; keep the codec's
     // field order stable so those prefixes stay meaningful.
     for (const status of ["ok", "error", "skipped"] as const) {
-      const detail = cronRunLogEntryToTaskDetail(
+      const detail = cronRunLogEntryToDetail(
         {
           ts: 100,
           jobId: JOB_ID,

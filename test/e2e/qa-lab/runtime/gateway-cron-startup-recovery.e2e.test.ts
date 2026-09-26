@@ -21,6 +21,7 @@ import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
+import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const GATEWAY_ENV_KEYS = [
@@ -143,6 +144,7 @@ describe("Gateway cron startup recovery", () => {
     ]);
     const storePath = path.join(stateDir, "cron", "jobs.json");
     const executionState = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       defaultAgentId: "main",

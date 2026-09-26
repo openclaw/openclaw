@@ -175,6 +175,7 @@ export async function evaluateDecisionInRegistry(
     if (lifetime.aborted || !authority()) {
       throw new DecisionConsumerClosedError();
     }
+    signal.throwIfAborted();
     assertCurrent();
     return result;
   } finally {

@@ -149,6 +149,7 @@ export function seedLegacyOperatorState() {
   });
   unsetSystemAgent();
   writeJson(artifact("legacy-operator-baseline.json"), {});
+  seedLegacyOperatorWebhooks(set);
   const skillPath = path.join(workspace, "skills", "survivor-workspace", "SKILL.md");
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(skillPath, SKILL);
@@ -156,6 +157,64 @@ export function seedLegacyOperatorState() {
     path.join(workspace, "IDENTITY.md"),
     "# Upgrade Survivor\n\nSynthetic operator workspace.\n",
   );
+}
+
+function seedLegacyOperatorWebhooks(set) {
+  const inventory = cli(["plugins", "list", "--json"], "legacy-operator-webhooks-inventory", {
+    json: true,
+  });
+  const supported = inventory.plugins?.some((plugin) => plugin.id === "webhooks") === true;
+  const baselineVersion = requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
+  if (baselineVersion === "2026.9.2") {
+    assert(supported, "the 2026.9.2 Webhooks retirement cell must seed the published plugin");
+  }
+  if (!supported) {
+    writeJson(artifact("legacy-operator-webhooks.json"), { baselineVersion, seeded: false });
+    return;
+  }
+  const entry = {
+    enabled: true,
+    config: {
+      routes: {
+        survivor: {
+          enabled: true,
+          path: "/survivor-taskflow",
+          sessionKey: "agent:main:main",
+          secret: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
+        },
+      },
+    },
+  };
+  const hooks = {
+    enabled: true,
+    path: "/survivor-hooks",
+    token: "synthetic-survivor-hook-token",
+  };
+  const prior = readJson(requiredEnv("OPENCLAW_CONFIG_PATH")).plugins ?? {};
+  // An explicit allowlist retains the baseline's enabled plugins. The deny entry
+  // keeps this migration specimen idle while exercising both retired-id lists.
+  const allow =
+    prior.allow ?? inventory.plugins.filter((plugin) => plugin.enabled).map((p) => p.id);
+  set("plugins", {
+    ...prior,
+    allow: [...new Set([...allow, "webhooks"])],
+    deny: [...new Set([...(prior.deny ?? []), "webhooks"])],
+    entries: { ...prior.entries, webhooks: entry },
+  });
+  set("hooks", hooks);
+  const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
+  assert.deepEqual(config.plugins?.entries?.webhooks, entry, "baseline Webhooks entry changed");
+  assert(config.plugins.allow.includes("webhooks"), "baseline Webhooks allow reference missing");
+  assert(config.plugins.deny.includes("webhooks"), "baseline Webhooks deny reference missing");
+  assert.deepEqual(config.hooks, hooks, "baseline ordinary hooks changed");
+  writeJson(artifact("legacy-operator-webhooks.json"), {
+    baselineVersion,
+    seeded: true,
+    entry,
+    hooks,
+    model: config.agents.defaults.model.primary,
+    provider: config.models.providers.survivor,
+  });
 }
 
 export function seedLegacyOperatorExternalPlugin() {
@@ -221,6 +280,12 @@ export function assertLegacyOperatorExternalPlugin(expectedVersion) {
   const inventory = cli(["plugins", "list", "--json"], "legacy-operator-candidate-plugins", {
     json: true,
   });
+  if (readJson(artifact("legacy-operator-webhooks.json")).seeded) {
+    assert(
+      !inventory.plugins?.some((entry) => entry.id === "webhooks"),
+      "candidate still discovers retired Webhooks",
+    );
+  }
   const plugin = inventory.plugins?.find((entry) => entry.id === "duckduckgo");
   assert(plugin, "plugins list omitted configured DuckDuckGo");
   assert.notEqual(plugin.origin, "bundled", "DuckDuckGo must converge to an external package");
@@ -310,6 +375,10 @@ function unsetSystemAgent() {
 }
 
 function seedCronJob(job) {
+  const seedNativeHistory = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.9.6";
+  const transcriptMarker = seedNativeHistory
+    ? `OPENCLAW_E2E_LEGACY_OPERATOR_CRON_${job.agentId.toUpperCase()}`
+    : undefined;
   const created = cli(
     [
       "cron",
@@ -318,8 +387,15 @@ function seedCronJob(job) {
       job.name,
       "--every",
       "24h",
-      "--command",
-      "printf survivor-cron",
+      ...(transcriptMarker
+        ? [
+            "--message",
+            `Reply with exactly ${transcriptMarker}.`,
+            "--thinking",
+            "off",
+            "--no-deliver",
+          ]
+        : ["--command", "printf survivor-cron"]),
       "--disabled",
       ...(job.agentId === "ops" ? ["--agent", "ops"] : []),
       "--json",
@@ -337,7 +413,35 @@ function seedCronJob(job) {
     job.agentId === "ops" ? "ops" : undefined,
     "baseline CLI changed the authored cron owner",
   );
-  return { id: created.id, name: created.name, agentId: created.agentId };
+  let history;
+  if (seedNativeHistory) {
+    // Each released run owns its real task_runs shape. Run the default-owner job
+    // before adding ops, while the published Gateway can still resolve its owner.
+    const log = artifact("legacy-operator-requests.jsonl");
+    const priorBytes = fs.existsSync(log) ? fs.statSync(log).size : 0;
+    cli(["cron", "run", created.id, "--wait"], `legacy-operator-run-${job.name}`, { json: true });
+    assertLegacyOperatorPrompt(transcriptMarker, priorBytes);
+    const page = cli(
+      ["cron", "runs", "--id", created.id, "--limit", "50"],
+      `legacy-operator-history-${job.name}`,
+      { json: true },
+    );
+    assert.equal(page.entries?.length, 1, "published baseline did not retain its Cron run");
+    assert.equal(page.entries[0].status, "ok", "published baseline Cron run did not succeed");
+    assert.equal(page.entries[0].jobId, created.id);
+    assert.equal(typeof page.entries[0].runId, "string");
+    for (const field of ["sessionId", "sessionKey"]) {
+      assert(page.entries[0][field]?.trim(), `published Cron run omitted ${field}`);
+    }
+    assert(page.entries[0].summary?.includes(transcriptMarker));
+    history = page.entries;
+  }
+  return {
+    id: created.id,
+    name: created.name,
+    agentId: created.agentId,
+    ...(history ? { history, transcriptMarker } : {}),
+  };
 }
 
 export function seedLegacyOperatorDefaultCron() {
@@ -386,6 +490,30 @@ export function seedLegacyOperatorGatewayState() {
 
 export function assertLegacyOperatorConfig(stage) {
   const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
+  const webhooks = readJson(artifact("legacy-operator-webhooks.json"));
+  assert.equal(webhooks.baselineVersion, requiredEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"));
+  if (webhooks.baselineVersion === "2026.9.2") {
+    assert.equal(webhooks.seeded, true, "the 2026.9.2 Webhooks specimen was not seeded");
+  }
+  if (webhooks.seeded) {
+    assert.deepEqual(config.hooks, webhooks.hooks, "ordinary hooks changed during retirement");
+    if (stage === "baseline") {
+      assert.deepEqual(config.plugins?.entries?.webhooks, webhooks.entry);
+      assert(config.plugins?.allow?.includes("webhooks"), "Webhooks allow reference missing");
+      assert(config.plugins?.deny?.includes("webhooks"), "Webhooks deny reference missing");
+    } else {
+      assert.equal(config.plugins?.entries?.webhooks, undefined, "retired Webhooks entry remains");
+      assert(!config.plugins?.allow?.includes("webhooks"), "retired Webhooks allow id remains");
+      assert(!config.plugins?.deny?.includes("webhooks"), "retired Webhooks deny id remains");
+      writeJson(artifact("legacy-operator-webhooks-retired.json"), {
+        baselineVersion: webhooks.baselineVersion,
+        seeded: true,
+        retired: true,
+        ordinaryHooksPreserved: true,
+        stage,
+      });
+    }
+  }
   const agents =
     config.agents?.entries ??
     Object.fromEntries((config.agents?.list ?? []).map((entry) => [entry.id, entry]));
@@ -446,8 +574,180 @@ export function assertLegacyOperatorGatewayState(stage) {
   const listing = cli(["cron", "list", "--all", "--json"], `legacy-operator-${stage}-cron`, {
     json: true,
   });
-  assertLegacyOperatorCronOwners(listing, readJson(artifact("legacy-operator-baseline.json")));
+  const baseline = readJson(artifact("legacy-operator-baseline.json"));
+  assertLegacyOperatorCronOwners(listing, baseline);
   console.log("Legacy operator cron owners: survivor-default-owner=main, survivor-ops-owner=ops.");
+  if (stage !== "baseline") {
+    assertLegacyOperatorCronHistory(stage, baseline);
+  }
+}
+
+function assertLegacyOperatorCronHistory(stage, baseline) {
+  const legacyPath = artifact("legacy-operator-cron-history.json");
+  const legacy = fs.existsSync(legacyPath) ? readJson(legacyPath).entries : [];
+  const expected = [...legacy, ...baseline.jobs.flatMap((job) => job.history ?? [])];
+  if (expected.length === 0) {
+    return;
+  }
+  const migrationProof = legacy.length
+    ? readJson(artifact("legacy-operator-cron-history-proof.json"))
+    : undefined;
+  if (migrationProof) {
+    assert.equal(migrationProof.status, "passed", "retained Cron import proof did not pass");
+  }
+  const proof = {
+    status: "running",
+    stage,
+    source: migrationProof?.contract ?? "published-native-runs",
+    pages: [],
+  };
+  const proofPath = artifact(`legacy-operator-${stage}-cron-history.json`);
+  try {
+    for (const [index, entry] of expected.entries()) {
+      const transcriptMarker = baseline.jobs.find(
+        (job) => job.id === entry.jobId,
+      )?.transcriptMarker;
+      if (!migrationProof) {
+        assert(transcriptMarker, "native Cron transcript expectation missing");
+      }
+      const args = ["cron", "runs", "--id", entry.jobId, "--limit", "1"];
+      const page = cli(
+        [...args, "--run-id", entry.runId],
+        `legacy-operator-${stage}-history-${index}`,
+        { json: true },
+      );
+      assert.equal(page.total, 1, "candidate lost or duplicated retained Cron history");
+      assert.equal(page.entries?.length, 1, "candidate omitted retained Cron entry");
+      assert.equal(page.hasMore, false);
+      for (const [key, value] of Object.entries(entry)) {
+        assert.deepEqual(page.entries[0][key], value, `candidate changed retained Cron ${key}`);
+      }
+      const empty = cli(
+        [...args, "--offset", "1"],
+        `legacy-operator-${stage}-history-${index}-offset`,
+        { json: true },
+      );
+      assert.deepEqual(
+        {
+          entries: empty.entries,
+          total: empty.total,
+          offset: empty.offset,
+          hasMore: empty.hasMore,
+          nextOffset: empty.nextOffset,
+        },
+        { entries: [], total: 1, offset: 1, hasMore: false, nextOffset: null },
+      );
+      const missing = cli(
+        [...args, "--run-id", "missing-survivor-run"],
+        `legacy-operator-${stage}-history-${index}-missing`,
+        { json: true },
+      );
+      assert.deepEqual(
+        { entries: missing.entries, total: missing.total },
+        { entries: [], total: 0 },
+      );
+      proof.pages.push({
+        jobId: entry.jobId,
+        runId: entry.runId,
+        retained: page,
+        offset: empty,
+        missing,
+        ...(transcriptMarker
+          ? {
+              transcript: assertLegacyOperatorCronTranscript(stage, index, entry, transcriptMarker),
+            }
+          : {}),
+      });
+    }
+    proof.status = "passed";
+  } catch (error) {
+    proof.status = "failed";
+    proof.failure = String(error).slice(0, 500);
+    throw error;
+  } finally {
+    writeJson(proofPath, proof);
+  }
+}
+
+function assertLegacyOperatorCronTranscript(stage, index, entry, marker) {
+  const read = (cursor) =>
+    cli(
+      [
+        "gateway",
+        "call",
+        "cron.history",
+        "--expect-url",
+        "ws://127.0.0.1:18789",
+        "--params",
+        JSON.stringify({
+          id: entry.jobId,
+          runId: entry.runId,
+          limit: 1,
+          ...(cursor ? { cursor } : {}),
+        }),
+        "--json",
+      ],
+      `legacy-operator-${stage}-transcript-${index}${cursor ? "-earlier" : ""}`,
+      { json: true },
+    );
+  const recent = read();
+  assert.equal(recent.messages?.length, 1, "Cron transcript omitted its latest message");
+  assert(
+    typeof recent.nextCursor === "string" && recent.nextCursor,
+    "Cron transcript omitted earlier history cursor",
+  );
+  const earlier = read(recent.nextCursor);
+  assert.equal(earlier.messages?.length, 1, "Cron transcript omitted its earlier message");
+  const latest = recent.messages[0];
+  const previous = earlier.messages[0];
+  const text = (message) =>
+    typeof message.content === "string"
+      ? message.content
+      : (message.content ?? [])
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+  assert.equal(latest.role, "assistant");
+  // Display history attributes the scheduled prompt to Cron as an assistant message.
+  assert.equal(previous.role, "assistant");
+  assert.deepEqual(
+    {
+      kind: previous.provenance?.kind,
+      sourceTool: previous.provenance?.sourceTool,
+      jobId: previous.provenance?.jobId,
+      runId: previous.provenance?.runId,
+      sourceSessionKey: previous.provenance?.sourceSessionKey,
+    },
+    {
+      kind: "internal_system",
+      sourceTool: "cron",
+      jobId: entry.jobId,
+      runId: entry.sessionId,
+      sourceSessionKey: entry.sessionKey,
+    },
+    "Cron transcript selected another run's scheduled prompt",
+  );
+  assert.equal(previous.senderSession?.sessionKey, entry.sessionKey);
+  assert.equal(previous["__openclaw"]?.turnBoundary, true);
+  assert(text(latest).includes(marker), "Cron transcript selected another run's reply");
+  assert(
+    text(previous).includes(`Reply with exactly ${marker}.`),
+    "Cron transcript selected another run's prompt",
+  );
+  for (const message of [latest, previous]) {
+    assert(message["__openclaw"]?.id?.trim(), "Cron transcript omitted retained message identity");
+    assert(Number.isSafeInteger(message["__openclaw"].seq));
+  }
+  assert.notEqual(
+    previous["__openclaw"].id,
+    latest["__openclaw"].id,
+    "Cron transcript repeated a page",
+  );
+  assert(
+    previous["__openclaw"].seq < latest["__openclaw"].seq,
+    "Cron transcript page did not move earlier",
+  );
+  return { sessionId: entry.sessionId, sessionKey: entry.sessionKey, recent, earlier };
 }
 
 export function assertLegacyOperatorCronOwners(listing, baseline) {
@@ -494,8 +794,13 @@ export function runLegacyOperatorTurn(stage) {
     label,
   );
   assertAgentReplyContainsMarker(marker, artifact(`${label}.out`));
+  assertLegacyOperatorPrompt(marker, priorBytes);
+  console.log(`Legacy operator ${stage} agent turn: ${marker}.`);
+}
+
+function assertLegacyOperatorPrompt(marker, priorBytes) {
   const requests = fs
-    .readFileSync(log)
+    .readFileSync(artifact("legacy-operator-requests.jsonl"))
     .subarray(priorBytes)
     .toString("utf8")
     .trim()
@@ -508,7 +813,6 @@ export function runLegacyOperatorTurn(stage) {
         request.path === "/v1/chat/completions" &&
         JSON.stringify(request.body).includes(marker),
     ),
-    `${stage} agent turn did not reach the mock provider with its prompt`,
+    `${marker} did not reach the mock provider with its prompt`,
   );
-  console.log(`Legacy operator ${stage} agent turn: ${marker}.`);
 }

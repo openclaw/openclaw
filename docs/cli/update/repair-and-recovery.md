@@ -68,6 +68,11 @@ history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
 
+After activation succeeds, a failure to read or publish update reporting leaves
+the updated installation in place. Reporting failures do not trigger package
+rollback. The command still exits nonzero when required finalization cannot
+complete; follow its recovery guidance after the owning updater exits.
+
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,
@@ -129,6 +134,11 @@ openclaw update repair --channel beta
 openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
+
+When repair runs under Bun, its fresh Doctor, config validation, readiness,
+completion, and non-interactive failure-diagnostic commands use that same Bun
+executable. Node and command-shim invocations keep their existing Node selection
+policy. Managed-service runtime selection remains owned by the service configuration.
 
 If an older updater publishes the new core but then reports
 `update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,

@@ -176,7 +176,10 @@ describe("worker environment runtime refresh", () => {
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, { environmentId, ownerEpoch: environment.ownerEpoch })
+        ? await seedActivePlacement(placements, {
+            environmentId,
+            ownerEpoch: environment.ownerEpoch,
+          })
         : undefined;
     environment = store.get(environmentId)!;
     await store.revokeEnvironmentCredential(environmentId);
@@ -321,7 +324,7 @@ describe("worker environment runtime refresh", () => {
 
   it("preserves a recovery-only claim and its pending workspace result", async () => {
     const { environment, placements, placement, input } = await seedRefresh("attached");
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       ...REQUEST,
       claimId: "interrupted-claim",
       runId: "interrupted-run",

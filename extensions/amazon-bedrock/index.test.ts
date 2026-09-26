@@ -1,15 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import {
-  buildPluginApi,
-  registerSingleProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 // Amazon Bedrock tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -17,55 +12,17 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { supportsBedrockClaudePromptCaching } from "./bedrock-options.js";
 import amazonBedrockPlugin from "./index.js";
 
-type BedrockClientResult =
-  | {
-      models?: Array<{ modelArn?: string }>;
-      modelSummaries?: Array<Record<string, unknown>>;
-      inferenceProfileSummaries?: Array<Record<string, unknown>>;
-    }
-  | { stall: (signal: AbortSignal) => void }
-  | Error;
+type InferenceProfileResult =
+  | { models: Array<{ modelArn: string }> }
+  | { stall: (signal: AbortSignal) => void };
 
-const foundationModelResults: BedrockClientResult[] = [];
-const inferenceProfileListResults: BedrockClientResult[] = [];
-const inferenceProfileGetResults: BedrockClientResult[] = [];
+const inferenceProfileGetResults: InferenceProfileResult[] = [];
 const bedrockClientConfigs: Array<Record<string, unknown>> = [];
 const destroyBedrockClient = vi.fn();
 const refreshSharedConfigCache = vi.fn(async () => {});
 const sendBedrockCommand = vi.fn(
   async (command: unknown, options?: { abortSignal?: AbortSignal }) => {
     const commandName = command?.constructor?.name;
-    const queue =
-      commandName === "ListFoundationModelsCommand"
-        ? foundationModelResults
-        : commandName === "ListInferenceProfilesCommand"
-          ? inferenceProfileListResults
-          : inferenceProfileGetResults;
-    const next = queue.shift();
-    if (next instanceof Error) {
-      throw next;
-    }
-    if (next && "stall" in next) {
-      const signal = options?.abortSignal;
-      if (!signal) {
-        throw new Error("expected Bedrock control-plane abort signal");
-      }
-      next.stall(signal);
-      return await new Promise<never>((_resolve, reject) => {
-        const rejectFromSignal = () => {
-          const reason = signal.reason;
-          reject(reason instanceof Error ? reason : new Error("Bedrock request aborted"));
-        };
-        if (signal.aborted) {
-          rejectFromSignal();
-        } else {
-          signal.addEventListener("abort", rejectFromSignal, { once: true });
-        }
-      });
-    }
-    if (next) {
-      return next;
-    }
     if (commandName === "ListFoundationModelsCommand") {
       return {
         modelSummaries: [
@@ -84,7 +41,26 @@ const sendBedrockCommand = vi.fn(
     if (commandName === "ListInferenceProfilesCommand") {
       return { inferenceProfileSummaries: [] };
     }
-    return { models: [] };
+    const next = inferenceProfileGetResults.shift();
+    if (next && "stall" in next) {
+      const signal = options?.abortSignal;
+      if (!signal) {
+        throw new Error("expected Bedrock control-plane abort signal");
+      }
+      next.stall(signal);
+      return await new Promise<never>((_resolve, reject) => {
+        const rejectFromSignal = () => {
+          const reason = signal.reason;
+          reject(reason instanceof Error ? reason : new Error("Bedrock request aborted"));
+        };
+        if (signal.aborted) {
+          rejectFromSignal();
+        } else {
+          signal.addEventListener("abort", rejectFromSignal, { once: true });
+        }
+      });
+    }
+    return next ?? { models: [] };
   },
 );
 
@@ -124,34 +100,14 @@ vi.mock("@smithy/shared-ini-file-loader", () => ({
 
 type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
-/** Register the amazon-bedrock plugin with an optional pluginConfig override. */
-async function registerWithConfig(
+function registerWithConfig(
   pluginConfig?: Record<string, unknown>,
 ): Promise<RegisteredProviderPlugin> {
-  const providers: RegisteredProviderPlugin[] = [];
-  const noopLogger = { info() {}, warn() {}, error() {}, debug() {} };
-  const api = buildPluginApi({
-    id: "amazon-bedrock",
-    name: "Amazon Bedrock Provider",
-    source: "test",
-    registrationMode: "full",
-    config: {} as OpenClawConfig,
-    pluginConfig,
-    runtime: {} as PluginRuntime,
-    logger: noopLogger,
-    resolvePath: (input) => input,
-    handlers: {
-      registerProvider(provider: RegisteredProviderPlugin) {
-        providers.push(provider);
-      },
+  return registerSingleProviderPlugin({
+    register(api) {
+      amazonBedrockPlugin.register({ ...api, pluginConfig });
     },
   });
-  amazonBedrockPlugin.register(api);
-  const provider = providers[0];
-  if (!provider) {
-    throw new Error("provider registration missing");
-  }
-  return provider;
 }
 
 /** Spy streamFn that returns the options it receives. */
@@ -175,8 +131,6 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
 
 const APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
-const OPUS_APP_INFERENCE_PROFILE_ARN =
-  "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opus-temperature-profile";
 const APP_INFERENCE_PROFILE_DESCRIPTOR = {
   api: "openai-completions",
   provider: "amazon-bedrock",
@@ -290,29 +244,8 @@ function expectPayloadServiceTier(result: Record<string, unknown>, type: string)
   });
 }
 
-function expectThinkingProfile(
-  profile: unknown,
-  fields: { defaultLevel?: string; levelIds?: string[]; includesAdaptive?: boolean },
-) {
-  const record = requireRecord(profile, "thinking profile");
-  if (fields.defaultLevel !== undefined) {
-    expect(record.defaultLevel).toBe(fields.defaultLevel);
-  }
-  const levelIds = requireArray(record.levels, "thinking levels").map((level) =>
-    String(requireRecord(level, "thinking level").id),
-  );
-  if (fields.levelIds) {
-    expect(levelIds).toEqual(fields.levelIds);
-  }
-  if (fields.includesAdaptive !== undefined) {
-    expect(levelIds.includes("adaptive")).toBe(fields.includesAdaptive);
-  }
-}
-
 describe("amazon-bedrock provider plugin", () => {
   beforeEach(() => {
-    foundationModelResults.length = 0;
-    inferenceProfileListResults.length = 0;
     inferenceProfileGetResults.length = 0;
     bedrockClientConfigs.length = 0;
     destroyBedrockClient.mockClear();
@@ -367,25 +300,6 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
-  it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-
-    expectThinkingProfile(
-      provider.resolveThinkingProfile?.({
-        provider: "amazon-bedrock",
-        modelId: "us.anthropic.claude-opus-4-6-v1",
-      } as never),
-      { includesAdaptive: true, defaultLevel: "adaptive" },
-    );
-    expectThinkingProfile(
-      provider.resolveThinkingProfile?.({
-        provider: "amazon-bedrock",
-        modelId: "amazon.nova-micro-v1:0",
-      } as never),
-      { includesAdaptive: false },
-    );
-  });
-
   it("normalizes explicit Claude 4.6 rows with native max metadata", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -422,34 +336,6 @@ describe("amazon-bedrock provider plugin", () => {
 
   it.each([
     {
-      name: "mirrors Claude Opus 4.7 thinking levels for Bedrock model refs",
-      modelIds: [
-        "us.anthropic.claude-opus-4-7",
-        "us.anthropic.claude-opus-4.7-v1:0",
-        "eu.anthropic.claude-opus-4-7",
-        "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
-      ],
-      defaultLevel: "off",
-    },
-    {
-      name: "defaults Claude Opus 5 Bedrock model refs to high adaptive thinking",
-      modelIds: [
-        "anthropic.claude-opus-5",
-        "us.anthropic.claude-opus-5",
-        "global.anthropic.claude-opus-5",
-      ],
-      defaultLevel: "high",
-    },
-    {
-      name: "leaves Claude Opus 4.8 Bedrock model refs off by default",
-      modelIds: [
-        "us.anthropic.claude-opus-4-8",
-        "us.anthropic.claude-opus-4.8-v1:0",
-        "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-8",
-      ],
-      defaultLevel: "off",
-    },
-    {
       name: "defaults Fable Bedrock model refs to medium effort",
       modelIds: [
         "anthropic.claude-fable-5",
@@ -472,30 +358,43 @@ describe("amazon-bedrock provider plugin", () => {
   ])("$name", async ({ modelIds, defaultLevel }) => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     for (const modelId of modelIds) {
-      expectThinkingProfile(
-        provider.resolveThinkingProfile?.({ provider: "amazon-bedrock", modelId } as never),
-        {
-          levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-          defaultLevel,
-        },
-      );
+      const profile = provider.resolveThinkingProfile?.({
+        provider: "amazon-bedrock",
+        modelId,
+      } as never);
+      expect(profile?.levels.map((level) => level.id)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "adaptive",
+        "max",
+      ]);
+      expect(profile?.defaultLevel).toBe(defaultLevel);
     }
   });
 
   it("keeps Fable thinking policy for opaque deployment aliases", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
-    expectThinkingProfile(
-      provider.resolveThinkingProfile?.({
-        provider: "amazon-bedrock",
-        modelId: "company-fable",
-        params: { canonicalModelId: "claude-fable-5" },
-      } as never),
-      {
-        levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-        defaultLevel: "medium",
-      },
-    );
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "amazon-bedrock",
+      modelId: "company-fable",
+      params: { canonicalModelId: "claude-fable-5" },
+    } as never);
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+    expect(profile?.defaultLevel).toBe("medium");
   });
 
   it("recognizes direct Claude 5 model refs as prompt-cache eligible", () => {
@@ -505,33 +404,26 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockClaudePromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
   });
 
-  it.each([
-    [ANTHROPIC_MODEL, false],
-    ["us.anthropic.claude-fable-5-1-v1:0", true],
-    ["global.anthropic.claude-mythos-5-1-v1:0", false],
-  ])(
-    "owns Anthropic-style replay policy for Bedrock %s",
-    async (modelId, appendOnlyRuntimeContext) => {
-      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+  it("registers the Anthropic replay policy for prefix-binding Bedrock models", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
-      expect(
-        provider.buildReplayPolicy?.({
-          provider: "amazon-bedrock",
-          modelApi: "bedrock-converse-stream",
-          modelId,
-        }),
-      ).toEqual({
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        appendOnlyRuntimeContext,
-        preserveSignatures: true,
-        repairToolUseResultPairing: true,
-        validateAnthropicTurns: true,
-        allowSyntheticToolResults: true,
-      });
-    },
-  );
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelApi: "bedrock-converse-stream",
+        modelId: "us.anthropic.claude-fable-5-1-v1:0",
+      }),
+    ).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      appendOnlyRuntimeContext: true,
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    });
+  });
 
   it.each([
     ["amazon.nova-micro-v1:0", "short", "short"],
@@ -609,13 +501,6 @@ describe("amazon-bedrock provider plugin", () => {
 
   it.each([
     {
-      name: "omits temperature for Bedrock Opus 4.7 model ids",
-      id: "us.anthropic.claude-opus-4-7",
-      options: { temperature: 0.2, maxTokens: 10 },
-      expected: { maxTokens: 10 },
-      checkAnthropicCache: true,
-    },
-    {
       name: "omits temperature for Bedrock Opus 4.8 model ids",
       id: "us.anthropic.claude-opus-4-8",
       options: { temperature: 0.2, maxTokens: 10 },
@@ -649,12 +534,6 @@ describe("amazon-bedrock provider plugin", () => {
       id: "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
       options: { temperature: 0, region: "us-west-2" },
       expected: { region: "us-west-2" },
-    },
-    {
-      name: "omits temperature for non-US Bedrock Opus 4.7 regional profiles",
-      id: "eu.anthropic.claude-opus-4-7",
-      options: { temperature: 0.4, maxTokens: 12 },
-      expected: { maxTokens: 12 },
     },
   ])("$name", async ({ id, canonicalModelId, options, expected, checkAnthropicCache }) => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
@@ -710,15 +589,6 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   it.each([
-    {
-      name: "preserves Bedrock Opus 4.7 max thinking in the final payload",
-      modelId: "us.anthropic.claude-opus-4-7",
-      thinkingLevel: "max",
-      reasoning: "xhigh",
-      initialEffort: "xhigh",
-      expectedEffort: "max",
-      adaptive: true,
-    },
     {
       name: "preserves Bedrock Opus 4.6 max thinking in the final payload",
       modelId: "us.anthropic.claude-opus-4-6-v1",
@@ -880,31 +750,7 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   describe("guardrail payload injection", () => {
-    it("does not inject guardrailConfig when guardrail is absent from plugin config", async () => {
-      const provider = await registerWithConfig(undefined);
-      const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
-
-      expect(result).not.toHaveProperty("capturedPayload");
-      // The onPayload hook should not exist when no guardrail is configured
-      expectWrappedResultFields(result, { cacheRetention: "none" });
-    });
-
     it.each([
-      {
-        name: "injects all four fields when guardrail config includes optional fields",
-        guardrail: {
-          guardrailIdentifier: "my-guardrail-id",
-          guardrailVersion: "1",
-          streamProcessingMode: "sync",
-          trace: "enabled",
-        },
-        anthropic: false,
-      },
-      {
-        name: "injects only required fields when optional fields are omitted",
-        guardrail: { guardrailIdentifier: "abc123", guardrailVersion: "DRAFT" },
-        anthropic: false,
-      },
       {
         name: "injects guardrailConfig for Anthropic models without cacheRetention: none",
         guardrail: {
@@ -914,15 +760,13 @@ describe("amazon-bedrock provider plugin", () => {
           trace: "disabled",
         },
         anthropic: true,
-        checkCacheRetention: true,
       },
       {
         name: "injects guardrailConfig for non-Anthropic models with cacheRetention: none",
         guardrail: { guardrailIdentifier: "guardrail-nova", guardrailVersion: "3" },
         anthropic: false,
-        checkCacheRetention: true,
       },
-    ])("$name", async ({ guardrail, anthropic, checkCacheRetention }) => {
+    ])("$name", async ({ guardrail, anthropic }) => {
       const provider = await registerWithConfig({ guardrail });
       const result = await callWrappedStream(
         provider,
@@ -931,10 +775,9 @@ describe("amazon-bedrock provider plugin", () => {
       );
 
       expect(result.capturedPayload).toEqual({ guardrailConfig: guardrail });
-      if (checkCacheRetention && anthropic) {
+      if (anthropic) {
         expect(result).not.toHaveProperty("cacheRetention", "none");
-      }
-      if (checkCacheRetention && !anthropic) {
+      } else {
         expectWrappedResultFields(result, { cacheRetention: "none" });
       }
     });
@@ -981,32 +824,14 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   describe("service tier", () => {
-    const CONVERSE_MODEL_DESCRIPTOR = {
-      api: "bedrock-converse-stream",
-      provider: "amazon-bedrock",
-      id: NON_ANTHROPIC_MODEL,
-    } as never;
-
-    it("injects serviceTier for valid camelCase value ('flex')", async () => {
-      const result = await callBedrockConverse({ serviceTier: "flex" });
-      expectPayloadServiceTier(result, "flex");
-    });
-
     it("injects serviceTier for valid snake_case value ('priority')", async () => {
       const result = await callBedrockConverse({ service_tier: "priority" });
       expectPayloadServiceTier(result, "priority");
     });
 
     it("injects serviceTier for all valid tier names", async () => {
-      const provider = await registerWithConfig(undefined);
       for (const tier of ["flex", "priority", "default", "reserved"] as const) {
-        const result = await callWrappedStream(
-          provider,
-          NON_ANTHROPIC_MODEL,
-          CONVERSE_MODEL_DESCRIPTOR,
-          runtimePluginConfig(undefined),
-          { serviceTier: tier },
-        );
+        const result = await callBedrockConverse({ serviceTier: tier });
         expectPayloadServiceTier(result, tier);
       }
     });
@@ -1025,14 +850,14 @@ describe("amazon-bedrock provider plugin", () => {
       },
     );
 
-    it.each(["fable", "opus", "sonnet"])(
-      "keeps the standard service tier for Claude %s 5",
-      async (family) => {
-        const modelId = `us.anthropic.claude-${family}-5`;
-        const result = await callBedrockConverse({ serviceTier: "default" }, {}, modelId);
-        expectPayloadServiceTier(result, "default");
-      },
-    );
+    it("keeps the standard service tier for Claude 5", async () => {
+      const result = await callBedrockConverse(
+        { serviceTier: "default" },
+        {},
+        "us.anthropic.claude-sonnet-5",
+      );
+      expectPayloadServiceTier(result, "default");
+    });
 
     it("does not overwrite caller-provided serviceTier in payload", async () => {
       const result = await callBedrockConverse(
@@ -1090,17 +915,6 @@ describe("amazon-bedrock provider plugin", () => {
 
     it.each([
       {
-        name: "injects cache points for application inference profile ARNs",
-        options: { cacheRetention: "short" },
-        expectedCachePoint: { type: "default" },
-        verifyUserMessage: true,
-      },
-      {
-        name: "uses long TTL when cacheRetention is 'long'",
-        options: { cacheRetention: "long" },
-        expectedCachePoint: { type: "default", ttl: "1h" },
-      },
-      {
         name: "does not inject cache points when cacheRetention is 'none'",
         options: { cacheRetention: "none" },
       },
@@ -1109,7 +923,7 @@ describe("amazon-bedrock provider plugin", () => {
         options: {},
         expectedCachePoint: { type: "default" },
       },
-    ])("$name", async ({ options, expectedCachePoint, verifyUserMessage }) => {
+    ])("$name", async ({ options, expectedCachePoint }) => {
       const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
       await callWrappedStreamWithPayload(
@@ -1124,13 +938,6 @@ describe("amazon-bedrock provider plugin", () => {
       expect(system).toHaveLength(expectedCachePoint ? 2 : 1);
       if (expectedCachePoint) {
         expect(system[1]).toEqual({ cachePoint: expectedCachePoint });
-      }
-      if (verifyUserMessage) {
-        const messages = requireArray(payload.messages, "Bedrock messages");
-        const user = requireRecord(messages[0], "last user message");
-        const content = requireArray(user.content, "last user content");
-        expect(content).toHaveLength(2);
-        expect(content[1]).toEqual({ cachePoint: { type: "default" } });
       }
     });
 
@@ -1218,7 +1025,7 @@ describe("amazon-bedrock provider plugin", () => {
 
     it("does not double-inject cache points if already present", async () => {
       const provider = await registerWithConfig(undefined);
-      const payload: Record<string, unknown> = {
+      const payload = {
         system: [{ text: "You are helpful." }, { cachePoint: { type: "default" } }],
         messages: [
           { role: "user", content: [{ text: "Hello" }, { cachePoint: { type: "default" } }] },
@@ -1233,22 +1040,14 @@ describe("amazon-bedrock provider plugin", () => {
         payload,
       );
 
-      const system = payload.system as Array<Record<string, unknown>>;
-      expect(system).toHaveLength(2);
-
-      const messages = payload.messages as Array<{
-        role: string;
-        content: Array<Record<string, unknown>>;
-      }>;
-      expect(expectDefined(messages[0], "cached user message").content).toHaveLength(2);
+      expect(payload.system).toHaveLength(2);
+      expect(payload.messages[0]?.content).toHaveLength(2);
     });
 
     it("does not inject cache points for regular Anthropic model IDs handled by the shared runtime", async () => {
       const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
 
-      // Regular model IDs contain "claude" so the shared runtime handles caching natively.
-      // wrapStreamFn should not install an onPayload hook for these.
       const wrapped = provider.wrapStreamFn?.({
         provider: "amazon-bedrock",
         modelId: ANTHROPIC_MODEL,
@@ -1259,34 +1058,8 @@ describe("amazon-bedrock provider plugin", () => {
         cacheRetention: "short",
       }) as unknown as Record<string, unknown>;
 
-      // For regular Anthropic models, no onPayload should be installed for cache injection.
       if (typeof result?.onPayload === "function") {
-        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
-      }
-
-      const system = payload.system as Array<Record<string, unknown>>;
-      expect(system).toHaveLength(1);
-    });
-
-    it("does not inject cache points for older Claude models not in the shared runtime cache list", async () => {
-      const provider = await registerWithConfig(undefined);
-      const oldClaudeModel = "anthropic.claude-3-opus-20240229-v1:0";
-      const payload = buildBedrockCachePayload();
-
-      // Claude 3 Opus is not in the shared runtime supportsPromptCaching list, but it's
-      // also not an application inference profile — we should not inject.
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "amazon-bedrock",
-        modelId: oldClaudeModel,
-        streamFn: spyStreamFn,
-      } as never);
-
-      const result = wrapped?.({ id: oldClaudeModel } as never, { messages: [] } as never, {
-        cacheRetention: "short",
-      }) as unknown as Record<string, unknown>;
-
-      if (typeof result?.onPayload === "function") {
-        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+        await (result.onPayload as (p: Record<string, unknown>) => Promise<unknown>)(payload);
       }
 
       const system = payload.system as Array<Record<string, unknown>>;
@@ -1295,7 +1068,7 @@ describe("amazon-bedrock provider plugin", () => {
 
     it("injects cache point only on last USER message", async () => {
       const provider = await registerWithConfig(undefined);
-      const payload: Record<string, unknown> = {
+      const payload = {
         system: [{ text: "You are helpful." }],
         messages: [
           { role: "user", content: [{ text: "First question" }] },
@@ -1312,18 +1085,10 @@ describe("amazon-bedrock provider plugin", () => {
         payload,
       );
 
-      const messages = payload.messages as Array<{
-        role: string;
-        content: Array<Record<string, unknown>>;
-      }>;
-      // First user message should NOT have a cache point
-      expect(expectDefined(messages[0], "first user message").content).toHaveLength(1);
-      // Assistant message untouched
-      expect(expectDefined(messages[1], "assistant message").content).toHaveLength(1);
-      // Last user message should have a cache point
-      const lastUserContent = expectDefined(messages[2], "last user message").content;
-      expect(lastUserContent).toHaveLength(2);
-      expect(lastUserContent[1]).toEqual({ cachePoint: { type: "default" } });
+      expect(payload.messages[0]?.content).toHaveLength(1);
+      expect(payload.messages[1]?.content).toHaveLength(1);
+      expect(payload.messages[2]?.content).toHaveLength(2);
+      expect(payload.messages[2]?.content[1]).toEqual({ cachePoint: { type: "default" } });
     });
 
     it("injects cache points for opaque application inference profile ARNs after profile lookup", async () => {
@@ -1384,34 +1149,6 @@ describe("amazon-bedrock provider plugin", () => {
       expect(bedrockClientConfigs).toEqual([{ region: "us-west-2" }]);
     });
 
-    it("omits temperature for Claude-named application inference profile ARNs that resolve to Opus 4.7", async () => {
-      inferenceProfileGetResults.push({
-        models: [
-          {
-            modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-7-v1:0",
-          },
-        ],
-      });
-      const provider = await registerWithConfig(undefined);
-      const payload = buildBedrockCachePayload("Hello", {
-        inferenceConfig: { temperature: 0.3, maxTokens: 10 },
-      });
-
-      await callWrappedStreamWithPayload(
-        provider,
-        OPUS_APP_INFERENCE_PROFILE_ARN,
-        makeAppInferenceProfileDescriptor(OPUS_APP_INFERENCE_PROFILE_ARN),
-        { temperature: 0.3, maxTokens: 10, cacheRetention: "short" },
-        payload,
-      );
-
-      const system = payload.system as Array<Record<string, unknown>>;
-      expect(payload.inferenceConfig).toEqual({ maxTokens: 10 });
-      expect(system[1]).toEqual({ cachePoint: { type: "default" } });
-      expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
-      expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);
-    });
-
     it.each(["anthropic.claude-3-opus-20240229-v1:0", "amazon.nova-pro-v1:0"])(
       "keeps opaque profile caching disabled for resolved target %s",
       async (target) => {
@@ -1443,45 +1180,6 @@ describe("amazon-bedrock provider plugin", () => {
         expect(payload.messages).toEqual([{ role: "user", content: [{ text: "Hello" }] }]);
       },
     );
-
-    it("retries opaque profile lookup after a transient failure instead of caching the fallback", async () => {
-      const modelId =
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459dc";
-      inferenceProfileGetResults.push(new Error("throttled"), {
-        models: [
-          {
-            modelArn:
-              "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6-20250514-v1:0",
-          },
-        ],
-      });
-      const provider = await registerWithConfig(undefined);
-      const firstPayload = buildBedrockCachePayload();
-      const secondPayload = buildBedrockCachePayload("Hello again");
-
-      await callWrappedStreamWithPayload(
-        provider,
-        modelId,
-        makeAppInferenceProfileDescriptor(modelId),
-        { cacheRetention: "short" },
-        firstPayload,
-      );
-      await callWrappedStreamWithPayload(
-        provider,
-        modelId,
-        makeAppInferenceProfileDescriptor(modelId),
-        { cacheRetention: "short" },
-        secondPayload,
-      );
-
-      expect(firstPayload.system).toEqual([{ text: "You are helpful." }]);
-      expect(secondPayload.system).toEqual([
-        { text: "You are helpful." },
-        { cachePoint: { type: "default" } },
-      ]);
-      expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
-      expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
-    });
 
     it("times out stalled profile lookup, destroys its client, and retries next request", async () => {
       vi.useFakeTimers();

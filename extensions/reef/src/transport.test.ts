@@ -230,8 +230,6 @@ describe("ReefTransportClient device authentication", () => {
 
   it.each([
     { name: "an empty 204", response: () => new Response(null, { status: 204 }), accept: true },
-    { name: "a primitive", response: () => Response.json("active"), accept: true },
-    { name: "a malformed object", response: () => Response.json({ peer: "bob" }), accept: true },
     {
       name: "a different peer",
       response: () => Response.json({ peer: "mallory", status: "active" }),

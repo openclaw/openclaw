@@ -2087,8 +2087,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(watchService.lastSentExecApprovalResolved?.outcomeText ==
             "This approval was already set to Always Allow.")
 
-        let ownWinnerService = MockWatchMessagingService()
-        let ownWinnerModel = NodeAppModel(watchMessagingService: ownWinnerService)
+        let (ownWinnerService, ownWinnerModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         try ownWinnerModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-race",
@@ -2337,7 +2337,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(firstModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(firstModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
 
-        let restoredModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let restoredModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
         restoredModel.connectedGatewayID = prompt.gatewayStableID
         #expect(restoredModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
@@ -2353,7 +2355,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let approvalID = "approval-watch-uncertain-resume"
-        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo watch",
@@ -2428,7 +2432,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `canonical terminal invalidates an in flight uncertain result`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
         let approvalID = "approval-terminal-beats-uncertain"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -4965,7 +4971,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `watch exec approval snapshot request publishes cached approvals in background`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         let (snapshotEvents, snapshotEventContinuation) = AsyncStream.makeStream(
             of: OpenClawWatchExecApprovalSnapshotMessage.self)
         defer { snapshotEventContinuation.finish() }
@@ -5002,7 +5009,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `foreground watch snapshot acknowledgment requires canonical readback`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
@@ -5206,7 +5214,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(composedGatewayID == decomposedGatewayID)
         #expect(GatewayStableIdentifier.key(composedGatewayID) !=
             GatewayStableIdentifier.key(decomposedGatewayID))
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = composedGatewayID
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -5409,7 +5418,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = "test-gateway"
         let approvalID = "approval-terminal-interleave"
         try appModel._test_presentExecApprovalPrompt(#require(
@@ -5555,7 +5565,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `phone and watch decisions share one exact owner write lease`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         let approvalID = "approval-phone-watch-lease"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(

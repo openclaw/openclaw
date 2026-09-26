@@ -1,9 +1,13 @@
 import type {
   ChannelIngressRow,
+  ChannelIngressClaimRequest,
+  ChannelIngressClaimSnapshot,
+  ChannelIngressClaimSelection,
   ChannelIngressQueueRecord,
   ChannelIngressQueueClaim,
   ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueDeadLetterRecord,
 } from "./ingress-queue.types.js";
 
 // Failed rows need to distinguish a retained JSON null payload from the "null"
@@ -111,4 +115,76 @@ export function completedRecord<TCompletedMetadata>(
           metadata: metaResult.value as TCompletedMetadata,
         }),
   };
+}
+
+export function failedRecord<TPayload, TMetadata>(
+  row: ChannelIngressRow,
+): ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata> {
+  const payloadResult = parseFailedPayload(row.payload_json);
+  const metadataResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
+  return {
+    id: row.event_id,
+    channelId: row.channel_id,
+    accountId: row.account_id,
+    queueName: row.queue_name,
+    ...(payloadResult.ok && row.payload_json !== "null"
+      ? {
+          // SAFETY: Retained payloads keep the same channel-owned codec contract after failure.
+          payload: payloadResult.value as TPayload,
+        }
+      : {}),
+    ...(metadataResult?.ok
+      ? {
+          // SAFETY: Failure retains the original channel-owned enqueue metadata unchanged.
+          metadata: metadataResult.value as TMetadata,
+        }
+      : {}),
+    receivedAt: row.received_at,
+    updatedAt: row.updated_at,
+    ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
+    attempts: row.attempts,
+    ...(row.last_attempt_at === null ? {} : { lastAttemptAt: row.last_attempt_at }),
+    failedAt: row.failed_at ?? row.updated_at,
+    reason: row.failed_reason ?? "failed",
+    ...(row.last_error === null ? {} : { message: row.last_error }),
+  };
+}
+
+export const CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT = 100;
+
+/** Resolve host policy only for the rows the original bounded scan would visit. */
+export function selectChannelIngressClaim(
+  snapshot: ChannelIngressClaimSnapshot,
+  request: ChannelIngressClaimRequest,
+  resolveLane: (row: ChannelIngressRow) => string | undefined,
+): ChannelIngressClaimSelection {
+  const blocked = new Set(request.blockedLaneKeys);
+  for (const row of snapshot.claimed) {
+    const lane = resolveLane(row);
+    if (lane) {
+      blocked.add(lane);
+    }
+  }
+  const corruptIds: string[] = [];
+  let pending = snapshot.pending;
+  while (true) {
+    const removed = new Set<string>();
+    for (const row of pending.slice(0, Math.max(1, Math.floor(request.scanLimit ?? 100)))) {
+      if (!baseRecord(row)) {
+        if (corruptIds.length < CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
+          corruptIds.push(row.event_id);
+          removed.add(row.event_id);
+        }
+        continue;
+      }
+      const laneKey = resolveLane(row);
+      if (!laneKey || !blocked.has(laneKey)) {
+        return { corruptIds, selected: { id: row.event_id, laneKey } };
+      }
+    }
+    if (removed.size === 0 || corruptIds.length >= CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
+      return { corruptIds };
+    }
+    pending = pending.filter((row) => !removed.has(row.event_id));
+  }
 }

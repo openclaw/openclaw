@@ -5,6 +5,7 @@ import * as diskSpace from "../../infra/disk-space.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { updateGitInstall } from "./update-command-git.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -20,12 +21,12 @@ async function git(root: string, ...args: string[]): Promise<string> {
 }
 
 it.each([
-  { current: true, recorded: true, noOp: true },
-  { current: false, recorded: true, noOp: false },
-  { current: true, recorded: false, noOp: false },
+  { current: true, runtimeReady: true, noOp: true },
+  { current: false, runtimeReady: true, noOp: false },
+  { current: true, runtimeReady: false, noOp: false },
 ])(
-  "checks snapshot space after the Git no-op decision (current=$current, recorded=$recorded)",
-  async ({ current, recorded, noOp }) => {
+  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady)",
+  async ({ current, runtimeReady, noOp }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -50,12 +51,8 @@ it.each([
       await git(root, "add", ".");
       await git(root, "commit", "-m", "fixture");
       const before = await git(root, "rev-parse", "HEAD");
-      if (recorded) {
-        await fs.mkdir(path.join(root, "dist"));
-        await fs.writeFile(
-          path.join(root, "dist", "build-info.json"),
-          JSON.stringify({ commit: before }),
-        );
+      if (runtimeReady) {
+        await writeOpenClawPackageFixture(root, "2026.9.1", { builtSha: before });
       }
       let target = before;
       if (!current) {

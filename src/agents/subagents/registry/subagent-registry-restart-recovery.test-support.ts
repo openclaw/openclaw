@@ -10,6 +10,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
   entries: {} as Record<string, SessionEntry>,
+  storePath: "/tmp/openclaw-subagent-recovery/agents/main/sessions/sessions.json",
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
 }));
@@ -19,11 +20,22 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
-  resolveSessionStorePathCore: () => "/tmp/subagent-recovery.sqlite",
+  resolveSessionStorePathCore: () => mocks.storePath,
 }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
   patchSessionEntryCore: mocks.patchSessionEntryCore,
+}));
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: async (
+    scope: unknown,
+    assertCurrent: () => void,
+    consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<unknown>,
+  ) => {
+    assertCurrent();
+    return await consume({ ok: true, value: mocks.loadSessionEntry(scope) });
+  },
 }));
 
 const childSessionKey = "agent:main:subagent:restart-child";
@@ -75,6 +87,7 @@ export const restartRecoveryTestHarness = {
   recover,
   reset() {
     vi.clearAllMocks();
+    mocks.storePath = "/tmp/openclaw-subagent-recovery/agents/main/sessions/sessions.json";
     mocks.entries = {
       [childSessionKey]: {
         sessionId: "session-id",

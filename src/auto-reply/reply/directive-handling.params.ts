@@ -23,11 +23,9 @@ type HandleDirectiveOnlyCoreParams = {
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
-  policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;

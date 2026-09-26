@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-s
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import * as decisionRuntime from "../../decisions/runtime.js";
 import { DecisionConsumerClosedError } from "../../decisions/validation.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
@@ -16,8 +17,13 @@ import {
   resetPluginRuntimeStateForTest,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { summarizeInStages } from "../compaction.js";
+import { isDecisionAssistanceEligible } from "../decision-assistance.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { setCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
@@ -200,10 +206,7 @@ describe("compaction semantic observer wiring", () => {
     const controller = new AbortController();
     const abortError = new Error("cancel asymmetric semantic observation");
     let started = 0;
-    let resolveStarted!: () => void;
-    const startedBarrier = new Promise<void>((resolve) => {
-      resolveStarted = resolve;
-    });
+    const startedBarrier = createDeferredCore();
     let releaseSlowRequest: (() => void) | undefined;
     const slowRequest = new Promise<void>((resolve) => {
       releaseSlowRequest = resolve;
@@ -211,7 +214,7 @@ describe("compaction semantic observer wiring", () => {
     const { config, builder } = installDecisionFixture("preserved", async (_batch, context) => {
       started += 1;
       if (started === 2) {
-        resolveStarted();
+        startedBarrier.resolve();
       }
       if (started === 1) {
         await new Promise<never>((_resolve, reject) => {
@@ -262,7 +265,7 @@ describe("compaction semantic observer wiring", () => {
       settled = true;
     });
     try {
-      await startedBarrier;
+      await startedBarrier.promise;
       controller.abort(abortError);
       // Flush all queued promise reactions without racing a wall-clock timer.
       await vi.advanceTimersByTimeAsync(0);
@@ -276,6 +279,82 @@ describe("compaction semantic observer wiring", () => {
     await expect(completion).resolves.toEqual({ status: "rejected", error: abortError });
     expect(builder.registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
   });
+
+  it.each(["off", "revoked", "allowed", "during-preparation"])(
+    "gates registered-hook provider dispatch when Labs is %s",
+    async (consent) => {
+      const { config, requests } = installDecisionFixture();
+      config.agents ??= {};
+      config.agents.defaults ??= {};
+      config.agents.defaults.experimental = { decisionAssistance: consent !== "off" };
+      setRuntimeConfigSnapshot(config);
+      const readConfig = createRuntimeConfigReader(config);
+      const sessionManager = stubSessionManager("specialist");
+      setCompactionSafeguardRuntime(sessionManager, {
+        agentId: "specialist",
+        model: createAnthropicModelFixture(),
+        recentTurnsPreserve: 0,
+        semanticCurationMode: "shadow",
+        semanticCurationEligible: () => isDecisionAssistanceEligible(readConfig(), "specialist"),
+      });
+      mockSummarizeInStages.mockReset();
+      mockSummarizeInStages.mockImplementation(async () => {
+        if (consent === "revoked") {
+          const disabled = {
+            ...config,
+            agents: {
+              ...config.agents,
+              defaults: { ...config.agents?.defaults, experimental: { decisionAssistance: false } },
+            },
+          };
+          setRuntimeConfigSnapshot(disabled);
+        }
+        return "The report remains pending.";
+      });
+      const event = createCompactionEvent({ messageText: "Finish the report.", tokensBefore: 100 });
+      event.preparation.messagesToSummarize.push(
+        castAgentMessage(timestampedTextAssistant("Unrelated old discussion.", 2)),
+      );
+      const original = structuredClone(event.preparation.messagesToSummarize);
+      const run = () =>
+        runCompactionScenario({
+          sessionManager,
+          event: {
+            ...event,
+            preparation: { ...event.preparation, settings: { reserveTokens: 4000 } },
+          },
+          apiKey: "test-key",
+        });
+      if (consent === "during-preparation") {
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            isWebchatConnect: () => false,
+            resolveGatewayContext: () => {
+              queueMicrotask(() => {
+                setRuntimeConfigSnapshot({
+                  ...config,
+                  agents: {
+                    ...config.agents,
+                    defaults: {
+                      ...config.agents?.defaults,
+                      experimental: { decisionAssistance: false },
+                    },
+                  },
+                });
+              });
+              return undefined;
+            },
+          },
+          run,
+        );
+      } else {
+        await run();
+      }
+      expect(requests).toHaveLength(consent === "allowed" ? 2 : 0);
+      expect(event.preparation.messagesToSummarize).toEqual(original);
+      expect(mockSummarizeInStages).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(
     [false, true].flatMap((registeredProvider) =>

@@ -228,7 +228,7 @@ export function collectRecoveryInventory(params: {
     } else if (
       current &&
       evidence &&
-      (["dev", "ino", "mtimeNs", "size"] as const).some(
+      (["ino", "mtimeNs", "size"] as const).some(
         (key) => String(current[key]) !== String(evidence.identity[key]),
       )
     ) {

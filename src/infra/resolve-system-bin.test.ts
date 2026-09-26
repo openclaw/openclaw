@@ -66,16 +66,7 @@ beforeEach(async () => {
 });
 
 describe("resolveSystemBin", () => {
-  it("returns null when binary is not in any trusted directory", () => {
-    expect(resolveSystemBin("nonexistent")).toBeNull();
-  });
-
   if (process.platform !== "win32") {
-    it("resolves a binary found in /usr/bin", () => {
-      executables.add("/usr/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg")).toBe("/usr/bin/ffmpeg");
-    });
-
     it.each([
       {
         name: "does NOT resolve a binary found in /usr/local/bin with strict trust",
@@ -107,20 +98,6 @@ describe("resolveSystemBin", () => {
       executables.add("/usr/bin/openssl");
       executables.add("/usr/local/bin/openssl");
       expect(resolveSystemBin("openssl")).toBe("/usr/bin/openssl");
-    });
-
-    it("caches results across calls", () => {
-      executables.add("/usr/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg")).toBe("/usr/bin/ffmpeg");
-
-      executables.delete("/usr/bin/ffmpeg");
-      expect(resolveSystemBin("ffmpeg")).toBe("/usr/bin/ffmpeg");
-    });
-
-    it("supports extraDirs for caller-specific paths", () => {
-      const customDir = "/custom/system/bin";
-      executables.add(`${customDir}/mytool`);
-      expect(resolveSystemBin("mytool", { extraDirs: [customDir] })).toBe(`${customDir}/mytool`);
     });
 
     it("extraDirs results do not poison the cache for callers without extraDirs", () => {

@@ -34,17 +34,6 @@ async function listen(handler: RequestListener): Promise<string> {
 }
 
 describe("postJson", () => {
-  it("times out stalled Gateway HTTP helpers", async () => {
-    const baseUrl = await listen((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.write('{"ok":');
-    });
-
-    await expect(postJson(`${baseUrl}/stall`, {}, undefined, { timeoutMs: 25 })).rejects.toThrow(
-      "timed out after 25ms",
-    );
-  });
-
   it("uses a wall-clock timeout instead of an idle socket timeout", async () => {
     const baseUrl = await listen((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });

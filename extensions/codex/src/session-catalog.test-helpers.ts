@@ -59,8 +59,7 @@ import {
   createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
   type CodexCatalogHome,
 } from "./session-catalog-homes.js";
-import { listPairedNode } from "./session-catalog-node-continue.js";
-import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
+import { catalogError } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -692,9 +691,7 @@ export {
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,
   buildCodexAppServerConnectionFingerprint,
-  listPairedNode,
   catalogError,
-  parseCatalogPage,
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,

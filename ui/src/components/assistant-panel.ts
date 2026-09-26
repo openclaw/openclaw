@@ -423,7 +423,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
               .size=${16}
             ></openclaw-mascot>
             ${(["home", "custodian"] as const).map((destination) =>
-              (destination === "home" ? this.homeAvailable : this.custodianAvailable)
+              this.availableFor(destination)
                 ? html`<button
                     type="button"
                     class="assistant-panel-tab"

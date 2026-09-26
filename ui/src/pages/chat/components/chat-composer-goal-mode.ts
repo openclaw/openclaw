@@ -114,7 +114,7 @@ export function createGoalComposerController(
         void props.onSend();
       }
     },
-    activateCommand(command: SlashCommandDef) {
+    activateCommand: (command: SlashCommandDef) => {
       if (
         command.key !== "goal" ||
         command.source !== "native" ||

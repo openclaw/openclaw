@@ -53,8 +53,8 @@ import {
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
 import {
-  formatCronSessionDiagnosticFields,
-  resolveCronSessionDiagnosticContext,
+  logWithSessionDiagnosticContext,
+  retireSessionDiagnosticLogs,
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
@@ -92,7 +92,6 @@ const webhookStats = {
   received: 0,
   processed: 0,
   errors: 0,
-  lastReceived: 0,
 };
 
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
@@ -378,17 +377,13 @@ function isIdleQueuedRecoverableSessionStall(params: {
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
 }): boolean {
-  const hasEmbeddedOwner =
-    params.activity.activeWorkKind === "embedded_run" ||
-    params.activity.hasActiveEmbeddedRun === true;
   // Also detect orphaned activity (model_call or tool_call left behind
   // without an active embedded owner) so recovery can pump the stale queue.
-  const hasOrphanedActivity =
-    params.activity.activeWorkKind !== undefined && params.activity.hasActiveEmbeddedRun !== true;
   return (
     params.state.state === "idle" &&
     params.state.queueDepth > 0 &&
-    (hasEmbeddedOwner || hasOrphanedActivity) &&
+    (params.activity.activeWorkKind !== undefined ||
+      params.activity.hasActiveEmbeddedRun === true) &&
     (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
   );
 }
@@ -403,7 +398,6 @@ export function logWebhookReceived(params: DiagnosticLogParams<"webhook.received
     return;
   }
   webhookStats.received += 1;
-  webhookStats.lastReceived = Date.now();
   if (diag.isEnabled("debug")) {
     diag.debug(
       `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
@@ -784,26 +778,24 @@ function logSessionAttention(
       : classification.eventType === "session.stalled"
         ? "stalled session"
         : "long-running session";
-  const activityFields = formatSessionActivityLogFields(activity);
-  const sessionFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({
-      sessionKey: params.sessionKey,
-      activeSessionId: params.sessionId,
-    }),
-  );
-  const detailFields = [activityFields, sessionFields].filter(Boolean).join(" ");
-  const message = `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-    params.sessionKey ?? "unknown"
-  } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-    queueDepth
-  } reason=${classification.reason} classification=${classification.classification}${
-    classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-  }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
-  if (classification.eventType === "session.long_running" && queueDepth <= 0) {
-    diag.debug(message);
-  } else {
-    diag.warn(message);
-  }
+  void logWithSessionDiagnosticContext({
+    level:
+      classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
+    sessionKey: params.sessionKey,
+    activeSessionId: params.sessionId,
+    format: (sessionFields) => {
+      const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
+        .filter(Boolean)
+        .join(" ");
+      return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+        params.sessionKey ?? "unknown"
+      } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+        queueDepth
+      } reason=${classification.reason} classification=${classification.classification}${
+        classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
+      }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
+    },
+  });
   const baseEvent = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1022,6 +1014,7 @@ export function startDiagnosticHeartbeat(
 }
 
 export function stopDiagnosticHeartbeat() {
+  retireSessionDiagnosticLogs();
   stopDiagnosticGcObserver();
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);
@@ -1044,7 +1037,6 @@ function resetDiagnosticStateForTest(): void {
   webhookStats.received = 0;
   webhookStats.processed = 0;
   webhookStats.errors = 0;
-  webhookStats.lastReceived = 0;
   resetDiagnosticMemoryForTest();
   resetDiagnosticPhasesForTest();
   resetDiagnosticStabilityRecorderForTest();

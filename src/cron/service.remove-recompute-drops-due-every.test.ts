@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -72,6 +73,8 @@ describe("remove() must not drop a due every-job's pending run", () => {
     });
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,

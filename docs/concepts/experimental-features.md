@@ -125,7 +125,8 @@ awaited results. This helper is not an authority token or a cancellation owner.
 
 Automatic consumers must document their evidence transfer, costs, latency, and
 failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges.
+provider and can incur charges; Labs alone sends no evidence and makes no
+performance or quality claims.
 
 ### Compaction curation
 

@@ -1,9 +1,8 @@
-// Codex migration source file discovery stays filesystem-only and bounded.
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
-import { exists, isDirectory, readJsonObject } from "./helpers.js";
+import { isDirectory, readJsonObject } from "./helpers.js";
 
 const SKILL_FILENAME = "SKILL.md";
 const MAX_SCAN_DEPTH = 6;
@@ -57,32 +56,27 @@ export type CodexMemorySource = {
   path: string;
 };
 
-async function safeReadDir(dir: string): Promise<Dirent[]> {
-  return await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-}
-
-export async function discoverSkillDirs(params: {
-  root: string | undefined;
-  sourceLabel: string;
-  excludeSystem?: boolean;
-}): Promise<CodexSkillSource[]> {
+async function discoverSourceDirs<T>(
+  params: { root: string | undefined; excludeSystem?: boolean },
+  readSource: (dir: string) => Promise<T | undefined>,
+): Promise<T[]> {
   if (!params.root || !(await isDirectory(params.root))) {
     return [];
   }
-  const discovered: CodexSkillSource[] = [];
+  const discovered: T[] = [];
   async function visit(dir: string, depth: number): Promise<void> {
     if (discovered.length >= MAX_DISCOVERED_DIRS || depth > MAX_SCAN_DEPTH) {
       return;
     }
-    const name = path.basename(dir);
-    if (params.excludeSystem && depth === 1 && name === ".system") {
+    if (params.excludeSystem && depth === 1 && path.basename(dir) === ".system") {
       return;
     }
-    if (await exists(path.join(dir, SKILL_FILENAME))) {
-      discovered.push({ name, source: dir, sourceLabel: params.sourceLabel });
+    const source = await readSource(dir);
+    if (source !== undefined) {
+      discovered.push(source);
       return;
     }
-    for (const entry of await safeReadDir(dir)) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (entry.isDirectory()) {
         await visit(path.join(dir, entry.name), depth + 1);
       }
@@ -92,37 +86,38 @@ export async function discoverSkillDirs(params: {
   return discovered;
 }
 
+export async function discoverSkillDirs(params: {
+  root: string | undefined;
+  sourceLabel: string;
+  excludeSystem?: boolean;
+}): Promise<CodexSkillSource[]> {
+  return discoverSourceDirs(params, async (dir) =>
+    (await pathExists(path.join(dir, SKILL_FILENAME)))
+      ? { name: path.basename(dir), source: dir, sourceLabel: params.sourceLabel }
+      : undefined,
+  );
+}
+
 export async function discoverPluginDirs(codexHome: string): Promise<CodexPluginSource[]> {
-  const root = path.join(codexHome, "plugins", "cache");
-  if (!(await isDirectory(root))) {
-    return [];
-  }
-  const discovered = new Map<string, CodexPluginSource>();
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (discovered.size >= MAX_DISCOVERED_DIRS || depth > MAX_SCAN_DEPTH) {
-      return;
-    }
-    const manifestPath = path.join(dir, ".codex-plugin", "plugin.json");
-    if (await exists(manifestPath)) {
+  const discovered = await discoverSourceDirs<CodexPluginSource>(
+    { root: path.join(codexHome, "plugins", "cache") },
+    async (dir) => {
+      const manifestPath = path.join(dir, ".codex-plugin", "plugin.json");
+      if (!(await pathExists(manifestPath))) {
+        return undefined;
+      }
       const manifest = await readJsonObject(manifestPath);
       const manifestName = typeof manifest.name === "string" ? manifest.name.trim() : "";
-      discovered.set(dir, {
+      return {
         name: manifestName || path.basename(dir),
         source: dir,
         migratable: false,
         message:
           "Cached Codex plugin bundle found. Review manually unless the plugin is also installed in the source Codex app-server inventory",
-      });
-      return;
-    }
-    for (const entry of await safeReadDir(dir)) {
-      if (entry.isDirectory()) {
-        await visit(path.join(dir, entry.name), depth + 1);
-      }
-    }
-  }
-  await visit(root, 0);
-  return [...discovered.values()].toSorted((a, b) => a.source.localeCompare(b.source));
+      };
+    },
+  );
+  return discovered.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
 async function discoverCodexMemoryFile(

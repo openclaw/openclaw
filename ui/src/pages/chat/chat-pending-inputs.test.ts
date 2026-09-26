@@ -425,17 +425,16 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it.each(
-    ["direct", "page", "delta"].flatMap((delivery) =>
-      [{ delivery, source: "delivered", custody: "interrupted" }].concat(
-        ["queued", "interrupted", "cancelled", "consumed"].map((custody) => ({
-          delivery,
-          source: "initial",
-          custody,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { delivery: "direct", source: "delivered", custody: "interrupted" },
+    ...["queued", "interrupted", "cancelled", "consumed"].map((custody) => ({
+      delivery: "direct",
+      source: "initial",
+      custody,
+    })),
+    { delivery: "page", source: "initial", custody: "interrupted" },
+    { delivery: "delta", source: "initial", custody: "consumed" },
+  ])(
     "retires an attributed $source source on $delivery $custody custody without disturbing active work",
     async ({ delivery, source, custody }) => {
       const canonical = {

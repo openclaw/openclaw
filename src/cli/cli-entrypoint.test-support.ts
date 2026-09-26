@@ -37,6 +37,25 @@ export const cliRecoveryEntrypoints = {
   },
 } as const;
 
+// Keep the message action and its native command stub in the same prepared graph.
+export const cliMessageExitEntrypoints = {
+  helpers: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/message/helpers",
+    distWorkerPath: "cli/program/message/helpers.js",
+  },
+  command: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/message",
+    distWorkerPath: "commands/message.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "cli/one-shot-exit.js",
+  },
+} as const;
+
 // Report producers remain hookable inside the prepared CLI graph.
 export const doctorOutputEntrypoints = {
   maintenance: {

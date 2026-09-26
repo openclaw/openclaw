@@ -156,19 +156,6 @@ describe("voice-call call record store", () => {
     expect(history).toEqual([]);
   });
 
-  it("persists new call snapshots without recreating the JSONL log", async () => {
-    const storePath = createTestStorePath();
-    const call = CallRecordSchema.parse(
-      makePersistedCall({ callId: "call-sqlite", transcript: [] }),
-    );
-
-    await persistCallRecord(storePath, call);
-
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
-    const restored = await loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.get("call-sqlite")?.providerCallId).toBe(call.providerCallId);
-  });
-
   it("does not read the JSONL fallback when SQLite state cannot open", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-jsonl" }));

@@ -261,7 +261,15 @@ describe.each([
       }
     },
   );
+});
 
+// Talk shares the buffered request owner; settlement above covers its separate entry point.
+describe.each([
+  ["telephony", textToSpeechTelephony],
+  ["buffered speech", synthesizeSpeech],
+] as const)("%s provider selection and ownership", (_surface, synthesize) => {
+  const createFixture = (id = "native-speech", reject = false, order = 10) =>
+    createNativeSpeechFixture(synthesize, id, reject, order);
   it.each(["managed", "managed-config", "raw"] as const)(
     "retains the %s host through setup and synthesis",
     async (owner) => {

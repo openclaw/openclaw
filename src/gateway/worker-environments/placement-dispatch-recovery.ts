@@ -99,7 +99,12 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ) {
             throw new Error("Interrupted worker owner changed while stopping");
           }
-          const released = placements.releaseTurn(claim);
+          const released = await placements.releaseTurn(claim, () => {
+            const releaseEnvironment = environments.get(placement.environmentId);
+            if (!isCurrentActiveWorkerEnvironment(placement, releaseEnvironment)) {
+              throw new Error("Interrupted worker owner changed before release");
+            }
+          });
           if (released.state !== "active") {
             throw new Error("Interrupted worker placement changed during recovery");
           }

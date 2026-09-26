@@ -28,24 +28,6 @@ struct JPEGTranscoder: Sendable {
         min(1.0, max(0.05, quality))
     }
 
-    /// Re-encodes image data to JPEG, optionally downscaling so that the *oriented* pixel width is <= `maxWidthPx`.
-    ///
-    /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
-    ///   relied on).
-    static func transcodeToJPEG(
-        imageData: Data,
-        maxWidthPx: Int?,
-        quality: Double,
-        maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
-    {
-        try self.transcodeToJPEG(
-            imageData: imageData,
-            maxWidthPx: maxWidthPx,
-            maxLongEdgePx: nil,
-            quality: quality,
-            maxBytes: maxBytes)
-    }
-
     /// Re-encodes image data to JPEG, optionally downscaling so the *oriented* longest edge is <= `maxLongEdgePx`.
     ///
     /// When `maxLongEdgePx` is provided it takes precedence over `maxWidthPx`.
@@ -54,7 +36,7 @@ struct JPEGTranscoder: Sendable {
     static func transcodeToJPEG(
         imageData: Data,
         maxWidthPx: Int? = nil,
-        maxLongEdgePx: Int?,
+        maxLongEdgePx: Int? = nil,
         quality: Double,
         maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
     {

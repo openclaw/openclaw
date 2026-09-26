@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
@@ -84,6 +85,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       mentionInbox: { invalidate: invalidateMentions },
     } as unknown as GatewayRequestContext;
     const reloader = startManagedGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => pluginRegistry,
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,

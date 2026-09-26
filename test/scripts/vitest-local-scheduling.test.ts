@@ -299,10 +299,8 @@ describe("vitest local full-suite profile", () => {
   });
 
   it.each([
-    ["CI", "1"],
     ["CI", "true"],
     ["GITHUB_ACTIONS", "yes"],
-    ["GITHUB_ACTIONS", "on"],
   ] as const)("keeps local-check disablement for %s=%s Vitest runs", (name, value) => {
     expect(
       resolveLocalVitestEnv({

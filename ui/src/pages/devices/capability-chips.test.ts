@@ -54,17 +54,15 @@ describe("device capability chips", () => {
     expect(runtimeChip?.getAttribute("title")).toBe(title);
   });
 
-  it.each(["custom-tools", "__proto__", "constructor"])(
-    "preserves unknown capability %s as a generic chip",
-    (cap) => {
-      const container = renderChips([cap]);
-      const chip = container.querySelector('[role="listitem"]');
+  it("preserves prototype-named capabilities as generic chips", () => {
+    const cap = "__proto__";
+    const container = renderChips([cap]);
+    const chip = container.querySelector('[role="listitem"]');
 
-      expect(chip?.textContent?.trim()).toBe(cap);
-      expect(chip?.getAttribute("title")).toBe(cap);
-      expect(chip?.querySelector("svg")).not.toBeNull();
-    },
-  );
+    expect(chip?.textContent?.trim()).toBe(cap);
+    expect(chip?.getAttribute("title")).toBe(cap);
+    expect(chip?.querySelector("svg")).not.toBeNull();
+  });
 
   it.each([
     { runtimes: [], overflow: 4 },

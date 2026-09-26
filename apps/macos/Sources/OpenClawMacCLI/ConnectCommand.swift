@@ -82,18 +82,17 @@ struct ConnectOutput: Encodable {
 
 actor SnapshotStore {
     private var value: (snapshot: HelloOk, generation: UInt64)?
-    // The channel awaits retirement before reconnecting. Keep that socket epoch
-    // so a queued old callback cannot overwrite the replacement snapshot.
-    private var activeGeneration: UInt64?
-    private var lastRetiredGeneration: UInt64?
+    /// The channel awaits retirement before reconnecting. Keep that socket epoch
+    /// so a queued old callback cannot overwrite the replacement snapshot.
+    private var socketGeneration = GatewaySocketGenerationState()
 
     func set(_ snapshot: HelloOk, generation: UInt64) {
-        guard self.admitGeneration(generation) else { return }
+        guard self.socketGeneration.admit(generation) else { return }
         self.value = (snapshot, generation)
     }
 
     func retire(generation: UInt64) {
-        guard self.retireGeneration(generation) else { return }
+        guard self.socketGeneration.retire(generation) else { return }
         if self.value?.generation == generation {
             self.value = nil
         }
@@ -101,35 +100,6 @@ actor SnapshotStore {
 
     func get() -> HelloOk? {
         self.value?.snapshot
-    }
-
-    private func admitGeneration(_ generation: UInt64) -> Bool {
-        if let lastRetiredGeneration,
-           generation <= lastRetiredGeneration
-        {
-            return false
-        }
-        if let activeGeneration {
-            return generation == activeGeneration
-        }
-        self.activeGeneration = generation
-        return true
-    }
-
-    private func retireGeneration(_ generation: UInt64) -> Bool {
-        if let lastRetiredGeneration,
-           generation <= lastRetiredGeneration
-        {
-            return false
-        }
-        if let activeGeneration,
-           generation != activeGeneration
-        {
-            return false
-        }
-        self.activeGeneration = nil
-        self.lastRetiredGeneration = generation
-        return true
     }
 }
 
@@ -210,7 +180,7 @@ func runConnect(_ args: [String], configURL: URL) async {
             error: nil)
         printConnectOutput(output, json: opts.json)
     } catch {
-        let endpoint = bestEffortEndpoint(opts: opts, config: config)
+        let endpoint = try? resolveGatewayEndpoint(opts: opts, config: config)
         let fallbackMode = (opts.mode ?? config.mode ?? "local").lowercased()
         let output = ConnectOutput(
             status: "error",
@@ -311,10 +281,6 @@ func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws 
             local: config.password,
             remote: config.remotePassword),
         mode: resolvedMode)
-}
-
-private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> GatewayEndpoint? {
-    try? resolveGatewayEndpoint(opts: opts, config: config)
 }
 
 private func gatewayEndpoint(

@@ -1,2 +1,1 @@
-// Mattermost plugin module implements setup.secret input behavior.
-export { hasConfiguredSecretInput } from "./secret-input.js";
+export { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";

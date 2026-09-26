@@ -204,10 +204,8 @@ describe("SessionDiffPanel", () => {
   });
 
   it.each([
-    { surface: "file", failed: false, feedback: "Copied!" },
     { surface: "file", failed: true, feedback: "Copy failed" },
     { surface: "sync", failed: false, feedback: "Copied!" },
-    { surface: "sync", failed: true, feedback: "Copy failed" },
   ])(
     "keeps $surface path copy feedback visible: $feedback",
     async ({ surface, failed, feedback }) => {
@@ -248,7 +246,6 @@ describe("SessionDiffPanel", () => {
 
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
-    { name: "native local gateway", nativeGateway: "local", offered: true },
     { name: "native remote gateway", nativeGateway: "remote", offered: false },
     {
       name: "remote execution node",

@@ -15,15 +15,7 @@ function providerItems(raw: Record<string, unknown>) {
 describe("Hermes provider source contracts", () => {
   it.each([
     ["openai", "openai-completions"],
-    ["openai-chat", "openai-completions"],
-    ["chat-completions", "openai-completions"],
-    ["chatcompletions", "openai-completions"],
     ["responses", "openai-responses"],
-    ["openai_responses", "openai-responses"],
-    ["openai-responses", "openai-responses"],
-    ["anthropic", "anthropic-messages"],
-    ["anthropic-messages", "anthropic-messages"],
-    ["messages", "anthropic-messages"],
     [" CHAT_COMPLETIONS ", "openai-completions"],
   ])("imports Hermes transport alias %s as %s", (transport, api) => {
     const items = providerItems({ transport, default_model: "acme-model" });

@@ -25,7 +25,7 @@ describe("security audit cross-agent session access", () => {
       name: "disabled agent-to-agent access",
       cfg: { agents, tools: { agentToAgent: { enabled: false } } },
     },
-    ...[["home", "work"], ["*"], [" "]].map((allow) => ({
+    ...[["home", "work"], [" "]].map((allow) => ({
       name: `configured allow list ${JSON.stringify(allow)}`,
       cfg: { agents, tools: { agentToAgent: { allow } } },
     })),
@@ -101,16 +101,6 @@ describe("security audit cross-agent session access", () => {
   );
 
   it.each([
-    {
-      name: "sandboxed agent",
-      cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
-      signals: ['work: sandbox.mode="all"'],
-    },
-    {
-      name: "inherited non-main sandbox",
-      cfg: { agents: { ...agents, defaults: { sandbox: { mode: "non-main" } } } },
-      signals: ['home: sandbox.mode="non-main"', 'work: sandbox.mode="non-main"'],
-    },
     ...[
       { tools: { deny: ["exec"] }, signal: "tools.deny" },
       { tools: { allow: [] }, signal: "tools.allow" },
@@ -159,12 +149,20 @@ describe("security audit cross-agent session access", () => {
       detail: [
         `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
           "- work: sandboxed sessions clamped to their spawn tree; its transcripts remain readable by the agents above.",
+        'work: sandbox.mode="all"',
+        "different trust levels",
       ],
     },
     {
       name: "non-main sandboxing that keeps main sessions unsandboxed",
       cfg: { agents: { ...agents, defaults: { sandbox: { mode: "non-main" } } } },
-      detail: ["- home: unsandboxed main session;", "- work: unsandboxed main session;"],
+      detail: [
+        "- home: unsandboxed main session;",
+        "- work: unsandboxed main session;",
+        'home: sandbox.mode="non-main"',
+        'work: sandbox.mode="non-main"',
+        "different trust levels",
+      ],
     },
     {
       name: "fully sandboxed agents with the clamp disabled",

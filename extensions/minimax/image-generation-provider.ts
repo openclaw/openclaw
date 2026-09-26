@@ -1,4 +1,3 @@
-// Minimax provider module implements model/runtime integration.
 import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,

@@ -250,14 +250,16 @@ async function withFixture(
         });
         const admittedRunContext = await admission.admit("plugin-harness", runId);
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
-        let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
+        let workerClaim:
+          | Awaited<ReturnType<NonNullable<typeof placements>["claimTurn"]>>
+          | undefined;
         if (placements) {
           seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
             environmentId: "policy-worker",
             sessionId,
             ownerEpoch: 7,
           });
-          let placement = placements.startDispatch(target);
+          let placement = await placements.startDispatch(target);
           placement = placements.transition({
             sessionId,
             from: "requested",
@@ -289,7 +291,7 @@ async function withFixture(
             expectedGeneration: placement.generation,
             patch: { activeOwnerEpoch: 7 },
           });
-          workerClaim = placements.claimTurn({
+          workerClaim = await placements.claimTurn({
             ...target,
             runId,
             claimId: "policy-claim",
@@ -334,7 +336,7 @@ async function withFixture(
           invalidate: async (reason) => {
             if (reason === "claim") {
               if (capturedWorkerClaim) {
-                placements?.releaseTurn(capturedWorkerClaim);
+                await placements?.releaseTurn(capturedWorkerClaim);
               }
               workerClaim = undefined;
             } else if (reason === "aborted") {
@@ -359,10 +361,10 @@ async function withFixture(
             }
           },
           userTurnTranscriptRecorder: recorder,
-          close: () => {
+          close: async () => {
             host.close();
             if (workerClaim) {
-              placements?.releaseTurn(workerClaim);
+              await placements?.releaseTurn(workerClaim);
             }
             admission.close();
             successor?.close();

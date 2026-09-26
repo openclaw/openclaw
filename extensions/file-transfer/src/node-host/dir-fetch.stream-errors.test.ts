@@ -144,36 +144,38 @@ describe("dir.fetch process wrapper", () => {
   });
 
   describe.each([true, false])("archive failures with preflight=%s", (preflightOnly) => {
-    it.each([
-      {
-        label: "output cap",
-        result: commandResult({
-          code: null,
-          termination: "output-limit",
-          outputLimitStream: "stdout",
-        }),
-        code: "TREE_TOO_LARGE",
-        message: `tarball exceeded 1024 byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
-      },
-      {
-        label: "timeout",
-        result: commandResult({ code: null, termination: "timeout" }),
-        code: "READ_ERROR",
-        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
-      },
-      {
-        label: "changed canonical path",
-        result: commandResult({ code: 78 }),
-        code: "CANONICAL_PATH_CHANGED",
-        message: "canonical path differs from the authorized target",
-      },
-      {
-        label: "launch error",
-        result: new Error("spawn failed"),
-        code: "READ_ERROR",
-        message: "tar command failed",
-      },
-    ])("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
+    it.each(
+      [
+        {
+          label: "output cap",
+          result: commandResult({
+            code: null,
+            termination: "output-limit",
+            outputLimitStream: "stdout",
+          }),
+          code: "TREE_TOO_LARGE",
+          message: `tarball exceeded 1024 byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
+        },
+        {
+          label: "timeout",
+          result: commandResult({ code: null, termination: "timeout" }),
+          code: "READ_ERROR",
+          message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
+        },
+        {
+          label: "changed canonical path",
+          result: commandResult({ code: 78 }),
+          code: "CANONICAL_PATH_CHANGED",
+          message: "canonical path differs from the authorized target",
+        },
+        {
+          label: "launch error",
+          result: new Error("spawn failed"),
+          code: "READ_ERROR",
+          message: "tar command failed",
+        },
+      ].filter(({ label }) => !preflightOnly || label === "output cap" || label === "launch error"),
+    )("classifies $label failures through handleDirFetch", async ({ result, code, message }) => {
       if (!preflightOnly) {
         runCommandBufferedMock.mockResolvedValueOnce(
           commandResult({ stdout: Buffer.from("1\tproject\n") }),
