@@ -7,7 +7,10 @@ import type {
   resolveStableChannelMessageIngress,
   StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
+import {
+  resolveBotThreadMentionPolicy,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -389,10 +392,50 @@ export async function resolveClickClackInboundAccess(params: {
       : false,
   });
 
+  const isAdmissionCurrent = () => {
+    if (!isCurrent()) {
+      return false;
+    }
+    if (!isBotOwnedThread) {
+      return true;
+    }
+    // Config publishes before the old channel monitor is aborted during reload.
+    // Recheck mention activation after ingress awaits and again at dispatch.
+    // SAFETY: The policy resolvers only read the host-validated current config.
+    const currentCfg = runtime.config.current() as CoreConfig;
+    const currentGroupPolicy = resolveClickClackGroupPolicy({
+      account: resolveClickClackAccountConfig(currentCfg, params.account.accountId),
+      channelId: params.message.channel_id,
+    });
+    const currentThreadPolicy = resolveBotThreadMentionPolicy({
+      isBotOwnedThread,
+      requireMentionInBotThreads: currentGroupPolicy.requireMentionInBotThreads,
+      requireMention: currentGroupPolicy.requireMention,
+    });
+    return !resolveInboundMentionDecision({
+      facts: resolveClickClackMentionFacts({
+        isDirect: preparedRoute.isDirect,
+        body: params.message.body,
+        mentionPatterns: currentGroupPolicy.mentionPatterns,
+        botHandle: params.account.botHandle,
+        cfg: currentCfg,
+        agentId: preparedRoute.route.agentId,
+        channelId: params.message.channel_id,
+      }),
+      policy: {
+        isGroup: !preparedRoute.isDirect,
+        requireMention: currentThreadPolicy.requireMention,
+        allowTextCommands,
+        hasControlCommand: shouldCheckCommand,
+        commandAuthorized: resolved.commandAccess.authorized,
+      },
+    }).shouldSkip;
+  };
+
   return {
     shouldDispatch:
-      isCurrent() && !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
-    isCurrent,
+      isAdmissionCurrent() && !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
+    isCurrent: isAdmissionCurrent,
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,

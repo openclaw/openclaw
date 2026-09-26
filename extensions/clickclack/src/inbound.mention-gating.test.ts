@@ -662,58 +662,98 @@ describe("ClickClack inbound mention gating", () => {
     },
   );
 
-  it("rejects a bot reassignment while admitted ingress is settling before dispatch", async () => {
-    const runtime = createRuntime();
-    setClickClackRuntime(runtime);
-    const account = createAgentAccount({
-      requireMention: true,
-      requireMentionInBotThreads: false,
-    });
-    const config = createAccountConfig(account);
-    vi.mocked(runtime.config.current).mockReturnValue(config);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(
-        Response.json({
-          message: createMessage({
-            id: "msg_root",
-            thread_root_id: "msg_root",
-            author_id: "usr_receiver",
+  it.each<{
+    name: string;
+    patch: Partial<ClickClackAccountConfig>;
+    body?: string;
+    command?: boolean;
+    shouldDispatch: boolean;
+  }>([
+    { name: "bot identity changes", patch: { botUserId: "usr_other_bot" }, shouldDispatch: false },
+    {
+      name: "thread mentions become required",
+      patch: { requireMentionInBotThreads: true },
+      shouldDispatch: false,
+    },
+    {
+      name: "thread override is removed",
+      patch: { requireMentionInBotThreads: undefined },
+      shouldDispatch: false,
+    },
+    { name: "policy is unchanged", patch: {}, shouldDispatch: true },
+    { name: "an unrelated label changes", patch: { name: "Renamed bot" }, shouldDispatch: true },
+    {
+      name: "newly required mentions are satisfied",
+      patch: { requireMentionInBotThreads: true },
+      body: "@blackbird please follow up",
+      shouldDispatch: true,
+    },
+    {
+      name: "an authorized command retains activation",
+      patch: { requireMentionInBotThreads: true },
+      body: "/status",
+      command: true,
+      shouldDispatch: true,
+    },
+  ])(
+    "rechecks admission when $name while ingress settles",
+    async ({ patch, body, command, shouldDispatch }) => {
+      const runtime = createRuntime();
+      if (command) {
+        vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
+        vi.mocked(runtime.channel.commands.shouldHandleTextCommands).mockReturnValue(true);
+      }
+      setClickClackRuntime(runtime);
+      const account = createAgentAccount({
+        requireMention: true,
+        requireMentionInBotThreads: false,
+      });
+      const config = createAccountConfig(account);
+      vi.mocked(runtime.config.current).mockReturnValue(config);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({
+            message: createMessage({
+              id: "msg_root",
+              thread_root_id: "msg_root",
+              author_id: "usr_receiver",
+            }),
           }),
+        ),
+      );
+      const admitted = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const resolveStable = runtime.channel.inbound.ingress.resolveStable;
+      vi.spyOn(runtime.channel.inbound.ingress, "resolveStable").mockImplementation(
+        async (params) => {
+          const result = await resolveStable(params);
+          admitted.resolve();
+          await resume.promise;
+          return result;
+        },
+      );
+      const handling = handleClickClackInbound({
+        account,
+        config,
+        message: createMessage({
+          parent_message_id: "msg_root",
+          thread_root_id: "msg_root",
+          body: body ?? "please follow up",
         }),
-      ),
-    );
-    const admitted = createDeferred<void>();
-    const resume = createDeferred<void>();
-    const resolveStable = runtime.channel.inbound.ingress.resolveStable;
-    vi.spyOn(runtime.channel.inbound.ingress, "resolveStable").mockImplementation(
-      async (params) => {
-        const result = await resolveStable(params);
-        admitted.resolve();
-        await resume.promise;
-        return result;
-      },
-    );
-    const handling = handleClickClackInbound({
-      account,
-      config,
-      message: createMessage({
-        parent_message_id: "msg_root",
-        thread_root_id: "msg_root",
-        body: "please follow up",
-      }),
-    });
-    await admitted.promise;
-    vi.mocked(runtime.config.current).mockReturnValue({
-      channels: {
-        clickclack: { ...config.channels?.clickclack, botUserId: "usr_other_bot" },
-      },
-    });
-    resume.resolve();
-    await handling;
+      });
+      await admitted.promise;
+      vi.mocked(runtime.config.current).mockReturnValue({
+        channels: {
+          clickclack: { ...config.channels?.clickclack, ...patch },
+        },
+      });
+      resume.resolve();
+      await handling;
 
-    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
-  });
+      expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(shouldDispatch ? 1 : 0);
+    },
+  );
 
   it("rechecks discussion access after the thread root lookup", async () => {
     const runtime = createRuntime();
