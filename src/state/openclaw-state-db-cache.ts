@@ -180,6 +180,16 @@ function closeUnpublishedOpenClawStateDatabaseHandle(database: StateDatabaseHand
   return errors;
 }
 
+/** Preserve physical custody if an unpublished reader cannot reacquire retirement admission. */
+function retireUnpublishedOpenClawStateDatabaseHandle(
+  database: StateDatabaseHandle,
+  options?: OpenClawStateDatabaseCloseOptions,
+): void {
+  retainStateDatabaseClose(database);
+  ownMaintenanceStateDatabaseHandle(database);
+  retireOpenClawStateDatabaseHandle(database, false, options);
+}
+
 /** Retain one exact canonical native owner; only the final reference retires its handle. */
 export const {
   retain: retainOpenClawStateDatabase,
@@ -626,6 +636,7 @@ export const openClawStateDatabaseCache = {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseHandle,
   closeUnpublishedOpenClawStateDatabaseHandle,
+  retireUnpublishedOpenClawStateDatabaseHandle,
   closeStaleCachedOpenClawStateDatabase,
   evictCachedOpenClawStateDatabase,
   evictOpenClawStateDatabaseAfterCorruption,
