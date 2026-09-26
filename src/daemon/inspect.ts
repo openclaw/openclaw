@@ -4,6 +4,8 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findExistingAncestor } from "../infra/fs-safe.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -283,6 +285,7 @@ export async function findSystemGatewayServices(): Promise<ExtraGatewayService[]
 async function scanWindowsStartupEntries(
   env: Record<string, string | undefined>,
   errors: GatewayServiceInventory["errors"],
+  deadline: number,
 ): Promise<InspectedGatewayService[]> {
   let directory: string;
   let selected: Set<string>;
@@ -297,24 +300,36 @@ async function scanWindowsStartupEntries(
   }
   let entries: string[];
   try {
-    entries = await fs.readdir(directory);
-  } catch (error) {
-    try {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      // Windows also reports ENOENT when a path traverses a non-directory.
-      const ancestor = await findExistingAncestor(directory);
-      if (
-        !ancestor ||
-        ancestor === path.resolve(directory) ||
-        !(await fs.stat(ancestor)).isDirectory()
-      ) {
-        throw error;
-      }
-    } catch {
-      errors.push({ source: directory, message: "Windows Startup folder could not be inspected." });
+    const found = await awaitWithinDeadline(
+      async () => {
+        try {
+          return await fs.readdir(directory);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT") || performance.now() >= deadline) {
+            throw error;
+          }
+          // Windows also reports ENOENT when a path traverses a non-directory.
+          const ancestor = await findExistingAncestor(directory);
+          if (
+            !ancestor ||
+            ancestor === path.resolve(directory) ||
+            performance.now() >= deadline ||
+            !(await fs.stat(ancestor)).isDirectory()
+          ) {
+            throw error;
+          }
+          return [];
+        }
+      },
+      deadline,
+      () => performance.now(),
+    );
+    if (found === ABSOLUTE_DEADLINE_EXPIRED) {
+      throw new Error("Startup inventory deadline expired.");
     }
+    entries = found;
+  } catch {
+    errors.push({ source: directory, message: "Windows Startup folder could not be inspected." });
     return [];
   }
   const selectedStartupEntries = new Set<string>();
@@ -324,7 +339,7 @@ async function scanWindowsStartupEntries(
     )
   ) {
     try {
-      const command = await readScheduledTaskCommand(env, { requireLoaded: true });
+      const command = await readScheduledTaskCommand(env, { requireLoaded: true, deadline });
       for (const entry of command?.startupEntryPaths ?? []) {
         selectedStartupEntries.add(path.win32.normalize(entry).toLowerCase());
       }
@@ -337,6 +352,10 @@ async function scanWindowsStartupEntries(
   }
   const services: InspectedGatewayService[] = [];
   for (const entry of entries.toSorted()) {
+    if (performance.now() >= deadline) {
+      errors.push({ source: directory, message: "Startup inventory deadline expired." });
+      break;
+    }
     if (!/\.(?:cmd|vbs)$/i.test(entry)) {
       continue;
     }
@@ -347,6 +366,7 @@ async function scanWindowsStartupEntries(
     let marker: Marker | undefined;
     try {
       const command = await readStartupEntryCommand(pathname, {
+        deadline,
         onLauncherContent: (content) => {
           const hint = detectLauncherGatewayMarker(content);
           gateway ||= Boolean(hint);
@@ -378,8 +398,12 @@ async function scanWindowsStartupEntries(
         ...(profile.kind === "resolved" ? { windowsProfile: profile.profile } : {}),
       });
     } catch {
-      if (gateway || selected.has(pathIdentity)) {
+      const expired = performance.now() >= deadline;
+      if (expired || gateway || selected.has(pathIdentity)) {
         errors.push({ source: pathname, message: "Startup launcher could not be inspected." });
+      }
+      if (expired) {
+        break;
       }
     }
   }
@@ -500,14 +524,33 @@ async function scanGatewayServices(
     if (!opts.deep) {
       return inventory;
     }
+    const deadline = performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
+    const expired = () => deadline - performance.now() < 1;
+    const deadlineError = {
+      source: "schtasks",
+      message: "Scheduled Task inventory deadline expired; some services could not be inspected.",
+    };
+    const recordDeadline = () => {
+      if (!errors.includes(deadlineError)) {
+        errors.push(deadlineError);
+      }
+    };
     let tasks: ReturnType<typeof listScheduledTasks>;
     try {
-      tasks = listScheduledTasks();
+      tasks = listScheduledTasks(deadline - performance.now());
     } catch {
       errors.push({ source: "schtasks", message: "Scheduled tasks could not be queried." });
       tasks = [];
     }
+    if (expired()) {
+      recordDeadline();
+      return inventory;
+    }
     for (const task of tasks) {
+      if (expired()) {
+        recordDeadline();
+        break;
+      }
       const name = task.taskPath?.trim();
       if (!name) {
         continue;
@@ -550,6 +593,7 @@ async function scanGatewayServices(
               requireEffective: true,
               requireLoaded: true,
               profileScope: "registered",
+              deadline,
               onLauncherContent: (content) => {
                 recognizableLauncher ||= Boolean(detectLauncherGatewayMarker(content));
               },
@@ -573,6 +617,10 @@ async function scanGatewayServices(
             gateway = serviceKind === "gateway";
           }
         } catch {
+          if (expired()) {
+            recordDeadline();
+            break;
+          }
           if (
             selected ||
             isOpenClawGatewayTaskName(name) ||
@@ -607,7 +655,11 @@ async function scanGatewayServices(
         ...(profile?.kind === "resolved" ? { windowsProfile: profile.profile } : {}),
       });
     }
-    for (const service of await scanWindowsStartupEntries(env, errors)) {
+    if (expired()) {
+      recordDeadline();
+      return inventory;
+    }
+    for (const service of await scanWindowsStartupEntries(env, errors, deadline)) {
       push(service);
     }
     return inventory;

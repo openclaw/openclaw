@@ -183,7 +183,7 @@ control over it.
 Local builds also check these definitions for a running Gateway using that
 installation's `dist`. Stop the matching Gateway before rebuilding its files.
 
-Doctor and deep status provide read-only `schtasks /Query` hints for extra Scheduled Tasks, including Node hosts. Review the registered command and purpose before choosing removal through the service's owner.
+Doctor and deep status provide read-only `schtasks /Query` hints for extra Scheduled Tasks, including Node hosts. Discovery shares one 60-second budget across the inventory query, Startup directory scan, and launcher inspection. If it expires, completed discoveries remain available and Doctor reports that some services could not be inspected. Review the registered command and purpose before choosing removal through the service's owner.
 
 Doctor compares task definitions using Task Scheduler's defaults. An omitted
 `Enabled` element means `true` for both the task and its logon trigger, so XML
