@@ -23,7 +23,9 @@ Inspect shows identity, load status, source, manifest capabilities, policy flags
 Default human inspection uses `enabled`, `disabled`, or `error` status labels,
 matching `plugins list`. It describes the metadata snapshot; it does not claim
 that a plugin module was imported. With `--runtime`, successful runtime inspection
-uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
+uses `loaded` and labels that result as this CLI process, not the running Gateway.
+JSON keeps the registry `status` and `imported` fields and adds `inspectionScope: "cli"`.
+Use `openclaw health` or `openclaw gateway status` for the running Gateway.
 
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 

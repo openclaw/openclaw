@@ -85,10 +85,12 @@ it.each([false, true])(
       plugins: [expect.objectContaining(plugin)],
     });
     for (const command of ["info", "inspect"]) {
-      expect(await runPluginsCommand([command, pluginId])).toMatchObject({
+      const inspected = await runPluginsCommand([command, pluginId]);
+      expect(inspected).toMatchObject({
         plugin: { ...plugin, imported: false },
         capabilities: [{ kind: "cli-backend", ids: cliBackendIds }],
       });
+      expect(inspected).not.toHaveProperty("inspectionScope");
     }
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   },
@@ -107,6 +109,7 @@ it.each([false, true])(
         cliBackendIds: [],
       },
       capabilities: [],
+      inspectionScope: "cli",
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(enabled);
   },
@@ -154,5 +157,6 @@ it("registered plugins inspect --runtime reports registrations rather than unreg
       cliBackendIds: ["runtime-cli"],
     },
     capabilities: [{ kind: "cli-backend", ids: ["runtime-cli"] }],
+    inspectionScope: "cli",
   });
 });

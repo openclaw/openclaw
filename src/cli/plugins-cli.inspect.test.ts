@@ -358,7 +358,48 @@ describe("plugins cli inspect", () => {
 
     await runPluginsCommand(["plugins", ...args]);
 
-    expect(readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format)).toBe("loaded");
+    const rendered = stripVTControlCharacters(pluginsCliRuntimeLogs.join("\n"));
+    expect(readRenderedStatus(rendered, format)).toBe(
+      format === "detail" ? "loaded (this CLI process, not the Gateway)" : "loaded",
+    );
+    if (format === "table") {
+      expect(rendered).toContain(
+        "Runtime inspection runs in this CLI process. It does not describe the running Gateway.",
+      );
+    }
+  });
+
+  it("labels runtime JSON as this CLI process without changing registry status", async () => {
+    const plugin = createPluginRecord({ id: "display-probe", name: "Display", imported: true });
+    const report = { plugins: [plugin], diagnostics: [] };
+    const inspect = createInspectReport({ plugin });
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
+      formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+    );
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+    for (const args of [
+      ["inspect", plugin.id, "--runtime", "--json"],
+      ["inspect", "--all", "--runtime", "--json"],
+    ]) {
+      pluginsCliRuntimeLogs.length = 0;
+      await runPluginsCommand(["plugins", ...args]);
+      const json = JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null") as
+        | { inspectionScope?: string; plugin?: { status?: string } }
+        | Array<{ inspectionScope?: string; plugin?: { status?: string } }>;
+      const entry = Array.isArray(json) ? json[0] : json;
+      expect(entry?.plugin?.status).toBe("loaded");
+      expect(entry?.inspectionScope).toBe("cli");
+    }
+
+    pluginsCliRuntimeLogs.length = 0;
+    await runPluginsCommand(["plugins", "inspect", plugin.id, "--json"]);
+    const cold = JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null") as {
+      inspectionScope?: string;
+    };
+    expect(cold.inspectionScope).toBeUndefined();
   });
 
   it.each([false, true].flatMap((all) => [false, true].map((json) => ({ all, json }))))(
@@ -462,8 +503,13 @@ describe("plugins cli inspect", () => {
           await command;
           if (json) {
             expect(pluginsCliRuntimeLogs).toHaveLength(1);
+            const expected = selection === "single" ? inspect : reports;
             expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toEqual(
-              selection === "single" ? inspect : reports,
+              runtime
+                ? Array.isArray(expected)
+                  ? expected.map((entry) => ({ ...entry, inspectionScope: "cli" }))
+                  : { ...expected, inspectionScope: "cli" }
+                : expected,
             );
           }
         }
@@ -518,7 +564,9 @@ describe("plugins cli inspect", () => {
       }
       await runPluginsCommand(["plugins", "inspect", "--all", "--json", ...runtimeArgs]);
       expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toEqual(
-        reports.map(({ plugin }) => ({ plugin, install })),
+        reports.map(({ plugin }) =>
+          runtime ? { plugin, install, inspectionScope: "cli" as const } : { plugin, install },
+        ),
       );
     },
   );
