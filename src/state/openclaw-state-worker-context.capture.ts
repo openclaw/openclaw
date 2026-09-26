@@ -14,7 +14,7 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 /** Capture read authority without constructing a worker environment. */
-export function captureOpenClawStateReadContext(
+export function captureOpenClawStateReadContextWithAdmission(
   pathname: string,
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
 ): Pick<
@@ -49,7 +49,7 @@ export function captureOpenClawStateReadContext(
 }
 
 /** Capture host facts before asynchronous work, without opening SQLite. */
-export function captureOpenClawStateWorkerContext(
+export function captureOpenClawStateWorkerContextWithAdmission(
   options: {
     path?: string;
     env?: NodeJS.ProcessEnv;
@@ -63,7 +63,7 @@ export function captureOpenClawStateWorkerContext(
     ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
   };
   return {
-    ...captureOpenClawStateReadContext(
+    ...captureOpenClawStateReadContextWithAdmission(
       options.path ?? resolveOpenClawStateSqlitePath(environment),
       captureAdmission,
     ),
