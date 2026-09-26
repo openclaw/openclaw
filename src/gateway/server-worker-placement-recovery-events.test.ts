@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -94,6 +98,7 @@ async function withRecoveryRuntime(
     >;
     placements: Map<string, RecoveryPlacement>;
     runtime: ReturnType<typeof createGatewayWorkerPlacementRuntime>;
+    time: ReturnType<typeof createGatewaySchedulerClock>;
     start: () => Promise<void>;
     stop: () => Promise<void>;
     catalogChanged: (profileId: string) => void;
@@ -101,7 +106,8 @@ async function withRecoveryRuntime(
   }) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    vi.useFakeTimers();
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
     runtimeMocks.publicationWarn.mockClear();
     runtimeMocks.destroyEnvironment.mockReset();
     const changes = vi.fn();
@@ -165,6 +171,7 @@ async function withRecoveryRuntime(
       ),
     );
     const runtime = createGatewayWorkerPlacementRuntime({
+      scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
@@ -195,6 +202,7 @@ async function withRecoveryRuntime(
         readChangeSnapshot,
         placements,
         runtime,
+        time,
         start: async () => {
           sidecar.current = await runtime.startRuntime({
             isClosePreludeStarted: () => false,
@@ -215,7 +223,6 @@ async function withRecoveryRuntime(
       await sidecar.current?.stop();
       await flushPendingSessionsChangedEvents(context);
       unsubscribeChanges();
-      vi.useRealTimers();
     }
   });
 }
@@ -318,14 +325,19 @@ describe("worker placement recovery session events", () => {
           }
         },
       },
-      async ({ context, changes, start }) => {
+      async ({ context, changes, start, time }) => {
         const initialMutationVersion = changes.mock.calls.length;
         await start();
-        await vi.advanceTimersByTimeAsync(60_000);
+        await time.advanceBy(60_000);
+        sweepCount = 0;
+        await time.advanceBy(60_000);
+        expect(sweepCount).toBe(1);
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(changes.mock.calls.length).toBe(initialMutationVersion);
 
-        await vi.advanceTimersByTimeAsync(60_000);
+        await time.advanceBy(60_000);
+        expect(sweepCount).toBe(2);
+        await flushPendingSessionsChangedEvents(context);
 
         expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",
