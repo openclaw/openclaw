@@ -68,6 +68,7 @@ import {
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getSharedCodexAppServerClientState,
+  ownCodexStartup,
   retireSharedCodexAppServerClientIfCurrent,
   retirePendingSharedClientEntryIfUnclaimed,
   waitForUnclaimedSharedClientStartup,
@@ -118,16 +119,6 @@ type CodexAppServerClientStartupOptions = {
 };
 
 const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE = "codex app-server initialize timed out";
-
-function ownCodexStartup<T>(
-  lifetime: CodexAppServerStartupLifetime,
-  operation: Promise<T>,
-): Promise<T> {
-  lifetime.pending.add(operation);
-  const release = () => lifetime.pending.delete(operation);
-  void operation.then(release, release);
-  return operation;
-}
 
 async function prepareCodexAppServerClient(options?: CodexAppServerClientOptions) {
   const lifetime = getSharedCodexAppServerClientState().startup;
@@ -1079,6 +1070,11 @@ async function startInitializedCodexAppServerClient(
       }
       throw error;
     }
+    client.addCloseHandler((closedClient) => {
+      // Retired transports leave liveClients on exit; their admitted local work
+      // must still settle before this plugin generation releases its resources.
+      void ownCodexStartup(params.lifetime, closedClient.waitForCloseWork());
+    });
     let ready = false;
     try {
       const nativeCommandAtStart =

@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindingStoreKey,
@@ -14,11 +12,12 @@ import {
   createStoredCodexAppServerBinding,
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerThreadBinding,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 
@@ -117,7 +116,7 @@ describe("Codex app-server binding codec", () => {
   it("canonicalizes undefined fields and preserves empty instruction snapshots in JSON-only plugin state", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
     try {
-      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+      const state = createCodexSqliteTestBindingStateStore({
         namespace: "app-server-thread-bindings-json-test",
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -195,6 +194,7 @@ describe("Codex app-server binding codec", () => {
       await expect(store.mutate(identity, { kind: "clear" })).resolves.toBe(true);
       expect(store.read(identity)).toBeUndefined();
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

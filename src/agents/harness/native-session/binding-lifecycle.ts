@@ -128,19 +128,27 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
                 if (deleted) {
                   return;
                 }
-                const current = state.lookup(key);
-                const parsed = options.readRecord(current);
-                const { lease, ...value } = parsed ?? {};
-                if (
-                  !current ||
-                  lease?.token !== owner.token ||
-                  lease.expiresAt <= Date.now() ||
-                  !isDeepStrictEqual(value, expectedValue) ||
-                  !deleteIf(key, (raw) => isDeepStrictEqual(raw, current))
-                ) {
+                let removed: TRecord | undefined;
+                const applied = deleteIf(key, (raw) => {
+                  const parsed = options.readRecord(raw);
+                  const { lease, ...value } = parsed ?? {};
+                  if (
+                    lease?.token !== owner.token ||
+                    lease.expiresAt <= Date.now() ||
+                    !isDeepStrictEqual(value, expectedValue)
+                  ) {
+                    return false;
+                  }
+                  // Renewal can finish while synchronous deletion awaits admission.
+                  // Compare ownership and payload in this transaction, retaining the
+                  // exact removed row for rollback rather than a pre-wait snapshot.
+                  removed = raw;
+                  return true;
+                });
+                if (!applied || !removed) {
                   throw new Error(options.errors.deletionChanged);
                 }
-                deleted = current;
+                deleted = removed;
                 // The host commits synchronously after removal; heartbeat
                 // renewal must not recreate a row during artifact publication.
                 owner.phase = "deleted";
@@ -202,4 +210,7 @@ type NativeSessionBindingDeletionOptions<TRecord extends NativeSessionBindingRec
     assertRecordCurrent: (current: TRecord | undefined) => void;
   };
 
-export type { NativeSessionBindingLeaseOptions } from "./binding-leases.js";
+export type {
+  NativeSessionBindingLeaseOptions,
+  NativeSessionBindingStateStore,
+} from "./binding-leases.js";

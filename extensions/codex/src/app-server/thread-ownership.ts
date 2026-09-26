@@ -231,26 +231,29 @@ export async function retireCodexConversationThreadBinding(params: {
       assertCurrent?.();
       await releaseCodexAppServerBindingSubscription(current, {
         allowUntracked: params.allowUntracked,
+        assertCurrent,
       });
-      const cleared = await params.bindingStore.mutate(params.identity, {
-        kind: "clear",
-        threadId: current.threadId,
-      });
+      const cleared = await params.bindingStore.mutate(
+        params.identity,
+        { kind: "clear", threadId: current.threadId },
+        assertCurrent,
+      );
       if (!cleared || !params.afterClear) {
         return cleared;
       }
       try {
+        assertCurrent?.();
         await params.afterClear();
         return true;
       } catch (error) {
         try {
           // Public binding storage commits separately. Restore its exact native
           // owner on failure without ever overwriting a replacement generation.
-          const restored = await params.bindingStore.mutate(params.identity, {
-            kind: "set",
-            binding: current,
-            if: { kind: "absent" },
-          });
+          const restored = await params.bindingStore.mutate(
+            params.identity,
+            { kind: "set", binding: current, if: { kind: "absent" } },
+            assertCurrent,
+          );
           if (!restored) {
             throw new Error("the previous Codex binding generation could not be restored", {
               cause: error,

@@ -1,3 +1,4 @@
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import {
   appendTaskEvent,
   normalizeTaskStatus,
@@ -87,10 +88,13 @@ export function prepareTaskRecordUpdate(
 }
 
 function prepareStateTransition(
-  current: TaskRecord,
-  params: TaskRunStateTransitionParams,
+  currentInput: TaskRecord,
+  transitionInput: TaskRunStateTransitionParams,
   now: number,
 ) {
+  const incognito = isIncognitoTask(currentInput) || isIncognitoTask(transitionInput);
+  const current = projectTaskContentForPersistence(incognito, currentInput);
+  const params = projectTaskContentForPersistence(incognito, transitionInput);
   const patch: Partial<TaskRecord> = {};
   const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
   if (

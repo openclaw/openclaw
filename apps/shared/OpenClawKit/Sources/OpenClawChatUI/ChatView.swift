@@ -617,14 +617,15 @@ public struct OpenClawChatView: View {
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
             if !preparedText.segments.isEmpty {
-                ChatStreamingAssistantBubble(
+                EquatableChatStreamingAssistantBubble(bubble: ChatStreamingAssistantBubble(
                     text: preparedText,
                     markdownVariant: self.markdownVariant,
                     assistantName: self.assistantName,
                     assistantAvatarText: self.assistantAvatarText,
                     assistantAvatarTint: self.assistantAvatarTint,
                     showsAssistantAvatar: self.showsAssistantAvatars,
-                    isClean: self.composerChrome == .clean)
+                    isClean: self.composerChrome == .clean))
+                    .equatable()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

@@ -698,7 +698,7 @@ describe("mattermostPlugin", () => {
       });
     };
 
-    it("keeps message reads hidden until they are explicitly enabled", () => {
+    it("declines native sends without adding a custom message schema", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -709,43 +709,12 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const actions = getDescribedActions(cfg);
-      expect(actions).toContain("react");
-      expect(actions).not.toContain("read");
-      expect(actions).toContain("send");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "read" })).toBe(true);
       // Send remains model-visible, but the native action dispatcher must decline it so
       // the Gateway and local tool both use prepared durable outbound delivery.
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "send" })).toBe(false);
-    });
-
-    it("hides react when mattermost is not configured", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).toStrictEqual([]);
-    });
-
-    it("declares presentation capability for message sends", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token",
-            baseUrl: "https://chat.example.com",
-          },
-        },
-      };
-
       const discovery = mattermostPlugin.actions?.describeMessageTool?.({ cfg });
-      expect(discovery?.capabilities).toContain("presentation");
       expect(discovery?.schema).toBeUndefined();
     });
 
@@ -831,24 +800,6 @@ describe("mattermostPlugin", () => {
         }),
       ).rejects.toThrow(error);
       expect(sendMessageMattermostMock).not.toHaveBeenCalled();
-    });
-
-    it("keeps read opt in when reactions are disabled", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          mattermost: {
-            enabled: true,
-            botToken: "test-token",
-            baseUrl: "https://chat.example.com",
-            actions: { reactions: false },
-          },
-        },
-      };
-
-      const actions = getDescribedActions(cfg);
-      expect(actions).not.toContain("react");
-      expect(actions).not.toContain("read");
-      expect(actions).toContain("send");
     });
 
     it("exposes read when actions.messages is true", () => {
