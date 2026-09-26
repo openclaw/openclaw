@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -41,7 +42,9 @@ it("evicts the least recently used avatar at the byte budget before the entry li
   });
   releases.push(retainUserProfileCatalog(options));
   const load = async (index: number) => {
-    const prepared = await createProfileAvatarReader(profiles[index].id, options).inspect();
+    const profile = profiles[index];
+    assert(profile);
+    const prepared = await createProfileAvatarReader(profile.id, options).inspect();
     return await prepared.loadBytes();
   };
   for (let index = 0; index < 32; index++) {
