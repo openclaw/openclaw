@@ -64,10 +64,14 @@ export async function expectPendingUntilAbort(params: {
   assertBeforeAbort?: () => void;
   assertAfterAbort?: () => void;
 }) {
-  await params.waitForStarted();
-  expect(params.isSettled()).toBe(false);
-  params.assertBeforeAbort?.();
-  await abortStartedAccount({ abort: params.abort, task: params.task });
+  try {
+    await params.waitForStarted();
+    expect(params.isSettled()).toBe(false);
+    params.assertBeforeAbort?.();
+  } finally {
+    // A failed assertion must not leave an account running into the next test.
+    await abortStartedAccount({ abort: params.abort, task: params.task });
+  }
   params.assertAfterAbort?.();
 }
 

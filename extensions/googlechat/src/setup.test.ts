@@ -23,7 +23,7 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   listGoogleChatAccountIds,
   resolveGoogleChatAccount,
@@ -91,6 +91,11 @@ async function waitForGoogleChatMonitorStarted() {
 }
 
 describe("googlechat setup", () => {
+  beforeAll(async () => {
+    // Complete the real resolver's imports before measuring monitor startup.
+    await import("./channel.runtime.js");
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
@@ -417,10 +422,13 @@ describe("googlechat setup", () => {
       abortSignal: firstAbort.signal,
     });
     const firstRun = startGoogleChatGatewayAccount(ctx);
-    await waitForGoogleChatMonitorStarted();
-    expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
-    firstAbort.abort();
-    await firstRun;
+    try {
+      await waitForGoogleChatMonitorStarted();
+      expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
+    } finally {
+      firstAbort.abort();
+      await firstRun;
+    }
 
     hoisted.startGoogleChatMonitor.mockClear();
     const secondAbort = new AbortController();
@@ -432,13 +440,15 @@ describe("googlechat setup", () => {
       },
       abortSignal: secondAbort.signal,
     });
-    await waitForGoogleChatMonitorStarted();
-
-    const restarted = ctx.getStatus();
-    expect(restarted.lifecycle).toBe("blocked");
-    expect(restarted.webhookPath).toBeUndefined();
-    secondAbort.abort();
-    await secondRun;
+    try {
+      await waitForGoogleChatMonitorStarted();
+      const restarted = ctx.getStatus();
+      expect(restarted.lifecycle).toBe("blocked");
+      expect(restarted.webhookPath).toBeUndefined();
+    } finally {
+      secondAbort.abort();
+      await secondRun;
+    }
   });
 
   it("clears running status when monitor startup fails", async () => {
