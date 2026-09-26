@@ -18,7 +18,7 @@ type NextcloudTalkConfig = Omit<z.input<typeof NextcloudTalkConfigSchema>, "acco
 };
 
 export type CoreConfig = {
-  channels?: {
+  channels?: NonNullable<OpenClawConfig["channels"]> & {
     "nextcloud-talk"?: NextcloudTalkConfig;
   };
   gateway?: OpenClawConfig["gateway"];
@@ -56,22 +56,15 @@ export type NextcloudTalkWebhookHeaders = {
   backend: string;
 };
 
-/** Options for the webhook server. */
-export type NextcloudTalkWebhookServerOptions = {
-  port: number;
-  host: string;
+/** One account served by a Gateway webhook route. */
+export type NextcloudTalkWebhookTarget = {
+  accountId?: string;
+  legacyListener?: { port: number; host?: string };
   path: string;
   secret: string;
-  maxBodyBytes?: number;
-  authRateLimit?: {
-    maxRequests?: number;
-    windowMs?: number;
-  };
-  readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   onWebhook: (rawBody: string) => Promise<"accepted" | "ignored">;
   onError?: (error: Error) => void;
-  abortSignal?: AbortSignal;
 };
