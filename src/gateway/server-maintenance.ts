@@ -250,8 +250,9 @@ export function startGatewayMaintenanceTimers(params: {
         limits: resolveWorktreeCleanupLimits(),
       });
     });
+  let worktreeGcInFlight: Promise<void> | undefined;
   const performWorktreeGc = () =>
-    periodicWork
+    (worktreeGcInFlight ??= periodicWork
       .track(runWorktreeGc)
       .then((result) => {
         if (!result) {
@@ -265,11 +266,12 @@ export function startGatewayMaintenanceTimers(params: {
       })
       .catch((err: unknown) => {
         params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-      });
+      })
+      .finally(() => {
+        worktreeGcInFlight = undefined;
+      }));
+  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
-  if (!restartDrainSignal.aborted) {
-    void performWorktreeGc();
-  }
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
