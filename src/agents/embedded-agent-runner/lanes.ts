@@ -43,6 +43,4 @@ export function resolveGlobalLane(
   return cleaned ? cleaned : CommandLane.Main;
 }
 
-export function resolveEmbeddedSessionLane(key: string) {
-  return resolveSessionLane(key);
-}
+export { resolveSessionLane as resolveEmbeddedSessionLane };

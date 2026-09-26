@@ -1,11 +1,4 @@
-/**
- * AbortSignal-aware promise racing helper for embedded-agent attempts.
- */
 import { toErrorObject } from "../../../infra/errors.js";
-
-function getAbortReason(signal: AbortSignal): unknown {
-  return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
-}
 
 /** Marks AbortErrors produced by abortable() so provider aborts stay retryable. */
 const OPENCLAW_ABORTABLE_WRAPPER = Symbol.for("openclaw.abortable.wrapper");
@@ -14,21 +7,13 @@ export function isOpenClawAbortableWrapper(err: unknown): boolean {
   return err !== null && typeof err === "object" && OPENCLAW_ABORTABLE_WRAPPER in err;
 }
 
-function tagAsAbortableWrapper(err: Error): Error {
-  (err as Error & { [OPENCLAW_ABORTABLE_WRAPPER]?: true })[OPENCLAW_ABORTABLE_WRAPPER] = true;
-  return err;
-}
-
 export function createAbortableError(signal: AbortSignal): Error {
-  const reason = getAbortReason(signal);
-  if (reason instanceof Error) {
-    const err = new Error(reason.message, { cause: reason });
-    err.name = "AbortError";
-    return tagAsAbortableWrapper(err);
-  }
-  const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-  err.name = "AbortError";
-  return tagAsAbortableWrapper(err);
+  const reason: unknown = signal.reason;
+  const err = new Error(
+    reason instanceof Error ? reason.message : "aborted",
+    reason ? { cause: reason } : undefined,
+  );
+  return Object.assign(err, { name: "AbortError", [OPENCLAW_ABORTABLE_WRAPPER]: true });
 }
 
 // Post-turn joins (pending subscription handlers, block-reply flush) ride

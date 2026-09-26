@@ -6,6 +6,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -15,9 +16,9 @@ import {
 import { mapThinkingLevelForProvider } from "./utils.js";
 
 export async function prepareCompactionSessionAgent(params: {
-  session: { agent: { streamFn?: unknown } };
+  session: { agent: { streamFn?: StreamFn } };
   llmRuntime: LlmRuntime;
-  providerStreamFn: unknown;
+  providerStreamFn: StreamFn | undefined;
   sessionId: string;
   signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
@@ -62,8 +63,8 @@ export async function prepareCompactionSessionAgent(params: {
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStream({
     llmRuntime: params.llmRuntime,
-    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
-    providerStreamFn: params.providerStreamFn as never,
+    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session }),
+    providerStreamFn: params.providerStreamFn,
     sessionId: params.sessionId,
     signal: params.signal,
     model: params.effectiveModel,
@@ -80,11 +81,11 @@ export async function prepareCompactionSessionAgent(params: {
   });
   if (providerTextTransforms) {
     params.session.agent.streamFn = wrapStreamFnTextTransforms({
-      streamFn: params.session.agent.streamFn as never,
+      streamFn: params.session.agent.streamFn,
       input: providerTextTransforms.input,
       output: providerTextTransforms.output,
       transformSystemPrompt: false,
-    }) as never;
+    });
   }
   const providerThinkingLevel = mapThinkingLevelForProvider(
     params.thinkLevel,
@@ -97,7 +98,7 @@ export async function prepareCompactionSessionAgent(params: {
     model: params.effectiveModel,
   });
   const extraParams = applyExtraParamsToAgent(
-    params.session.agent as never,
+    params.session.agent,
     params.config,
     params.provider,
     params.modelId,

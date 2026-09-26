@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -50,10 +51,6 @@ function readCliMcpDelegationCapability(run: object): DelegationCapability | und
   return capability === "full" || capability === "report_only" ? capability : undefined;
 }
 
-export function normalizeOptionalMcpContextValue(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
-}
-
 function buildCliMcpExecSession(
   sessionEntry: RunCliAgentParams["sessionEntry"],
   execOverrides: RunCliAgentParams["execOverrides"],
@@ -64,8 +61,8 @@ function buildCliMcpExecSession(
       ? SESSION_PERMISSION_BY_EXEC_MODE[execOverrides.mode]
       : permissionMode;
   const execSession = {
-    execHost: normalizeOptionalMcpContextValue(sessionEntry?.execHost),
-    execNode: normalizeOptionalMcpContextValue(sessionEntry?.execNode),
+    execHost: normalizeOptionalString(sessionEntry?.execHost),
+    execNode: normalizeOptionalString(sessionEntry?.execNode),
     ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
   };
   return Object.values(execSession).some(Boolean) ? execSession : undefined;
@@ -111,9 +108,9 @@ function buildCliMcpChannelContext(
   senderId?: string | null,
 ): McpLoopbackRequestContext["channelContext"] {
   const resolvedSenderId =
-    normalizeOptionalMcpContextValue(senderId ?? undefined) ??
-    normalizeOptionalMcpContextValue(channelContext?.sender?.id);
-  const chatId = normalizeOptionalMcpContextValue(channelContext?.chat?.id);
+    normalizeOptionalString(senderId ?? undefined) ??
+    normalizeOptionalString(channelContext?.sender?.id);
+  const chatId = normalizeOptionalString(channelContext?.chat?.id);
   if (!resolvedSenderId && !chatId) {
     return undefined;
   }
@@ -147,9 +144,7 @@ export function buildCliMcpGrantContext(params: {
   toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
-  const runtimePolicySessionKey = normalizeOptionalMcpContextValue(
-    params.run.runtimePolicySessionKey,
-  );
+  const runtimePolicySessionKey = normalizeOptionalString(params.run.runtimePolicySessionKey);
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
@@ -157,17 +152,17 @@ export function buildCliMcpGrantContext(params: {
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
-  const senderName = normalizeOptionalMcpContextValue(params.run.senderName ?? undefined);
-  const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername ?? undefined);
-  const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164 ?? undefined);
-  const groupId = normalizeOptionalMcpContextValue(params.run.groupId ?? undefined);
-  const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
-  const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
-  const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
+  const senderName = normalizeOptionalString(params.run.senderName ?? undefined);
+  const senderUsername = normalizeOptionalString(params.run.senderUsername ?? undefined);
+  const senderE164 = normalizeOptionalString(params.run.senderE164 ?? undefined);
+  const groupId = normalizeOptionalString(params.run.groupId ?? undefined);
+  const groupChannel = normalizeOptionalString(params.run.groupChannel ?? undefined);
+  const groupSpace = normalizeOptionalString(params.run.groupSpace ?? undefined);
+  const spawnedBy = normalizeOptionalString(params.run.spawnedBy ?? undefined);
   const messageProvider = resolveGatewayMessageChannel(
     params.run.messageChannel ?? params.run.messageProvider,
   );
-  const currentChannelId = normalizeOptionalMcpContextValue(params.run.currentChannelId);
+  const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
   // Trusted message-only completions stay restricted even when source routing
@@ -183,10 +178,10 @@ export function buildCliMcpGrantContext(params: {
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
-    sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
-    runId: normalizeOptionalMcpContextValue(params.run.runId),
+    sessionId: normalizeOptionalString(params.run.sessionId),
+    runId: normalizeOptionalString(params.run.runId),
     workspaceDir: params.run.workspaceDir,
-    ...(normalizeOptionalMcpContextValue(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
+    ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
     // Restricted runs get their allowlist stamped into the grant; the
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
@@ -219,14 +214,14 @@ export function buildCliMcpGrantContext(params: {
     gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     ...(params.run.pinnedWidgetAuthoring === true ? { pinnedWidgetAuthoring: true } : {}),
     currentChannelId,
-    currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
+    currentThreadTs: normalizeOptionalString(params.run.currentThreadTs),
     currentMessageId:
       params.run.currentMessageId == null
         ? undefined
-        : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
+        : normalizeOptionalString(String(params.run.currentMessageId)),
     replyToMode: params.run.replyToMode,
     currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
-    accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
+    accountId: normalizeOptionalString(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     ...(sourceReplyOnly ? { sourceReplyOnly: true } : {}),
@@ -238,7 +233,7 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
-    ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
+    ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),
     ...(channelContext ? { channelContext } : {}),

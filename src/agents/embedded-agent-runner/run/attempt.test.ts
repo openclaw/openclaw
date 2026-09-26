@@ -1,4 +1,5 @@
 // Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
 import {
@@ -27,7 +28,6 @@ import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
   mergeOrphanedTrailingUserPrompt,
-  prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -2623,9 +2623,9 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   });
 });
 
-describe("prependSystemPromptAddition", () => {
+describe("context engine system prompt additions", () => {
   it("prepends context-engine addition to the system prompt", () => {
-    const result = prependSystemPromptAddition({
+    const result = prependSystemPromptAdditionAfterCacheBoundary({
       systemPrompt: "base system",
       systemPromptAddition: "extra behavior",
     });
@@ -2634,7 +2634,7 @@ describe("prependSystemPromptAddition", () => {
   });
 
   it("returns the original system prompt when no addition is provided", () => {
-    const result = prependSystemPromptAddition({
+    const result = prependSystemPromptAdditionAfterCacheBoundary({
       systemPrompt: "base system",
     });
 

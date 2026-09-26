@@ -47,37 +47,25 @@ function jsonCharLength(value: unknown): number | undefined {
   return jsonLength(value, false);
 }
 
-function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefined {
-  const type = chunk.type;
-  if (
-    (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
-    typeof chunk.delta === "string"
-  ) {
-    return Buffer.byteLength(chunk.delta, "utf8");
-  }
-  return undefined;
-}
-
-function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefined {
-  if (!isRecord(chunk)) {
-    return utf8JsonByteLength(chunk);
-  }
-  const deltaBytes = streamDeltaByteLength(chunk);
-  if (deltaBytes !== undefined) {
-    return deltaBytes;
-  }
-  if (!("partial" in chunk)) {
-    return utf8JsonByteLength(chunk);
-  }
-  // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
-  // count the new stream payload, not the answer-so-far replay.
-  const { partial: _partial, ...snapshotlessChunk } = chunk;
-  return utf8JsonByteLength(snapshotlessChunk);
-}
-
 function responseStreamChunkByteLength(chunk: unknown): number | undefined {
   try {
-    return responseStreamChunkByteLengthUnchecked(chunk);
+    if (!isRecord(chunk)) {
+      return utf8JsonByteLength(chunk);
+    }
+    const type = chunk.type;
+    if (
+      (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
+      typeof chunk.delta === "string"
+    ) {
+      return Buffer.byteLength(chunk.delta, "utf8");
+    }
+    if (!("partial" in chunk)) {
+      return utf8JsonByteLength(chunk);
+    }
+    // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
+    // count the new stream payload, not the answer-so-far replay.
+    const { partial: _partial, ...snapshotlessChunk } = chunk;
+    return utf8JsonByteLength(snapshotlessChunk);
   } catch {
     return undefined;
   }
@@ -115,13 +103,7 @@ function streamContextModelPromptStats(streamContext: unknown): ModelCallPromptS
   const inputMessagesChars = messages ? jsonCharLength(messages) : undefined;
   const toolDefinitionsChars = tools ? jsonCharLength(tools) : undefined;
   const systemPromptChars = systemPrompt?.length;
-  if (
-    messages === undefined &&
-    tools === undefined &&
-    systemPromptChars === undefined &&
-    inputMessagesChars === undefined &&
-    toolDefinitionsChars === undefined
-  ) {
+  if (messages === undefined && tools === undefined && systemPrompt === undefined) {
     return undefined;
   }
   const totalChars =

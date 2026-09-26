@@ -1,3 +1,4 @@
+import type { ContextEngine } from "../../../context-engine/types.js";
 /** Prepares the session-owned runtime used by one embedded attempt. */
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -7,7 +8,6 @@ import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
   prepareEmbeddedAttemptAgentSession,
   prepareEmbeddedAttemptSessionBoundary,
@@ -41,7 +41,7 @@ type EmbeddedAttemptSessionRuntimeState = {
 
 export async function prepareEmbeddedAttemptSessionRuntime(input: {
   attempt: EmbeddedRunAttemptParams;
-  activeContextEngine?: AttemptContextEngine;
+  activeContextEngine?: ContextEngine;
   agentDir: string;
   isRawModelRun: boolean;
   resolveActiveContextEnginePluginId: () => string | undefined;

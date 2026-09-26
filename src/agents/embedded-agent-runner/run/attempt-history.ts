@@ -41,31 +41,32 @@ export function splitLeadingTimestampEnvelope(text: string): {
   return { envelope, body: envelope ? text.slice(envelope.length) : text };
 }
 
-export function readFirstUserText(content: unknown): string | undefined {
+function readFirstUserText(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    return typedBlock.type === "text" && typeof typedBlock.text === "string";
-  });
-  return firstTextBlock?.text;
+  return content.find(isUserTextBlock)?.text;
+}
+
+export function isUserTextBlock(value: unknown): value is { type: "text"; text: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const block = value as { type?: unknown; text?: unknown };
+  return block.type === "text" && typeof block.text === "string";
 }
 
 export function hasNonBlankUserText(content: unknown): boolean {
   return typeof content === "string"
     ? Boolean(content.trim())
     : Array.isArray(content) &&
-        content.some((block) => Boolean(readFirstUserText([block])?.trim()));
+        content.some((block) => isUserTextBlock(block) && Boolean(block.text.trim()));
 }
 
-function contentMatchesTimestampOverride(
+export function contentMatchesTimestampOverride(
   content: unknown,
   override: CurrentUserTimestampMatch,
 ): boolean {
@@ -224,10 +225,6 @@ function readPersistedSender(message: AgentMessage): PersistedSender | undefined
   return sender;
 }
 
-function formatPersistedSenderContext(sender: PersistedSender): string {
-  return formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
-}
-
 function mergeSenderIntoLeadingConversationInfo(
   text: string,
   sender: PersistedSender,
@@ -258,7 +255,7 @@ function mergeSenderIntoLeadingConversationInfo(
 }
 
 function prependContextToUserMessage(message: AgentMessage, sender: PersistedSender): AgentMessage {
-  const context = formatPersistedSenderContext(sender);
+  const context = formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
     const { body, envelope } = splitLeadingTimestampEnvelope(content);
@@ -278,13 +275,7 @@ function prependContextToUserMessage(message: AgentMessage, sender: PersistedSen
     return message;
   }
 
-  const textIndex = content.findIndex((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const textBlock = block as { type?: unknown; text?: unknown };
-    return textBlock.type === "text" && typeof textBlock.text === "string";
-  });
+  const textIndex = content.findIndex(isUserTextBlock);
   if (textIndex === -1) {
     return {
       ...message,

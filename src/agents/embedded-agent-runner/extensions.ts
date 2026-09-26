@@ -93,12 +93,8 @@ function buildAgentToolResultMiddlewareFactory(
       });
       const isAcceptedSessionSpawn =
         event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
-      const isError =
-        !isAcceptedSessionSpawn &&
-        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
-      const clearsAcceptedSessionSpawnError =
-        isAcceptedSessionSpawn &&
-        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const hasError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isError = !isAcceptedSessionSpawn && hasError;
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -111,8 +107,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
-        ...(isError ? { isError: true } : {}),
-        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
+        ...(hasError ? { isError } : {}),
       };
     });
   };

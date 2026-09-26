@@ -11,11 +11,7 @@ export function resolveSessionBoundaryPromptCacheKey(params: {
   if (explicit) {
     return explicit;
   }
-  const usesOpenAIPromptCacheKey =
-    params.api === "openai-completions" ||
-    params.api === "openai-responses" ||
-    params.api.includes("openai");
-  if (!usesOpenAIPromptCacheKey) {
+  if (!params.api.includes("openai")) {
     return undefined;
   }
   // Reserve the lifecycle suffix inside OpenAI's 64-code-point limit for proxy runtimes.

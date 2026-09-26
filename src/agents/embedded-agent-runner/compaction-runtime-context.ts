@@ -1,6 +1,7 @@
 /**
  * Builds runtime context for context-engine backed embedded compaction.
  */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +25,6 @@ import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
 type EmbeddedCompactionRuntimeContextParams = Omit<
@@ -295,7 +295,7 @@ export function resolveCompactionContextTokenBudget(params: {
         cfg: params.config,
         provider: params.provider,
         modelId: params.modelId,
-        modelContextTokens: readAgentModelContextTokens(params.model),
+        modelContextTokens: asFiniteNumber(params.model?.contextTokens),
         modelContextWindow: params.model?.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,

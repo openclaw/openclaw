@@ -78,10 +78,6 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
-vi.mock("./run/skill-workshop-attempt-params.js", () => ({
-  resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
-}));
-
 let admittedRunContext: AdmittedRunContext;
 
 function makeDispatchInput(

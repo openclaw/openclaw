@@ -147,7 +147,15 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       userTurnTranscriptRecorder: recorder,
     });
 
-    expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
+    expect(steer).toHaveBeenCalledWith(
+      "runtime prompt",
+      undefined,
+      recorder,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 
   it("forwards ordered images with a queued steering message", async () => {
@@ -163,7 +171,15 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
 
-    expect(steer).toHaveBeenCalledWith("compare these", images);
+    expect(steer).toHaveBeenCalledWith(
+      "compare these",
+      images,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 
   it("forwards ordered prompt facts with a queued steering message", async () => {
@@ -189,6 +205,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       undefined,
       media,
       imageOrder,
+      undefined,
       undefined,
     );
   });

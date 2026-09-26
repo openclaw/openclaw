@@ -9,6 +9,7 @@ import type {
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolResultDelta,
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
@@ -23,13 +24,6 @@ import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-type CliToolResult = {
-  toolCallId: string;
-  name: string;
-  isError: boolean;
-  result?: unknown;
-};
 
 function resolveCliToolSource(name: string, kind?: CliToolUseStartDelta["kind"]): "core" | "mcp" {
   return kind === "mcp_tool_use" || name.startsWith("mcp__") ? "mcp" : "core";
@@ -135,7 +129,7 @@ export function createCliEventHandlers(params: {
       });
     }
   };
-  const emitToolResult = (event: CliToolResult, tracked: boolean) => {
+  const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
     const summary = recordToolSummary(event, event.isError);
     const firstTerminal = !summary.terminalObserved;
@@ -213,10 +207,10 @@ export function createCliEventHandlers(params: {
   };
   // Display-only native events never enter host-tool correlation or delivery accounting.
   const emitCliToolUseStart = (event: CliToolUseStartDelta) => emitToolUseStart(event, true);
-  const emitCliToolResult = (event: CliToolResult) => emitToolResult(event, true);
+  const emitCliToolResult = (event: CliToolResultDelta) => emitToolResult(event, true);
   const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) =>
     emitToolUseStart(event, false);
-  const emitCliDisplayToolResult = (event: CliToolResult) => emitToolResult(event, false);
+  const emitCliDisplayToolResult = (event: CliToolResultDelta) => emitToolResult(event, false);
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
     activeParsedTools.set(event.toolCallId, {
@@ -326,7 +320,7 @@ export function createCliEventHandlers(params: {
           : { type: "tool.execution.completed", ...diagnosticBase },
     );
   };
-  const emitParsedToolResult = (event: CliToolResult) => {
+  const emitParsedToolResult = (event: CliToolResultDelta) => {
     emitParsedToolTerminal(event);
     emitCliToolResult(event);
   };

@@ -29,7 +29,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
-import type { CliOutput } from "../cli-output-contracts.js";
+import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
@@ -65,13 +65,7 @@ export function buildCliHookAssistantMessage(params: {
   text: string;
   provider: string;
   model: string;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: CliUsage;
   stopReason: StopReason;
 }): unknown {
   return {
@@ -92,15 +86,11 @@ function isAgentMessage(value: unknown): value is AgentMessage {
 
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 
-function shouldAwaitCliAgentEndHook(params: RunCliAgentParams): boolean {
-  return !params.messageChannel && !params.messageProvider;
-}
-
 export async function runCliAgentEndHook(
   params: RunCliAgentParams,
   hookParams: CliAgentEndHookParams,
 ): Promise<void> {
-  if (shouldAwaitCliAgentEndHook(params)) {
+  if (!params.messageChannel && !params.messageProvider) {
     await awaitAgentEndSideEffects(hookParams);
     return;
   }
@@ -143,13 +133,7 @@ export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
 }): Promise<{
@@ -158,17 +142,10 @@ export async function persistCliAssistantTranscript(params: {
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
   const { runParams } = params;
-  if (runParams.currentInboundEventKind === "room_event") {
+  if (runParams.currentInboundEventKind === "room_event" || !params.text) {
     const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
     return {
-      owned: true,
-      ...(admission ? { terminalAnchor: admission } : {}),
-    };
-  }
-  if (!params.text) {
-    const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    return {
-      owned: false,
+      owned: runParams.currentInboundEventKind === "room_event",
       ...(admission ? { terminalAnchor: admission } : {}),
     };
   }

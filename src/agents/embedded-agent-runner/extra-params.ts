@@ -8,9 +8,6 @@ import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
-/**
- * Resolves model extra parameters and transport overrides for embedded agents.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
@@ -66,11 +63,6 @@ const GPT_PARALLEL_TOOL_CALLS_APIS = new Set([
   "azure-openai-responses",
 ]);
 
-/** True when a provider API accepts GPT parallel-tool-call payload settings. */
-function supportsGptParallelToolCallsPayload(api: unknown): boolean {
-  return typeof api === "string" && GPT_PARALLEL_TOOL_CALLS_APIS.has(api);
-}
-
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -122,19 +114,13 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   seed?: number;
   stop?: string[];
 };
-type SupportedTransport = AgentRuntimeTransport;
-
-function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
+function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | undefined {
   return value === "sse" ||
     value === "websocket" ||
     value === "websocket-cached" ||
     value === "auto"
     ? value
     : undefined;
-}
-
-function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
-  return Object.hasOwn(settings, "transport");
 }
 
 export function resolvePreparedExtraParams(params: {
@@ -148,7 +134,7 @@ export function resolvePreparedExtraParams(params: {
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
-  resolvedTransport?: SupportedTransport;
+  resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
@@ -241,21 +227,11 @@ function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined)
   return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
 }
 
-function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
-  provider: string;
-  modelId: string;
-}): boolean {
-  if (params.provider !== "openai") {
-    return false;
-  }
-  return /^gpt-5(?:[.-]|$)/i.test(params.modelId);
-}
-
 function applyDefaultOpenAIGptRuntimeParams(
   params: { provider: string; modelId: string },
   merged: Record<string, unknown>,
 ): void {
-  if (!shouldApplyDefaultOpenAIGptRuntimeParams(params)) {
+  if (params.provider !== "openai" || !/^gpt-5(?:[.-]|$)/i.test(params.modelId)) {
     return;
   }
   if (
@@ -272,10 +248,10 @@ function applyDefaultOpenAIGptRuntimeParams(
 export function resolveAgentTransportOverride(params: {
   settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
-}): SupportedTransport | undefined {
+}): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
   const projectSettings = params.settingsManager.getProjectSettings();
-  if (hasExplicitTransportSetting(globalSettings) || hasExplicitTransportSetting(projectSettings)) {
+  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
@@ -284,13 +260,10 @@ export function resolveAgentTransportOverride(params: {
 export function resolveExplicitSettingsTransport(params: {
   settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
   sessionTransport: unknown;
-}): SupportedTransport | undefined {
+}): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
   const projectSettings = params.settingsManager.getProjectSettings();
-  if (
-    !hasExplicitTransportSetting(globalSettings) &&
-    !hasExplicitTransportSetting(projectSettings)
-  ) {
+  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -484,7 +457,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (model, context, options) => {
-    if (!supportsGptParallelToolCallsPayload(model.api)) {
+    if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -498,15 +471,11 @@ function createParallelToolCallsWrapper(
 
 type ApplyExtraParamsContext = {
   agent: { streamFn?: StreamFn };
-  cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
-  agentDir?: string;
-  workspaceDir?: string;
   thinkingLevel?: ProviderThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
-  resolvedExtraParams?: Record<string, unknown>;
   override?: Record<string, unknown>;
 };
 
@@ -768,7 +737,7 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
-  resolvedTransport?: SupportedTransport,
+  resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
     auth?: ProviderPrepareExtraParamsContext["auth"];
@@ -808,15 +777,11 @@ export function applyExtraParamsToAgent(
     });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
-    cfg,
     provider,
     modelId,
-    agentDir,
-    workspaceDir,
     thinkingLevel,
     model,
     effectiveExtraParams,
-    resolvedExtraParams,
     override,
   };
 

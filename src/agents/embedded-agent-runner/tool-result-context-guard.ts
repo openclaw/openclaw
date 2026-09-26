@@ -26,6 +26,7 @@ import {
   getToolResultText,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
@@ -113,27 +114,17 @@ function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
   return messageRest;
 }
 
-function projectTranscriptPromptMessages(
+function projectMessages(
   messages: AgentMessage[],
-  cache: WeakMap<AgentMessage, AgentMessage>,
+  project: (message: AgentMessage) => AgentMessage,
 ): AgentMessage[] {
   let changed = false;
   const projected = messages.map((message) => {
-    const next = restoreTranscriptPromptText(message, cache);
+    const next = project(message);
     changed ||= next !== message;
     return next;
   });
   return changed ? projected : messages;
-}
-
-function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] {
-  let changed = false;
-  const stripped = messages.map((message) => {
-    const next = stripTranscriptPromptMarker(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? stripped : messages;
 }
 
 function replaceToolResultContent(
@@ -174,10 +165,7 @@ function truncateToolResultToChars(
     const isImage = (block: unknown) =>
       Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image";
     const isText = (block: unknown): block is { type: "text"; text: string } =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string";
+      isToolResultTextBlock(block) && block.type === "text";
     const imageCount = content.filter(isImage).length;
     const omissionNotice = (retainedImages: number) => {
       const omittedImages = imageCount - retainedImages;
@@ -256,25 +244,9 @@ function enforceToolResultLimit(params: {
 }): AgentMessage[] {
   const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
-  let changed = false;
-  const guarded = messages.map((message) => {
-    const next = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? guarded : messages;
-}
-
-function hasNewToolResultAfterFence(params: {
-  messages: AgentMessage[];
-  prePromptMessageCount: number;
-}): boolean {
-  for (const message of params.messages.slice(params.prePromptMessageCount)) {
-    if (isToolResultMessage(message)) {
-      return true;
-    }
-  }
-  return false;
+  return projectMessages(messages, (message) =>
+    truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
+  );
 }
 
 function toMidTurnPrecheckRequest(
@@ -336,8 +308,10 @@ export function installContextEngineLoopHook(params: {
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const transcriptMessages = params.deferredTurn
       ? sourceMessages
-      : projectTranscriptPromptMessages(sourceMessages, transcriptProjectionCache);
-    const providerMessages = stripTranscriptPromptMarkers(sourceMessages);
+      : projectMessages(sourceMessages, (message) =>
+          restoreTranscriptPromptText(message, transcriptProjectionCache),
+        );
+    const providerMessages = projectMessages(sourceMessages, stripTranscriptPromptMarker);
     const sourceHistoryChanged =
       lastSeenLength != null &&
       lastSourceMessages != null &&
@@ -491,12 +465,7 @@ export function installToolResultContextGuard(params: {
         ),
       );
       lastSeenLength = prePromptMessageCount;
-      if (
-        hasNewToolResultAfterFence({
-          messages: contextMessages,
-          prePromptMessageCount,
-        })
-      ) {
+      if (contextMessages.slice(prePromptMessageCount).some(isToolResultMessage)) {
         // Use the same post-truncation view the runtime will send to the next model call.
         // Recovery re-applies truncation to the persisted session manager, so
         // this precheck is only a routing signal, not the source of truth.

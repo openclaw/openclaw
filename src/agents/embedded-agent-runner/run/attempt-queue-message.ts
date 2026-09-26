@@ -12,6 +12,7 @@ import {
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
   getSteeringMessageIdentity,
@@ -33,15 +34,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
       predicate: (message: AgentMessage) => boolean,
     ) => AgentMessage | undefined;
   };
-  steer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-    canInject?: () => boolean,
-  ): Promise<void>;
+  steer: AgentSession["steer"];
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -53,42 +46,6 @@ class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
     super(message, options);
     this.name = "EmbeddedSteeringAcceptedUnconfirmedError";
   }
-}
-
-function steerActiveSession(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-  images?: ImageContent[],
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  media?: MediaFact[],
-  imageOrder?: PromptImageOrderEntry[],
-  queueIdentity?: string,
-  canInject?: () => boolean,
-): Promise<void> {
-  if (canInject) {
-    return activeSession.steer(
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      queueIdentity,
-      canInject,
-    );
-  }
-  if (media?.length || queueIdentity) {
-    return activeSession.steer(
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      queueIdentity,
-    );
-  }
-  return userTurnTranscriptRecorder
-    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-    : activeSession.steer(text, images);
 }
 
 function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean {
@@ -132,7 +89,7 @@ async function cancelQueuedSteeringMessage(
     return false;
   }
   try {
-    if (!retireQueuedUserMessage(message as AgentMessage)) {
+    if (!retireQueuedUserMessage(message)) {
       log.warn("failed to retire queued steering display entry during cancellation");
     }
   } catch (error) {
@@ -258,8 +215,7 @@ async function steerAndWaitForTranscriptCommit(
       rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
       return;
     }
-    const steer = steerActiveSession(
-      activeSession,
+    const steer = activeSession.steer(
       text,
       images,
       userTurnTranscriptRecorder,
@@ -358,8 +314,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   }
   if (options?.waitForTranscriptCommit !== true) {
     try {
-      await steerActiveSession(
-        activeSession,
+      await activeSession.steer(
         text,
         options?.images,
         options?.userTurnTranscriptRecorder,
@@ -408,11 +363,10 @@ export async function claimEmbeddedPendingUserInputAnswer(
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
-  const claimed = await claimPendingAgentQuestionAnswer({
+  return await claimPendingAgentQuestionAnswer({
     sessionKey,
     text,
     authority: resolveQuestionAuthority(canInject, authority),
     sourceRecorder: options.userTurnTranscriptRecorder,
   });
-  return claimed;
 }

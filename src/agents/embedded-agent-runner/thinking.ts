@@ -37,18 +37,6 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
   return type === "toolCall" || type === "tool_use" || type === "function_call";
 }
 
-function hasAssistantToolCall(message: AssistantMessage): boolean {
-  return message.content.some((block) => isToolCallBlock(block));
-}
-
-function isToolResultMessage(message: AgentMessage): boolean {
-  return (
-    Boolean(message) &&
-    typeof message === "object" &&
-    (message as { role?: unknown }).role === "toolResult"
-  );
-}
-
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
   if (!isThinkingBlock(block)) {
     return false;
@@ -65,20 +53,6 @@ function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
     record.thinkingSignature != null ||
     record.thought_signature != null
   );
-}
-
-function hasMeaningfulText(block: AssistantContentBlock): boolean {
-  if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
-    return false;
-  }
-  return typeof (block as { text?: unknown }).text === "string"
-    ? (block as { text: string }).text.trim().length > 0
-    : false;
-}
-
-function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
-  // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
-  return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
 }
 
 function mapAssistantMessages(
@@ -104,7 +78,9 @@ function filterAssistantContent(
     ? message
     : {
         ...message,
-        content: content.length > 0 ? content : buildOmittedAssistantReasoningContent(),
+        // Provider converters drop blank blocks; preserve the assistant turn with nonempty text.
+        content:
+          content.length > 0 ? content : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
       };
 }
 
@@ -122,9 +98,9 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
     (block as { type?: unknown }).type === "redacted_thinking"
       ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
       : [record.signature, record.thinkingSignature, record.thought_signature];
-  return candidates.some((signature) => {
-    return typeof signature === "string" && signature.trim().length > 0;
-  });
+  return candidates.some(
+    (signature) => typeof signature === "string" && signature.trim().length > 0,
+  );
 }
 
 /**
@@ -189,7 +165,7 @@ function shouldPreserveCurrentToolTurnReasoning(
     !message ||
     index < latestUserIndex ||
     !isAssistantMessageWithContent(message) ||
-    !hasAssistantToolCall(message)
+    !message.content.some(isToolCallBlock)
   ) {
     return false;
   }
@@ -207,7 +183,7 @@ function shouldPreserveCurrentToolTurnReasoning(
   for (let i = index + 1; i < messages.length; i += 1) {
     const next = messages.at(i);
     const role = next?.role;
-    if (next && isToolResultMessage(next)) {
+    if (next && typeof next === "object" && role === "toolResult") {
       return true;
     }
     if (role === "user") {
@@ -277,7 +253,7 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
       continue;
     }
     hasNonThinkingContent = true;
-    if ((block as { type?: unknown }).type === "text" && !hasMeaningfulText(block)) {
+    if (block.type === "text" && (typeof block.text !== "string" || !block.text.trim())) {
       hasEmptyTextBlock = true;
     }
   }
@@ -285,10 +261,7 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   if (hasUnsignedThinking) {
     return "incomplete-thinking";
   }
-  if (hasSignedThinking && !hasNonThinkingContent) {
-    return "incomplete-text";
-  }
-  if (hasSignedThinking && hasEmptyTextBlock) {
+  if (hasSignedThinking && (!hasNonThinkingContent || hasEmptyTextBlock)) {
     return "incomplete-text";
   }
   return "valid";

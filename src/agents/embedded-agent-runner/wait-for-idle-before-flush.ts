@@ -20,37 +20,32 @@ async function waitForAgentIdleBestEffort(
   agent: IdleAwareAgent | null | undefined,
   timeoutMs: number,
   abortSignal?: AbortSignal,
-): Promise<boolean> {
+): Promise<void> {
   const waitForIdle = agent?.waitForIdle;
   if (abortSignal?.aborted || typeof waitForIdle !== "function") {
-    return false;
+    return;
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
 
-  const idleResolved = Symbol("idle");
-  const idleTimedOut = Symbol("timeout");
-  const idleAborted = Symbol("aborted");
   let onAbort: (() => void) | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
     const aborted = abortSignal
-      ? new Promise<symbol>((resolve) => {
-          onAbort = () => resolve(idleAborted);
+      ? new Promise<void>((resolve) => {
+          onAbort = () => resolve();
           abortSignal.addEventListener("abort", onAbort, { once: true });
         })
       : undefined;
-    const outcome = await Promise.race([
-      waitForIdle.call(agent).then(() => idleResolved),
-      new Promise<symbol>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(idleTimedOut), resolvedTimeoutMs);
+    await Promise.race([
+      waitForIdle.call(agent).then(() => undefined),
+      new Promise<void>((resolve) => {
+        timeoutHandle = setTimeout(resolve, resolvedTimeoutMs);
         timeoutHandle.unref?.();
       }),
       ...(aborted ? [aborted] : []),
     ]);
-    return outcome === idleTimedOut;
   } catch {
     // Best-effort during cleanup.
-    return false;
   } finally {
     if (onAbort) {
       abortSignal?.removeEventListener("abort", onAbort);
