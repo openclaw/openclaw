@@ -16,6 +16,7 @@ import {
   projectSqliteSessionOwner,
   type SqliteSessionOwnerRow,
 } from "./session-accessor.sqlite-owner-projection.js";
+import { internSessionEntryDiffBaseline } from "./session-diff-baseline-intern.js";
 import {
   hasValidSessionEntryIdentity,
   parseSqliteSessionEntryRecord,
@@ -110,7 +111,12 @@ export function parseSessionEntryJson(
     delete record.skillsSnapshot;
     delete record.systemPromptReport;
   }
-  return projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
+  const entry = projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
+  // Sessions on one host baseline the same checkout, so without this every parsed row holds
+  // its own copy of every file record. Interning here covers all callers rather than
+  // whichever read path happens to be patched.
+  internSessionEntryDiffBaseline(entry);
+  return entry;
 }
 
 export function hasSessionEntriesByStatus(
