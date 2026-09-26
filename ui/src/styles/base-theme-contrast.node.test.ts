@@ -570,6 +570,72 @@ describe("Control UI theme contrast", () => {
     expect(failures).toEqual([]);
   });
 
+  it("keeps GitHub item ink and focus legible across every tone, theme and bubble", () => {
+    const css = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
+    const bubble = readBubbleBackgrounds(
+      fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8"),
+    );
+    const selector = ".chat-text a.markdown-github-item";
+    const base = readRuleBody(css, selector);
+    const declaration = (body: string, property: string) => {
+      const value = body
+        .split(property + ":")[1]
+        ?.split(";")[0]
+        ?.trim();
+      if (!value) throw new Error("Missing GitHub chip paint: " + property);
+      return value;
+    };
+    const foreground = declaration(base, "color");
+    const surfaces = [
+      declaration(base, "background"),
+      declaration(readRuleBody(css, selector + ":focus-visible"), "background"),
+    ];
+    const focus = css.match(
+      /a\.markdown-github-item:focus-visible\s*\{\s*outline-color:\s*([^;]+);/u,
+    )?.[1];
+    if (!focus) throw new Error("Missing GitHub chip focus paint");
+    const failures: string[] = [];
+    for (const [theme, palette] of themes) {
+      const page = resolveOpaqueColor("var(--bg)", palette);
+      const light = theme === "light" || theme.endsWith("-light");
+      const hosts = [
+        page,
+        composite(resolveColor(light ? bubble.lightUser : bubble.user, palette), page),
+      ];
+      for (let hue = 0; hue < 360; hue++) {
+        const tokens = new Map(palette).set("--chat-sender-hue", String(hue));
+        hosts.push(
+          composite(resolveColor(light ? bubble.lightSenderTint : bubble.senderTint, tokens), page),
+        );
+        // Forwarded assistant messages retain the translucent sender skin in light mode.
+        hosts.push(composite(resolveColor(bubble.senderTint, tokens), page));
+      }
+      for (const tone of ["unknown", "neutral", "positive", "negative", "accent", "attention"]) {
+        const rule =
+          tone === "unknown" || tone === "neutral"
+            ? base
+            : readRuleBody(css, selector + '[data-link-reader-tone="' + tone + '"]');
+        const tokens = new Map(palette).set(
+          "--github-item-tone",
+          declaration(rule, "--github-item-tone"),
+        );
+        for (const surface of surfaces) {
+          for (const host of hosts) {
+            const background = composite(resolveColor(surface, tokens), host);
+            const ink = composite(resolveColor(foreground, tokens), background);
+            const ratio = contrastRatio(ink, background);
+            const floor = AAA_THEMES.has(theme) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+            if (ratio < floor)
+              failures.push(theme + "/" + tone + ": " + ratio.toFixed(2) + " < " + floor);
+            const focusRatio = contrastRatio(composite(resolveColor(focus, tokens), host), host);
+            if (focusRatio < 3) failures.push(theme + "/focus: " + focusRatio.toFixed(2));
+          }
+        }
+      }
+    }
+    expect([...new Set(failures)]).toEqual([]);
+  });
+
   it("keeps chat links at WCAG AA on every bubble surface", () => {
     const chatTextCss = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");

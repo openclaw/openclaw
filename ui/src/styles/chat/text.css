@@ -671,40 +671,56 @@
   line-break: anywhere;
 }
 
-/* Item references share the titled session chip's surface. The whole chip is
-   atomic so its in-flow icon cannot wrap away from the number. */
+/* Pair each reader tone with its own opaque, theme-derived tint. A translucent
+   accent fill mixed unrelated state colors into user/sender bubbles. Mixing the
+   ink toward strong text protects both light and dark palettes; the surface
+   remains independent of the bubble beneath it. The whole chip stays atomic. */
 .chat-text a.markdown-github-item {
+  --github-item-tone: var(--muted);
+
   display: inline-block;
+  max-inline-size: 100%;
   position: static;
   padding: 0.08em 0.45em 0.08em 0.4em;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
-  /* Unknown state must not imply an open pull request. */
-  color: var(--muted);
+  background: color-mix(in srgb, var(--github-item-tone) 12%, var(--bg));
+  /* Unknown, unavailable and draft states remain neutral, not disabled. */
+  color: color-mix(in srgb, var(--github-item-tone) 65%, var(--text-strong));
   font-weight: 600;
   line-height: 1.25;
   text-decoration: none;
   vertical-align: baseline;
-  white-space: nowrap;
+  /* Short references remain atomic; qualified repository names can wrap when
+     the chip itself is wider than its mobile or enlarged-text container. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-break: auto;
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="positive"] {
-  color: var(--ok);
+  --github-item-tone: var(--ok);
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="accent"] {
-  color: var(--pr-merged);
+  --github-item-tone: var(--pr-merged);
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="negative"] {
-  color: var(--danger);
+  --github-item-tone: var(--danger);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="attention"] {
+  --github-item-tone: var(--warn);
 }
 
 .chat-text a.markdown-github-item:hover,
 .chat-text a.markdown-github-item:focus-visible {
-  background: color-mix(in srgb, var(--accent-subtle) 92%, var(--bg-muted));
+  background: color-mix(in srgb, var(--github-item-tone) 18%, var(--bg));
   text-decoration: underline;
+}
+
+.chat-text a.markdown-github-item:focus-visible {
+  outline-color: var(--text-strong);
 }
 
 .chat-text a.markdown-github-item::before {

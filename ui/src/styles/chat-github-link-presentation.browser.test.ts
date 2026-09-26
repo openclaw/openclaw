@@ -183,6 +183,39 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
     },
   );
 
+  it.each(["ltr", "rtl"])(
+    "wraps oversized qualified chips without clipping in %s",
+    async (direction) => {
+      const fixtureFile = path.join(fixtureDirectory, "qualified-" + direction + ".html");
+      fs.writeFileSync(fixtureFile, fixtureDocument("dark"), "utf8");
+      const page = await browser.newPage();
+      try {
+        await page.goto("file://" + fixtureFile);
+        const geometry = await page.evaluate((direction) => {
+          const column = document.querySelector<HTMLElement>("#column-repository-ref")!;
+          const chip = document.querySelector<HTMLElement>("#repository-ref")!;
+          column.style.width = "280px";
+          column.style.fontSize = "28px";
+          column.dir = direction;
+          chip.textContent = "organization-with-a-long-name/repository-with-a-long-name#987654";
+          const label = document.createRange();
+          label.selectNodeContents(chip);
+          return {
+            width: column.clientWidth,
+            scrollWidth: column.scrollWidth,
+            chipWidth: chip.getBoundingClientRect().width,
+            fragments: label.getClientRects().length,
+          };
+        }, direction);
+        expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+        expect(geometry.chipWidth).toBeLessThanOrEqual(geometry.width);
+        expect(geometry.fragments).toBeGreaterThan(1);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
   it("keeps GitHub links breaking across lines instead of moving whole", async () => {
     const samples = await probeWrap("dark");
     // Non-item links still fill the line they start on rather than moving whole.
