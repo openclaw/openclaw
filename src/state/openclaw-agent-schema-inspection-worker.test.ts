@@ -8,6 +8,7 @@ import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-insp
 import { resolveLifecycleCoordinatorPath } from "../infra/state-database-coordinator-paths.js";
 import {
   acquireStateDatabaseHandleExclusion,
+  acquireStateDatabaseHandleLease,
   resolveStateLifecycleRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
@@ -233,6 +234,76 @@ it("reuses a process while rereading changed data and releasing each source leas
     acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
   }
   expect(fork).toHaveBeenCalledOnce();
+});
+
+it("reads cold WAL headers without a receipt while preserving source admission and full-check fallback", async () => {
+  const pathname = path.join(tempDirs.make("agent-schema-cold-wal-"), "source.sqlite");
+  const writer = sqlite.openNodeSqliteDatabase(pathname);
+  try {
+    writer.exec(`
+      PRAGMA journal_mode=WAL;
+      PRAGMA user_version=1;
+      CREATE TABLE schema_meta (
+        meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER, agent_id TEXT, app_version TEXT
+      );
+      INSERT INTO schema_meta VALUES ('primary', 'agent', 1, 'worker', 'header-fixture');
+    `);
+  } finally {
+    writer.close();
+  }
+  const before = fs.readFileSync(pathname);
+  const sidecars = ["-wal", "-shm", "-journal"];
+  expect(sidecars.filter((suffix) => fs.existsSync(pathname + suffix))).toEqual([]);
+  vi.mocked(fork).mockClear();
+  const closed = vi.fn();
+  {
+    await using reader = createAgentSchemaInspectionWorker();
+    const input = { pathname, supportedVersion: 1, inspectOwnership: true };
+    const first = reader.inspect(input);
+    const child = vi.mocked(fork).mock.results.at(-1)?.value;
+    expect(child?.pid).toBeGreaterThan(0);
+    child.once("close", closed);
+    await expect(first).resolves.toMatchObject({
+      version: 1,
+      writerAppVersion: "header-fixture",
+      agentSchemaMeta: { agentId: "worker", role: "agent", schemaVersion: 1 },
+    });
+    expect(fs.readFileSync(pathname)).toEqual(before);
+    expect(sidecars.filter((suffix) => fs.existsSync(pathname + suffix))).toEqual([]);
+
+    for (const flags of [
+      { verifyCurrentSchemaShape: true },
+      { requireStartupMigrationReadiness: true },
+    ]) {
+      await expect(reader.inspect({ ...input, ...flags })).resolves.toBeNull();
+    }
+    for (const suffix of sidecars) {
+      const sidecar = pathname + suffix;
+      fs.writeFileSync(sidecar, "unsettled", { flag: "wx" });
+      try {
+        await expect(reader.inspect(input)).resolves.toBeNull();
+        expect(fs.readFileSync(sidecar, "utf8")).toBe("unsettled");
+        expect(fs.readFileSync(pathname)).toEqual(before);
+      } finally {
+        fs.rmSync(sidecar);
+      }
+    }
+    const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
+    try {
+      await expect(reader.inspect(input)).resolves.toBeNull();
+      expect(fs.readFileSync(pathname)).toEqual(before);
+    } finally {
+      lease.release();
+    }
+    await expect(reader.inspect(input)).resolves.toMatchObject({ version: 1 });
+    acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
+    expect(reader.processCount).toBe(1);
+    expect(reader.snapshotCount).toBe(0);
+  }
+  expect(closed).toHaveBeenCalledExactlyOnceWith(0, null);
+  expect(fork).toHaveBeenCalledOnce();
+  expect(fs.readFileSync(pathname)).toEqual(before);
+  expect(sidecars.filter((suffix) => fs.existsSync(pathname + suffix))).toEqual([]);
 });
 
 it("preserves a busy source failure without requesting another snapshot attempt", () => {

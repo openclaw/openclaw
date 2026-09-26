@@ -15,6 +15,7 @@ import {
   assertOpenClawDatabasesReady,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
@@ -26,6 +27,43 @@ afterEach(() => {
 });
 
 describe("schema-only agent preflight", () => {
+  it("checks closed WAL ownership without a cached integrity receipt or an agent copy", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-only-closed-wal-") };
+    const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const writer = new (requireNodeSqlite().DatabaseSync)(agentPath);
+    try {
+      writer.exec("PRAGMA journal_mode=WAL;");
+    } finally {
+      writer.close();
+    }
+    clearOpenClawAgentIntegrityVerification(agentPath, env);
+    const before = fs.readFileSync(agentPath);
+    const sidecars = ["-wal", "-shm", "-journal"];
+    expect(sidecars.filter((suffix) => fs.existsSync(agentPath + suffix))).toEqual([]);
+    const canonicalAgentPath = fs.realpathSync.native(agentPath);
+    const prepare = snapshots.prepareSqliteReadOnlyLocation;
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
+      if (fs.realpathSync.native(pathname) === canonicalAgentPath) {
+        throw new Error("Header-only preflight must not copy a consolidated agent database");
+      }
+      return prepare(pathname, options);
+    });
+    const onAgentInspection = vi.fn();
+    const result = await preflightOpenClawDatabaseSchemas({
+      env,
+      agentAdmissionConfig: { agents: { list: [{ id: "worker", default: true }] } },
+      onAgentInspection,
+    });
+    expect(result).toEqual({ incompatible: [], indeterminate: [] });
+    expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ schemaInspectionCount: 1, schemaSnapshotCount: 0 }),
+    );
+    expect(fs.readFileSync(agentPath)).toEqual(before);
+    expect(sidecars.filter((suffix) => fs.existsSync(agentPath + suffix))).toEqual([]);
+  });
+
   it.each(
     ["DELETE", "WAL"].flatMap((mode) =>
       [false, true].map((verifyCurrentSchemaShape) => ({ mode, verifyCurrentSchemaShape })),

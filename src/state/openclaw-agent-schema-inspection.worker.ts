@@ -68,9 +68,13 @@ process.on(
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
       } else {
         inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
+        // Reuse the source fence for header-only reads of a closed WAL database.
+        const headerOnly =
+          !input.verifyCurrentSchemaShape && !input.requireStartupMigrationReadiness;
         if (
           !inspection &&
-          canReuseOpenClawAgentIntegrityVerification(input.pathname, readVerification(), false)
+          (headerOnly ||
+            canReuseOpenClawAgentIntegrityVerification(input.pathname, readVerification(), false))
         ) {
           try {
             inspection = withSqliteSourceReadDatabase(
@@ -80,11 +84,8 @@ process.on(
                 // sqlite-allow-raw -- Match the ordinary source reader's connection policy.
                 database.exec("PRAGMA trusted_schema = OFF;");
                 const verification = readVerification();
-                return canReuseOpenClawAgentIntegrityVerification(
-                  input.pathname,
-                  verification,
-                  false,
-                )
+                return headerOnly ||
+                  canReuseOpenClawAgentIntegrityVerification(input.pathname, verification, false)
                   ? inspect(database, verification)
                   : undefined;
               },
