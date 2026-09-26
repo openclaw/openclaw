@@ -563,6 +563,27 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
   });
 
+  it("does not serve the old snapshot after lifecycle refresh fails", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const agentDir = fixture.state.agentDir("default");
+    const firstConfig = {};
+    const secondConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    const input = {
+      config: firstConfig,
+      agentDir,
+      inheritedAuthDir: agentDir,
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    await publishPreparedModelRuntimeSnapshot(input, { provenance: "configured" });
+    const refreshError = new Error("catalog refresh failed");
+    mocks.ensureOpenClawModelsJson.mockRejectedValueOnce(refreshError);
+
+    await expect(refreshPreparedModelRuntimeSnapshots(secondConfig)).rejects.toBe(refreshError);
+    await expect(prepareModelRuntimeSnapshot({ ...input, config: secondConfig })).rejects.toBe(
+      refreshError,
+    );
+  });
+
   it("does not serve a retired owner when another owner fails to refresh", async () => {
     mocks.configuredAgentIds = ["default", "removed"];
     const firstConfig = {};

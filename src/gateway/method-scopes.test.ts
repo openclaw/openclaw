@@ -149,6 +149,18 @@ describe("method scope resolution", () => {
     ["skills.curator.unpin", ["operator.admin"]],
     ["skills.curator.restore", ["operator.admin"]],
     ["poll", ["operator.write"]],
+    ["talk.client.create", ["operator.talk"]],
+    ["talk.client.transcript", ["operator.talk"]],
+    ["talk.client.close", ["operator.talk"]],
+    ["talk.client.toolCall", ["operator.talk"]],
+    ["talk.client.steer", ["operator.talk"]],
+    ["talk.session.create", ["operator.talk"]],
+    ["talk.session.appendAudio", ["operator.talk"]],
+    ["talk.session.cancelOutput", ["operator.talk"]],
+    ["talk.session.acknowledgeMark", ["operator.talk"]],
+    ["talk.session.submitToolResult", ["operator.talk"]],
+    ["talk.session.steer", ["operator.talk"]],
+    ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
     ["update.report", ["operator.admin"]],
     ["update.runs.get", ["operator.admin"]],
@@ -235,6 +247,19 @@ describe("method scope resolution", () => {
         includeSecrets: true,
       }),
     ).toEqual({ allowed: true });
+  });
+
+  it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.talk"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.talk",
+    });
   });
 
   it("requires admin only when DM pairing approval bootstraps a command owner", () => {

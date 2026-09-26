@@ -287,6 +287,71 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("keeps the actual winner when the later-started nested tool settles first", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const { tools: codeModeTools, register } = createBridgeHarness();
+    const events: string[] = [];
+    const firstStarted = createDeferred();
+    const firstRelease = createDeferred();
+    let firstAborted = false;
+    const first = pluginToolWithExecute(
+      "fake_first",
+      "Earlier slow helper",
+      async (_toolCallId, _input, signal) => {
+        events.push("first:start");
+        firstStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            firstAborted = true;
+            firstRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await firstRelease.promise;
+        events.push("first:done");
+        return jsonResult({ winner: "first" });
+      },
+    );
+    const second = pluginToolWithExecute("fake_second", "Later fast helper", async () => {
+      await firstStarted.promise;
+      events.push("second:win");
+      return jsonResult({ winner: "second" });
+    });
+    const release = pluginToolWithExecute(
+      "fake_first_release",
+      "Release earlier race helper",
+      async () => {
+        events.push("first:release");
+        firstRelease.resolve();
+        return jsonResult({ released: true });
+      },
+    );
+    register([first, second, release]);
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-later-winner",
+        {
+          code: `const value = await Promise.race([
+              fake_first({}),
+              fake_second({}),
+            ]);
+            void fake_first_release({});
+            return value;`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed", value: { winner: "second" } });
+    expect(first.execute).toHaveBeenCalledOnce();
+    expect(second.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual(["first:start", "second:win", "first:release", "first:done"]);
+    expect(firstAborted).toBe(false);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it.each([
     {
       label: "directly",

@@ -121,7 +121,10 @@ function mockOpenAiCliBackendRegistration(params: { requiresRuntime?: boolean })
   });
 }
 
-function mockDuplicateSetupClaims(params: { kind: "cliBackend" | "provider" }) {
+function mockDuplicateSetupClaims(params: {
+  duplicatePluginId: boolean;
+  kind: "cliBackend" | "provider";
+}) {
   const bundledRoot = makeTempDir();
   const workspaceRoot = makeTempDir();
   writeSetupApiStub(bundledRoot);
@@ -145,7 +148,7 @@ function mockDuplicateSetupClaims(params: { kind: "cliBackend" | "provider" }) {
         setup: setup.bundled,
       },
       {
-        id: "openai",
+        id: params.duplicatePluginId ? "openai" : "workspace-shadow",
         origin: "workspace",
         rootDir: workspaceRoot,
         setup: setup.workspace,
@@ -1056,8 +1059,9 @@ describe("setup-registry module loader", () => {
     }
   });
 
-  it("fails closed when duplicate plugin ids shadow the same setup provider id", () => {
+  it("fails closed when multiple plugins claim the same setup provider id", () => {
     mockDuplicateSetupClaims({
+      duplicatePluginId: false,
       kind: "provider",
     });
 
@@ -1065,8 +1069,29 @@ describe("setup-registry module loader", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
+  it("fails closed when duplicate plugin ids shadow the same setup provider id", () => {
+    mockDuplicateSetupClaims({
+      duplicatePluginId: true,
+      kind: "provider",
+    });
+
+    expect(resolvePluginSetupProviderCore({ provider: "openai", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when multiple plugins claim the same setup cli backend id", () => {
+    mockDuplicateSetupClaims({
+      duplicatePluginId: false,
+      kind: "cliBackend",
+    });
+
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
   it("fails closed when duplicate plugin ids shadow the same setup cli backend id", () => {
     mockDuplicateSetupClaims({
+      duplicatePluginId: true,
       kind: "cliBackend",
     });
 

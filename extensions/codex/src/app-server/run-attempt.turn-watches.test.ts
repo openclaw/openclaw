@@ -693,6 +693,81 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
+  it("keeps secret user input request activity active until the answer arrives", async () => {
+    vi.useFakeTimers();
+    const harness = createStartedThreadHarness();
+    const toolAuthorityFingerprint = "turn-watch-secret-input-authority";
+    const params = makeTestParams({
+      timeoutMs: 60 * 60_000,
+      toolAuthorityFingerprint,
+    });
+    params.onBlockReply = vi.fn();
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "turn:start" }),
+        ),
+      fastWait,
+    );
+    const response = harness.handleServerRequest({
+      id: "request-user-input",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "input-1",
+        isBlocking: true,
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: true,
+            options: [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+    expect(
+      onRunProgress.mock.calls.some(
+        ([event]) =>
+          (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
+      ),
+    ).toBe(false);
+    expect(
+      queueActiveRunMessageForTest("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: ["Deep"] } },
+    });
+    expect(onRunProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+  });
+
   it("waits for native completion after tool events buffered during turn start", async () => {
     vi.useFakeTimers();
     const turnStartRequested = createDeferred<void>();

@@ -30,6 +30,13 @@ import {
   resolveNodePairingGeneration,
   withPairedDeviceRecords,
 } from "./device-pairing.js";
+import {
+  NODE_BROWSER_PROXY_COMMANDS,
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+  NODE_TERMINAL_UPLOAD_COMMAND,
+} from "./node-commands.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
 const databasePaths = new Set<string>();
@@ -475,7 +482,13 @@ describe("node surface approvals", () => {
   });
 
   test.each([
-    { command: "system.run", scopes: ["operator.pairing", "operator.admin"] },
+    ...[
+      ...NODE_SYSTEM_RUN_COMMANDS,
+      ...NODE_BROWSER_PROXY_COMMANDS,
+      ...NODE_EXEC_APPROVALS_COMMANDS,
+      NODE_FS_LIST_DIR_COMMAND,
+      NODE_TERMINAL_UPLOAD_COMMAND,
+    ].map((command) => ({ command, scopes: ["operator.pairing", "operator.admin"] })),
     { command: "canvas.present", scopes: ["operator.pairing", "operator.write"] },
     { command: undefined, scopes: ["operator.pairing"] },
   ])("reports and enforces approval scopes for $command", async ({ command, scopes }) => {

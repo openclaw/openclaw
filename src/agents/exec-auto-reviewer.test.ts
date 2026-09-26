@@ -24,7 +24,10 @@ const input = {
   },
 };
 
-function createReviewerHarness(modelOverrides?: { maxTokens?: number }) {
+function createReviewerHarness(
+  decision: "allow" | "ask" = "allow",
+  modelOverrides?: { maxTokens?: number },
+) {
   const prepare = vi.fn(async () => ({
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const, ...modelOverrides },
@@ -37,8 +40,8 @@ function createReviewerHarness(modelOverrides?: { maxTokens?: number }) {
       {
         type: "text" as const,
         text: JSON.stringify({
-          decision: "allow",
-          risk: "low",
+          decision,
+          risk: decision === "allow" ? "low" : "medium",
           rationale: "reviewer fixture",
         }),
       },
@@ -454,7 +457,7 @@ describe("createModelExecAutoReviewer", () => {
   );
 
   it("keeps the command input budget independent of a large transcript", async () => {
-    const { reviewer, prepare } = createReviewerHarness();
+    const { reviewer, prepare, complete } = createReviewerHarness();
     const transcript: ExecAutoReviewTranscript = {
       entries: Array.from({ length: 8 }, () => ({ kind: "user", text: "x".repeat(4_000) })),
       omittedEntries: 0,
@@ -467,9 +470,11 @@ describe("createModelExecAutoReviewer", () => {
       reviewer({ ...input, command: "x".repeat(16_000), transcript }),
     ).resolves.toMatchObject({
       decision: "ask",
+      risk: "unknown",
       rationale: "exec reviewer deferred because the request exceeds review input limits",
     });
     expect(prepare).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it("denies command text that tries to instruct the reviewer", async () => {
@@ -878,12 +883,50 @@ describe("createModelExecAutoReviewer", () => {
     expect(complete).toHaveBeenCalledTimes(24);
   });
 
+  it.each([
+    ["resolved executable", { resolvedPath: "/tmp/shadow/git" }],
+    ["working directory", { cwd: "/other-repo" }],
+    ["environment", { envKeys: ["REVIEW_SCOPE"] }],
+    ["approval reason", { reason: "allowlist-miss" as const }],
+    ["agent", { agent: { id: "other-agent", sessionKey: "agent:other:main" } }],
+    ["command analysis", { analysis: { ...input.analysis, durableApprovalMatched: true } }],
+  ])("does not reuse a gateway review across a changed %s", async (_label, changes) => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+
+    await reviewer(input);
+    await reviewer({ ...input, ...changes });
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("never caches reviews without a bound gateway executable", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+    const unbound = { ...input, resolvedPath: undefined };
+
+    await reviewer(unbound);
+    await reviewer(unbound);
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
   it("never reuses gateway review authority for a node-host request", async () => {
     const { reviewer, prepare, complete } = createReviewerHarness();
     const nodeInput = { ...input, host: "node" as const };
 
     await reviewer(nodeInput);
     await reviewer(nodeInput);
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache decisions requiring human approval", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness("ask");
+
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "ask" });
+    await expect(reviewer(input)).resolves.toMatchObject({ decision: "ask" });
 
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(complete).toHaveBeenCalledTimes(2);
@@ -956,7 +999,7 @@ describe("createModelExecAutoReviewer", () => {
     });
 
     it("clamps completion maxTokens to model advertised cap when smaller", async () => {
-      const { reviewer, complete } = createReviewerHarness({ maxTokens: 500 });
+      const { reviewer, complete } = createReviewerHarness("allow", { maxTokens: 500 });
       await expect(reviewer(input)).resolves.toMatchObject({ decision: "allow-once" });
       expect(complete).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -937,6 +937,59 @@ describe("push APNs send semantics", () => {
     });
   });
 
+  it("sends relay exec approval alerts with generic modal-only metadata", async () => {
+    const { send, registration, relayConfig, gatewayIdentity } = createRelayApnsSendFixture({
+      nodeId: "ios-node-relay-approval-alert",
+      sendResult: {
+        ok: true,
+        status: 202,
+        apnsId: "relay-approval-alert-id",
+        environment: "production",
+      },
+    });
+
+    const result = await sendApnsExecApprovalAlert({
+      registration,
+      nodeId: "ios-node-relay-approval-alert",
+      approvalId: "approval-relay-1",
+      gatewayDeviceId: "gateway-device-relay",
+      relayConfig,
+      relayGatewayIdentity: gatewayIdentity,
+      relayRequestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({
+      alert: {
+        title: "Exec approval required",
+        body: "Open OpenClaw to review this request.",
+      },
+      sound: "default",
+      category: "openclaw.exec-approval",
+      "content-available": 1,
+    });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "exec.approval.requested",
+      approvalId: "approval-relay-1",
+      gatewayDeviceId: "gateway-device-relay",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectNoProperties(openclawPayload, [
+      "commandText",
+      "host",
+      "nodeId",
+      "allowedDecisions",
+      "expiresAtMs",
+    ]);
+    expectRecordFields(requireRecord(result, "APNs result"), {
+      ok: true,
+      status: 202,
+      environment: "production",
+      transport: "relay",
+    });
+  });
+
   it("keeps bounded non-JSON error reasons UTF-16 well-formed", async () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-utf16-reason",

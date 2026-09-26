@@ -781,6 +781,8 @@ describe("Codex plugin thread config", () => {
 
   it.each([
     ["auto", "auto", undefined],
+    ["boolean true", true, undefined],
+    ["boolean false", false, undefined],
     ["ask", "ask", "user"],
   ] as const)(
     "applies the resolved per-plugin %s reviewer policy over global ask",
@@ -803,7 +805,7 @@ describe("Codex plugin thread config", () => {
       const app = apps?.["google-calendar-app"] as Record<string, unknown> | undefined;
       expect(app?.approvals_reviewer).toBe(expectedReviewer);
       expect(config.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode).toBe(
-        pluginOverride,
+        pluginOverride === true ? "allow" : pluginOverride === false ? "deny" : pluginOverride,
       );
     },
   );
@@ -1970,6 +1972,12 @@ describe("Codex plugin thread config", () => {
       ],
       exposed: true,
     },
+    ...[false, true].map((appEnabled) => ({
+      name: `fails closed when Codex config layers cannot be inspected${appEnabled ? " for a globally ready app" : ""}`,
+      appEnabled,
+      configUnavailable: true,
+      exposed: false,
+    })),
     {
       name: "refuses ask plugin apps when config cannot be inspected",
       appEnabled: false,

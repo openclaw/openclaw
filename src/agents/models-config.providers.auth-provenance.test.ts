@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -63,6 +63,7 @@ vi.mock("./provider-auth-aliases.js", () => ({
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
+let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
@@ -77,15 +78,17 @@ import {
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
-  const [providerRuntimeModule, markersModule, secretsModule] = await Promise.all([
+  const [providerRuntimeModule, markersModule, helperModule, secretsModule] = await Promise.all([
     import("../plugins/provider-runtime.js"),
     import("./model-auth-markers.js"),
+    import("./models-config.providers.secret-helpers.js"),
     import("./models-config.providers.secrets.js"),
   ]);
   mockedResolveProviderSyntheticAuthWithPlugin = vi.mocked(
     providerRuntimeModule.resolveProviderSyntheticAuthWithPlugin,
   );
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
+  resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
@@ -717,6 +720,47 @@ describe("models-config provider auth provenance", () => {
       });
     },
   );
+
+  it("persists env keyRef and tokenRef auth profiles as env var markers", () => {
+    const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY", "TOGETHER_API_KEY"]);
+    delete process.env.VOLCANO_ENGINE_API_KEY;
+    delete process.env.TOGETHER_API_KEY;
+    try {
+      const volcengineApiKey = resolveApiKeyFromCredential({
+        type: "api_key",
+        provider: "volcengine",
+        keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
+      })?.apiKey;
+      const togetherApiKey = resolveApiKeyFromCredential({
+        type: "token",
+        provider: "together",
+        tokenRef: { source: "env", provider: "default", id: "TOGETHER_API_KEY" },
+      })?.apiKey;
+      expect(volcengineApiKey).toBe("VOLCANO_ENGINE_API_KEY");
+      expect(togetherApiKey).toBe("TOGETHER_API_KEY");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", () => {
+    // Ref-managed secrets may be resolved in memory, but models.json should
+    // persist only a non-env marker so plaintext is not written back.
+    const byteplusApiKey = resolveApiKeyFromCredential({
+      type: "api_key",
+      provider: "byteplus",
+      key: "sk-runtime-resolved-byteplus",
+      keyRef: { source: "file", provider: "vault", id: "/byteplus/apiKey" },
+    })?.apiKey;
+    const togetherApiKey = resolveApiKeyFromCredential({
+      type: "token",
+      provider: "together",
+      token: "tok-runtime-resolved-together",
+      tokenRef: { source: "exec", provider: "vault", id: "providers/together/token" },
+    })?.apiKey;
+    expect(byteplusApiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
+  });
 
   it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
     "exposes %s to provider catalog policy",
