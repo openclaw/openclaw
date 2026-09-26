@@ -1,65 +1,67 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import type { Root } from "@openclaw/fs-safe/root";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
-export type MemoryWatchEventStats = {
-  isDirectory?: () => boolean;
-  size?: number;
-  mtimeMs?: number;
-};
-
-type WatchPathSnapshot = {
-  size: number;
-  mtimeMs: number;
-};
-
-export type MemoryWatchSettleQueue = Map<string, WatchPathSnapshot | null>;
-
-/** Overflow reconciles the source; keep watch bursts bounded in the owner. */
+export type MemoryWatchFile = { root: Root; relative: string; sample: boolean };
+export type MemoryWatchEventStats = { size: number; mtimeMs: number };
+type PendingFile = { file: MemoryWatchFile; snapshot: MemoryWatchEventStats | null };
+export type MemoryWatchSettleQueue = Map<string, PendingFile>;
 export const MEMORY_WATCH_MAX_PATHS = 1024;
 const MEMORY_WATCH_SETTLE_RECHECK_MS = 100;
 
-function snapshotFromStats(stats?: MemoryWatchEventStats): WatchPathSnapshot | null {
-  if (!stats || stats.isDirectory?.()) {
-    return null;
+export class MemoryWatchMetadataCloseError extends Error {
+  constructor(cause: unknown) {
+    super("Memory metadata handle cleanup failed", { cause });
   }
-  if (typeof stats.size !== "number" || typeof stats.mtimeMs !== "number") {
-    return null;
-  }
-  return { size: stats.size, mtimeMs: stats.mtimeMs };
 }
 
-function snapshotsMatch(left: WatchPathSnapshot | null, right: WatchPathSnapshot | null): boolean {
-  if (left === null || right === null) {
-    return left === right;
-  }
-  return left.size === right.size && left.mtimeMs === right.mtimeMs;
+function snapshotsMatch(
+  left: MemoryWatchEventStats | null,
+  right: MemoryWatchEventStats | null,
+): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.size === right.size && left.mtimeMs === right.mtimeMs;
 }
 
-async function snapshotPath(filePath: string): Promise<WatchPathSnapshot | null> {
+async function snapshotPath(file: MemoryWatchFile): Promise<MemoryWatchEventStats | null> {
+  if (!file.sample) {
+    return null;
+  }
+  let opened: Awaited<ReturnType<Root["open"]>>;
   try {
-    return snapshotFromStats(await fs.stat(filePath));
+    // Root.stat follows contained aliases even with reject read defaults. Only
+    // guarded no-follow regular-file opens may sample a selected dirty path.
+    opened = await file.root.open("./" + file.relative, {
+      symlinks: "reject",
+    });
   } catch {
+    // Removed/rejected entries still invalidate the domain's guarded indexer.
     return null;
   }
+  // Root.open captured the metadata already. Retire the handle before reading
+  // that in-memory snapshot, so even an unexpected snapshot error cannot leak it.
+  try {
+    await opened[Symbol.asyncDispose]();
+  } catch (error) {
+    throw new MemoryWatchMetadataCloseError(error);
+  }
+  return opened.stat.isFile() ? { size: opened.stat.size, mtimeMs: opened.stat.mtimeMs } : null;
 }
 
+/** False means overflow: the owner must retain whole-source invalidation. */
 export function recordMemoryWatchEventPath(
   queue: MemoryWatchSettleQueue,
-  watchPath?: string,
-  stats?: MemoryWatchEventStats,
-): void {
-  if (!watchPath) {
-    return;
+  file: MemoryWatchFile,
+  snapshot: MemoryWatchEventStats | null = null,
+): boolean {
+  const key = path.resolve(file.root.rootDir, file.relative);
+  queue.set(key, { file, snapshot });
+  if (queue.size <= MEMORY_WATCH_MAX_PATHS) {
+    return true;
   }
-  const trimmed = watchPath.trim();
-  if (!trimmed) {
-    return;
-  }
-  queue.set(path.resolve(trimmed), snapshotFromStats(stats));
-  if (queue.size > MEMORY_WATCH_MAX_PATHS) {
-    queue.clear();
-  }
+  queue.clear();
+  return false;
 }
 
 export async function settleMemoryWatchEventPaths(
@@ -67,49 +69,37 @@ export async function settleMemoryWatchEventPaths(
   signal?: AbortSignal,
 ): Promise<boolean> {
   signal?.throwIfAborted();
-  if (queue.size === 0) {
-    return true;
-  }
-
-  const entries = Array.from(queue.entries());
+  const entries = [...queue];
   queue.clear();
-  const missingBaseline: Array<{ filePath: string; snapshot: WatchPathSnapshot }> = [];
-
-  for (const [filePath, previousSnapshot] of entries) {
-    signal?.throwIfAborted();
-    const currentSnapshot = await snapshotPath(filePath);
-    signal?.throwIfAborted();
-    if (previousSnapshot === null) {
-      if (currentSnapshot !== null) {
-        missingBaseline.push({ filePath, snapshot: currentSnapshot });
-      }
-      continue;
+  const missingBaseline: Array<[string, PendingFile]> = [];
+  const retain = (key: string, pending: PendingFile) => {
+    if (!queue.has(key) && queue.size < MEMORY_WATCH_MAX_PATHS) {
+      queue.set(key, pending);
     }
-    if (
-      !snapshotsMatch(previousSnapshot, currentSnapshot) &&
-      !queue.has(filePath) &&
-      queue.size < MEMORY_WATCH_MAX_PATHS
-    ) {
-      queue.set(filePath, currentSnapshot);
+  };
+  for (const [key, pending] of entries) {
+    signal?.throwIfAborted();
+    const snapshot = await snapshotPath(pending.file);
+    signal?.throwIfAborted();
+    if (pending.snapshot === null) {
+      if (snapshot !== null) {
+        missingBaseline.push([key, { file: pending.file, snapshot }]);
+      }
+    } else if (!snapshotsMatch(pending.snapshot, snapshot)) {
+      retain(key, { file: pending.file, snapshot });
     }
   }
-
-  if (missingBaseline.length > 0) {
+  if (missingBaseline.length) {
     await sleepWithAbort(MEMORY_WATCH_SETTLE_RECHECK_MS, signal);
-    for (const entry of missingBaseline) {
+    for (const [key, pending] of missingBaseline) {
       signal?.throwIfAborted();
-      const currentSnapshot = await snapshotPath(entry.filePath);
+      const snapshot = await snapshotPath(pending.file);
       signal?.throwIfAborted();
       // A newer event owns its snapshot while this generation waits on I/O.
-      if (
-        !snapshotsMatch(entry.snapshot, currentSnapshot) &&
-        !queue.has(entry.filePath) &&
-        queue.size < MEMORY_WATCH_MAX_PATHS
-      ) {
-        queue.set(entry.filePath, currentSnapshot);
+      if (!snapshotsMatch(pending.snapshot, snapshot)) {
+        retain(key, { file: pending.file, snapshot });
       }
     }
   }
-
   return queue.size === 0;
 }

@@ -1,8 +1,13 @@
 /** Host-local macOS system-cookie sync into a managed Browser profile. */
-import fs from "node:fs";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
+import { watch } from "@openclaw/fs-safe/watch";
 import type { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  resolveFsObservationMode,
+  resolveFsObservationIntervalMs,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   cacheKeychainSecret,
@@ -120,11 +125,7 @@ async function watchSystemProfileCookies(params: {
   let stopError: Error | undefined;
   const stoppedResult = createDeferred<void>();
   const settleStopped = () => {
-    if (stopError) {
-      stoppedResult.reject(stopError);
-    } else {
-      stoppedResult.resolve();
-    }
+    stoppedResult.resolve();
   };
 
   const runCycle = async () => {
@@ -159,25 +160,12 @@ async function watchSystemProfileCookies(params: {
   };
 
   const sourceName = path.basename(source.cookiesFile);
-  const watcher = fs.watch(path.dirname(source.cookiesFile), (_event, filename) => {
-    const changedName = filename === null ? null : path.basename(filename);
-    if (
-      changedName !== null &&
-      changedName !== sourceName &&
-      !changedName.startsWith(`${sourceName}-`)
-    ) {
-      return;
-    }
-    clearTimeout(debounce);
-    debounce = setTimeout(() => void runCycle(), COOKIE_SYNC_DEBOUNCE_MS);
-  });
   const stop = () => {
     if (stopped) {
       return;
     }
     stopped = true;
     clearTimeout(debounce);
-    watcher.close();
     controller.abort(new Error("cookie sync stopped"));
     if (!inFlight) {
       settleStopped();
@@ -187,17 +175,50 @@ async function watchSystemProfileCookies(params: {
     stopError = error;
     stop();
   };
-  watcher.on("error", fail);
+  const authority = await root(path.dirname(source.cookiesFile));
+  const mode = resolveFsObservationMode();
+  let ready = false;
+  const selected = (name: string) => name === sourceName || name.startsWith(`${sourceName}-`);
+  const watcher = watch(authority, {
+    scopes: [{ path: ".", kind: "tree", depth: 1 }],
+    mode,
+    intervalMs: mode === "poll" ? resolveFsObservationIntervalMs() : undefined,
+    exclude: (entry) =>
+      Boolean(entry.path) && entry.path !== "." && !selected(path.basename(entry.path)),
+    onInvalidate: (invalidation) => {
+      if (stopped || (!ready && invalidation.reason === "reconcile" && !invalidation.changes)) {
+        return;
+      }
+      if (
+        invalidation.changes &&
+        !invalidation.changes.some((change) => selected(path.basename(change.path)))
+      ) {
+        return;
+      }
+      clearTimeout(debounce);
+      debounce = setTimeout(() => void runCycle(), COOKIE_SYNC_DEBOUNCE_MS);
+    },
+    onHealth: (health) => {
+      if (health.state === "unavailable") {
+        fail(new Error("cookie sync observation failed", { cause: health.failure?.error }));
+      }
+    },
+  });
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
+    await watcher.ready;
+    ready = true;
     await runCycle();
     await stoppedResult.promise;
+    if (stopError) {
+      throw stopError;
+    }
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
-    watcher.removeListener("error", fail);
     stop();
+    await watcher.close();
   }
 }
 

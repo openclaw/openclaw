@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import type { WatchOptions } from "@openclaw/fs-safe/watch";
 import { Command } from "commander";
 import * as cliRuntime from "openclaw/plugin-sdk/cli-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -14,10 +14,10 @@ const gatewayMocks = vi.hoisted(() => ({
 }));
 
 const watchMocks = vi.hoisted(() => ({ watch: vi.fn(), readSecret: vi.fn() }));
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, default: { ...actual, watch: watchMocks.watch } };
-});
+vi.mock("@openclaw/fs-safe/watch", () => ({ watch: watchMocks.watch }));
+vi.mock("@openclaw/fs-safe/root", () => ({
+  root: vi.fn(async () => ({ [Symbol.asyncDispose]: vi.fn(async () => {}) })),
+}));
 vi.mock("../browser/system-chrome-cookies.js", () => ({
   cacheKeychainSecret: vi.fn(async () => watchMocks.readSecret),
 }));
@@ -99,10 +99,10 @@ describe("browser cookie-sync CLI", () => {
     const secondPush = createDeferred<{ ok: boolean; targetId: string; added: number }>();
     gatewayMocks.callGatewayFromCli.mockImplementationOnce(async () => firstPush.promise);
     gatewayMocks.callGatewayFromCli.mockImplementationOnce(async () => secondPush.promise);
-    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
-    let changed: (event: string, filename: string) => void = () => {};
-    watchMocks.watch.mockImplementation((_path, listener) => {
-      changed = listener;
+    const watcher = { ready: Promise.resolve(), close: vi.fn(async () => {}) };
+    let changed: WatchOptions["onInvalidate"] = () => {};
+    watchMocks.watch.mockImplementation((_root, options: WatchOptions) => {
+      changed = options.onInvalidate;
       return watcher;
     });
     const running = createProgram().parseAsync(
@@ -111,12 +111,12 @@ describe("browser cookie-sync CLI", () => {
     );
     try {
       await vi.waitFor(() => expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledTimes(1));
-      changed("change", "Cookies-wal");
+      changed({ reason: "event", changes: [{ path: "Cookies-wal", type: "content" }] });
       await vi.advanceTimersByTimeAsync(1_500);
       expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledTimes(1);
       firstPush.resolve({ ok: true, targetId: "tab-1", added: 1 });
       await vi.waitFor(() => expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledTimes(2));
-      changed("change", "Cookies");
+      changed({ reason: "event", changes: [{ path: "Cookies", type: "structural" }] });
       await vi.advanceTimersByTimeAsync(1_500);
       process.emit("SIGINT");
       secondPush.resolve({ ok: true, targetId: "tab-1", added: 1 });

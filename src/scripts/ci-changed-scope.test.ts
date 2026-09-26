@@ -227,12 +227,12 @@ describe("detectChangedScope", () => {
   it("routes Skills watcher ownership to desktop Node proof without native app builds", () => {
     for (const changedPath of [
       "src/skills/runtime/refresh.ts",
-      "src/skills/runtime/refresh-content-native.ts",
-      "src/skills/runtime/refresh-ancestor-native.ts",
-      "src/skills/runtime/refresh-watch-close.ts",
-      "src/skills/runtime/refresh-content-native.test.ts",
-      "src/skills/runtime/refresh-content-native.entries.test.ts",
-      "src/skills/runtime/refresh.native-content.integration.test.ts",
+      "src/skills/runtime/refresh-observation-source.ts",
+      "src/skills/runtime/refresh-file-stability.ts",
+      "src/skills/runtime/refresh-watch-registry.ts",
+      "src/skills/runtime/refresh-file-stability.test.ts",
+      "src/skills/runtime/refresh.recovery.test.ts",
+      "src/skills/runtime/refresh.observation.live.test.ts",
       "src/skills/runtime/refresh.missing-root.integration.test.ts",
       "src/skills/runtime/refresh.symbolic-source.integration.test.ts",
     ]) {

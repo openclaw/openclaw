@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveRealpathOrAbsolute } from "../../infra/boundary-path.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { tryRealpath } from "../loading/symlink-targets.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
@@ -10,14 +11,13 @@ import { resolveSkillsWatchSourceRoots } from "./refresh-source-roots.js";
 import {
   DEFAULT_SKILLS_WATCH_IGNORED,
   isTrustedSymlinkSkillTarget,
-  makeSkillsWatchTarget,
   readBudgetedDirEntries,
   toWatchRoot,
 } from "./refresh-watch-path.js";
 
 export type WatchTarget = {
   path: string;
-  watchRoot: string;
+  authorityPath: string;
   depth: number;
   executionOnly?: true;
 };
@@ -25,7 +25,7 @@ export type WatchTarget = {
 function skillsWatchTargetsMatch(previous: WatchTarget, next: WatchTarget): boolean {
   return (
     previous.path === next.path &&
-    previous.watchRoot === next.watchRoot &&
+    previous.authorityPath === next.authorityPath &&
     previous.depth === next.depth &&
     previous.executionOnly === next.executionOnly
   );
@@ -130,11 +130,24 @@ export function resolveSkillsWatchTargets(
   const sortedTargets = Array.from(targets.values()).toSorted((a, b) =>
     a.path.localeCompare(b.path),
   );
+  const authorityWorkspaces = [workspaceDir, executionWorkspaceDir].flatMap((workspace) =>
+    workspace ? [workspace, resolvePathViaExistingAncestorSync(workspace)] : [],
+  );
+  for (const target of sortedTargets) {
+    // Explicit workspace parents survive replacement of workspace-owned roots.
+    // External configured/plugin/target roots retain their own admitted parent.
+    for (const workspace of authorityWorkspaces) {
+      if (isPathInside(workspace, target.path)) {
+        target.authorityPath = path.dirname(workspace);
+        break;
+      }
+    }
+  }
   return { signature, targets: sortedTargets };
 }
 
 function addWatchTarget(targets: Map<string, WatchTarget>, raw: string, depth: number): void {
-  const target = makeSkillsWatchTarget(raw, depth);
+  const target: WatchTarget = { path: toWatchRoot(raw), authorityPath: path.dirname(raw), depth };
   target.depth = Math.max(target.depth, targets.get(target.path)?.depth ?? 0);
   targets.set(target.path, target);
 }
@@ -162,7 +175,12 @@ function addSkillSourceWatchTargets(
   const companionSkillsRoot = addSkillRootWatchTargets(targets, root, rootDepth);
   // Both bounded scans share the source's containment identity for this preparation.
   // Trusted symlink leaves below remain registration-only, never recursive scans.
-  const rootRealPath = resolveRealpathOrAbsolute(root);
+  const rootRealPath = resolvePathViaExistingAncestorSync(root);
+  if (toWatchRoot(rootRealPath) !== toWatchRoot(root)) {
+    // The configured source admits its canonical root even when an ancestor,
+    // rather than the leaf, is the alias (including missing descendants).
+    addSkillRootWatchTargets(targets, rootRealPath, rootDepth);
+  }
   addTrustedSymlinkSkillWatchTargets(
     targets,
     root,
@@ -179,7 +197,7 @@ function addSkillSourceWatchTargets(
     allowedSymlinkTargetRealPaths,
     GROUPED_SKILLS_WATCH_DEPTH,
     rootRealPath,
-    resolveRealpathOrAbsolute(companionSkillsRoot),
+    resolvePathViaExistingAncestorSync(companionSkillsRoot),
   );
 }
 
@@ -236,7 +254,8 @@ function addTrustedSymlinkSkillWatchTargets(
         continue;
       }
       const childPath = path.join(current.dir, entry.name);
-      if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(childPath))) {
+      // Exclusions apply within this admitted source, never to its ancestors.
+      if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(path.relative(root, childPath)))) {
         continue;
       }
       if (entry.isSymbolicLink()) {

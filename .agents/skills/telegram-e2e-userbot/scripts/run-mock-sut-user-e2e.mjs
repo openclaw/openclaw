@@ -1069,7 +1069,29 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
   let scenarioWatcher;
   try {
     leaseHealth.assertHealthy();
-    if (args.scenario) scenarioWatcher = fs.watch(scenarioBarrierDir, readActionFailure);
+    if (args.scenario) {
+      const { root } = await import("@openclaw/fs-safe/root");
+      const { watch } = await import("@openclaw/fs-safe/watch");
+      const { resolveFsObservationMode, resolveFsObservationIntervalMs } = await import(
+        pathToFileURL(path.join(repoRoot, "src/infra/fs-observation-mode.ts")).href
+      );
+      const scenarioRoot = await root(scenarioBarrierDir);
+      const mode = resolveFsObservationMode();
+      scenarioWatcher = watch(scenarioRoot, {
+        scopes: [{ path: "action-failure.json", kind: "entry" }],
+        mode,
+        intervalMs: mode === "poll" ? resolveFsObservationIntervalMs() : undefined,
+        onInvalidate: () => {
+          readActionFailure();
+        },
+        onHealth: (health) => {
+          if (health.state === "unavailable") {
+            actionFailure ??= { error: "Scenario failure observation became unavailable" };
+          }
+        },
+      });
+      await scenarioWatcher.ready;
+    }
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
       mock = spawnProcess(
@@ -1548,9 +1570,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       },
     };
   } finally {
-    scenarioWatcher?.close();
-    await stopChild(gateway);
-    await stopChild(mock);
+    const retired = await Promise.allSettled([
+      scenarioWatcher?.close(),
+      stopChild(gateway),
+      stopChild(mock),
+    ]);
+    const errors = retired
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason);
+    if (errors.length) throw new AggregateError(errors, "Scenario observation cleanup failed");
   }
 }
 

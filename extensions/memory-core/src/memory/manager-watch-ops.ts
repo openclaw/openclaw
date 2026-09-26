@@ -14,6 +14,8 @@ function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   private fileWatcher: MemoryFileWatcher | undefined;
   private memoryWatcherReady: Promise<void> = Promise.resolve();
+  private remoteWatchRetirement: Promise<void> | undefined;
+  private remoteWatchCloseFailure: { error: unknown } | undefined;
   protected get memoryWatchCapacityDegraded(): boolean {
     return this.fileWatcher?.capacityDegraded ?? false;
   }
@@ -37,7 +39,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         // Remote notifications have already passed native file settling on the host.
         runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
       };
-      void this.memoryFiles
+      this.remoteWatchRetirement = this.memoryFiles
         .watch(
           {
             agentId: this.agentId,
@@ -56,6 +58,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
             markDirty("unavailable");
             if (!subscription.signal.aborted) {
               log.warn(`memory workspace watcher unavailable: ${String(error)}`);
+            } else if (error !== subscription.signal.reason) {
+              // Cancellation is expected; a distinct transport retirement failure
+              // must survive shutdown instead of being mistaken for a joined worker.
+              this.remoteWatchCloseFailure = { error };
             }
           },
         );
@@ -102,11 +108,34 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     }
     this.memoryWatchSubscription?.abort();
     this.memoryWatchSubscription = undefined;
-    await this.fileWatcher?.close();
-    this.fileWatcher = undefined;
-    if (this.sessionUnsubscribe) {
-      this.sessionUnsubscribe();
-      this.sessionUnsubscribe = null;
+    const results = await Promise.allSettled([
+      (async () => {
+        // Abort only requests remote cancellation. Its transport owns and joins
+        // the worker; retain the subscription until that physical join settles.
+        await this.remoteWatchRetirement;
+        if (this.remoteWatchCloseFailure) {
+          throw this.remoteWatchCloseFailure.error;
+        }
+        this.remoteWatchRetirement = undefined;
+      })(),
+      (async () => {
+        await this.fileWatcher?.close();
+        // A failed observer retains its rejected retirement join.
+        this.fileWatcher = undefined;
+      })(),
+      (async () => {
+        this.sessionUnsubscribe?.();
+        this.sessionUnsubscribe = null;
+      })(),
+    ]);
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Memory watch resources cleanup failed");
     }
   }
 
