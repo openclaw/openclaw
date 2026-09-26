@@ -166,7 +166,7 @@ export function listSqliteSessionEntriesFromDatabase(
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
-export function* iterateSessionEntriesForListing(
+function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
   sessionKeys?: ReadonlySet<string>,
