@@ -212,6 +212,8 @@ detected again on startup. Same-identity restarts and token rotations retain the
 queue, as do legacy offsets without a known previous identity. `purge` is optional
 on the structural queue type for compatibility with plugin-supplied queues; a
 caller requiring an identity reset must fail rather than skip an unavailable purge.
+Runtime-provided purge handles recheck plugin lifecycle authority immediately
+before deletion and reject after their plugin runtime is retired.
 
 Treat this flag as a capability claim, not a performance preference. Contract
 tests should prove that adding and editing one named account leaves a sibling's
