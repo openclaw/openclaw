@@ -5,9 +5,14 @@ import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawConfig,
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
@@ -86,9 +91,20 @@ export type BuildTelegramMessageContextParams = {
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
-  resolveGroupActivation: RegisterTelegramHandlerParams["resolveGroupActivation"];
-  resolveGroupRequireMention: RegisterTelegramHandlerParams["resolveGroupRequireMention"];
-  resolveTelegramGroupConfig: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
+  resolveGroupActivation: (params: {
+    agentId?: string;
+    sessionKey: string;
+    cfg: OpenClawConfig;
+  }) => boolean | undefined;
+  resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
+  ) => {
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
   runtime?: TelegramMessageContextRuntimeOverrides;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;
