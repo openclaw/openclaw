@@ -6,7 +6,7 @@ import {
   mocks,
   resetSessionAccessorMocks,
   resolveAgentTestConfig,
-} from "./agent.mocks.test-support.js";
+} from "./agent.mocks.test-utils.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
@@ -42,7 +42,7 @@ export {
   waitForAssertion,
 } from "./agent-clock.test-helpers.js";
 
-export { getAgentTestMocks } from "./agent.mocks.test-support.js";
+export { getAgentTestMocks } from "./agent.mocks.test-utils.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
