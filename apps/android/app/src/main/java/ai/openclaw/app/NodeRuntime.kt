@@ -1471,6 +1471,14 @@ class NodeRuntime private constructor(
   val providerModelOutcomes: StateFlow<List<GatewayModelProviderOutcome>> = _providerModelOutcomes.asStateFlow()
   private val _providerModelPendingProviders = MutableStateFlow<Set<String>>(emptySet())
   val providerModelPendingProviders: StateFlow<Set<String>> = _providerModelPendingProviders.asStateFlow()
+  private val _providerDecisionModels = MutableStateFlow<List<GatewayDecisionModelSummary>>(emptyList())
+  val providerDecisionModels: StateFlow<List<GatewayDecisionModelSummary>> = _providerDecisionModels.asStateFlow()
+  private val _providerAutomaticUtilityModel = MutableStateFlow<String?>(null)
+  val providerAutomaticUtilityModel: StateFlow<String?> = _providerAutomaticUtilityModel.asStateFlow()
+  private val _providerModelSelectionRestricted = MutableStateFlow(false)
+  val providerModelSelectionRestricted: StateFlow<Boolean> = _providerModelSelectionRestricted.asStateFlow()
+  private val _providerPolicyDefaultModel = MutableStateFlow<String?>(null)
+  val providerPolicyDefaultModel: StateFlow<String?> = _providerPolicyDefaultModel.asStateFlow()
   private val _providerModelCatalogRefreshing = MutableStateFlow(false)
   val providerModelCatalogRefreshing: StateFlow<Boolean> = _providerModelCatalogRefreshing.asStateFlow()
   private val _providerModelCatalogErrorText = MutableStateFlow<NativeText?>(null)
@@ -1531,6 +1539,12 @@ class NodeRuntime private constructor(
   val usageState: StateFlow<GatewaySummaryState<GatewayUsageSummary>> = usageSummary.state
   private val providerSessionSpend = GatewaySummaryOwner<Map<String, GatewayProviderSessionSpend>>()
   val providerSessionSpendState: StateFlow<GatewaySummaryState<Map<String, GatewayProviderSessionSpend>>> = providerSessionSpend.state
+  private val installedAgentsSummary = GatewaySummaryOwner<List<GatewayInstalledAgent>>()
+  val installedAgentsState: StateFlow<GatewaySummaryState<List<GatewayInstalledAgent>>> = installedAgentsSummary.state
+  private val _installedAgentsAvailable = MutableStateFlow(false)
+  val installedAgentsAvailable: StateFlow<Boolean> = _installedAgentsAvailable.asStateFlow()
+  private val _gatewayConfigRevision = MutableStateFlow(0L)
+  val gatewayConfigRevision: StateFlow<Long> = _gatewayConfigRevision.asStateFlow()
   private var usageIncompleteRetryJob: Job? = null
   private val skillsSummary = GatewaySummaryOwner<GatewaySkillsSummary>()
   val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
@@ -2063,6 +2077,7 @@ class NodeRuntime private constructor(
       usageSummary.reset()
     }
     providerSessionSpend.reset()
+    installedAgentsSummary.reset()
     skillsSummary.reset()
     synchronized(gatewayDataScopeLock) {
       chatSelectionSeq.incrementAndGet()
@@ -2936,6 +2951,8 @@ class NodeRuntime private constructor(
   fun refreshUsage() = launchGatewayRefresh { refreshUsageFromGateway() }
 
   fun refreshProviderSessionSpend() = launchGatewayRefresh { refreshProviderSessionSpendFromGateway() }
+
+  fun refreshInstalledAgents() = launchGatewayRefresh { refreshInstalledAgentsFromGateway() }
 
   fun refreshSkills() = launchGatewayRefresh { refreshSkillsFromGateway() }
 
@@ -6128,6 +6145,24 @@ class NodeRuntime private constructor(
     }
   }
 
+  internal fun createGatewayModelSettingsController(): GatewayModelSettingsController? {
+    val gatewayScope = captureGatewayDataScope() ?: return null
+    if (gatewayAdvertisesMethod(GatewayMethod.ConfigGet.rawValue) != true) return null
+    val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return null
+    return GatewayModelSettingsController(
+      scope = scope,
+      lease = lease,
+      json = json,
+      isCurrent = { isGatewayDataScopeCurrent(gatewayScope) },
+      canMutate = { operatorScopesAllowAdmin(_operatorScopes.value) && gatewayAdvertisesMethod(GatewayMethod.ConfigPatch.rawValue) == true },
+      onConfigChanged = {
+        refreshModelCatalog()
+        refreshProviderModels()
+        if (_installedAgentsAvailable.value) refreshInstalledAgents()
+      },
+    )
+  }
+
   fun refreshChatCommands() {
     chat.refreshCommands()
   }
@@ -6145,6 +6180,10 @@ class NodeRuntime private constructor(
     if (operatorConnected && (event == "config.changed" || event == "chat.metadata.changed")) {
       refreshModelCatalog()
       refreshProviderModels()
+    }
+    if (event == "config.changed") {
+      _gatewayConfigRevision.update { it + 1 }
+      if (_installedAgentsAvailable.value && installedAgentsSummary.state.value.summary != null) refreshInstalledAgents()
     }
     if (event == "config.changed" || event == GatewayEvent.UsersPrefsChanged.rawValue) {
       // Config changes invalidate the snapshot; profile changes are targeted by
@@ -7283,6 +7322,10 @@ class NodeRuntime private constructor(
     _providerModelTagsDescribeDefaults.value = false
     _providerModelOutcomes.value = emptyList()
     _providerModelPendingProviders.value = emptySet()
+    _providerDecisionModels.value = emptyList()
+    _providerAutomaticUtilityModel.value = null
+    _providerModelSelectionRestricted.value = false
+    _providerPolicyDefaultModel.value = null
     _providerModelCatalogRefreshing.value = false
     _providerModelCatalogErrorText.value = null
     _modelAuthProviders.value = emptyList()
@@ -7317,6 +7360,10 @@ class NodeRuntime private constructor(
           _providerModelTagsDescribeDefaults.value = catalog.tagsDescribeDefaults
           _providerModelOutcomes.value = catalog.providerOutcomes
           _providerModelPendingProviders.value = catalog.pendingProviders
+          _providerDecisionModels.value = catalog.decisionModels
+          _providerAutomaticUtilityModel.value = catalog.automaticUtilityModel
+          _providerModelSelectionRestricted.value = catalog.selectionRestricted
+          _providerPolicyDefaultModel.value = catalog.policyDefaultModel
           if (catalog.refreshFailed) {
             _providerModelCatalogErrorText.value = nativeText("Some models could not be refreshed. Tap Refresh to retry.")
           }
@@ -7832,6 +7879,17 @@ class NodeRuntime private constructor(
       val response = requestGatewayData(gatewayScope, GatewayMethod.SessionsUsage.rawValue, params.toString())
       parseGatewayProviderSessionSpend(json.parseToJsonElement(response).jsonObject)
     }
+
+  private suspend fun refreshInstalledAgentsFromGateway() {
+    if (!_installedAgentsAvailable.value) return
+    refreshGatewaySummary(
+      summary = installedAgentsSummary,
+      failureText = nativeText("Could not load installed agents. Try checking again."),
+    ) { gatewayScope ->
+      val response = requestGatewayData(gatewayScope, "acpx.agents.list", "{}")
+      parseGatewayInstalledAgents(json.parseToJsonElement(response).jsonObject)
+    }
+  }
 
   private suspend fun refreshSkillsFromGateway(): GatewaySkillsSummary? =
     refreshGatewaySummary(
@@ -9199,6 +9257,8 @@ class NodeRuntime private constructor(
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
       _sessionCatalogAvailable.value = sessionCatalogAvailableFor(advertisedMethods, _operatorScopes.value)
+      _installedAgentsAvailable.value = "acpx.agents.list" in advertisedMethods && operatorScopesAllowRead(_operatorScopes.value)
+      if (!_installedAgentsAvailable.value) installedAgentsSummary.reset()
       _sessionDiffAvailable.value = GatewayMethod.SessionsDiff.rawValue in advertisedMethods
       _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods

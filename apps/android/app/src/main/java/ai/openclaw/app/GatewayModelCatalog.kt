@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatThinkingLevelOption
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -59,6 +60,16 @@ internal data class GatewayModelCatalogResult(
   val tagsDescribeDefaults: Boolean,
   val providerOutcomes: List<GatewayModelProviderOutcome>,
   val pendingProviders: Set<String>,
+  val decisionModels: List<GatewayDecisionModelSummary>,
+  val automaticUtilityModel: String?,
+  val selectionRestricted: Boolean,
+  val policyDefaultModel: String?,
+)
+
+data class GatewayDecisionModelSummary(
+  val id: String,
+  val provider: String,
+  val name: String,
 )
 
 data class GatewayModelProviderOutcome(
@@ -82,6 +93,18 @@ internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogRes
         )
       },
     pendingProviders = (root?.get("pendingProviders") as? JsonArray).orEmpty().map { it.jsonPrimitive.content }.toSet(),
+    decisionModels =
+      (root?.get("decisionModels") as? JsonArray).orEmpty().map { item ->
+        val row = item.jsonObject
+        GatewayDecisionModelSummary(
+          id = row.getValue("id").jsonPrimitive.content,
+          provider = row.getValue("provider").jsonPrimitive.content,
+          name = row.getValue("name").jsonPrimitive.content,
+        )
+      },
+    automaticUtilityModel = (root?.get("defaultModels") as? JsonObject)?.get("automaticUtilityModel")?.jsonPrimitive?.contentOrNull,
+    selectionRestricted = (root?.get("modelSelectionPolicy") as? JsonObject)?.get("restricted")?.jsonPrimitive?.booleanOrNull == true,
+    policyDefaultModel = (root?.get("modelSelectionPolicy") as? JsonObject)?.get("defaultModel")?.jsonPrimitive?.contentOrNull,
   )
 
 internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =

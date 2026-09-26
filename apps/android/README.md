@@ -24,13 +24,24 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 ## Providers and models
 
-Open **Settings → Providers and models** for provider cards like the Web UI.
-Search by provider or model, view the selected agent's credential sources, and
+Open **Settings → Providers and models** for the Gateway's **Models** page.
+**Defaults for all agents** sets the primary, utility, decision, and fallback
+models, thinking level, and Fast Mode. Utility models can be automatic, disabled,
+or selected explicitly. Decision models use their own catalog and remain disabled
+until selected; chat models are not their fallback. Agent-specific settings
+continue to override these shared defaults. Changes require administrator access.
+
+When the Gateway provides **Installed agents**, check its coding-agent installation
+status and enable or disable each integration. These are apps on the Gateway
+computer, not models. Each app owns its installation and sign-in; enabling one
+does not authenticate it.
+
+Under **Provider access**, search by provider or model, view the selected agent's credential sources, and
 expand each card's models. **Gateway default** and **Fallback** identify the
 Gateway's shared model defaults, not the selected agent's overrides or active
 requests. Older Gateways that omit this tag scope omit those badges. **More
-models** expands the remaining inventory without labeling it old; this screen
-does not change model selection.
+models** expands the remaining inventory without labeling it old. Expanding a
+provider or model does not change the configured default.
 
 **Connect Provider** offers the Gateway's supported account, device-code,
 token, and API-key methods. **Set API key** opens a masked key field directly.

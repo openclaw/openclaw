@@ -547,6 +547,10 @@ class MainViewModel private constructor(
   val providerModelTagsDescribeDefaults: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelTagsDescribeDefaults }
   val providerModelOutcomes: StateFlow<List<GatewayModelProviderOutcome>> = runtimeState(initial = emptyList()) { it.providerModelOutcomes }
   val providerModelPendingProviders: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.providerModelPendingProviders }
+  val providerDecisionModels: StateFlow<List<GatewayDecisionModelSummary>> = runtimeState(initial = emptyList()) { it.providerDecisionModels }
+  val providerAutomaticUtilityModel: StateFlow<String?> = runtimeState(initial = null) { it.providerAutomaticUtilityModel }
+  val providerModelSelectionRestricted: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelSelectionRestricted }
+  val providerPolicyDefaultModel: StateFlow<String?> = runtimeState(initial = null) { it.providerPolicyDefaultModel }
   val providerModelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.providerModelCatalogRefreshing }
   val providerModelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.providerModelCatalogErrorText }
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
@@ -578,6 +582,9 @@ class MainViewModel private constructor(
   val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   internal val usageState = runtimeState(initial = GatewaySummaryState<GatewayUsageSummary>()) { it.usageState }
   internal val providerSessionSpendState = runtimeState(initial = GatewaySummaryState<Map<String, GatewayProviderSessionSpend>>()) { it.providerSessionSpendState }
+  internal val installedAgentsState = runtimeState(initial = GatewaySummaryState<List<GatewayInstalledAgent>>()) { it.installedAgentsState }
+  val installedAgentsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.installedAgentsAvailable }
+  internal val gatewayConfigRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.gatewayConfigRevision }
   internal val skillsState = runtimeState(initial = GatewaySummaryState<GatewaySkillsSummary>()) { it.skillsState }
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
@@ -1541,6 +1548,12 @@ class MainViewModel private constructor(
   fun refreshProviderSessionSpend() {
     ensureRuntime().refreshProviderSessionSpend()
   }
+
+  fun refreshInstalledAgents() {
+    ensureRuntime().refreshInstalledAgents()
+  }
+
+  internal fun createGatewayModelSettingsController(): GatewayModelSettingsController? = runtimeRef.value?.createGatewayModelSettingsController()
 
   fun refreshTalkSetupReadiness() {
     ensureRuntime().refreshTalkSetupReadiness()

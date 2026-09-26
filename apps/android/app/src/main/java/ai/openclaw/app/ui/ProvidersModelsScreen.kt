@@ -1,11 +1,14 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayModelProviderSummary
+import ai.openclaw.app.GatewayModelSettingsState
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ProviderAuthController
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -63,6 +66,10 @@ internal fun ProvidersModelsScreen(
   val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
   val models by viewModel.providerModelCatalog.collectAsState()
+  val decisionModels by viewModel.providerDecisionModels.collectAsState()
+  val automaticUtilityModel by viewModel.providerAutomaticUtilityModel.collectAsState()
+  val selectionRestricted by viewModel.providerModelSelectionRestricted.collectAsState()
+  val policyDefaultModel by viewModel.providerPolicyDefaultModel.collectAsState()
   val outcomes by viewModel.providerModelOutcomes.collectAsState()
   val pendingProviders by viewModel.providerModelPendingProviders.collectAsState()
   val tagsDescribeDefaults by viewModel.providerModelTagsDescribeDefaults.collectAsState()
@@ -72,6 +79,19 @@ internal fun ProvidersModelsScreen(
   val errorText by viewModel.providerModelCatalogErrorText.collectAsState()
   val usageState by viewModel.usageState.collectAsState()
   val spendState by viewModel.providerSessionSpendState.collectAsState()
+  val installedAgentsAvailable by viewModel.installedAgentsAvailable.collectAsState()
+  val installedAgentsState by viewModel.installedAgentsState.collectAsState()
+  val operatorScopes by viewModel.operatorScopes.collectAsState()
+  val gatewayCatalogRevision by viewModel.gatewayCatalogRevision.collectAsState()
+  val gatewayConfigRevision by viewModel.gatewayConfigRevision.collectAsState()
+  val settingsController = remember(gatewayId, isConnected, gatewayCatalogRevision) { if (isConnected) viewModel.createGatewayModelSettingsController() else null }
+  val settingsState = settingsController?.state?.collectAsState()?.value ?: GatewayModelSettingsState()
+  val canEditSettings = isConnected && operatorScopesAllowAdmin(operatorScopes)
+  val installedRuntimeIds =
+    installedAgentsState.summary
+      .orEmpty()
+      .map { it.runtimeId }
+      .toSet()
   var query by rememberSaveable(gatewayId) { mutableStateOf("") }
   var expandedProviders by rememberSaveable(gatewayId) { mutableStateOf(emptyList<String>()) }
   var expandedMore by rememberSaveable(gatewayId) { mutableStateOf(emptyList<String>()) }
@@ -94,9 +114,12 @@ internal fun ProvidersModelsScreen(
         ?.providers
         ?.filter { it.providerId.isNotBlank() }
         ?.forEach { put(it.providerId, it.displayName) }
-      spendState.summary?.keys?.forEach { putIfAbsent(it, providerDisplayName(it)) }
+      spendState.summary?.forEach { (provider, spend) ->
+        if (spend.totalTokens > 0 || spend.totalCost > 0) putIfAbsent(provider, providerDisplayName(provider))
+      }
     }
-  val rows = providerRows(providers, models, additionalProviders)
+  val rows = providerRows(providers, models, additionalProviders).filterNot { it.id in installedRuntimeIds }
+  val modelCount = rows.sumOf { it.modelCount }
   val search = query.trim()
   val searching = search.isNotEmpty()
   val visibleRows =
@@ -146,6 +169,14 @@ internal fun ProvidersModelsScreen(
     viewModel.refreshProviderModels(refresh = true)
     viewModel.refreshUsage()
     viewModel.refreshProviderSessionSpend()
+    settingsController?.refresh()
+    if (installedAgentsAvailable) viewModel.refreshInstalledAgents()
+  }
+
+  LaunchedEffect(settingsController, gatewayConfigRevision) { settingsController?.refresh() }
+  DisposableEffect(settingsController) { onDispose { settingsController?.close() } }
+  LaunchedEffect(isConnected, gatewayId, installedAgentsAvailable) {
+    if (isConnected && installedAgentsAvailable) viewModel.refreshInstalledAgents()
   }
 
   LaunchedEffect(isConnected, gatewayId, selectionGeneration) {
@@ -217,23 +248,63 @@ internal fun ProvidersModelsScreen(
             IconButton(onClick = onBack) {
               Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), tint = ClawTheme.colors.text)
             }
-            Text(nativeString("Providers and models"), modifier = Modifier.weight(1f), style = ClawTheme.type.title, color = ClawTheme.colors.text)
+            Text(nativeString("Models"), modifier = Modifier.weight(1f), style = ClawTheme.type.title, color = ClawTheme.colors.text)
             IconButton(onClick = ::refresh, enabled = isConnected && !refreshing) {
               Icon(Icons.Default.Refresh, contentDescription = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"), tint = ClawTheme.colors.textMuted)
             }
           }
+        }
+        item(key = "model-defaults") {
+          ModelDefaultsPanel(
+            controller = settingsController,
+            state = settingsState,
+            models = models,
+            decisionModels = decisionModels,
+            automaticUtilityModel = automaticUtilityModel,
+            authProviders = providers,
+            selectionRestricted = selectionRestricted,
+            policyDefaultModel = policyDefaultModel,
+            canEdit = canEditSettings,
+            connected = isConnected,
+          )
+        }
+        if (installedAgentsAvailable) {
+          item(key = "installed-agents") {
+            InstalledAgentsPanel(
+              agents = installedAgentsState.summary,
+              loading = installedAgentsState.refreshing || settingsState.loading,
+              errorText = installedAgentsState.errorText,
+              canRefresh = isConnected,
+              canEdit = canEditSettings && settingsController != null,
+              saving = settingsState.saving,
+              nativeAgentFlags = settingsState.nativeAgentFlags,
+              models = models,
+              outcomes = outcomes,
+              pendingProviders = pendingProviders,
+              readOnlyReason = if (!canEditSettings) nativeText("Browsing only. Changes require administrator access.") else null,
+              onRefresh = {
+                viewModel.refreshInstalledAgents()
+                viewModel.refreshProviderModels(refresh = true)
+              },
+              onEnabledChange = { id, enabled -> settingsController?.setInstalledAgentEnabled(id, enabled) },
+            )
+          }
+        }
+        item(key = "provider-access") {
+          Text(nativeString("Provider access"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(nativeString("Connections for \$agent. Global defaults above apply to all agents.", agentLabel), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
         }
         item(key = "search") {
           ClawTextField(value = query, onValueChange = { query = it }, placeholder = nativeString("Search providers or models"), modifier = Modifier.semantics { contentDescription = nativeString("Search providers or models") }, maxLines = 1)
         }
         item(key = "summary") {
           Text(
-            if (rows.size == 1 && models.size == 1) {
+            if (rows.size == 1 && modelCount == 1) {
               nativeString("1 provider · 1 model")
-            } else if (models.size == 1) {
+            } else if (modelCount == 1) {
               nativeString("\$count providers · 1 model", rows.size)
             } else {
-              nativeString("\$count providers · \$models models", rows.size, models.size)
+              nativeString("\$count providers · \$models models", rows.size, modelCount)
             },
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,

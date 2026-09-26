@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -64,10 +65,52 @@ class GatewaySummaryRuntimeTest {
         runtime.healthLogsState.value,
         runtime.usageState.value,
         runtime.providerSessionSpendState.value,
+        runtime.installedAgentsState.value,
       )
 
     summaries.forEach { assertNull("an unrequested summary is not a successful empty response", it.summary) }
   }
+
+  @Test
+  fun installedAgentRosterIsCapabilityGatedAndRetiresOnDisconnect() =
+    runBlocking<Unit> {
+      val runtime = createRuntime()
+      connect(runtime)
+      @Suppress("UNCHECKED_CAST")
+      val scopes = field(runtime, "_operatorScopes").get(runtime) as MutableStateFlow<List<String>>
+      scopes.value = listOf("operator.read")
+      val requests = Channel<HeldSummaryRequest>(Channel.UNLIMITED)
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        check(method == "acpx.agents.list")
+        val response = CompletableDeferred<String>()
+        requests.send(HeldSummaryRequest(response, currentCoroutineContext().job))
+        response.await()
+      }
+      assertFalse(runtime.installedAgentsAvailable.value)
+      runtime.javaClass
+        .getDeclaredMethod("replaceGatewayMethods", Set::class.java, java.lang.Boolean.TYPE)
+        .apply { isAccessible = true }
+        .invoke(runtime, setOf("acpx.agents.list"), true)
+      assertTrue(runtime.installedAgentsAvailable.value)
+      runtime.refreshInstalledAgents()
+      val first = withTimeout(2_000) { requests.receive() }
+      val payload = """{"agents":[{"id":"opencode","name":"OpenCode","runtimeId":"acp-opencode","installation":"missing","enabled":true}]}"""
+      first.complete(payload)
+      val agent = checkNotNull(runtime.installedAgentsState.value.summary).single()
+      assertEquals("acp-opencode", agent.runtimeId)
+      assertEquals(GatewayInstalledAgentInstallation.Missing, agent.installation)
+      assertTrue(agent.enabled)
+
+      runtime.refreshInstalledAgents()
+      val retired = withTimeout(2_000) { requests.receive() }
+      runtime.disconnect()
+      retired.complete(payload)
+      assertFalse(runtime.installedAgentsAvailable.value)
+      assertNull(runtime.installedAgentsState.value.summary)
+      assertNull(runtime.installedAgentsState.value.errorText)
+      assertFalse(runtime.installedAgentsState.value.refreshing)
+      requests.close()
+    }
 
   @Test
   fun providerSpendUsesGlobalThirtyDayScopeAndRetiresOnDisconnect() =

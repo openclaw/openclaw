@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayModelProviderProfile
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.GatewayProviderSessionSpend
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -18,6 +19,7 @@ import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.parseGatewayModelProviders
+import ai.openclaw.app.parseGatewayProviderSessionSpend
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.graphics.Bitmap
@@ -38,7 +40,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -121,6 +123,26 @@ class ProvidersModelsScreenTest {
         }
       }
     }
+  }
+
+  @Test
+  fun zeroUsageBookkeepingDoesNotBecomeAProviderAndRuntimeBackedModelsRemainVisible() {
+    val spendOwner = ReflectionHelpers.getField<Any>(runtime, "providerSessionSpend")
+    ReflectionHelpers.getField<MutableStateFlow<GatewaySummaryState<Map<String, GatewayProviderSessionSpend>>>>(spendOwner, "mutableState").value =
+      GatewaySummaryState(
+        summary = parseGatewayProviderSessionSpend(Json.parseToJsonElement("""{"aggregates":{"byProvider":[{"provider":"openclaw","count":12,"totals":{"totalCost":0,"totalTokens":0}},{"provider":"past-provider","count":1,"totals":{"totalCost":0.1,"totalTokens":10}}]}}""").jsonObject),
+      )
+    val models = ReflectionHelpers.getField<MutableStateFlow<List<GatewayModelSummary>>>(runtime, "_providerModelCatalog")
+    models.value = models.value.map { if (it.provider == "openai") it.copy(agentRuntime = Json.parseToJsonElement("""{"id":"openclaw","source":"model"}""").jsonObject) else it }
+    show(dark = true)
+    val search = composeRule.onNode(hasSetTextAction())
+    search.performTextReplacement("openclaw")
+    composeRule.onNodeWithText("No providers or models match \"openclaw\"").assertIsDisplayed()
+    search.performTextReplacement("past-provider")
+    composeRule.onNodeWithText("Global session spend · 30d").performScrollTo().assertIsDisplayed()
+    scrollToSearch()
+    search.performTextReplacement("OpenAI")
+    composeRule.onNodeWithText("GPT-4.1").performScrollTo().assertIsDisplayed()
   }
 
   @Test
@@ -227,6 +249,7 @@ class ProvidersModelsScreenTest {
     search.performTextReplacement("no-such-model")
     composeRule.onNodeWithText("No providers or models match \"no-such-model\"").assertIsDisplayed()
     search.performTextReplacement("")
+    composeRule.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("GPT-4.1"))
     composeRule.onNodeWithText("GPT-4.1").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithText("GPT-4o").performScrollTo().assertIsDisplayed()
     composeRule.onNodeWithText("OpenAI").performScrollTo().performClick()
@@ -319,7 +342,7 @@ class ProvidersModelsScreenTest {
   }
 
   private fun scrollToSearch() {
-    composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+    composeRule.onNode(hasScrollToIndexAction()).performScrollToNode(hasSetTextAction())
   }
 
   private fun show(dark: Boolean) {
@@ -332,6 +355,7 @@ class ProvidersModelsScreenTest {
     assertEquals(19, model.providerModelCatalog.value.size)
     assertEquals(3, model.modelAuthProviders.value.size)
     assertEquals(null, model.providerModelCatalogErrorText.value)
+    scrollToSearch()
   }
 
   private fun capture(name: String) {
