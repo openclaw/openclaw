@@ -812,7 +812,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
             ? [{ kind: "legacy-auth" as const, path: candidate.legacyPath }]
             : []),
         ]);
-        return `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}${hasCredentials ? ` (affected providers: ${providers?.join(", ") ?? "unknown; provider scope unavailable"})` : ""}`;
+        const providerScope =
+          providers === null
+            ? "unknown; provider scope unavailable"
+            : providers.length > 0
+              ? providers.join(", ")
+              : "none; retired files declare no credentials";
+        return `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}${hasCredentials ? ` (affected providers: ${providerScope})` : ""}`;
       }),
       `- ${formatCliCommand("openclaw doctor --fix")} imports legacy auth profile JSON into SQLite, verifies it, records a receipt, and archives the original bytes.`,
     ].join("\n"),

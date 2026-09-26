@@ -39,7 +39,10 @@ function isCredentialSource(source: LegacyAuthProfileSource): boolean {
   return source.kind !== "auth-state";
 }
 
-/** Read provider metadata only; unknown shapes retain the owner-wide refusal. */
+/**
+ * Read provider metadata only; unknown shapes retain the owner-wide refusal,
+ * while a recognized empty set scopes the refusal to no provider at all.
+ */
 export function readLegacyAuthProfileProviders(
   sources: readonly LegacyAuthProfileSource[],
 ): string[] | null {
@@ -55,7 +58,17 @@ export function readLegacyAuthProfileProviders(
       }
       const nested = Object.hasOwn(raw, "profiles");
       const profiles = nested ? raw.profiles : raw;
-      if (!isRecord(profiles) || Object.keys(profiles).length === 0) {
+      if (!isRecord(profiles)) {
+        return null;
+      }
+      // A recognized envelope carrying an explicit empty set is positive data:
+      // this file owns nobody's credentials. A bare `{}` with no `profiles` key
+      // says nothing about which shape it was meant to be, so it keeps the
+      // owner-wide refusal.
+      if (Object.keys(profiles).length === 0) {
+        if (nested) {
+          continue;
+        }
         return null;
       }
       for (const [key, profile] of Object.entries(profiles)) {
@@ -80,7 +93,17 @@ export function readLegacyAuthProfileProviders(
       return null;
     }
   }
-  return providers.size > 0 ? [...providers].toSorted() : null;
+  return providers.size > 0 ? [...providers].toSorted() : [];
+}
+
+/** `null` means the scope could not be read; `[]` means it names nobody. */
+function formatAffectedProviderScope(providers: readonly string[] | null): string {
+  if (providers === null) {
+    return "all (legacy provider scope unavailable)";
+  }
+  return providers.length > 0
+    ? providers.join(", ")
+    : "none (retired files declare no credentials)";
 }
 
 function resolveAuthProfileOwnerPath(agentDir?: string, env?: NodeJS.ProcessEnv): string {
@@ -202,7 +225,7 @@ export class AuthProfileMigrationRequiredError extends Error {
         ? [...new Set([...(previous?.affectedProviders ?? []), ...providers])].toSorted()
         : null;
     super(
-      `Auth profile store ${ownerId} requires legacy credential migration; affected providers: ${affectedProviders?.join(", ") ?? "all (legacy provider scope unavailable)"}; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
+      `Auth profile store ${ownerId} requires legacy credential migration; affected providers: ${formatAffectedProviderScope(affectedProviders)}; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
     );
     this.name = "AuthProfileMigrationRequiredError";
     this.ownerId = ownerId;
