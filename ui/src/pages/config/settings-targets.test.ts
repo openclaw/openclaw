@@ -149,18 +149,18 @@ describe("settings search target manifest", () => {
 });
 
 describe("settings config section ownership", () => {
-  const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "tts", "transcripts"]],
-    ["appearance", ["__appearance__", "ui"]],
-    ["notifications", ["__notifications__"]],
-    ["security", ["security", "approvals"]],
-    ["automation", ["commands", "hooks", "bindings", "cron"]],
-    ["mcp", ["mcp"]],
-    ["memory", ["memory"]],
-    ["talk", ["talk"]],
-    ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
-    ["updates", ["update"]],
-    ["ai-agents", ["agents", "skills", "tools", "session"]],
+  const pages: readonly ConfigPageId[] = [
+    "communications",
+    "appearance",
+    "notifications",
+    "security",
+    "automation",
+    "mcp",
+    "memory",
+    "talk",
+    "infrastructure",
+    "updates",
+    "ai-agents",
   ];
 
   it("assigns each curated section to exactly one page", () => {
