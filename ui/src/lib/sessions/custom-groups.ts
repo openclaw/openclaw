@@ -77,7 +77,7 @@ export function normalizeSessionSectionOrderTokens(value: unknown): string[] | n
       continue;
     }
     const trimmed = entry.trim();
-    const prefix = ["catalog:", "category:"].find((prefix) => trimmed.startsWith(prefix));
+    const prefix = ["catalog:", "category:"].find((candidate) => trimmed.startsWith(candidate));
     const name = prefix ? trimmed.slice(prefix.length).trim() : "";
     const token = prefix
       ? name && `${prefix}${name}`

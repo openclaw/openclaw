@@ -240,9 +240,9 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.sendAttempts = entry.sendAttempts;
   }
   for (const key of ["localCommandArgs", "localCommandName", "sessionKey"] as const) {
-    const value = normalizeOptionalString(entry[key]);
-    if (value) {
-      item[key] = value;
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
     }
   }
   const agentId = normalizeOptionalString(entry.agentId);
