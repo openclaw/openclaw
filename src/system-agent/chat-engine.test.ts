@@ -1,5 +1,10 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../agents/prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../agents/prepared-model-runtime.types.js";
 import type { SystemAgentSession } from "./agent-turn.js";
 import type { SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import {
@@ -18,6 +23,55 @@ import {
 import { loadSystemAgentOverview } from "./overview.js";
 
 describe("SystemAgentChatEngine facade", () => {
+  it("keeps alternate-agent turns and planners outside the requester generation", async () => {
+    useTempStateDir();
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        list: [{ id: "alternate", default: true, model: "openai/gpt-5.5" }],
+      },
+    };
+    const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
+    expect(inference.binding.execution.agentId).toBe("alternate");
+    const inheritedGeneration = {} as PreparedModelRuntimePluginGeneration;
+    const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+    const runEmbeddedAgent = vi.fn(async () => {
+      observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+      return { meta: { finalAssistantVisibleText: "ready" } };
+    });
+    const planGreeting = vi.fn(async () => {
+      observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+      return null;
+    });
+    const engine = new SystemAgentChatEngine({
+      requesterAgentId: "requester",
+      verifiedInference: inference.binding,
+      planGreeting,
+      runAgentTurn: (params) =>
+        runSystemAgentTurnWithDeps(params, {
+          ...inference.deps,
+          readConfigFileSnapshot: async () => configSnapshot(config),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+        }),
+      deps: {
+        ...inference.deps,
+        readConfigFileSnapshot: async () => configSnapshot(config),
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    try {
+      await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
+        engine.handle("continue setup"),
+      );
+      await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
+        engine.planGreeting({ overview: {} as never, facts: {} as never, timeoutMs: 10 }),
+      );
+      expect(observedGenerations).toEqual([undefined, undefined]);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("ends a partial timed-out agent turn without starting a second planner inference", async () => {
     useTempStateDir();
     const config: OpenClawConfig = {
