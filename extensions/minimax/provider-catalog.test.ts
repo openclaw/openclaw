@@ -86,3 +86,44 @@ it.each([
     });
   },
 );
+
+it.each([
+  { provider: "minimax", baseUrl: "api.minimaxi.com/anthropic" },
+  { provider: "minimax", baseUrl: "${MINIMAX_HOST}/v1" },
+  { provider: "minimax-portal", baseUrl: "api.minimax.io/anthropic/v1" },
+])(
+  "registered $provider catalog.run reports an unparseable base URL $baseUrl as unavailable",
+  async ({ provider, baseUrl }) => {
+    const { providers } = await registerProviderPlugin({
+      plugin: { register: registerMinimaxProviders },
+      id: "minimax",
+      name: "MiniMax",
+    });
+    const oauth = provider === "minimax-portal";
+    const profileId = `${provider}:selected`;
+
+    // No fetch stub: an unparseable base never produces a request, so the strict
+    // catalog contract is the only thing standing between this hook and a throw.
+    await expect(
+      runProviderCatalog({
+        provider: requireRegisteredProvider(providers, provider),
+        config: { models: { providers: { [provider]: { baseUrl, models: [] } } } },
+        env: {},
+        resolveProviderApiKey: () =>
+          oauth
+            ? { apiKey: undefined }
+            : { apiKey: "MINIMAX_API_KEY", discoveryApiKey: "selected-key", profileId },
+        resolveProviderAuth: () => ({
+          apiKey: MINIMAX_OAUTH_MARKER,
+          discoveryApiKey: "selected-oauth",
+          mode: "oauth",
+          source: "profile",
+          profileId,
+        }),
+      }),
+    ).resolves.toEqual({
+      providers: {},
+      outcomes: [{ provider, profileId, status: "unavailable" }],
+    });
+  },
+);
