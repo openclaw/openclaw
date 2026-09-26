@@ -60,9 +60,13 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This Labs entry saves consent for automatic Decision assistance. Turning it on
+alone does not start inference, enable consumer modes, select a provider,
+provision credentials, or download models.
+
+[Semantic no-progress observation](/tools/loop-detection) consumes this gate only
+when loop detection and its `semanticNoProgress: "shadow"` mode are also enabled.
+It remains observational; the existing deterministic loop controls retain authority.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +86,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model
@@ -124,7 +128,7 @@ awaited results. This helper is not an authority token or a cancellation owner.
 
 Any future consumer must document its evidence transfer, costs, latency, and
 failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges; this foundation sends no evidence and makes no
+provider and can incur charges; the Labs setting itself sends no evidence and makes no
 performance or quality claims.
 
 ## Local model lean mode

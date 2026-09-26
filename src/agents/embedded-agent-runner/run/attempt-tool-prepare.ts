@@ -337,6 +337,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             authProfileStore: attempt.authProfileStore,
             recordToolPrepStage: params.markCoreToolStage,
             onToolOutcome: attempt.onToolOutcome,
+            semanticNoProgressObserver: attempt.semanticNoProgressObserver,
             isTurnTainted: attempt.isTurnTainted,
             allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
             skillUsagePaths: params.skillUsagePaths,
@@ -406,6 +407,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           agentId: params.setup.sessionAgentId,
         }),
         onToolOutcome: attempt.onToolOutcome,
+        semanticNoProgressObserver: attempt.semanticNoProgressObserver,
         allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
       },
       get toolAbortSignal() {

@@ -19,6 +19,7 @@ import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
+import { projectToolOutcomeHooks } from "../../tool-outcome-hooks.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
   resolveAttemptWorkspaceSandbox,
@@ -64,7 +65,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   startupStagesEmitted: boolean;
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
-  observeToolOutcome: ToolOutcomeObserver;
+  onToolOutcome: ToolOutcomeObserver;
+  semanticNoProgressObserver?: EmbeddedRunAttemptParams["semanticNoProgressObserver"];
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: NonNullable<EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"]>;
   getPostCompactionAbortError: () => Error | undefined;
@@ -561,9 +563,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     modelRegistry,
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
-    onToolOutcome: input.observeToolOutcome,
+    ...projectToolOutcomeHooks(input),
     isTurnTainted: input.isTurnTainted,
-    allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
     onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
     onRunProgress: notifyRunProgress,
     fastMode: attemptFastMode,

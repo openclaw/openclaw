@@ -54,6 +54,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import type { SemanticNoProgressLoopEvidence } from "./semantic-no-progress.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   resolveToolExecutionErrorKind,
@@ -646,8 +647,11 @@ export async function recordLoopOutcome(args: {
     return;
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
+  let semanticEvidence: SemanticNoProgressLoopEvidence | undefined;
+  const semanticObserver = args.ctx.semanticNoProgressObserver;
   try {
     const {
+      detectToolCallLoop,
       getArgumentChurnNoProgressStreak,
       getDiagnosticSessionState,
       markDiagnosticArgumentChurnObservation,
@@ -690,11 +694,42 @@ export async function recordLoopOutcome(args: {
         ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
       };
     }
+    if (semanticObserver && args.ctx.loopDetection?.semanticNoProgress === "shadow" && record) {
+      // The detector is prospective: exclude this completed call and any
+      // later concurrent calls from its historical input, without mutating it.
+      const history = sessionState.toolCallHistory ?? [];
+      const recordIndex = history.indexOf(record);
+      const loop = detectToolCallLoop(
+        { ...sessionState, toolCallHistory: history.slice(0, Math.max(0, recordIndex)) },
+        record.toolName,
+        args.toolParams,
+        args.ctx.loopDetection,
+        args.ctx.runId ? { runId: args.ctx.runId, suppressLogs: true } : { suppressLogs: true },
+      );
+      if (loop.stuck) {
+        semanticEvidence = {
+          detector: loop.detector,
+          level: loop.level,
+          count: loop.count,
+          ...(loop.pairedToolName ? { pairedToolName: loop.pairedToolName } : {}),
+        };
+      }
+    }
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
   }
   if (recordedOutcome) {
     args.ctx.onToolOutcome?.(recordedOutcome);
+  }
+  if (semanticObserver && args.ctx.loopDetection?.semanticNoProgress === "shadow") {
+    await semanticObserver.observeOutcome({
+      toolName: args.toolName,
+      toolParams: args.toolParams,
+      ...(args.result !== undefined ? { result: args.result } : {}),
+      ...(args.error !== undefined ? { error: args.error } : {}),
+      ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
+      ...(semanticEvidence ? { evidence: semanticEvidence } : {}),
+    });
   }
 }
 

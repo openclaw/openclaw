@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
+import { wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.wrapper.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
   resetDiagnosticEventsForTest,

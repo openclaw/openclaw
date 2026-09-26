@@ -25,5 +25,8 @@ export function resolveToolLoopDetectionConfig(params: {
     return agent;
   }
 
-  return { enabled: agent.enabled ?? global.enabled };
+  return {
+    enabled: agent.enabled ?? global.enabled,
+    semanticNoProgress: agent.semanticNoProgress ?? global.semanticNoProgress,
+  };
 }

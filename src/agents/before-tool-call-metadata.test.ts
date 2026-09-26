@@ -5,7 +5,7 @@ import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import {
   prepareBeforeToolCallExecutionParams,
   rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHookCore as wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.wrapper.js";
 import {
   getBeforeToolCallDiagnosticOptions,

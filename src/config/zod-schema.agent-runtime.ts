@@ -483,6 +483,8 @@ const ToolLoopDetectionSchema = z
   .object({
     /** Enable tool-loop protection (default: false). */
     enabled: z.boolean().optional(),
+    /** Optional Decision-backed no-progress observation, gated by deterministic loop evidence. */
+    semanticNoProgress: z.enum(["off", "shadow"]).optional(),
   })
   .strict()
   .optional();

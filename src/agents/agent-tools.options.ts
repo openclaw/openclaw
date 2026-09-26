@@ -23,6 +23,7 @@ import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import type { SemanticNoProgressObserver } from "./semantic-no-progress.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
@@ -132,6 +133,8 @@ export type OpenClawCodingToolsOptions = {
   authProfileStore?: AuthProfileStore;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Run-owned async semantic observer; deterministic loop evidence remains its gate. */
+  semanticNoProgressObserver?: SemanticNoProgressObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */

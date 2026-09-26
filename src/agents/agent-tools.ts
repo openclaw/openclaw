@@ -1,10 +1,9 @@
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 /**
  * Builds the effective OpenClaw agent tool surface.
  * Assembles core, shell, channel, OpenClaw, plugin, and Tool Search tools, then
  * applies sandbox, profile, provider, sender, group, and sub-agent policy.
  */
-
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
@@ -69,6 +68,7 @@ import { resolveSessionPlacementComputer } from "./session-placement-computer.js
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
+import { omitSemanticNoProgressObserver, projectToolOutcomeHooks } from "./tool-outcome-hooks.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import {
@@ -776,8 +776,7 @@ export function createOpenClawCodingToolsInternal(
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-    onToolOutcome: options?.onToolOutcome,
-    allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
+    ...projectToolOutcomeHooks(options),
   };
   // NOTE: Keep canonical (lowercase) tool names here. Provider transports remap on the wire.
   return finalizeAgentTools({
@@ -796,8 +795,8 @@ export function createOpenClawCodingToolsInternal(
 
 /** Build the SDK tool list without exposing core-only auxiliary read scope. */
 export function createOpenClawCodingTools(
-  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey">,
+  options?: Omit<OpenClawCodingToolsOptions, "semanticNoProgressObserver" | "sessionReadScopeKey">,
 ): AnyAgentTool[] {
-  return createOpenClawCodingToolsInternal(options);
+  return createOpenClawCodingToolsInternal(omitSemanticNoProgressObserver(options));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,17 +6,11 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
 import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import {
-  createPostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
-} from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
@@ -50,13 +44,10 @@ import { settleEmbeddedRun } from "./run/run-settlement.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
-import {
-  createTerminalToolPresentationTracker,
-  resolveEmbeddedRunTerminal,
-} from "./run/terminal-resolution.js";
+import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
-import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
+import { createRunToolOutcomeState } from "./run/tool-outcome-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -170,34 +161,22 @@ export async function runPreparedEmbeddedLoop(
   const terminalRetryState = createEmbeddedRunTerminalRetryState();
   // Keep the idle-timeout cost breaker across attempts and auth-profile retries.
   const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
-  // Post-compaction loop guard for #77474. Armed at each compaction-success
-  // site below; observed from the live tool-outcome path so it can abort
-  // while the post-compaction prompt is still running.
-  const resolvedLoopDetectionConfig = resolveToolLoopDetectionConfig({
-    cfg: params.config,
+  const toolOutcomeState = createRunToolOutcomeState({
+    config: params.config,
     agentId: sessionAgentId,
+    signal: input.laneController.abortSignal,
+    laneTaskAbortController: input.laneController.laneTaskAbortController,
+    assertAdmittedActive,
+    goal: params.currentInboundContext?.text ?? params.prompt,
+    initialTurnTainted: params.initialTurnTainted,
   });
-  const postCompactionGuard = createPostCompactionLoopGuard({
-    enabled: resolvedLoopDetectionConfig?.enabled !== false,
-  });
-  let postCompactionAbortController: AbortController | undefined;
-  let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
-  // Presentation survives retry attempts, but a newer tool result must clear stale text.
-  const terminalToolPresentation = createTerminalToolPresentationTracker();
-  const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
-  const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
-    terminalToolPresentation.observe(observation);
-    turnTaintState.observe(observation);
-    if (observation.presentationOnly) {
-      return;
-    }
-    const verdict = postCompactionGuard.observe(observation);
-    if (verdict.shouldAbort) {
-      postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
-      input.laneController.laneTaskAbortController.abort(postCompactionAbortError);
-      postCompactionAbortController?.abort(postCompactionAbortError);
-    }
-  };
+  const {
+    postCompactionGuard,
+    semanticNoProgressObserver,
+    terminalToolPresentation,
+    turnTaintState,
+    observeToolOutcome,
+  } = toolOutcomeState;
   let lastRetryFailoverReason: FailoverReason | null = null;
   let codexAppServerRecoveryRetries = 0;
   let emptyErrorRetries = 0;
@@ -345,18 +324,13 @@ export async function runPreparedEmbeddedLoop(
             startupStagesEmitted,
             bootstrapPromptWarningSignaturesSeen,
             resolveRuntimeFallbackReason,
-            observeToolOutcome,
+            onToolOutcome: observeToolOutcome,
+            semanticNoProgressObserver,
             isTurnTainted: turnTaintState.isTainted,
             allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
-            getPostCompactionAbortError: () => postCompactionAbortError,
-            setPostCompactionAbortController: (controller) => {
-              postCompactionAbortController = controller;
-            },
-            clearPostCompactionAbortController: (controller) => {
-              if (postCompactionAbortController === controller) {
-                postCompactionAbortController = undefined;
-              }
-            },
+            getPostCompactionAbortError: toolOutcomeState.getPostCompactionAbortError,
+            setPostCompactionAbortController: toolOutcomeState.setPostCompactionAbortController,
+            clearPostCompactionAbortController: toolOutcomeState.clearPostCompactionAbortController,
           }),
         );
       } catch (error) {
@@ -671,10 +645,12 @@ export async function runPreparedEmbeddedLoop(
       return providerReview.finish(terminalResolution.result);
     }
   } finally {
+    const semanticObserverClosed = semanticNoProgressObserver?.close();
     // Successful registration already cleared the marker; every earlier exit
     // must restore terminal suppression before asynchronous settlement begins.
     contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
+    await semanticObserverClosed;
     await settleEmbeddedRun({
       runInput: admittedRunInput,
       runtime: preparedRuntime,

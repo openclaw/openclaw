@@ -38,6 +38,7 @@ Global setting:
   tools: {
     loopDetection: {
       enabled: false, // master switch for the rolling-history detectors
+      semanticNoProgress: "off", // optional Decision-backed shadow observation
     },
   },
 }
@@ -68,9 +69,21 @@ You can also enable the global rolling-history detectors in **Settings → Agent
 
 ### Field behavior
 
-| Field     | Default | Effect                                                                                            |
-| --------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `enabled` | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard. |
+| Field                | Default | Effect                                                                                                                                                              |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`            | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard.                                                                   |
+| `semanticNoProgress` | `off`   | With `enabled: true`, asks the Decision model for a bounded `progress`, `stalled`, `regressing`, or `uncertain` observation only after deterministic loop evidence. |
+
+Semantic observation also requires the **Decision assistance** Labs opt-in
+(`agents.defaults.experimental.decisionAssistance: true`) and an effective
+Decision model for the owning agent. Model selection alone does not activate it;
+an empty agent override disables it. Published Labs opt-out stops new observation
+and discards in-flight classifications without changing deterministic loop behavior.
+
+Semantic no-progress shadowing keeps at most a small run-local trajectory and
+one outstanding Decision request. It records only aggregate, content-free
+metrics; the raw trajectory is not written to routine logs. It never chooses a
+tool, cancels or terminates a run, starts a retry, or changes goal status.
 
 For `exec`, no-progress hashing compares stable command outcomes (status,
 exit code, timed-out flag, output) and ignores volatile runtime metadata such
@@ -180,3 +193,5 @@ spend and lockups while preserving normal tool access.
     Full `tools.loopDetection` schema and merging semantics.
   </Card>
 </CardGroup>
+
+The semantic observer uses a cooperative 750 ms Decision budget, not a hard return deadline. Tool-result delivery and run close join started provider work before returning; a provider that ignores cancellation can therefore exceed this budget. Observer control state remains private to the run owner, not a plugin lifecycle contract.

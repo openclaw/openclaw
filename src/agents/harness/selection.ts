@@ -616,6 +616,7 @@ function withoutPluginHarnessPrivateState(
     hostCapabilities: _hostCapabilities,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
+    semanticNoProgressObserver: _semanticNoProgressObserver,
     inputAttachmentMedia: _inputAttachmentMedia,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams

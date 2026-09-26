@@ -44,10 +44,21 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
   tools: {
     loopDetection: {
       enabled: true,
+      semanticNoProgress: "shadow", // optional; deterministic evidence gates Decision calls
     },
   },
 }
 ```
+
+`semanticNoProgress: "shadow"` is opt-in and requires `enabled: true`, the Decision
+assistance Labs opt-in (`agents.defaults.experimental.decisionAssistance: true`),
+and an effective owning-agent Decision model. It keeps
+a small bounded action/result trajectory and asks the configured Decision model
+only after the existing deterministic detector reports a loop suspicion. The
+typed `progress`, `stalled`, `regressing`, or `uncertain` result is observation
+only: it does not choose tools, cancel the run, retry a turn, or change goal
+state. Provider failures and uncertain answers are retained as unavailable
+observation; caller cancellation and run replacement still win.
 
 ## `tools.web`
 
