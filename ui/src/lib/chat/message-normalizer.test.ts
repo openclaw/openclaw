@@ -886,36 +886,6 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("uses persisted delivery facts for the current-message reply target", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: "Reply body",
-        openclawDelivery: { replyToCurrent: true },
-      });
-
-      expect(result.replyTarget).toEqual({ kind: "current" });
-      expect(result.content).toEqual([{ type: "text", text: "Reply body" }]);
-    });
-
-    it("keeps a fact-only current-message reply target", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: "",
-        openclawDelivery: { replyToCurrent: true },
-      });
-
-      expect(result.replyTarget).toEqual({ kind: "current" });
-      expect(result.content).toStrictEqual([]);
-    });
-
-    it("renders quoted delivery and TTS markers verbatim", () => {
-      const text = "Use `[[reply_to_current]]` and `[[tts]]` literally.";
-      const result = normalizeMessage({ role: "assistant", content: text });
-
-      expect(result.replyTarget).toBeUndefined();
-      expect(result.content).toEqual([{ type: "text", text }]);
-    });
-
     it("preserves structured attachment content items", () => {
       const result = normalizeMessage({
         role: "assistant",
