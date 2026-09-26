@@ -45,10 +45,21 @@ describe("Baseten model catalog", () => {
 
   it("ships every current Baseten Model API with Inkling as the default", () => {
     const models = buildStaticBasetenModels();
+    const expectedIds = [
+      "deepseek-ai/DeepSeek-V4-Pro",
+      "zai-org/GLM-4.7",
+      "zai-org/GLM-5.2",
+      "zai-org/GLM-5.2-Fast",
+      "thinkingmachines/inkling",
+      "moonshotai/Kimi-K2.6",
+      "moonshotai/Kimi-K2.7-Code",
+      "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+      "openai/gpt-oss-120b",
+    ];
 
     expect(BASETEN_DEFAULT_MODEL_REF).toBe("baseten/thinkingmachines/inkling");
-    expect(models).toHaveLength(9);
-    expect(models.map((model) => model.id)).toEqual(BASETEN_MODEL_CATALOG.map((model) => model.id));
+    expect(models.map((model) => model.id)).toEqual(expectedIds);
+    expect(BASETEN_MODEL_CATALOG.map((model) => model.id)).toEqual(expectedIds);
     expect(models.find((model) => model.id === "zai-org/GLM-5.2")).toMatchObject({
       contextWindow: 524_000,
       maxTokens: 262_000,

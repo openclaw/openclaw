@@ -91,6 +91,27 @@ describe("arcee provider plugin", () => {
       return { method, runNonInteractive: method.runNonInteractive };
     }
 
+    async function onboardInteractive(config: OpenClawConfig, apiKey: string) {
+      const { method } = await registeredMethod();
+      return await method.run({
+        config,
+        opts: { [route.optionKey]: apiKey },
+        env: {},
+        runtime: createRuntimeEnv(),
+        prompter: createTestWizardPrompter(),
+        secretInputMode: "plaintext",
+        isRemote: false,
+        openUrl: async () => {
+          throw new Error("Unexpected browser auth");
+        },
+        oauth: {
+          createVpsAwareHandlers: () => {
+            throw new Error("Unexpected OAuth");
+          },
+        },
+      });
+    }
+
     async function onboard(config: OpenClawConfig) {
       const { runNonInteractive } = await registeredMethod();
       const result = await runNonInteractive({
@@ -109,24 +130,7 @@ describe("arcee provider plugin", () => {
     }
 
     it("selects stored credentials from registered setup without crossing accounts", async () => {
-      const { method } = await registeredMethod();
-      const result = await method.run({
-        config: {},
-        opts: { [route.optionKey]: "selected-route-key" },
-        env: {},
-        runtime: createRuntimeEnv(),
-        prompter: createTestWizardPrompter(),
-        secretInputMode: "plaintext",
-        isRemote: false,
-        openUrl: async () => {
-          throw new Error("Unexpected browser auth");
-        },
-        oauth: {
-          createVpsAwareHandlers: () => {
-            throw new Error("Unexpected OAuth");
-          },
-        },
-      });
+      const result = await onboardInteractive({}, "selected-route-key");
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
@@ -161,24 +165,7 @@ describe("arcee provider plugin", () => {
     ])("keeps the registered row policy in $mode mode", async ({ mode, expectedIds }) => {
       const input: OpenClawConfig = { models: { mode } };
       const nonInteractive = await onboard(input);
-      const { method } = await registeredMethod();
-      const interactive = await method.run({
-        config: input,
-        opts: { [route.optionKey]: "test-arcee-key" },
-        env: {},
-        runtime: createRuntimeEnv(),
-        prompter: createTestWizardPrompter(),
-        secretInputMode: "plaintext",
-        isRemote: false,
-        openUrl: async () => {
-          throw new Error("Unexpected browser auth");
-        },
-        oauth: {
-          createVpsAwareHandlers: () => {
-            throw new Error("Unexpected OAuth");
-          },
-        },
-      });
+      const interactive = await onboardInteractive(input, "test-arcee-key");
 
       expect(interactive.profiles).toEqual([
         {
