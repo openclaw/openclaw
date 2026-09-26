@@ -9,6 +9,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import { registerRecordedInferenceAccessTests } from "./environment-access.inference.suite.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
@@ -22,6 +23,8 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => vi.restoreAllMocks());
+
+  registerRecordedInferenceAccessTests();
 
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");

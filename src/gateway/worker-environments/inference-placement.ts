@@ -28,3 +28,20 @@ export function workerInferencePlacement(
   }
   return "worker";
 }
+
+/** Invalid profiles stay visible for diagnosis without advertising worker inference. */
+export function workerInferenceMetadata(environment: WorkerInferenceProfile): {
+  inference?: "worker";
+} {
+  const settings = environment.profileSnapshot.settings;
+  try {
+    return workerInferencePlacement(environment) === "worker" &&
+      isRecord(settings) &&
+      typeof settings.device === "string" &&
+      settings.device.trim()
+      ? { inference: "worker" }
+      : {};
+  } catch {
+    return {};
+  }
+}
