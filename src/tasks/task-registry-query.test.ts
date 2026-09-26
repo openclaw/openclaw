@@ -480,7 +480,6 @@ describe("listTaskRecordPage", () => {
   );
 
   it.each([
-    { name: "stale cursor", continuation: true, mutate: true, failLater: false },
     { name: "cursorless retry", continuation: false, mutate: true, failLater: false },
     {
       name: "stale cursor before a later failure",

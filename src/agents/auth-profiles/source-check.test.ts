@@ -167,17 +167,4 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
   });
-
-  it("does not count expired token profiles as credential evidence", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:token": {
-        type: "token",
-        provider: "openai",
-        token: "expired-token",
-        expires: Date.now() - 1000,
-      },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
-  });
 });

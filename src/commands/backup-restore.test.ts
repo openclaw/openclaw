@@ -106,6 +106,24 @@ async function writeArchive(params: {
   );
 }
 
+async function writeUnextractableArchive(archivePath: string) {
+  const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+  const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
+  await writeArchive({
+    archivePath,
+    archiveRoot,
+    payloadPath: buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json"),
+    extraEntries: [
+      encodeTarEntry({ path: directoryPath, type: "Directory" }),
+      encodeTarEntry({
+        path: `${archiveRoot}/payload/directory-hardlink`,
+        type: "Link",
+        linkpath: directoryPath,
+      }),
+    ],
+  });
+}
+
 describe("backupRestoreCommand", () => {
   it.for([
     { targetForm: "qualified", suffix: "" },
@@ -600,22 +618,7 @@ describe("backupRestoreCommand", () => {
       async (state) => {
         const archivePath = state.path("unextractable.tar.gz");
         const targetPath = state.path("restore-target");
-        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
-        const assetPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
-        const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
-        await writeArchive({
-          archivePath,
-          archiveRoot,
-          payloadPath: assetPath,
-          extraEntries: [
-            encodeTarEntry({ path: directoryPath, type: "Directory" }),
-            encodeTarEntry({
-              path: `${archiveRoot}/payload/directory-hardlink`,
-              type: "Link",
-              linkpath: directoryPath,
-            }),
-          ],
-        });
+        await writeUnextractableArchive(archivePath);
 
         await expect(
           backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
@@ -639,22 +642,7 @@ describe("backupRestoreCommand", () => {
       async (state) => {
         const archivePath = state.path("unextractable.tar.gz");
         const targetPath = state.path("restore-target");
-        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
-        const assetPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
-        const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
-        await writeArchive({
-          archivePath,
-          archiveRoot,
-          payloadPath: assetPath,
-          extraEntries: [
-            encodeTarEntry({ path: directoryPath, type: "Directory" }),
-            encodeTarEntry({
-              path: `${archiveRoot}/payload/directory-hardlink`,
-              type: "Link",
-              linkpath: directoryPath,
-            }),
-          ],
-        });
+        await writeUnextractableArchive(archivePath);
         const cleanupError = new Error("cleanup denied");
         vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
 

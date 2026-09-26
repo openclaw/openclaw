@@ -348,6 +348,13 @@ function openAgentDatabaseBackend(
       openWriter();
       return undefined;
     }
+    if (command.type === "database.walMaintenance") {
+      return (
+        openWriter().walMaintenance.maintainPeriodic?.(command.input, admit) ?? {
+          reclaimedPages: 0,
+        }
+      );
+    }
     if (command.type === "session.entry.read" && entryReader) {
       return entryReader.readSessionEntryRow(openWriter(), command.input.sessionKey)?.entry;
     }

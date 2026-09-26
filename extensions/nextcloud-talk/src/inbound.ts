@@ -1,5 +1,4 @@
 import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
-// Nextcloud Talk plugin module implements inbound behavior.
 import {
   channelIngressRoutes,
   type ChannelIngressContextBinding,
@@ -25,7 +24,6 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
   type GroupPolicy,
   type OpenClawConfig,
-  type OutboundReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -96,28 +94,6 @@ function roomRoutes(params: {
           }),
     },
   );
-}
-
-async function deliverNextcloudTalkReply(params: {
-  cfg: CoreConfig;
-  payload: OutboundReplyPayload;
-  roomToken: string;
-  accountId: string;
-  statusSink?: (patch: { lastOutboundAt?: number }) => void;
-}): Promise<{ visibleReplySent: boolean }> {
-  const { cfg, payload, roomToken, accountId, statusSink } = params;
-  const visibleReplySent = await deliverFormattedTextWithAttachments({
-    payload,
-    send: async ({ text, replyToId }) => {
-      await sendMessageNextcloudTalk(roomToken, text, {
-        cfg,
-        accountId,
-        replyTo: replyToId,
-      });
-      statusSink?.({ lastOutboundAt: Date.now() });
-    },
-  });
-  return { visibleReplySent };
 }
 
 export async function handleNextcloudTalkInbound(params: {
@@ -405,13 +381,18 @@ export async function handleNextcloudTalkInbound(params: {
               text: sanitizeAssistantVisibleText(payload.text),
             },
       deliver: async (payload) => {
-        return await deliverNextcloudTalkReply({
-          cfg: config,
+        const visibleReplySent = await deliverFormattedTextWithAttachments({
           payload,
-          roomToken,
-          accountId: account.accountId,
-          statusSink,
+          send: async ({ text, replyToId }) => {
+            await sendMessageNextcloudTalk(roomToken, text, {
+              cfg: config,
+              accountId: account.accountId,
+              replyTo: replyToId,
+            });
+            statusSink?.({ lastOutboundAt: Date.now() });
+          },
         });
+        return { visibleReplySent };
       },
       onError: (err, info) => {
         runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
