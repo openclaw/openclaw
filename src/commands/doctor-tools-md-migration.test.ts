@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -179,7 +180,7 @@ describe("TOOLS.md migration", () => {
     );
   });
 
-  it("appends customized content verbatim under the existing Tools section and is idempotent", async () => {
+  it("preserves customized content and existing modes under restrictive umask and is idempotent", async () => {
     const fixture = await createFixture();
     const agents = "# Agent\n\n## Tools\n\nExisting notes.\n\n## Safety\n\nBe careful.\n";
     const tools = "### Cameras\n\n- kitchen → wide angle\n\nKeep trailing spaces.  \n";
@@ -195,11 +196,36 @@ describe("TOOLS.md migration", () => {
       await fs.chmod(fixture.agentsPath, 0o640);
     }
 
-    const result = await maybeMigrateToolsMd({
-      cfg: fixture.cfg,
-      shouldRepair: true,
-      env: fixture.env,
+    const child = await runCliProcessChild({
+      nodeArgs: [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        `
+          import { maybeMigrateToolsMd } from ${JSON.stringify(new URL("./doctor-tools-md-migration.ts", import.meta.url).href)};
+          if (process.platform !== "win32") process.umask(0o077);
+          const result = await maybeMigrateToolsMd({
+            cfg: ${JSON.stringify(fixture.cfg)},
+            shouldRepair: true,
+          });
+          process.stdout.write(JSON.stringify(result));
+        `,
+      ],
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: fixture.root,
+        USERPROFILE: fixture.root,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+        OPENCLAW_SUPPRESS_NOTES: "1",
+        TMPDIR: fixture.root,
+        TEMP: fixture.root,
+        TMP: fixture.root,
+      },
     });
+    expect(child.code, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout);
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(1);

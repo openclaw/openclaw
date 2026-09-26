@@ -222,6 +222,9 @@ async function writeAgentsAtomically(params: {
     {
       await using handle = await fs.open(tempPath, "wx", mode);
       await handle.writeFile(params.content, "utf8");
+      if (stat) {
+        await handle.chmod(mode);
+      }
       await handle.sync();
     }
     // Doctor is a single-operator flow. This final snapshot catches edits before
