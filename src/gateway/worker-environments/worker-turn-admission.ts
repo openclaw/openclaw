@@ -266,12 +266,9 @@ export async function executeLocalTurn<T>(params: {
   let settlement: Promise<void> | undefined;
   const settle = () => {
     closed = true;
-    return (settlement ??= releaseClaimIfOwned(params.placements, turnClaim).catch(
-      (error: unknown) => {
-        settlement = undefined;
-        throw error;
-      },
-    ));
+    // Both completion paths own the same outcome, including terminal refusal.
+    // Conditional release itself retains retryable precommit contention.
+    return (settlement ??= releaseClaimIfOwned(params.placements, turnClaim));
   };
   let authority:
     | Awaited<ReturnType<WorkerSessionPlacementStore["prepareTurnClaimAuthority"]>>

@@ -4,8 +4,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveSessionPlacementForcedTerminalSettlement,
+  resolveSessionPlacementTurnSettlementAssertion,
+} from "../../agents/session-placement-forced-terminal-settlement.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
@@ -18,6 +23,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
+import { executeLocalTurn } from "./worker-turn-admission.js";
 
 let database: OpenClawStateDatabase;
 let placements: WorkerSessionPlacementStore;
@@ -126,16 +132,17 @@ it("fences retained authority before release commit and closes observers after s
   const unsubscribe = placements.registerTurnClaimClosedHandler(closed);
   authority.onRevoked(revoked);
   const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  let observedCommit = false;
+  let commitObservation: { current: boolean; revoked: number; closed: number } | undefined;
   vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
     (admit, attachment) =>
       createAdmission((request, grant) => {
         admit(request, grant);
         if (request.stage === "commit") {
-          observedCommit = true;
-          expect(authority.isCurrent()).toBe(false);
-          expect(revoked).not.toHaveBeenCalled();
-          expect(closed).not.toHaveBeenCalled();
+          commitObservation = {
+            current: authority.isCurrent(),
+            revoked: revoked.mock.calls.length,
+            closed: closed.mock.calls.length,
+          };
         }
       }, attachment),
   );
@@ -143,7 +150,7 @@ it("fences retained authority before release commit and closes observers after s
     const released = placements.waitForTurnClaimRelease(claim.sessionId, {});
     await placements.releaseTurn(claim);
     await released;
-    expect(observedCommit).toBe(true);
+    expect(commitObservation).toEqual({ current: false, revoked: 0, closed: 0 });
     expect(authority.isCurrent()).toBe(false);
     expect(revoked).toHaveBeenCalledOnce();
     expect(closed).toHaveBeenCalledExactlyOnceWith(claim);
@@ -242,3 +249,81 @@ it("keeps a later same-byte native claim authoritative when the old release repl
     next?.release();
   }
 });
+
+it("settles a failed local startup after precommit release contention without replaying it", async () => {
+  const claim = input("local-startup-busy");
+  const startupError = new Error("local backend startup failed");
+  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+  let assertSettlementCurrent: (() => void) | undefined;
+  const runLocal = vi.fn(async () => {
+    assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    throw startupError;
+  });
+  await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(startupError);
+  expect(runLocal).toHaveBeenCalledOnce();
+  expect(assertSettlementCurrent).toBeDefined();
+  expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
+  expect(placements.get(claim.sessionId)?.turnClaim).toBeNull();
+  await expect(
+    executeLocalTurn({
+      claim: { ...claim, runId: "local-startup-next" },
+      placements,
+      runLocal: async () => "next turn completed",
+    }),
+  ).resolves.toBe("next turn completed");
+});
+
+it.each(["ordinary", "forced"] as const)(
+  "retains non-contention cleanup refusal across %s local completion",
+  async (completion) => {
+    const claim = input(`release-refused-${completion}`);
+    const refused = new Error("release authority refused");
+    const startupError = new Error("local backend startup failed");
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    const release = vi.spyOn(placements, "releaseTurnIfOwned");
+    let forcedSettlement: (() => Promise<void>) | undefined;
+    let forcedFailure: unknown;
+    const runLocal = vi.fn(async () => {
+      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+        (admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "transaction") {
+              throw refused;
+            }
+            admit(request, grant);
+          }, attachment),
+      );
+      if (completion === "forced") {
+        forcedSettlement = resolveSessionPlacementForcedTerminalSettlement();
+        if (forcedSettlement) {
+          try {
+            await forcedSettlement();
+          } catch (error) {
+            forcedFailure = error;
+          }
+        }
+      }
+      throw startupError;
+    });
+    await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(refused);
+    if (completion === "forced") {
+      expect(forcedSettlement).toBeTypeOf("function");
+      expect(forcedFailure).toBe(refused);
+    }
+    expect(runLocal).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    const retained = release.mock.calls[0]![0];
+    expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({ claimId: retained.claimId });
+    // Only the fixture reauthorizes this refused cleanup; production must not retry it.
+    await placements.releaseTurn(retained);
+  },
+);

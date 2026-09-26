@@ -4,6 +4,8 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -16,6 +18,8 @@ import type {
   PlacementTurnClaimReceipt,
   PlacementTurnClaimWorkerOperations,
 } from "./placement-turn-claims.worker-contract.js";
+
+const log = createSubsystemLogger("gateway/placement");
 
 type Claims = ReturnType<typeof createPlacementTurnClaimOps>;
 
@@ -81,121 +85,150 @@ export function createPlacementTurnClaimWorkerOps(runtime: { path: string; now?:
       command.type === "placementTurns.claim"
         ? undefined
         : prepareWorkerTurnClaimClosed(runtime.path, command.input.claim);
-    let admission: SqliteWorkerOperationAdmission | undefined;
-    let publication: ReturnType<typeof stagePlacementTurnClaimWorkerPublication> | undefined;
-    let granted = false;
-    let prepared: PlacementTurnClaimReceipt | undefined;
-    let published = false;
-    const check = () => {
-      context.admission.assertCurrent();
-      assertCurrent?.();
-    };
-    const publish = (receipt: PlacementTurnClaimReceipt) => {
-      if (!published) {
-        published = true;
-        publication?.commit();
-        if (receipt.placement) {
-          close?.();
-          sessionChanges.emit({
-            agentId: receipt.placement.agentId,
-            sessionKey: receipt.placement.sessionKey,
-          });
+    let reportedContention = false;
+    for (;;) {
+      let admission: SqliteWorkerOperationAdmission | undefined;
+      let publication: ReturnType<typeof stagePlacementTurnClaimWorkerPublication> | undefined;
+      let granted = false;
+      let prepared: PlacementTurnClaimReceipt | undefined;
+      let published = false;
+      const check = () => {
+        context.admission.assertCurrent();
+        assertCurrent?.();
+      };
+      const publish = (receipt: PlacementTurnClaimReceipt) => {
+        if (!published) {
+          published = true;
+          publication?.commit();
+          if (receipt.placement) {
+            close?.();
+            sessionChanges.emit({
+              agentId: receipt.placement.agentId,
+              sessionKey: receipt.placement.sessionKey,
+            });
+          }
         }
-      }
-      return receipt;
-    };
-    try {
-      return await runOpenClawStateWorkerOperation(
-        context,
-        async (scope) => publish(await scope.execute(command)),
-        {
-          assertCurrent: check,
-          requireStateLifecycle: true,
-          createAdmission: () => {
-            admission = createSqliteWorkerOperationAdmission((request, grant) => {
-              check();
-              if (request.stage === "commit") {
-                if (!isReceipt(request.facts)) {
-                  throw new Error("Placement claim commit has no receipt");
+        return receipt;
+      };
+      try {
+        return await runOpenClawStateWorkerOperation(
+          context,
+          async (scope) => publish(await scope.execute(command)),
+          {
+            assertCurrent: check,
+            requireStateLifecycle: true,
+            createAdmission: () => {
+              admission = createSqliteWorkerOperationAdmission((request, grant) => {
+                check();
+                if (request.stage === "commit") {
+                  if (!isReceipt(request.facts)) {
+                    throw new Error("Placement claim commit has no receipt");
+                  }
+                  prepared = request.facts;
+                  if (request.facts.placement) {
+                    publication = stagePlacementTurnClaimWorkerPublication(
+                      context.admission.identity,
+                      request.facts.placement,
+                    );
+                  }
                 }
-                prepared = request.facts;
-                if (request.facts.placement) {
-                  publication = stagePlacementTurnClaimWorkerPublication(
-                    context.admission.identity,
-                    request.facts.placement,
+                if (!grant()) {
+                  publication?.rollback();
+                  throw new Error("Placement claim admission expired");
+                }
+                granted ||= request.stage === "commit";
+              });
+              return { nativeLocations: [runtime.path], admission };
+            },
+          },
+        );
+      } catch (error) {
+        const committed = admission?.committed ?? admission?.settlement?.committed;
+        if (committed && isReceipt(committed.facts)) {
+          // A committed claim must reach its caller so ordinary settlement can release it.
+          return publish(committed.facts);
+        }
+        if (!granted || admission?.settlement?.kind === "completed") {
+          publication?.rollback();
+        } else {
+          // Native settlement precedes readback. Never replay an uncertain claim or release.
+          const reply = await (async () => {
+            try {
+              context.admission.assertCurrent();
+              return await executeExistingOpenClawStateRead(
+                { path: runtime.path },
+                {
+                  type: "workers.placementProjection",
+                  sessionIds: [command.input.claim.sessionId],
+                  conflictBindings: [],
+                },
+                { current: true },
+              );
+            } catch (readError) {
+              if (command.type === "placementTurns.claim" && prepared?.claim) {
+                try {
+                  await execute({
+                    type: "placementTurns.releaseIfOwned",
+                    input: { claim: prepared.claim, nowMs: runtime.now?.() },
+                  });
+                  publication?.rollback();
+                } catch (cleanupError) {
+                  throw new AggregateError(
+                    [error, readError, cleanupError],
+                    "Placement turn claim custody could not be settled; restart recovery is required",
                   );
                 }
               }
-              if (!grant()) {
-                publication?.rollback();
-                throw new Error("Placement claim admission expired");
-              }
-              granted ||= request.stage === "commit";
-            });
-            return { nativeLocations: [runtime.path], admission };
-          },
-        },
-      );
-    } catch (error) {
-      const committed = admission?.committed ?? admission?.settlement?.committed;
-      if (committed && isReceipt(committed.facts)) {
-        // A committed claim must reach its caller so ordinary settlement can release it.
-        return publish(committed.facts);
-      }
-      if (!granted || admission?.settlement?.kind === "completed") {
-        publication?.rollback();
-      } else {
-        // Native settlement precedes readback. Never replay an uncertain claim or release.
-        const reply = await (async () => {
-          try {
-            context.admission.assertCurrent();
-            return await executeExistingOpenClawStateRead(
-              { path: runtime.path },
-              {
-                type: "workers.placementProjection",
-                sessionIds: [command.input.claim.sessionId],
-                conflictBindings: [],
-              },
-              { current: true },
-            );
-          } catch (readError) {
-            if (command.type === "placementTurns.claim" && prepared?.claim) {
-              try {
-                await execute({
-                  type: "placementTurns.releaseIfOwned",
-                  input: { claim: prepared.claim, nowMs: runtime.now?.() },
-                });
-                publication?.rollback();
-              } catch (cleanupError) {
-                throw new AggregateError(
-                  [error, readError, cleanupError],
-                  "Placement turn claim custody could not be settled; restart recovery is required",
-                );
-              }
+              throw new AggregateError(
+                [error, readError],
+                "Placement turn outcome readback failed",
+              );
             }
-            throw new AggregateError([error, readError], "Placement turn outcome readback failed");
+          })();
+          context.admission.assertCurrent();
+          if (!reply?.ok || reply.type !== "workers.placementProjection") {
+            throw error;
           }
-        })();
-        context.admission.assertCurrent();
-        if (!reply?.ok || reply.type !== "workers.placementProjection") {
-          throw error;
+          const placement = reply.result.projection.placements.get(command.input.claim.sessionId);
+          if (
+            command.type === "placementTurns.claim"
+              ? placement &&
+                prepared?.claim &&
+                isCurrentPlacementTurnClaim(placement, prepared.claim)
+              : !placement || !isCurrentPlacementTurnClaim(placement, command.input.claim)
+          ) {
+            if (prepared) {
+              return publish(prepared);
+            }
+          }
+          publication?.rollback();
         }
-        const placement = reply.result.projection.placements.get(command.input.claim.sessionId);
         if (
-          command.type === "placementTurns.claim"
-            ? placement && prepared?.claim && isCurrentPlacementTurnClaim(placement, prepared.claim)
-            : !placement || !isCurrentPlacementTurnClaim(placement, command.input.claim)
+          command.type === "placementTurns.releaseIfOwned" &&
+          !granted &&
+          admission?.settlement?.kind !== "unknown" &&
+          error instanceof StateDatabaseCoordinatorContentionError &&
+          error.family === "state-lifecycle"
         ) {
-          if (prepared) {
-            return publish(prepared);
+          // The worker never admitted a commit. Keep this exact cleanup owner alive;
+          // the broker waits asynchronously before every new acquisition attempt.
+          // Never replay startup, a claim, an uncertain write, or a replaced database.
+          context.admission.assertCurrent();
+          if (!reportedContention) {
+            reportedContention = true;
+            log.warn("Turn claim release is waiting for the state coordinator", {
+              sessionId: claim.sessionId,
+              runId: claim.runId,
+              error,
+            });
           }
+          continue;
         }
-        publication?.rollback();
+        if (error instanceof Error && error.name === "ActiveTurnClaimError") {
+          throw new ActiveTurnClaimError(command.input.claim.sessionId);
+        }
+        throw error;
       }
-      if (error instanceof Error && error.name === "ActiveTurnClaimError") {
-        throw new ActiveTurnClaimError(command.input.claim.sessionId);
-      }
-      throw error;
     }
   }
   return {

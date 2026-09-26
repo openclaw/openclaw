@@ -1,15 +1,16 @@
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
-import type { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
-
-type Claims = ReturnType<typeof createPlacementTurnClaimOps>;
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerSessionTurnClaim,
+  WorkerTurnClaimInput,
+} from "./placement-record.js";
 export type PlacementTurnClaimReceipt = {
   placement?: WorkerSessionPlacementRecord;
   claim?: WorkerSessionTurnClaim;
 };
 export type PlacementTurnClaimWorkerOperations = {
   "placementTurns.claim": {
-    input: { claim: Parameters<Claims["claimTurn"]>[0]; nowMs?: number };
+    input: { claim: WorkerTurnClaimInput; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
   "placementTurns.release": {
