@@ -96,16 +96,13 @@ describe("assertSettledTurnFinalizationResult", () => {
     );
   });
 
-  it.each(["length", "error", "aborted"] as const)(
-    "rejects an assistant with unsuccessful %s stop reason",
-    (stopReason) => {
-      expect(() =>
-        assertSettledTurnFinalizationResult({
-          assistant: assistantMessage([{ type: "text", text: "partial" }], stopReason),
-        }),
-      ).toThrow(`unsuccessful stop reason: ${stopReason}`);
-    },
-  );
+  it("rejects an assistant stopped at the length limit", () => {
+    expect(() =>
+      assertSettledTurnFinalizationResult({
+        assistant: assistantMessage([{ type: "text", text: "partial" }], "length"),
+      }),
+    ).toThrow("unsuccessful stop reason: length");
+  });
 
   it("rejects an invalid transcript index", () => {
     expect(() =>

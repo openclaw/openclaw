@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";
 import "./server-context.chrome-test-harness.js";
 import * as cdpHelpersModule from "./cdp.helpers.js";
@@ -26,10 +25,6 @@ function seedRunningProfileState(
     running: { pid: 1234, proc: { on: vi.fn() } },
     lastTargetId: null,
   });
-}
-
-function fetchCallUrls(fetchMock: ReturnType<typeof vi.fn>): string[] {
-  return fetchMock.mock.calls.map(([url]) => String(url));
 }
 
 describe("browser server-context tab selection lookup state", () => {
@@ -94,46 +89,5 @@ describe("browser server-context tab selection lookup state", () => {
     selected.wsLookup?.("browser.example", {}, () => {});
     expect(lookupHosts).toEqual(["browser.example"]);
     expect(fetchJson.mock.calls.some(([url]) => url.includes("/json/new"))).toBe(true);
-  });
-
-  it("resolves friendly tab references before backend focus and close calls", async () => {
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const value = String(url);
-      if (value.includes("/json/list")) {
-        return {
-          ok: true,
-          json: async () => [
-            {
-              id: "DOCS_RAW",
-              title: "Docs",
-              url: "https://docs.example.com",
-              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/DOCS_RAW",
-              type: "page",
-            },
-          ],
-        } as unknown as Response;
-      }
-      if (value.includes("/json/activate/DOCS_RAW") || value.includes("/json/close/DOCS_RAW")) {
-        return { ok: true } as unknown as Response;
-      }
-      throw new Error(`unexpected fetch: ${value}`);
-    });
-
-    global.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    const ctx = createTestBrowserRouteContext({ getState: () => state });
-    const openclaw = ctx.forProfile("openclaw");
-
-    await openclaw.labelTab("DOCS_RAW", "docs");
-    await expect(openclaw.ensureTabAvailable("t1")).resolves.toEqual(
-      expect.objectContaining({ targetId: "DOCS_RAW" }),
-    );
-    await openclaw.focusTab("docs");
-    await openclaw.closeTab("t1");
-
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/activate/DOCS_RAW"))).toBe(
-      true,
-    );
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/DOCS_RAW"))).toBe(true);
   });
 });

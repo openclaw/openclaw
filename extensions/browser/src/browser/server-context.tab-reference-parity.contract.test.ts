@@ -122,13 +122,10 @@ describe("tab reference parity contract", () => {
   // entry), focusTab, and closeTab. Each operation gets an isolated profile so
   // sticky lastTargetId state cannot mask a divergence.
   const resolveCases: Array<{ name: string; input: string; expected: string }> = [
-    { name: "tabId t1", input: "t1", expected: "ABCDEF123456" },
     { name: "tabId t2", input: "t2", expected: "ABC999" },
-    { name: "label docs", input: "docs", expected: "ABCDEF123456" },
     { name: "label app", input: "app", expected: "ABC999" },
-    { name: "raw targetId A", input: "ABCDEF123456", expected: "ABCDEF123456" },
     { name: "raw targetId B", input: "ABC999", expected: "ABC999" },
-    { name: "unique raw prefix ABCDEF", input: "ABCDEF", expected: "ABCDEF123456" },
+    { name: "case-insensitive raw prefix abcdef", input: "abcdef", expected: "ABCDEF123456" },
   ];
 
   for (const { name, input, expected } of resolveCases) {

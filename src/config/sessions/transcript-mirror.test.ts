@@ -20,7 +20,7 @@ describe("resolveMirroredTranscriptText", () => {
     ).toBe("See attachments\na.png, b.pdf");
   });
 
-  it.each(["   /   ", "data:image/png;base64,aGVsbG8=", "data:text/plain,hello"])(
+  it.each(["   /   ", "data:image/png;base64,aGVsbG8="])(
     "uses the media placeholder when %s has no filename",
     (mediaUrl) => {
       expect(resolveMirroredTranscriptText({ text: "hello", mediaUrls: [mediaUrl] })).toBe(

@@ -348,6 +348,27 @@ export async function executeSystemAgentOperation(
     }
     case "setup":
       return await executeSetup(operation, runtime, opts);
+    case "config-unset":
+      return await applyPersistentOperation({
+        auditOperation: "config.unset",
+        operation,
+        runtime,
+        opts,
+        run: async (ctx) => {
+          const runConfigUnset =
+            ctx.deps?.runConfigUnset ?? (await import("../cli/config-cli.js")).runConfigUnset;
+          await ctx.commit(() =>
+            runConfigUnset({
+              path: operation.path,
+              runtime: createNoExitRuntime(ctx.runtime),
+              ...(ctx.assertPersistentApply
+                ? { beforePersistentApply: ctx.assertPersistentApply }
+                : {}),
+            }),
+          );
+          return { summary: `Removed config ${operation.path}`, details: { path: operation.path } };
+        },
+      });
     case "config-set":
       return await applyPersistentOperation({
         auditOperation: "config.set",

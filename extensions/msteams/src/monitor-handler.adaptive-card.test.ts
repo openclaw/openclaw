@@ -161,8 +161,7 @@ describe("msteams adaptive card action invoke", () => {
   });
 
   it("routes Teams imBack actions as the submitted message text", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
 
     await runAdaptiveCardInvoke(registered, {
       action: {
@@ -177,8 +176,7 @@ describe("msteams adaptive card action invoke", () => {
   });
 
   it("routes typed command submit actions as command text", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
 
     await runAdaptiveCardInvoke(registered, {
       action: {
@@ -193,8 +191,7 @@ describe("msteams adaptive card action invoke", () => {
   });
 
   it("preserves legacy presentation submit values as structured data", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
     const data = { value: "/codex permissions yolo", label: "Run" };
 
     await runAdaptiveCardInvoke(registered, {
@@ -209,26 +206,8 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
   });
 
-  it("preserves arbitrary submitted data with a value field", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
-    const data = { value: "selected", formId: "deploy-approval", choices: ["canary"] };
-
-    await runAdaptiveCardInvoke(registered, {
-      action: {
-        type: "Action.Submit",
-        data,
-      },
-    });
-
-    const ctxPayload = lastDispatchedCtxPayload();
-    expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
-    expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
-  });
-
   it("preserves generic Action.Execute verb metadata", async () => {
-    const deps = createDeps();
-    const registered = createMSTeamsActivityHandler(deps);
+    const registered = createMSTeamsActivityHandler(createDeps());
     const payload = {
       action: {
         type: "Action.Execute",

@@ -48,7 +48,7 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
 }
 
 /** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
-export function withPersistentCodexTestToolPolicy(
+function withPersistentCodexTestToolPolicy(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {
   const modelCompat =

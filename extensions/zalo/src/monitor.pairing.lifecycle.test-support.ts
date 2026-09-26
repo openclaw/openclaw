@@ -181,7 +181,7 @@ describe("Zalo pairing lifecycle", () => {
               userName: "Unauthorized User",
               chatId: "dm-pairing-1",
             }),
-            settleBeforeReplay: monitor.waitForIdle,
+            beforeReplay: monitor.waitForIdle,
           });
 
           expect(first.status).toBe(200);

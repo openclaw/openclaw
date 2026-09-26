@@ -820,25 +820,21 @@ export async function startGatewayPostAttachRuntime(
   };
   const skipStartupLog = () => assignStartupLogOwner(Promise.resolve());
 
-  const updateCheck =
-    params.minimalTestGateway || candidateCanary
-      ? { start: () => {}, stop: async () => {} }
-      : createDeferredGatewayUpdateCheck({
-          startupTrace: params.startupTrace,
-          createUpdateCheck: runtimeDeps.createGatewayUpdateCheck,
-          getConfig: params.getConfig,
-          log: params.log,
-          isNixMode: params.isNixMode,
-          broadcastToConnIds: params.broadcastToConnIds,
-          getClientConnIds: params.getClientConnIds,
-          waitForPostReadyWork: params.waitForPostReadyWork,
-          isClosing: params.isClosing,
-          activeWorkInspectors: params.activeWorkInspectors,
-        });
-  if (!params.minimalTestGateway) {
-    // Startup failure can precede publication of the post-attach return handle.
-    params.onGatewayLifetimeSidecars(updateCheck);
-  }
+  const updateCheck = createDeferredGatewayUpdateCheck({
+    scheduler: params.scheduler,
+    startupTrace: params.startupTrace,
+    createUpdateCheck: runtimeDeps.createGatewayUpdateCheck,
+    getConfig: params.getConfig,
+    log: params.log,
+    isNixMode: params.isNixMode,
+    broadcastToConnIds: params.broadcastToConnIds,
+    getClientConnIds: params.getClientConnIds,
+    waitForPostReadyWork: params.waitForPostReadyWork,
+    isClosing: params.isClosing,
+    activeWorkInspectors: params.activeWorkInspectors,
+  });
+  // Startup failure can precede publication of the post-attach return handle.
+  params.onGatewayLifetimeSidecars(updateCheck);
 
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
     if (params.pluginRuntimeClaim?.isCurrent() === false) {
@@ -1083,17 +1079,14 @@ export async function startGatewayPostAttachRuntime(
 
   if (params.sidecarStartup !== "defer") {
     await sidecarsPromise;
-    updateCheck.start();
-    return {
-      stopGatewayUpdateCheck: updateCheck.stop,
-      startupSettled: Promise.resolve(),
-    };
   }
-
-  updateCheck.start();
-  const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
-    () => undefined,
-  );
+  if (!params.minimalTestGateway && !candidateCanary) {
+    updateCheck.start();
+  }
+  const startupSettled =
+    params.sidecarStartup === "defer"
+      ? Promise.all([sidecarsPromise, startupLogSettled.promise]).then(() => undefined)
+      : Promise.resolve();
   // Direct callers may ignore this handle; only the managed run loop observes it.
   // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
   void startupSettled.catch(() => {});

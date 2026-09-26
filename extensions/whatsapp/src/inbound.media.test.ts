@@ -339,6 +339,20 @@ describe("web inbound media saves with extension", () => {
     };
   }
 
+  function startMediaMonitor(
+    onMessage: Parameters<typeof monitorWebInbox>[0]["onMessage"],
+    mediaMaxMb?: number,
+  ) {
+    return monitorWebInbox({
+      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } },
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+      ...(mediaMaxMb === undefined ? {} : { mediaMaxMb }),
+    });
+  }
+
   beforeEach(() => {
     vi.useRealTimers();
     currentMockSocket = undefined;
@@ -421,15 +435,7 @@ describe("web inbound media saves with extension", () => {
 
   it("stores image extension and keeps document filename", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -473,15 +479,7 @@ describe("web inbound media saves with extension", () => {
 
   it("stores quoted image media from reply context", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -524,13 +522,7 @@ describe("web inbound media saves with extension", () => {
 
   it("preserves self-authored quoted media through the real Baileys reupload boundary", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -575,13 +567,7 @@ describe("web inbound media saves with extension", () => {
 
   it("delivers incoming video notes as normal video media", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -605,13 +591,7 @@ describe("web inbound media saves with extension", () => {
 
   it("delivers native polls and preserves their questions when quoted", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: { channels: { whatsapp: { allowFrom: ["*"] } } } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
     const poll = {
       name: "Lunch?",
@@ -662,16 +642,7 @@ describe("web inbound media saves with extension", () => {
 
   it("passes mediaMaxMb to saveMediaStream", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as never,
-      verbose: false,
-      onMessage,
-      mediaMaxMb: 1,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage, 1);
     const realSock = await getMockSocket();
 
     const upsert = {
@@ -703,15 +674,7 @@ describe("web inbound media saves with extension", () => {
       ),
     );
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
@@ -781,15 +744,7 @@ describe("web inbound media saves with extension", () => {
       ),
     );
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      cfg: {
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as never,
-      verbose: false,
-      onMessage,
-      accountId: "default",
-      authDir: path.join(HOME, "wa-auth"),
-    });
+    const listener = await startMediaMonitor(onMessage);
     const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {

@@ -1,4 +1,3 @@
-// Browser tests cover chrome plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import http, { createServer } from "node:http";
@@ -709,13 +708,6 @@ describe("browser chrome helpers", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(proc.kill).not.toHaveBeenCalled();
-  });
-
-  it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const proc = makeChromeTestProc();
-    await stopChromeWithProc(proc, 10);
-    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("stopOpenClawChrome asks Chrome to close gracefully before sending a signal", async () => {

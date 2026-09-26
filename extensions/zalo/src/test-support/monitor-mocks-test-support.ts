@@ -15,6 +15,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -37,6 +38,10 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
 let lifecycleStateDir: string | undefined;
 let previousLifecycleStateDir: string | undefined;
+const lifecycleIngressMonitors = new Set<{
+  waitForIdle(): Promise<void>;
+  waitForDeferredClaims(): Promise<void>;
+}>();
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -70,6 +75,21 @@ export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
 
 function installLifecycleModuleMocks() {
+  vi.doMock("openclaw/plugin-sdk/channel-outbound", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
+      "openclaw/plugin-sdk/channel-outbound",
+    );
+    return {
+      ...actual,
+      createChannelIngressMonitor: (
+        ...args: Parameters<typeof actual.createChannelIngressMonitor>
+      ) => {
+        const monitor = actual.createChannelIngressMonitor(...args);
+        lifecycleIngressMonitors.add(monitor);
+        return monitor;
+      },
+    };
+  });
   vi.doMock(apiModuleId, async () => {
     const actual = await vi.importActual<object>(apiModuleId);
     return {
@@ -117,8 +137,10 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 );
 
 export async function resetLifecycleTestState() {
+  lifecycleIngressMonitors.clear();
   // Agent close releases leases through shared state; closing shared state first
   // can reopen it during teardown and leave Windows handles under the state dir.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -215,20 +237,6 @@ export async function startWebhookLifecycleMonitor(params: {
   const { monitorZaloProvider } = params.cacheKey
     ? await loadCachedLifecycleMonitorModule(params.cacheKey)
     : await loadLifecycleMonitorModule();
-  const channelOutbound = await import("openclaw/plugin-sdk/channel-outbound");
-  const createIngressMonitor = channelOutbound.createChannelIngressMonitor;
-  const ingressMonitors = new Set<{
-    waitForIdle(): Promise<void>;
-    waitForDeferredClaims(): Promise<void>;
-  }>();
-  const captureIngressMonitor: typeof createIngressMonitor = (options) => {
-    const monitor = createIngressMonitor(options);
-    ingressMonitors.add(monitor);
-    return monitor;
-  };
-  const monitorFactory = vi
-    .spyOn(channelOutbound, "createChannelIngressMonitor")
-    .mockImplementation(captureIngressMonitor);
   const run = monitorZaloProvider({
     token: params.token ?? "zalo-token",
     account: params.account,
@@ -251,21 +259,20 @@ export async function startWebhookLifecycleMonitor(params: {
       }
     });
     expect(
-      ingressMonitors.size,
+      lifecycleIngressMonitors.size,
       "capture the real monitor before awaiting delivery",
     ).toBeGreaterThan(0);
   } catch (error) {
     abort.abort();
     await run;
     throw error;
-  } finally {
-    monitorFactory.mockRestore();
   }
 
   const route = registry.httpRoutes.find((entry) => entry.source === "zalo-webhook");
   if (!route) {
     throw new Error("missing plugin HTTP route");
   }
+  const ingressMonitors = [...lifecycleIngressMonitors];
 
   return {
     abort,
@@ -275,7 +282,7 @@ export async function startWebhookLifecycleMonitor(params: {
     runtime,
     waitForIdle: async () => {
       const settled = await Promise.allSettled(
-        [...ingressMonitors].map(async (monitor) => {
+        ingressMonitors.map(async (monitor) => {
           await monitor.waitForIdle();
           await monitor.waitForDeferredClaims();
           await monitor.waitForIdle();

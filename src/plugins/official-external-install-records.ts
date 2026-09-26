@@ -25,16 +25,11 @@ function resolveExactNpmPackageName(value: string): string | undefined {
   return packageName && value.trim() === packageName ? packageName : undefined;
 }
 
-function resolveUnanimousRecordedNpmPackageName(record: PluginInstallRecord): string | undefined {
-  if (record.source !== "npm") {
-    return undefined;
-  }
+// A populated identity must parse successfully; absent fields do not supply evidence.
+function resolveRecordedPackageNames(
+  fields: ReadonlyArray<readonly [string | undefined, (value: string) => string | undefined]>,
+): string[] | undefined {
   const packageNames: string[] = [];
-  const fields = [
-    [record.spec, resolveNpmSpecPackageName],
-    [record.resolvedName, resolveExactNpmPackageName],
-    [record.resolvedSpec, resolveNpmSpecPackageName],
-  ] as const;
   for (const [value, resolvePackageName] of fields) {
     if (value === undefined) {
       continue;
@@ -45,7 +40,19 @@ function resolveUnanimousRecordedNpmPackageName(record: PluginInstallRecord): st
     }
     packageNames.push(packageName);
   }
-  return packageNames.length > 0 && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
+  return packageNames;
+}
+
+function resolveUnanimousRecordedNpmPackageName(record: PluginInstallRecord): string | undefined {
+  if (record.source !== "npm") {
+    return undefined;
+  }
+  const packageNames = resolveRecordedPackageNames([
+    [record.spec, resolveNpmSpecPackageName],
+    [record.resolvedName, resolveExactNpmPackageName],
+    [record.resolvedSpec, resolveNpmSpecPackageName],
+  ]);
+  return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
 }
 
 function hasTrustedOfficialNpmProvenance(record: PluginInstallRecord): boolean {
@@ -69,38 +76,15 @@ function resolveOfficialPackageNames(params: {
 function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string[] | undefined {
   // Source switches can leave legacy resolution fields in durable records. Treat every
   // populated identity as corroborating evidence so one conflicting field fails closed.
-  const packageNames: string[] = [];
-  if (record.clawhubPackage !== undefined) {
-    const packageName = resolveExactNpmPackageName(record.clawhubPackage);
-    if (!packageName) {
-      return undefined;
-    }
-    packageNames.push(packageName);
-  }
-  if (record.spec !== undefined) {
-    const packageName = resolveClawHubSpecPackageName(record.spec);
-    if (!packageName) {
-      return undefined;
-    }
-    packageNames.push(packageName);
-  }
-  if (record.resolvedSpec !== undefined) {
-    const packageName =
-      resolveClawHubSpecPackageName(record.resolvedSpec) ??
-      resolveNpmSpecPackageName(record.resolvedSpec);
-    if (!packageName) {
-      return undefined;
-    }
-    packageNames.push(packageName);
-  }
-  if (record.resolvedName !== undefined) {
-    const packageName = resolveExactNpmPackageName(record.resolvedName);
-    if (!packageName) {
-      return undefined;
-    }
-    packageNames.push(packageName);
-  }
-  return packageNames;
+  return resolveRecordedPackageNames([
+    [record.clawhubPackage, resolveExactNpmPackageName],
+    [record.spec, resolveClawHubSpecPackageName],
+    [
+      record.resolvedSpec,
+      (spec) => resolveClawHubSpecPackageName(spec) ?? resolveNpmSpecPackageName(spec),
+    ],
+    [record.resolvedName, resolveExactNpmPackageName],
+  ]);
 }
 
 function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {

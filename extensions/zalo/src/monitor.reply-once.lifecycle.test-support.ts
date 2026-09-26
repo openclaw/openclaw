@@ -164,7 +164,7 @@ describe("Zalo reply-once lifecycle", () => {
               userName: "User One",
               chatId: "dm-chat-1",
             }),
-            settleBeforeReplay: monitor.waitForIdle,
+            beforeReplay: monitor.waitForIdle,
           });
 
           expect(first.status).toBe(200);

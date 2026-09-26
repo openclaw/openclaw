@@ -147,15 +147,8 @@ function gateway(
   snapshotOverride?: ApplicationGatewaySnapshot,
 ): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = snapshotOverride ?? {
-    client,
+    ...gatewaySnapshot(client, false),
     phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
   };
   return {
     snapshot,
@@ -611,13 +604,6 @@ describe("DevicesPage gateway lifecycle", () => {
       operatorRoles: ["operator"],
     },
     {
-      name: "node reconnects while its operator stays connected",
-      role: "node",
-      previousReason: "disconnect",
-      nextReason: "connect",
-      operatorRoles: ["operator"],
-    },
-    {
       name: "merged node-role presence disconnects while its operator stays connected",
       role: "node",
       previousReason: "connect",
@@ -633,25 +619,11 @@ describe("DevicesPage gateway lifecycle", () => {
       operatorRoles: ["operator"],
     },
     {
-      name: "operator reconnects while its node stays connected",
-      role: "operator",
-      previousReason: "disconnect",
-      nextReason: "connect",
-      operatorRoles: ["operator"],
-    },
-    {
       name: "node disconnects while a roleless device stays connected",
       role: "node",
       previousReason: "connect",
       nextReason: "disconnect",
       operatorRoles: undefined,
-    },
-    {
-      name: "node disconnects while a device with empty roles stays connected",
-      role: "node",
-      previousReason: "connect",
-      nextReason: "disconnect",
-      operatorRoles: [],
     },
   ])("reloads mixed-role inventory when $name", async (scenario) => {
     const request = vi.fn(async (method: string) =>

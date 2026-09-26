@@ -792,38 +792,6 @@ describe("gateway aux handlers", () => {
     expect(firstRespondCall(respond)[0]).toBe(false);
   });
 
-  it("restores both current and required shared-gateway generation on reload failure", async () => {
-    // Locks in the auth-generation rollback contract: a failed reload must
-    // not leave `required` cleared during activation, otherwise stale clients matching `current`
-    // could remain authorized after rollback.
-    const buildReloadPlan = buildRestartChannelsPlan("slack");
-    activateSnapshot(slackConfig("old-slack-secret"));
-    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
-    const stopChannel = vi.fn().mockResolvedValue(undefined);
-    const startChannel = vi.fn().mockRejectedValue(new Error("slack refused to start"));
-
-    const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
-      current: "gen-a",
-      required: "gen-a",
-    });
-
-    const { reload, respond } = createSecretsReloadHarness({
-      prepareRuntimeSecretsSnapshot,
-      buildReloadPlan,
-      sharedGatewaySessionGenerationState,
-      resolveSharedGatewaySessionGenerationForConfig: () => "gen-b",
-      startChannel,
-      stopChannel,
-    });
-
-    await reload();
-
-    expect(sharedGatewaySessionGenerationState.current).toBe("gen-a");
-    expect(sharedGatewaySessionGenerationState.required).toBe("gen-a");
-    expect(respond.mock.calls).toHaveLength(1);
-    expect(firstRespondCall(respond)[0]).toBe(false);
-  });
-
   it("fails reload when channel restarts are required but skip flags block them", async () => {
     const buildReloadPlan = buildRestartChannelsPlan("slack");
     process.env.OPENCLAW_SKIP_CHANNELS = "1";

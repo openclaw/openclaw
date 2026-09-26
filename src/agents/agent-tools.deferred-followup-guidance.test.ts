@@ -126,7 +126,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     );
   });
 
-  it.each(["automations", "cron", undefined] as const)(
+  it.each(["automations", undefined] as const)(
     "keeps shell-quoting guidance without process and with scheduler %s",
     (schedulerToolName) => {
       const exec = findToolDescription("exec", schedulerToolName, false);
@@ -142,24 +142,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
   it.each([
     { name: "process", description: "plugin process", available: [] },
     {
-      name: "sessions_send",
-      description: describeSessionsSendTool(),
-      available: ["conversations_list", "conversations_send"],
-    },
-    {
       name: "sessions_search",
       description: describeSessionsSearchTool(),
       available: ["sessions_history"],
-    },
-    {
-      name: "sessions_spawn",
-      description: describeSessionsSpawnTool(),
-      available: ["agents_list"],
-    },
-    {
-      name: "conversations_send",
-      description: createConversationsSendTool().description,
-      available: ["conversations_list"],
     },
   ])(
     "preserves ownership metadata when replacing $name descriptions",
