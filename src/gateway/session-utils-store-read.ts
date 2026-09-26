@@ -11,7 +11,13 @@ import type {
   SessionEntryListScope,
   SessionEntryReadSource,
 } from "../config/sessions/session-accessor.types.js";
+import {
+  readSessionEntryInWorker,
+  withSessionEntriesFromStoresInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 
 /**
  * Request-scoped store reuse.
@@ -86,6 +92,95 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
     if (!result.ok) {
       read.readSource = undefined;
     }
+  }
+}
+
+export async function loadGatewaySessionStoreReadsAsync(
+  reads: readonly GatewaySessionStoreRead[],
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  const prepare = async (pending: readonly GatewaySessionStoreRead[]) => {
+    await withSessionEntriesFromStoresInWorker(
+      pending.map((read) => ({
+        agentId: expectDefined(read.agentId, "session store agent"),
+        storePath: read.storePath,
+        env,
+        sessionKeys: expectDefined(read.options.exactKeys, "exact session keys"),
+        includeAuthorization: true,
+      })),
+      (prepared) => {
+        for (const [index, read] of pending.entries()) {
+          const { result, database } = expectDefined(prepared[index], "session store read");
+          read.result = ok(
+            Object.fromEntries(result.entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+          );
+          read.readSource = result.databaseIdentity
+            ? { agentId: database.agentId, path: database.path }
+            : undefined;
+          read.capturedReadSource = result.databaseIdentity
+            ? {
+                agentId: database.agentId,
+                path: database.path,
+                databaseIdentity: result.databaseIdentity.identity,
+                databaseBirthtime: result.databaseIdentity.birthtime,
+              }
+            : undefined;
+        }
+      },
+    );
+  };
+  let requiresWritableAdmission = false;
+  try {
+    await prepare(reads);
+  } catch (error) {
+    if (
+      !(error instanceof SessionMetadataUnavailableError) ||
+      !reads.some((read) => read.options.readOnly === false)
+    ) {
+      throw error;
+    }
+    requiresWritableAdmission = true;
+  }
+  for (const read of reads) {
+    if (read.options.readOnly !== false) {
+      if (requiresWritableAdmission) {
+        await prepare([read]);
+      }
+      continue;
+    }
+    if (read.capturedReadSource && !requiresWritableAdmission) {
+      continue;
+    }
+    // First sends share the existing writer FIFO before claiming a missing database's birth.
+    await runExclusiveSessionStoreWrite(
+      read.storePath,
+      async () => {
+        try {
+          await prepare([read]);
+        } catch (error) {
+          if (!(error instanceof SessionMetadataUnavailableError)) {
+            throw error;
+          }
+          read.capturedReadSource = undefined;
+        }
+        if (!read.capturedReadSource) {
+          await readSessionEntryInWorker(
+            {
+              agentId: read.agentId,
+              storePath: read.storePath,
+              sessionKey: expectDefined(read.options.exactKeys?.[0], "session creation key"),
+              env,
+            },
+            () => {},
+          );
+          await prepare([read]);
+        }
+      },
+      { reentrant: true },
+    );
+  }
+  if (requiresWritableAdmission) {
+    await prepare(reads);
   }
 }
 

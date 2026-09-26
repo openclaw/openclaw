@@ -32,7 +32,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import {
-  prepareGatewaySessionStoreTargetReadOnly,
+  prepareGatewaySessionStoreTargetAsync,
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
@@ -345,7 +345,7 @@ export async function prepareSessionMutationFacts(
               },
             });
           }
-          const target = await prepareGatewaySessionStoreTargetReadOnly(
+          const target = await prepareGatewaySessionStoreTargetAsync(
             {
               cfg: inventory.config,
               key: params.sessionKey,

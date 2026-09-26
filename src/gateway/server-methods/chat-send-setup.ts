@@ -70,11 +70,12 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  const loadedSession = prepareChatSendSession({
+  const loadedSession = await prepareChatSendSession({
     request: normalizedRequest.value,
     context,
     client,
   });
+  assertCurrent?.();
   if (!loadedSession.ok) {
     respond(
       false,

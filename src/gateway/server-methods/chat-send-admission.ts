@@ -196,7 +196,10 @@ export async function admitChatSend(
   let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
-  const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
+  const assertChatWorkAdmissionAllowed = (
+    commitOutcome: boolean,
+    latestSession = { cfg, entry, canonicalKey: sessionKey, storePath },
+  ) => {
     params.assertCurrent?.();
     const retainedRequestConflict = resolveChatSendRequestConflict(params);
     if (retainedRequestConflict) {
@@ -250,7 +253,7 @@ export async function admitChatSend(
       }
       return;
     }
-    const latestSession = loadCurrentChatSendSession(session);
+    assertSessionTargetCurrent();
     const latestEntry = latestSession.entry;
     const requestConflict = resolveChatSendRequestConflict({
       ...params,
@@ -396,7 +399,11 @@ export async function admitChatSend(
       scope: storePath,
       identities: [sessionKey, backingSessionId],
       assertAllowed: () => assertChatWorkAdmissionAllowed(false),
-      revalidateAllowed: () => assertChatWorkAdmissionAllowed(true),
+      revalidateAllowed: async () =>
+        assertChatWorkAdmissionAllowed(
+          true,
+          await loadCurrentChatSendSession(session, context.getRuntimeConfig),
+        ),
       onInterrupt: (reason) => {
         const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
         if (!admittedRunAbort) {
