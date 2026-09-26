@@ -31,6 +31,7 @@ import type {
 } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
@@ -267,6 +268,29 @@ export function useQueuedCollectorFixture() {
     };
   }
 
+  async function spawnCollectorsWithDelayedFirstRead() {
+    const resolveTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+    const requester = await resolveTarget({ cfg: getRuntimeConfig(), key: parentKey });
+    let firstReadStarted = false;
+    const read = vi
+      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementation(async (params) => {
+        if (params.key !== parentKey) {
+          return await resolveTarget(params);
+        }
+        if (!firstReadStarted) {
+          firstReadStarted = true;
+          await Promise.resolve();
+        }
+        return requester;
+      });
+    try {
+      return await spawnCollectors();
+    } finally {
+      read.mockRestore();
+    }
+  }
+
   return {
     parentKey,
     launchedRunIds,
@@ -274,6 +298,7 @@ export function useQueuedCollectorFixture() {
     operatorClient,
     listChildren,
     spawnCollectors,
+    spawnCollectorsWithDelayedFirstRead,
     createQueuedReservation,
   };
 }
