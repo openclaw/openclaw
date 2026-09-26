@@ -151,7 +151,7 @@ function resolveConfiguredKeyProviderOrder(params: {
 function resolveConfiguredImageModel(params: {
   cfg: OpenClawConfig;
   providerId: string;
-}): { id?: string; input?: string[] } | undefined {
+}): { id?: string; input?: string[]; metadataSource?: string } | undefined {
   const providerCfg = findNormalizedProviderValue(params.cfg.models?.providers, params.providerId);
   return providerCfg?.models?.find((entry) => {
     const id = entry?.id?.trim();
@@ -408,6 +408,16 @@ async function activeModelSupportsNativeVision(params: {
     })
   ) {
     return false;
+  }
+  // Answer from the configured model first, as explicitImageModelVisionStatus does.
+  // models-add rows are excluded: runtime may prefer discovered input over the row.
+  const configured = resolveConfiguredImageModel({ cfg: params.cfg, providerId: activeProvider });
+  if (
+    configured?.id?.trim() === params.activeModel?.model?.trim() &&
+    configured?.input?.includes("image") &&
+    configured.metadataSource !== "models-add"
+  ) {
+    return true;
   }
   const { findModelInCatalog, readPreparedModelCatalog, modelSupportsVision } =
     await loadPreparedModelCatalogApi();
