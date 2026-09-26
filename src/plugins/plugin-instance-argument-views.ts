@@ -124,7 +124,7 @@ function restorePluginArgumentViews(
 /** Preserves caller data and caches callback views within one instance. */
 export function createPluginArgumentView(bindings: {
   originalValues: WeakMap<object, object>;
-  wrapped: WeakMap<object, unknown>;
+  isWrapped: (value: object) => boolean;
   wrap: <T>(value: T) => T;
   invoke: <T>(run: () => T) => T;
 }) {
@@ -160,7 +160,7 @@ export function createPluginArgumentView(bindings: {
       }
       // Returned handles regain identity only in their own instance. One hop preserves
       // the guarded callback when the plugin returned an incoming caller callback.
-      if (callbackIndex === undefined && bindings.wrapped.get(value) === value) {
+      if (callbackIndex === undefined && bindings.isWrapped(value)) {
         return bindings.originalValues.get(value) ?? value;
       }
       let callback = callerData ? undefined : callbacks.get(value);

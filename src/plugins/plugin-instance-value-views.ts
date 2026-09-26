@@ -252,7 +252,7 @@ export function createPluginValueView(
   const iterators = new WeakMap<object, PluginIteratorAdmission>();
   const wrapArguments = createPluginArgumentView({
     originalValues: bindings.originalValues,
-    wrapped,
+    isWrapped: (value) => memberReaders.has(value),
     wrap: (value) => wrap(value),
     invoke: admitCallback,
   });
@@ -277,7 +277,7 @@ export function createPluginValueView(
       return value;
     }
     const object: object = value;
-    const cached = wrapped.get(object);
+    const cached = memberReaders.has(object) ? object : wrapped.get(object);
     if (cached) {
       // SAFETY: The cache stores only the view created for this exact input value.
       return cached as T;
@@ -515,7 +515,6 @@ export function createPluginValueView(
       );
     }
     wrapped.set(object, result);
-    wrapped.set(result, result);
     memberReaders.set(result, { source: object, derivedFields, read });
     bindings.originalValues.set(result, object);
     valueInstances.set(result, bindings.instance);
