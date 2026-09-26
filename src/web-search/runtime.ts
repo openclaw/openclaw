@@ -254,12 +254,13 @@ type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  sandboxed: boolean;
 };
 
 function resolveWebSearchRequestContext(
   options?: Pick<
     ResolveWebSearchDefinitionParams,
-    "config" | "preferInputConfig" | "runtimeWebSearch"
+    "config" | "preferInputConfig" | "runtimeWebSearch" | "sandboxed"
   >,
 ): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
@@ -271,6 +272,7 @@ function resolveWebSearchRequestContext(
     search: resolveSearchConfig(config),
     runtimeWebSearch:
       options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
+    sandboxed: options?.sandboxed === true,
   };
 }
 
@@ -297,22 +299,30 @@ function loadSortedWebSearchProviders(
         value: providerId,
       })
     : undefined;
-  const resolveProviders = params.preferRuntimeProviders
-    ? resolveRuntimeWebSearchProviders
-    : resolvePluginWebSearchProviders;
-  return sortPluginEntriesForAutoDetect(
-    resolveProviders({
-      config: params.config,
-      ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
-    }),
-  );
+  const sharedParams = {
+    config: params.config,
+    ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
+  };
+  // Sandboxed agents resolve from trusted plugin providers only: the sandboxed
+  // flag is threaded through the runtime resolver so the shared trust filter
+  // still applies without eager plugin activation.
+  const providers = params.preferRuntimeProviders
+    ? resolveRuntimeWebSearchProviders({
+        ...sharedParams,
+        ...(params.sandboxed ? { sandboxed: true } : {}),
+      })
+    : resolvePluginWebSearchProviders({
+        ...sharedParams,
+        ...(params.sandboxed ? { sandboxed: true } : {}),
+      });
+  return sortPluginEntriesForAutoDetect(providers);
 }
 
 function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
   context = resolveWebSearchRequestContext(options),
 ): PluginWebSearchProviderEntry[] {
-  const { config, search, runtimeWebSearch } = context;
+  const { config, search, runtimeWebSearch, sandboxed } = context;
   if (search?.enabled === false) {
     return [];
   }
@@ -321,6 +331,7 @@ function resolveWebSearchCandidates(
     config,
     search,
     runtimeWebSearch,
+    sandboxed,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   }).filter(Boolean);
@@ -412,15 +423,57 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
+/**
+ * Names the configured search provider when sandboxing emptied the candidate set, so the failure
+ * explains the trust restriction instead of reading as "nothing is enabled at all".
+ */
+function resolveSandboxedRejectedProviderId(params: {
+  search?: WebSearchConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+  providerId?: string;
+}): string | undefined {
+  if (params.search?.enabled === false) {
+    return undefined;
+  }
+  const configuredProviderId =
+    params.providerId?.trim() ||
+    (params.search && "provider" in params.search && typeof params.search.provider === "string"
+      ? params.search.provider.trim()
+      : "");
+  if (configuredProviderId) {
+    return configuredProviderId;
+  }
+  return params.runtimeWebSearch?.providerSource === "configured"
+    ? normalizeOptionalLowercaseString(
+        params.runtimeWebSearch.selectedProvider ?? params.runtimeWebSearch.providerConfigured,
+      )
+    : undefined;
+}
+
 /** Executes web_search with fallback when selection was not explicit. */
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const context = resolveWebSearchRequestContext(params);
-  const { config, search, runtimeWebSearch } = context;
+  const { config, search, runtimeWebSearch, sandboxed } = context;
   const candidates = resolveWebSearchCandidates(
     { ...params, preferRuntimeProviders: params.preferRuntimeProviders ?? true },
     context,
   );
   if (candidates.length === 0) {
+    const rejectedProviderId = sandboxed
+      ? resolveSandboxedRejectedProviderId({
+          search,
+          runtimeWebSearch,
+          providerId: params.providerId,
+        })
+      : undefined;
+    if (rejectedProviderId) {
+      throw new Error(
+        "web_search is disabled or no provider is available. " +
+          `The configured search provider "${rejectedProviderId}" is not available to sandboxed ` +
+          "web_search: sandboxed agents only run bundled or verified-official providers. " +
+          "Select a bundled or verified-official search provider to restore web_search.",
+      );
+    }
     throw new Error("web_search is disabled or no provider is available.");
   }
   const allowFallback = !hasExplicitWebSearchSelection({

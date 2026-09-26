@@ -1,6 +1,4 @@
 // Runtime bridge for web-search providers supplied by plugins.
-import type { PluginLoadOptions } from "./loader.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -13,6 +11,8 @@ import {
 } from "./web-provider-resolution-shared.js";
 import {
   resolvePluginWebProviders,
+  type ResolvePluginWebProvidersParams,
+  type ResolveRuntimeWebProvidersParams,
   type WebProviderRuntimeResolution,
 } from "./web-provider-runtime-shared.js";
 
@@ -49,31 +49,20 @@ function resolveLazyBundledWebSearchProviders(
   );
 }
 
-export function resolvePluginWebSearchProviders(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  activate?: boolean;
-  cache?: boolean;
-  mode?: "runtime" | "setup";
-  origin?: PluginManifestRecord["origin"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): PluginWebSearchProviderEntry[] {
+/** Resolves web search providers, activating plugin runtimes when requested. */
+export function resolvePluginWebSearchProviders(
+  params: ResolvePluginWebProvidersParams,
+): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,
     resolveBundledPublicArtifactProviders: resolveBundledWebSearchProvidersFromPublicArtifacts,
   });
 }
 
-export function resolveRuntimeWebSearchProviders(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): PluginWebSearchProviderEntry[] {
+/** Resolves already-eligible runtime web search providers without setup-mode activation. */
+export function resolveRuntimeWebSearchProviders(
+  params: ResolveRuntimeWebProvidersParams,
+): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,
     resolveBundledRuntimeArtifactProviders: resolveLazyBundledWebSearchProviders,
