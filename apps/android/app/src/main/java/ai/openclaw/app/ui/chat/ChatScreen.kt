@@ -157,6 +157,7 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -646,6 +647,11 @@ internal fun ChatScreen(
     onDispose { pickers.forEach { it.dispose() } }
   }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
+  var focusModeActive by rememberSaveable { mutableStateOf(false) }
+  // Composed before the Details pane's BackHandler, so Back dismisses Details first.
+  if (focusModeActive) {
+    BackHandler { focusModeActive = false }
+  }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
   var sendCheckpointFull by rememberSaveable(composerOwner) { mutableStateOf(false) }
 
@@ -924,6 +930,7 @@ internal fun ChatScreen(
         dismissDetails()
         onOpenSidebar()
       },
+      onEnterFocusMode = { focusModeActive = true },
       onJumpToLatest =
         onJumpToLatest?.let { jump ->
           {
@@ -1085,13 +1092,13 @@ internal fun ChatScreen(
     features = features,
     conversationStatus = conversationStatus,
     header = { onJumpToLatest, compactHeight, tabletop ->
-      if ((!compactHeight || tabletop) && !detailsExpanded) headerContent(onJumpToLatest) { detailsExpanded = false }
+      if ((!compactHeight || tabletop) && !detailsExpanded && !focusModeActive) headerContent(onJumpToLatest) { detailsExpanded = false }
     },
   ) { onJumpToLatest, compactHeight, tabletop ->
     ChatComposer(
       onInputPositioned = { composerAnchor = it },
       ownerReady = composerOwnerReady,
-      compactHeight = compactHeight,
+      compactHeight = compactHeight || focusModeActive,
       detailsExpanded = detailsExpanded,
       onDetailsExpandedChange = { detailsExpanded = it },
       conversationHeader = { dismissDetails -> headerContent(onJumpToLatest, dismissDetails) },
@@ -1525,6 +1532,7 @@ private fun ChatHeader(
   sessionColor: String?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
+  onEnterFocusMode: () -> Unit,
   onJumpToLatest: (() -> Unit)?,
   healthOk: Boolean,
   pendingRunCount: Int,
@@ -1685,6 +1693,7 @@ private fun ChatHeader(
               }
               add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
               add(FoldAwareMenuItem("background", nativeString("Background tasks"), onOpenBackgroundTasks, Icons.Default.HourglassEmpty))
+              add(FoldAwareMenuItem("focus-mode", nativeString("Focus mode"), onEnterFocusMode, Icons.Default.Fullscreen))
               if (workspaceGit) {
                 add(FoldAwareMenuItem("worktree", newChatInWorktreeLabel, onNewChatInWorktree, enabled = newChatEnabled))
               }

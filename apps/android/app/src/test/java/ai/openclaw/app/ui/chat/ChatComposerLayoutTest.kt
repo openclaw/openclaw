@@ -703,6 +703,69 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun focusModeEntryHidesHeaderAndCompactsComposerAtFullHeight() {
+    withReaderHistory(assistantCount = 12, useChatShell = true, viewportHeight = { 800.dp }) { _ ->
+      val editor = composerEditor()
+      val editorId = editor.fetchSemanticsNode().id
+      assertReaderHeaderControl("Chat actions")
+      composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+      val before = readerTranscript().getUnclippedBoundsInRoot()
+
+      enterFocusMode()
+
+      readerHeaderControl("Chat actions").assertDoesNotExist()
+      readerHeaderControl("Show Sidebar").assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed()
+      val after = readerTranscript().getUnclippedBoundsInRoot()
+      assertTrue(
+        "Focus mode must hand the header band to the transcript",
+        after.top < before.top,
+      )
+      assertTrue(
+        "Focus mode must grow the transcript band it reclaims",
+        after.bottom - after.top > before.bottom - before.top,
+      )
+      assertEquals("Focus mode must not replace the editor", editorId, editor.fetchSemanticsNode().id)
+      editor.assertIsEnabled()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun focusModeBackReturnsToTheFullShell() {
+    withReaderHistory(assistantCount = 4, useChatShell = true, viewportHeight = { 800.dp }) { _ ->
+      enterFocusMode()
+      readerHeaderControl("Chat actions").assertDoesNotExist()
+
+      pressChatBack()
+
+      assertReaderHeaderControl("Chat actions")
+      composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun focusModeBackClosesDetailsBeforeExitingFocus() {
+    withReaderHistory(assistantCount = 4, useChatShell = true, viewportHeight = { 800.dp }) { _ ->
+      enterFocusMode()
+      composeRule.onNodeWithContentDescription(nativeString("Details")).performClick()
+      val detailsPane = SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, nativeString("Details"))
+      composeRule.onNode(detailsPane).assertIsDisplayed()
+
+      pressChatBack()
+
+      composeRule.onNode(detailsPane).assertDoesNotExist()
+      readerHeaderControl("Chat actions").assertDoesNotExist()
+
+      pressChatBack()
+
+      assertReaderHeaderControl("Chat actions")
+    }
+  }
+
+  @Test
   fun expandingTheOnlyLoadedUserPromptOffersJumpWithoutPriorScrolling() {
     val head = "The original user prompt starts here."
     val tail = "The original user prompt ends here."
@@ -6230,6 +6293,19 @@ class ChatComposerLayoutTest {
     composeRule.onNode(
       hasContentDescription(nativeString(label)) and hasClickAction() and hasAnyAncestor(hasTestTag("chat-viewport")),
     )
+
+  private fun enterFocusMode() {
+    readerHeaderControl("Chat actions").performClick()
+    composeRule.onNode(hasText(nativeString("Focus mode")) and hasClickAction()).performClick()
+    composeRule.waitForIdle()
+  }
+
+  private fun pressChatBack() {
+    composeRule.runOnIdle {
+      checkNotNull(insetView.findViewTreeOnBackPressedDispatcherOwner()).onBackPressedDispatcher.onBackPressed()
+    }
+    composeRule.waitForIdle()
+  }
 
   private fun assertReaderHeaderControl(label: String): DpRect {
     val bounds = readerHeaderControl(label).assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
