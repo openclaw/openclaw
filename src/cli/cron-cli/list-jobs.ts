@@ -126,63 +126,10 @@ export async function listCronJobsFromGateway(
         // `total` and returns an empty terminal page (hasMore=false). Accept that
         // contract-defined terminal clamp; any other offset mismatch is invalid.
         const isTerminalClamp =
-          page.hasMore === false &&
-          page.total !== undefined &&
-          page.offset === page.total;
+          page.hasMore === false && page.total !== undefined && page.offset === page.total;
         if (!isTerminalClamp) {
           throw new Error("cron.list returned an invalid inventory page");
         }
-      }
-
-      if (singlePage) {
-        // Single-page mode returns the one validated page without walking the
-        // rest of the snapshot. Apply the same continuation and terminal
-        // invariants the multi-page path enforces, so an advertised cursor or
-        // terminal state cannot be internally inconsistent:
-        // - a continuation page must carry an advancing, exact nextOffset;
-        // - a terminal page must not advertise a nextOffset.
-        if (page.hasMore === true) {
-          if (
-            typeof page.nextOffset !== "number" ||
-            !Number.isSafeInteger(page.nextOffset) ||
-            page.nextOffset <= offset ||
-            (page.total !== undefined && page.nextOffset !== offset + page.jobs.length)
-          ) {
-            throw new Error("cron.list pagination did not advance while looking up automation");
-          }
-        } else if (page.nextOffset !== undefined && page.nextOffset !== null) {
-          throw new Error("cron.list returned an inconsistent terminal inventory page");
-        } else if (page.total !== undefined) {
-          // A canonical terminal page must cover the advertised inventory from
-          // its offset: offset + jobs.length must equal total. The Gateway
-          // clamps a requested offset beyond the end down to total and returns
-          // an empty terminal page, so a valid clamped page has offset === total
-          // and jobs.length === 0 — it satisfies the equality without a special
-          // case, and a page with rows beyond the advertised total is rejected.
-          if (
-            page.offset === undefined ||
-            page.offset + page.jobs.length !== page.total
-          ) {
-            throw new Error("cron.list returned an inconsistent terminal inventory page");
-          }
-        }
-        // Preserve the page's own metadata only when the
-        // Gateway actually supplied it: a legacy page has no `total`, so we must
-        // not fabricate one from the row count or fabricated totals would mislead
-        // scripts that compute completion from the advertised inventory size.
-        return {
-          jobs: page.jobs,
-          ...(page.deliveryPreviews ? { deliveryPreviews: page.deliveryPreviews } : {}),
-          ...(page.snapshotRevision !== undefined
-            ? { snapshotRevision: page.snapshotRevision }
-            : {}),
-          ...(page.total !== undefined ? { total: page.total } : {}),
-          ...(page.offset !== undefined ? { offset: page.offset } : { offset }),
-          ...(page.limit !== undefined ? { limit: page.limit } : {}),
-          ...(page.hasMore !== undefined
-            ? { hasMore: page.hasMore, nextOffset: page.nextOffset ?? null }
-            : {}),
-        };
       }
 
       if (!hasCanonicalMetadata && !allowLegacyUnversionedPagination) {
@@ -207,6 +154,57 @@ export async function listCronJobsFromGateway(
         if (!allowLegacyUnversionedPagination) {
           throw new Error("cron.list returned an invalid inventory page");
         }
+      }
+
+      if (singlePage) {
+        // Single-page mode returns the one validated page without walking the
+        // rest of the snapshot. The legacy capability probe above runs first, so
+        // an unversioned page is only accepted when cron.get proves the Gateway
+        // is legacy; a modern Gateway returning malformed metadata fails closed
+        // exactly like the multi-page path. Apply the same continuation and
+        // terminal invariants the multi-page path enforces, so an advertised
+        // cursor or terminal state cannot be internally inconsistent:
+        // - a continuation page must carry an advancing, exact nextOffset;
+        // - a terminal page must not advertise a nextOffset.
+        if (page.hasMore === true) {
+          if (
+            typeof page.nextOffset !== "number" ||
+            !Number.isSafeInteger(page.nextOffset) ||
+            page.nextOffset <= offset ||
+            (page.total !== undefined && page.nextOffset !== offset + page.jobs.length)
+          ) {
+            throw new Error("cron.list pagination did not advance while looking up automation");
+          }
+        } else if (page.nextOffset !== undefined && page.nextOffset !== null) {
+          throw new Error("cron.list returned an inconsistent terminal inventory page");
+        } else if (page.total !== undefined) {
+          // A canonical terminal page must cover the advertised inventory from
+          // its offset: offset + jobs.length must equal total. The Gateway
+          // clamps a requested offset beyond the end down to total and returns
+          // an empty terminal page, so a valid clamped page has offset === total
+          // and jobs.length === 0 — it satisfies the equality without a special
+          // case, and a page with rows beyond the advertised total is rejected.
+          if (page.offset === undefined || page.offset + page.jobs.length !== page.total) {
+            throw new Error("cron.list returned an inconsistent terminal inventory page");
+          }
+        }
+        // Preserve the page's own metadata only when the
+        // Gateway actually supplied it: a legacy page has no `total`, so we must
+        // not fabricate one from the row count or fabricated totals would mislead
+        // scripts that compute completion from the advertised inventory size.
+        return {
+          jobs: page.jobs,
+          ...(page.deliveryPreviews ? { deliveryPreviews: page.deliveryPreviews } : {}),
+          ...(page.snapshotRevision !== undefined
+            ? { snapshotRevision: page.snapshotRevision }
+            : {}),
+          ...(page.total !== undefined ? { total: page.total } : {}),
+          ...(page.offset !== undefined ? { offset: page.offset } : { offset }),
+          ...(page.limit !== undefined ? { limit: page.limit } : {}),
+          ...(page.hasMore !== undefined
+            ? { hasMore: page.hasMore, nextOffset: page.nextOffset ?? null }
+            : {}),
+        };
       }
 
       pageMetadataMode ??= currentMetadataMode;

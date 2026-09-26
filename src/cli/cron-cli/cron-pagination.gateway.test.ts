@@ -313,77 +313,89 @@ describe("cron CLI with the real Gateway pagination contract", () => {
   });
 
   it("rejects a single-page continuation page with a non-advancing cursor", async () => {
-    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
-      transformListPage(page) {
-        const response = page as Record<string, unknown>;
-        // A malformed canonical page advertises hasMore=true but supplies no
-        // usable nextOffset; scripts must not stop early or repeat a page.
-        return {
-          ...response,
-          hasMore: true,
-          nextOffset: null,
-        };
+    installRealCronGateway(
+      Array.from({ length: 201 }, (_, index) => createJob(index)),
+      {
+        transformListPage(page) {
+          const response = page as Record<string, unknown>;
+          // A malformed canonical page advertises hasMore=true but supplies no
+          // usable nextOffset; scripts must not stop early or repeat a page.
+          return {
+            ...response,
+            hasMore: true,
+            nextOffset: null,
+          };
+        },
       },
-    });
+    );
 
     await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
   });
 
   it("rejects a truncated canonical terminal single page that does not reach total", async () => {
-    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
-      transformListPage(page) {
-        const response = page as Record<string, unknown>;
-        const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
-        const firstJob = responseJobs[0];
-        // A canonical terminal page advertises total=2 but returns only one job
-        // from offset 0; scripts must not treat a partial page as complete.
-        return {
-          ...response,
-          jobs: [firstJob],
-          total: 2,
-          hasMore: false,
-          nextOffset: null,
-        };
+    installRealCronGateway(
+      Array.from({ length: 201 }, (_, index) => createJob(index)),
+      {
+        transformListPage(page) {
+          const response = page as Record<string, unknown>;
+          const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
+          const firstJob = responseJobs[0];
+          // A canonical terminal page advertises total=2 but returns only one job
+          // from offset 0; scripts must not treat a partial page as complete.
+          return {
+            ...response,
+            jobs: [firstJob],
+            total: 2,
+            hasMore: false,
+            nextOffset: null,
+          };
+        },
       },
-    });
+    );
 
     await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
   });
 
   it("rejects a canonical terminal single page whose rows exceed the advertised total", async () => {
-    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
-      transformListPage(page) {
-        const response = page as Record<string, unknown>;
-        const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
-        // A malformed page claims offset === total (3) but still returns a job
-        // beyond the inventory; offset + jobs.length (4) must not equal total.
-        return {
-          ...response,
-          jobs: responseJobs.slice(0, 1),
-          offset: 3,
-          total: 3,
-          hasMore: false,
-          nextOffset: null,
-        };
+    installRealCronGateway(
+      Array.from({ length: 201 }, (_, index) => createJob(index)),
+      {
+        transformListPage(page) {
+          const response = page as Record<string, unknown>;
+          const responseJobs = Array.isArray(response.jobs) ? response.jobs : [];
+          // A malformed page claims offset === total (3) but still returns a job
+          // beyond the inventory; offset + jobs.length (4) must not equal total.
+          return {
+            ...response,
+            jobs: responseJobs.slice(0, 1),
+            offset: 3,
+            total: 3,
+            hasMore: false,
+            nextOffset: null,
+          };
+        },
       },
-    });
+    );
 
     await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
   });
 
   it("keeps a legacy single-page total unknown instead of fabricating one", async () => {
-    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)), {
-      transformListPage(page) {
-        const response = page as Record<string, unknown>;
-        // Protocol-v4 legacy page: jobs and cursor, but no total/snapshot/offset/limit.
-        return {
-          jobs: response.jobs,
-          hasMore: response.hasMore,
-          nextOffset: response.nextOffset,
-          deliveryPreviews: response.deliveryPreviews,
-        };
+    installRealCronGateway(
+      Array.from({ length: 201 }, (_, index) => createJob(index)),
+      {
+        transformListPage(page) {
+          const response = page as Record<string, unknown>;
+          // Protocol-v4 legacy page: jobs and cursor, but no total/snapshot/offset/limit.
+          return {
+            jobs: response.jobs,
+            hasMore: response.hasMore,
+            nextOffset: response.nextOffset,
+            deliveryPreviews: response.deliveryPreviews,
+          };
+        },
       },
-    });
+    );
     disableCronGetForProtocolV4Gateway();
 
     await runCron(["list", "--json", "--limit", "50"]);
@@ -398,6 +410,29 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     // The legacy page advertises no total; the CLI must not invent a per-page
     // row count as the inventory size.
     expect(result.total).toBeUndefined();
+  });
+
+  it("fails closed on an unversioned single page from a protocol-v4 Gateway", async () => {
+    installRealCronGateway(
+      Array.from({ length: 201 }, (_, index) => createJob(index)),
+      {
+        transformListPage(page) {
+          const response = page as Record<string, unknown>;
+          // A protocol-v4 Gateway that returns a legacy-shaped page (jobs and
+          // cursor but no canonical metadata) is malformed: cron.get succeeds, so
+          // the unversioned page must fail closed exactly like the multi-page
+          // path instead of being accepted by the single-page branch.
+          return {
+            jobs: response.jobs,
+            hasMore: response.hasMore,
+            nextOffset: response.nextOffset,
+            deliveryPreviews: response.deliveryPreviews,
+          };
+        },
+      },
+    );
+
+    await expect(runCron(["list", "--json", "--limit", "50"])).rejects.toThrow("exit 1");
   });
 
   it("rejects a non-numeric --limit", async () => {
