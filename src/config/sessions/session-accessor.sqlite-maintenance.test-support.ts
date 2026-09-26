@@ -187,7 +187,7 @@ function maintenancePreparationFixture(state: OpenClawTestState) {
 }
 
 export function registerSessionMaintenancePreparationTests() {
-  it("lets foreground writes invalidate prepared maintenance without caller-thread data SQL", async ({
+  it("lets foreground changes to selected rows invalidate maintenance without caller-thread data SQL", async ({
     signal,
   }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -234,13 +234,13 @@ export function registerSessionMaintenancePreparationTests() {
         );
         foreground = applySessionEntryExactReplacements({
           storePath: database.path,
-          sessionKeys: [active.sessionKey],
+          sessionKeys: [stale.sessionKey],
           skipMaintenance: true,
           update: ([row]) => ({
             result: undefined,
             replacements: [
               {
-                sessionKey: active.sessionKey,
+                sessionKey: stale.sessionKey,
                 entry: {
                   ...expectDefined(row, "foreground session row").entry,
                   label: "foreground progressed",
@@ -251,11 +251,11 @@ export function registerSessionMaintenancePreparationTests() {
         });
         await racePromiseWithAbortSignal(foreground, signal);
         expect(released).toEqual([]);
-        expect(published).toEqual([]);
+        expect(published).toEqual([stale.sessionKey]);
         continuePreparation.resolve();
         await expect(pending).resolves.toEqual({ kind: "maintenance-plan-stale" });
         expect(released).toEqual([preparations[0]]);
-        expect(published).toEqual([]);
+        expect(published).toEqual([stale.sessionKey]);
         retry = runSqliteSessionReclamation({ forceInProcess: false, plan });
         await expect(retry).resolves.toMatchObject({
           kind: "maintenance-plan",
@@ -264,7 +264,7 @@ export function registerSessionMaintenancePreparationTests() {
         expect(preparations).toHaveLength(2);
         expect(preparations[0]).not.toBe(preparations[1]);
         expect(released).toEqual(preparations);
-        expect(published).toEqual([stale.sessionKey]);
+        expect(published).toEqual([stale.sessionKey, stale.sessionKey]);
         expect(sql.queries).toEqual([]);
       } finally {
         continuePreparation.resolve();
@@ -272,7 +272,8 @@ export function registerSessionMaintenancePreparationTests() {
         sql.restore();
         unsubscribe();
       }
-      expect(loadSessionEntry(active)?.label).toBe("foreground progressed");
+      expect(loadSessionEntry(stale)?.label).toBe("foreground progressed");
+      expect(loadSessionEntry(active)?.archivedAt).toBeUndefined();
       expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
     });
   });

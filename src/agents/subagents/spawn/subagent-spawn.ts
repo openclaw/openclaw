@@ -78,7 +78,7 @@ export async function spawnSubagentDirect(
     gatewayScope?.context?.resolveGatewayContext;
   const operatorAuthority =
     gatewayCaller?.operatorAuthority ?? gatewayScope?.client?.internal?.operatorRunAuthority;
-  const requestResolution = resolveSubagentSpawnRequest(params, ctx);
+  const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
   }
@@ -129,6 +129,7 @@ export async function spawnSubagentDirect(
   let provisionalCleanupOpen = true;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
+    assertActive?.();
     if (reservationPending && !swarmReservation) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
     }

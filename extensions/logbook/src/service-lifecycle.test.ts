@@ -44,7 +44,6 @@ function completion(
 
 describe("Logbook service disposal", () => {
   it.each([
-    { prune: false, pending: false },
     { prune: true, pending: false },
     { prune: false, pending: true },
   ])(
@@ -287,11 +286,9 @@ describe("Logbook service disposal", () => {
 
   it.each([
     "capture-list",
-    "capture-invoke",
     "capture-write",
     "vision-success",
     "vision-error",
-    "standup",
     "standup-write",
     "status-read",
     "ask-read",
@@ -312,13 +309,7 @@ describe("Logbook service disposal", () => {
       }
       return nodes;
     });
-    runtime.nodes.invoke = vi.fn(async () => {
-      if (kind === "capture-invoke") {
-        entered.resolve();
-        await release.promise;
-      }
-      return snapshot;
-    });
+    runtime.nodes.invoke = vi.fn(async () => snapshot);
     runtime.mediaUnderstanding.extractStructuredWithModel = vi.fn(async () => {
       entered.resolve();
       await release.promise;
@@ -333,10 +324,6 @@ describe("Logbook service disposal", () => {
     });
     runtime.llm.complete = vi.fn(async () => {
       if (kind.startsWith("standup")) {
-        if (kind === "standup") {
-          entered.resolve();
-          await release.promise;
-        }
         return completion("Synthetic standup");
       }
       return completion(

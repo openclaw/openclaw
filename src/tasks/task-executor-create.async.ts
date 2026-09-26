@@ -65,6 +65,13 @@ type CreatedTaskRunReceipt = {
   ) => Promise<TaskRecord | null>;
 };
 
+export async function createRunningTaskRunCoreAsync(
+  params: DetachedRunningTaskCreateParams,
+  assertCurrent?: () => void,
+): Promise<TaskRecord> {
+  return (await createTaskRun({ ...params, status: "running" }, assertCurrent)).task;
+}
+
 export async function createRunningTaskRunCoreWithReceiptAsync(
   params: DetachedRunningTaskCreateParams,
   assertCurrent?: () => void,

@@ -48,7 +48,6 @@ type CreationDatabase =
     };
 type CreationRecord = {
   agentId: string;
-  operation: SessionEntryCreationOperation;
   source: CreationDatabase;
   sessionKey: string;
   active: boolean;
@@ -133,8 +132,10 @@ export function emitPreparedSessionSharingChange(
   sessionChanges.emit(change, database.db);
 }
 
-function assertCreationCurrent(creation: CreationRecord): void {
-  if (!creation.active) {
+function assertCreationCurrent(
+  creation: CreationRecord | undefined,
+): asserts creation is CreationRecord {
+  if (!creation?.active) {
     throw new Error("Session creation publication owner is no longer current");
   }
   const source = creation.source;
@@ -173,7 +174,6 @@ export async function withSessionEntryCreationPublication<T>(
   const operation = createSessionEntryCreationOperation();
   const creation: CreationRecord = {
     agentId: params.agentId,
-    operation,
     source: params.database
       ? { kind: "native", database: params.database, agentId: params.database.agentId }
       : { kind: "file", ...params.file },
@@ -196,9 +196,6 @@ export function runWithSessionEntryCreationPublication<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const creation = preparedSharingChanges.operations.get(operation);
-  if (!creation) {
-    throw new Error("Session creation publication owner is no longer current");
-  }
   assertCreationCurrent(creation);
   return preparedSharingChanges.current.run(creation, run);
 }
@@ -208,9 +205,6 @@ export function assertSessionEntryCreationPublication(
   target: { agentId: string; sessionKey: string; paths: ReadonlySet<string> },
 ): void {
   const creation = preparedSharingChanges.operations.get(operation);
-  if (!creation) {
-    throw new Error("Session creation publication owner is no longer current");
-  }
   assertCreationCurrent(creation);
   const sourcePath =
     creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
@@ -459,11 +453,7 @@ export function publishSessionSharingMemberChange(
   publishTrackedCacheUpdate(
     database,
     () => {
-      const update = <
-        T extends { entry: SessionSharingEntry | undefined; membership: ReadonlySet<string> },
-      >(
-        facts: T,
-      ): T => {
+      const update = (facts: CommittedSessionSharingFacts): CommittedSessionSharingFacts => {
         // A legacy synchronous replacement can commit before a worker reply reaches this owner.
         if (facts.entry?.sessionId !== member.sessionId) {
           return facts;

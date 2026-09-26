@@ -541,12 +541,12 @@ it.each(
       expect(changed).toBe(true);
       expect(workerThreadIds.length).toBeGreaterThan(0);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
+      expect(new Set(workerThreadIds).size).toBe(1);
+      if (warm) {
+        expect(workerThreadIds[0]).toBe(warmWorkerThreadId);
+      }
       if (boundary !== "before-authorization") {
         expect(workerThreadIds.length).toBeGreaterThanOrEqual(2);
-        expect(new Set(workerThreadIds).size).toBe(1);
-        if (warm) {
-          expect(workerThreadIds[0]).toBe(warmWorkerThreadId);
-        }
         expect(adoptedAfterMutation[0]).toBeUndefined();
       }
       expect(loadSessionEntry(victim)).toMatchObject({

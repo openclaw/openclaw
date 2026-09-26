@@ -19,6 +19,7 @@ import type { RespondFn } from "../../gateway/server-methods/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { ExitError } from "../../runtime.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -180,6 +181,8 @@ describe("cron CLI delivery suppression readback", () => {
           };
         };
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          nowMs: () => Date.now(),
           storePath,
           defaultAgentId: "main",
           cronEnabled: true,

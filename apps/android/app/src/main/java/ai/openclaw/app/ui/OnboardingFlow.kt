@@ -379,84 +379,56 @@ internal fun onboardingFormUsesStackedLayout(
   fontScale: Float,
 ): Boolean = availableWidthDp < OnboardingFormStackBreakpointDp || fontScale >= OnboardingLargeFontScale
 
-internal data class OnboardingBackDestination(
-  val step: OnboardingStep,
-  val inlineQrScannerActive: Boolean = false,
-)
-
 internal data class OnboardingBackState(
   val step: OnboardingStep,
   val inlineQrScannerActive: Boolean = false,
-  val setupCodeEntryOpenedFromScanner: Boolean = false,
 )
-
-internal fun onboardingBackDestination(
-  step: OnboardingStep,
-  lastGatewayInputSource: OnboardingGatewayInputSource = OnboardingGatewayInputSource.SetupScanner,
-  accessStage: OnboardingAccessStage = OnboardingAccessStage.InitialApproval,
-): OnboardingBackDestination? =
-  when (step) {
-    OnboardingStep.Welcome -> {
-      null
-    }
-
-    OnboardingStep.Gateway -> {
-      OnboardingBackDestination(OnboardingStep.Welcome)
-    }
-
-    OnboardingStep.SetupCode -> {
-      OnboardingBackDestination(OnboardingStep.Gateway)
-    }
-
-    OnboardingStep.EnterSetupCode -> {
-      OnboardingBackDestination(OnboardingStep.SetupCode)
-    }
-
-    OnboardingStep.Manual -> {
-      OnboardingBackDestination(OnboardingStep.Gateway)
-    }
-
-    OnboardingStep.Recovery -> {
-      when (lastGatewayInputSource) {
-        OnboardingGatewayInputSource.SetupScanner -> OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = true)
-
-        OnboardingGatewayInputSource.SetupGallery,
-        OnboardingGatewayInputSource.SetupEntry,
-        -> OnboardingBackDestination(OnboardingStep.SetupCode)
-
-        OnboardingGatewayInputSource.Manual -> OnboardingBackDestination(OnboardingStep.Manual)
-      }
-    }
-
-    OnboardingStep.NodeApproval -> {
-      OnboardingBackDestination(accessStage.nodeApprovalBackStep)
-    }
-
-    OnboardingStep.Permissions -> {
-      OnboardingBackDestination(accessStage.permissionsBackStep)
-    }
-  }
 
 internal fun onboardingBackStateAfterBack(
   step: OnboardingStep,
   lastGatewayInputSource: OnboardingGatewayInputSource = OnboardingGatewayInputSource.SetupScanner,
   setupCodeEntryOpenedFromScanner: Boolean = false,
   accessStage: OnboardingAccessStage = OnboardingAccessStage.InitialApproval,
-): OnboardingBackState? {
-  if (step == OnboardingStep.EnterSetupCode) {
-    return OnboardingBackState(
-      step = OnboardingStep.SetupCode,
-      inlineQrScannerActive = setupCodeEntryOpenedFromScanner,
-    )
+): OnboardingBackState? =
+  when (step) {
+    OnboardingStep.Welcome -> {
+      null
+    }
+
+    OnboardingStep.Gateway -> {
+      OnboardingBackState(OnboardingStep.Welcome)
+    }
+
+    OnboardingStep.SetupCode,
+    OnboardingStep.Manual,
+    -> {
+      OnboardingBackState(OnboardingStep.Gateway)
+    }
+
+    OnboardingStep.EnterSetupCode -> {
+      OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = setupCodeEntryOpenedFromScanner)
+    }
+
+    OnboardingStep.Recovery -> {
+      when (lastGatewayInputSource) {
+        OnboardingGatewayInputSource.SetupScanner -> OnboardingBackState(OnboardingStep.SetupCode, inlineQrScannerActive = true)
+
+        OnboardingGatewayInputSource.SetupGallery,
+        OnboardingGatewayInputSource.SetupEntry,
+        -> OnboardingBackState(OnboardingStep.SetupCode)
+
+        OnboardingGatewayInputSource.Manual -> OnboardingBackState(OnboardingStep.Manual)
+      }
+    }
+
+    OnboardingStep.NodeApproval -> {
+      OnboardingBackState(accessStage.nodeApprovalBackStep)
+    }
+
+    OnboardingStep.Permissions -> {
+      OnboardingBackState(accessStage.permissionsBackStep)
+    }
   }
-  val destination =
-    onboardingBackDestination(
-      step = step,
-      lastGatewayInputSource = lastGatewayInputSource,
-      accessStage = accessStage,
-    ) ?: return null
-  return OnboardingBackState(step = destination.step, inlineQrScannerActive = destination.inlineQrScannerActive)
-}
 
 /** First-run Android onboarding flow for gateway pairing and permission setup. */
 @Composable
@@ -549,13 +521,13 @@ fun OnboardingFlow(
           accessStage = accessStage,
         ) ?: return
       inlineQrScannerActive = next.inlineQrScannerActive
-      setupCodeEntryOpenedFromScanner = next.setupCodeEntryOpenedFromScanner
+      setupCodeEntryOpenedFromScanner = false
       step = next.step
     }
 
     BackHandler(
       enabled =
-        onboardingBackDestination(
+        onboardingBackStateAfterBack(
           step = step,
           lastGatewayInputSource = lastGatewayInputSource,
           accessStage = accessStage,
@@ -2696,10 +2668,6 @@ internal enum class GatewayRecoveryUiState(
     title = nativeText("Pairing Gateway"),
     message = nativeText("Approve this phone on the gateway.\nThen retry the connection."),
   ),
-  NodeCapabilityApprovalPending(
-    title = nativeText("Node Approval Pending"),
-    message = nativeText("Gateway pairing worked.\nApprove this phone's node capabilities from an operator UI."),
-  ),
   Pairing(
     title = nativeText("Pairing Gateway"),
     message = nativeText("Approval is in progress.\nOpenClaw will reconnect automatically."),
@@ -2751,7 +2719,6 @@ internal fun gatewayRecoveryPrimaryAction(
       GatewayRecoveryPrimaryAction.Retry
     }
 
-    GatewayRecoveryUiState.NodeCapabilityApprovalPending,
     GatewayRecoveryUiState.Pairing,
     GatewayRecoveryUiState.Finishing,
     -> {
@@ -2836,10 +2803,6 @@ internal fun gatewayRecoveryProgressItems(
         GatewayRecoveryProgressItem(nativeText("Gateway needs device approval"), GatewayRecoveryProgressStatus.Current),
         GatewayRecoveryProgressItem(nativeText("Run the approval command on the Gateway"), GatewayRecoveryProgressStatus.Pending),
       )
-    }
-
-    GatewayRecoveryUiState.NodeCapabilityApprovalPending -> {
-      emptyList()
     }
 
     GatewayRecoveryUiState.Connected,

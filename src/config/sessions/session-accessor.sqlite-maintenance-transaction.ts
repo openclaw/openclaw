@@ -26,6 +26,7 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
+  invalidateSessionEntryMaintenanceAgeFact,
   readSessionEntryMaintenanceAgeFact,
   stageSessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
@@ -34,6 +35,7 @@ import {
   prepareSessionEntryMaintenanceInDatabase,
   refreshSessionPlannerStatisticsInDatabase,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 
 type MaintenancePlan = Extract<
   SqliteSessionReclamationPlan,
@@ -53,7 +55,7 @@ function readPreservation(input: SessionEntryMaintenanceInput) {
   return input.preservation;
 }
 
-/** Retain the snapshot's connection until its revision is checked inside the final writer. */
+/** Retain the snapshot connection; its revision fences age facts, not unrelated row writes. */
 export function prepareSessionMaintenanceInWorker(
   plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }> & {
     databaseOptions: ReclamationDatabaseOptions;
@@ -92,10 +94,16 @@ export function prepareSessionMaintenanceInWorker(
         onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
       ) {
         claim.assertCurrent();
-        if (!cacheValidityTokensEqual(revision, readSessionEntryCacheValidityToken(database.db))) {
-          return undefined;
+        const snapshotCurrent = cacheValidityTokensEqual(
+          revision,
+          readSessionEntryCacheValidityToken(database.db),
+        );
+        const maintenance = apply(current, onArchived);
+        // Unrelated commits can change age/count hints without changing the selected victims.
+        if (!snapshotCurrent) {
+          invalidateSessionEntryMaintenanceAgeFact(current.db);
         }
-        return apply(current, onArchived);
+        return maintenance;
       },
       release: claim.release,
     };
@@ -176,9 +184,6 @@ export function runSessionMaintenanceMetadataInTransaction(
               () => readPreservation(plan.input),
               callbacks.onArchived,
             );
-        if (!maintenance) {
-          return { kind: "maintenance-plan-stale" };
-        }
         if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
           callbacks.onCommit?.(database);
         }
@@ -193,6 +198,9 @@ export function runSessionMaintenanceMetadataInTransaction(
       { operationLabel: "session.maintenance.plan.write" },
     );
   } catch (error) {
+    if (error instanceof SqliteReclamationInputsChangedError) {
+      return { kind: "maintenance-plan-stale" };
+    }
     if (error instanceof MaintenancePreservationRequiredError) {
       // Candidate discovery requested protection before writes; the transaction has rolled back.
       return { kind: "maintenance-preservation-required" };

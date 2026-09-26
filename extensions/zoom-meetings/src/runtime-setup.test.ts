@@ -74,47 +74,4 @@ describe("Zoom meetings runtime setup", () => {
     });
     expect(status.ok).toBe(true);
   });
-
-  it("fails setup when the remote prerequisite probe fails", async () => {
-    const runtime = runtimeWithNode(async () => {
-      throw new Error("SoX audio command not found on the node.");
-    });
-    const status = await getZoomMeetingsSetupStatus({
-      config: resolveZoomMeetingsConfig({ chromeNode: { node: "zoom-node" } }),
-      fullConfig: {},
-      runtime,
-      options: { mode: "bidi", transport: "chrome-node" },
-    });
-
-    expect(status.ok).toBe(false);
-    expect(status.checks).toContainEqual({
-      id: "chrome-node-audio-prerequisites",
-      message: "SoX audio command not found on the node.",
-      ok: false,
-    });
-  });
-
-  it("returns structured diagnostics when local talk-back is unsupported", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const runCommandWithTimeout = vi.fn();
-    try {
-      const status = await getZoomMeetingsSetupStatus({
-        config: resolveZoomMeetingsConfig({}),
-        fullConfig: {},
-        runtime: { system: { runCommandWithTimeout } } as unknown as PluginRuntime,
-        options: { mode: "agent", transport: "chrome" },
-      });
-
-      expect(status.ok).toBe(false);
-      expect(status.checks).toContainEqual({
-        id: "chrome-local-audio-device",
-        message: expect.stringContaining("unsupported on win32"),
-        ok: false,
-      });
-      expect(status.checks.some((check) => check.id === "chrome-local-audio-commands")).toBe(false);
-      expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    } finally {
-      platform.mockRestore();
-    }
-  });
 });

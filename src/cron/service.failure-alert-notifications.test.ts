@@ -13,6 +13,7 @@ import {
   enqueueSystemEvent,
   peekSystemEventEntries,
 } from "../infra/system-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -119,6 +120,7 @@ describe("CronService failure notification delivery", () => {
       throw new Error("failure alert channel unavailable");
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },

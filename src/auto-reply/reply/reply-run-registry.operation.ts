@@ -20,8 +20,6 @@ import {
   type ReplyBackendCancelReason,
   type ReplyOperation,
   type ReplyOperationPhase,
-  type ReplyToolAuthorityRoute,
-  type ReplyToolAuthoritySnapshot,
   type ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 import {
@@ -51,6 +49,7 @@ import {
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
 } from "./reply-run-registry.state.js";
+import { createReplyOperationToolAuthority } from "./reply-run-registry.tool-authority.js";
 
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
 type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
@@ -102,9 +101,10 @@ export function createReplyOperation(params: {
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
-  let toolAuthorityFingerprint: string | undefined;
-  let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
-  let toolAuthorityRoute: ReplyToolAuthorityRoute | undefined;
+  const toolAuthority = createReplyOperationToolAuthority({
+    isOpen: () => result === null,
+    ownsRunSlot: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+  });
   const ownerSettlement = createDeferredCore();
   const producerCompletion = createDeferredCore();
   let ownerCompletionBarrier: Promise<void> | undefined;
@@ -257,11 +257,18 @@ export function createReplyOperation(params: {
       return acceptedSteeredInboundAudio;
     },
     get toolAuthorityFingerprint() {
-      return toolAuthorityFingerprint;
+      return toolAuthority.toolAuthorityFingerprint;
     },
     get toolAuthorityRoute() {
-      return toolAuthorityRoute;
+      return toolAuthority.toolAuthorityRoute;
     },
+    get requestedToolAuthorityRoute() {
+      return toolAuthority.requestedToolAuthorityRoute;
+    },
+    get automaticFallbackRoute() {
+      return toolAuthority.automaticFallbackRoute;
+    },
+    setAutomaticFallbackRoute: toolAuthority.setAutomaticFallbackRoute,
     get phase() {
       return phase;
     },
@@ -332,49 +339,9 @@ export function createReplyOperation(params: {
     markAcceptedSteeredInboundAudio() {
       acceptedSteeredInboundAudio = true;
     },
-    bindToolAuthoritySnapshot(snapshot) {
-      if (result || (toolAuthoritySnapshot && toolAuthoritySnapshot !== snapshot)) {
-        throw new Error("Reply operation cannot change tool authority after admission");
-      }
-      if (toolAuthoritySnapshot) {
-        return;
-      }
-      const fingerprint = normalizeOptionalString(snapshot.fingerprint());
-      if (!fingerprint) {
-        throw new Error("Reply operation tool authority fingerprint is required");
-      }
-      toolAuthoritySnapshot = snapshot;
-      toolAuthorityFingerprint = fingerprint;
-    },
-    projectToolAuthorityFingerprint(overlay) {
-      if (result || !toolAuthoritySnapshot || !toolAuthorityRoute) {
-        return undefined;
-      }
-      try {
-        return normalizeOptionalString(toolAuthoritySnapshot.project(overlay, toolAuthorityRoute));
-      } catch {
-        return undefined;
-      }
-    },
-    bindToolAuthorityRoute(route) {
-      if (
-        result ||
-        !toolAuthoritySnapshot ||
-        replyRunState.activeRunsByKey.get(currentSessionKey) !== operation
-      ) {
-        throw new Error("Reply operation has no active tool authority snapshot");
-      }
-      const provider = normalizeOptionalString(route.provider);
-      const model = normalizeOptionalString(route.model);
-      if (!provider || !model) {
-        throw new Error("Reply operation tool authority route is required");
-      }
-      const preparedRoute = { provider, model };
-      const fingerprint = toolAuthoritySnapshot.fingerprint(preparedRoute);
-      toolAuthorityRoute = preparedRoute;
-      toolAuthorityFingerprint = fingerprint;
-      return fingerprint;
-    },
+    bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
+    projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
+    bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
     updateSessionId(nextSessionId) {
       if (result) {
         return;
@@ -445,12 +412,7 @@ export function createReplyOperation(params: {
         return;
       }
       recordActivity();
-      const backendToolAuthorityFingerprint = normalizeOptionalString(
-        handle.toolAuthorityFingerprint,
-      );
-      if (backendToolAuthorityFingerprint) {
-        toolAuthorityFingerprint = backendToolAuthorityFingerprint;
-      }
+      toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       attachedBackendByOperation.set(operation, handle);
       if (controller.signal.aborted) {
         handle.cancel("superseded");

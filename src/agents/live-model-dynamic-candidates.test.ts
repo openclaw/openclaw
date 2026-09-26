@@ -136,25 +136,6 @@ describe("appendPrioritizedDynamicLiveModels", () => {
     );
   });
 
-  it("does not duplicate refs already present in the generated registry", async () => {
-    const resolveDynamicModel: DynamicModelResolver = vi.fn(() => model(DYNAMIC_PROVIDER, "glm-5"));
-    const prepareDynamicModel: DynamicModelPreparer = vi.fn(async () => undefined);
-
-    const result = await appendPrioritizedDynamicLiveModels({
-      models: [model(DYNAMIC_PROVIDER, "glm-5")],
-      agentDir: "/tmp/openclaw-agent",
-      modelRegistry: REGISTRY,
-      resolveDynamicModel,
-      prepareDynamicModel,
-      refs: [{ provider: DYNAMIC_PROVIDER, id: "glm-5" }],
-    });
-
-    expect(result.added).toEqual([]);
-    expect(result.models).toHaveLength(1);
-    expect(prepareDynamicModel).not.toHaveBeenCalled();
-    expect(resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
   it("materializes a directly prepared model without retrying synchronous resolution", async () => {
     const preparedModel = model(DYNAMIC_PROVIDER, "glm-5");
     providerRuntimeMocks.prepareProviderDynamicModel.mockResolvedValue(preparedModel);

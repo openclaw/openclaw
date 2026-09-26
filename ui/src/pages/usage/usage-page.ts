@@ -30,18 +30,9 @@ import {
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
-import {
-  providerUsageFromSnapshotResult,
-  type ProviderUsageSnapshot,
-  requestUsageSnapshot,
-} from "./request-usage-snapshot.ts";
+import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import { createUsageRequest } from "./request.ts";
-import {
-  DEFAULT_VISIBLE_COLUMNS,
-  type SessionLogRole,
-  type UsageProps,
-  type UsageRouteData,
-} from "./types.ts";
+import type { SessionLogRole, UsageProps, UsageRouteData } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type { UsageRouteData } from "./types.ts";
@@ -87,7 +78,6 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageContextExpanded = false;
   @state() private usageHeaderPinned = false;
   @state() private usageSessionsTab: "all" | "recent" = "all";
-  @state() private usageVisibleColumns = [...DEFAULT_VISIBLE_COLUMNS];
   @state() private usageLogFilterRoles: SessionLogRole[] = [];
   @state() private usageLogFilterTools: string[] = [];
   @state() private usageLogFilterHasTools = false;
@@ -179,7 +169,7 @@ class UsagePage extends OpenClawLightDomElement {
         this.applyUsageError(snapshot.error.cause);
       }
       this.applyUsageLoadState(
-        providerUsageFromSnapshotResult(snapshot),
+        snapshot.ok ? snapshot.value.providerUsage : snapshot.error.providerUsage,
         value.epoch,
         current && snapshot.ok ? undefined : null,
       );
@@ -530,9 +520,6 @@ class UsagePage extends OpenClawLightDomElement {
         error: this.usageError,
         sessions: this.usageResult?.sessions ?? [],
         creatorOptions: this.usageCreatorOptions,
-        agents:
-          this.context.agents.state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ??
-          [],
         sessionsLimitReached: (this.usageResult?.sessions.length ?? 0) >= 1000,
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
@@ -553,7 +540,6 @@ class UsagePage extends OpenClawLightDomElement {
         selectedSessions: this.usageSelectedSessions,
         selectedDays: this.usageSelectedDays,
         selectedHours: this.usageSelectedHours,
-        agentId: this.usageAgentId,
         creatorKey: this.usageCreatorKey,
         query: this.usageQuery,
         queryDraft: this.usageQueryDraft,
@@ -566,7 +552,6 @@ class UsagePage extends OpenClawLightDomElement {
         sessionSortDir: this.usageSessionSortDir,
         recentSessions: this.usageRecentSessions,
         sessionsTab: this.usageSessionsTab,
-        visibleColumns: this.usageVisibleColumns,
         contextExpanded: this.usageContextExpanded,
         headerPinned: this.usageHeaderPinned,
       },
@@ -610,9 +595,6 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageScope = scope;
             this.clearSelectionsAndDetails();
             this.refreshPolicy.request("manual");
-          },
-          onAgentChange: (agentId) => {
-            this.context.agentSelection.setScope(agentId);
           },
           onCreatorChange: (creatorKey) => {
             this.usageCreatorKey = creatorKey;
@@ -683,11 +665,6 @@ class UsagePage extends OpenClawLightDomElement {
           onSessionSortChange: (sort) => (this.usageSessionSort = sort),
           onSessionSortDirChange: (direction) => (this.usageSessionSortDir = direction),
           onSessionsTabChange: (tab) => (this.usageSessionsTab = tab),
-          onToggleColumn: (column) => {
-            this.usageVisibleColumns = this.usageVisibleColumns.includes(column)
-              ? this.usageVisibleColumns.filter((entry) => entry !== column)
-              : [...this.usageVisibleColumns, column];
-          },
         },
         details: {
           onToggleContextExpanded: () => (this.usageContextExpanded = !this.usageContextExpanded),

@@ -2067,6 +2067,144 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
     }
   });
 
+  it("separates read-only iOS reconciliation from the delayed ref writer", () => {
+    const source = fs.readFileSync(".github/workflows/ios-release.yml", "utf8");
+    const workflow = parse(source) as {
+      jobs: {
+        release: { if: string; steps: WorkflowStep[] };
+        "reconcile-ios-build": {
+          environment: string;
+          if: string;
+          permissions: Record<string, string>;
+          steps: WorkflowStep[];
+        };
+        "record-ios-build": {
+          env: Record<string, string>;
+          environment: string;
+          if: string;
+          permissions: Record<string, string>;
+          steps: WorkflowStep[];
+        };
+      };
+      on: {
+        workflow_dispatch: {
+          inputs: {
+            operation: {
+              default: string;
+              options: string[];
+              required: boolean;
+              type: string;
+            };
+          };
+        };
+      };
+      permissions: Record<string, string>;
+    };
+    const reader = workflow.jobs["reconcile-ios-build"];
+    const writer = workflow.jobs["record-ios-build"];
+    const readerSteps = reader.steps;
+    const writerSteps = writer.steps;
+    const readerSource = JSON.stringify(reader);
+    const writerSource = JSON.stringify(writer);
+    const beforeStore = readerSteps.findIndex(
+      (step) => step.name === "Revalidate authority immediately before App Store credentials",
+    );
+    const storeRead = readerSteps.findIndex(
+      (step) => step.name === "Read existing iOS build state",
+    );
+    const afterStore = readerSteps.findIndex(
+      (step) => step.name === "Revalidate authority after App Store read",
+    );
+    const fetchCandidate = readerSteps.findIndex(
+      (step) => step.name === "Fetch frozen candidate data objects",
+    );
+    const validateWriter = writerSteps.findIndex(
+      (step) => step.name === "Validate reconciliation before write-token access",
+    );
+    const mintToken = writerSteps.findIndex((step) => step.name === "Create iOS release ref token");
+    const record = writerSteps.findIndex(
+      (step) => step.name === "Revalidate and record immutable iOS release ref",
+    );
+
+    expect(workflow.permissions).toEqual({});
+    expect(workflow.on.workflow_dispatch.inputs.operation).toEqual({
+      description: "Upload a new release or reconcile one existing processed build",
+      required: true,
+      default: "release",
+      type: "choice",
+      options: ["release", "reconcile-and-record"],
+    });
+    expect(workflow.jobs.release.if).toContain("inputs.operation == 'release'");
+    expect(reader.if).toContain("inputs.operation == 'reconcile-and-record'");
+    expect(writer.if).toContain("inputs.operation == 'reconcile-and-record'");
+    expect(reader.environment).toBe("ios-store-release");
+    expect(writer.environment).toBe("ios-store-release");
+    expect(reader.permissions).toEqual({
+      actions: "read",
+      attestations: "write",
+      contents: "read",
+      "id-token": "write",
+    });
+    expect(writer.permissions).toEqual({
+      actions: "read",
+      attestations: "read",
+      contents: "read",
+    });
+
+    expect(beforeStore).toBeGreaterThanOrEqual(0);
+    expect(fetchCandidate).toBeGreaterThanOrEqual(0);
+    expect(fetchCandidate).toBeLessThan(beforeStore);
+    expect(storeRead).toBe(beforeStore + 1);
+    expect(afterStore).toBe(storeRead + 1);
+    expect(readerSteps[beforeStore]?.run).toContain("prepare-reader");
+    expect(readerSteps[afterStore]?.run).toContain("finalize-reader");
+    expect(readerSteps[fetchCandidate]?.run).toContain("d69752a1c90715e74a36652b2e64c41e9409c5fd");
+    expect(readerSteps[fetchCandidate]?.run).toContain("--no-write-fetch-head");
+    expect(readerSteps[beforeStore]?.run).toContain('--candidate-root "$GITHUB_WORKSPACE"');
+    expect(readerSteps[afterStore]?.run).toContain('--candidate-root "$GITHUB_WORKSPACE"');
+    expect(readerSource).not.toContain("GH_APP_PRIVATE_KEY");
+    expect(readerSource).not.toContain("ios:release:upload");
+    expect(readerSource).not.toContain("release_plan");
+    expect(readerSource).not.toContain("signing_check");
+
+    expect(validateWriter).toBeGreaterThanOrEqual(0);
+    expect(mintToken).toBe(validateWriter + 1);
+    expect(record).toBe(mintToken + 1);
+    expect(writerSteps[mintToken]).toMatchObject({
+      uses: "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      with: {
+        "app-id": "2729701",
+        owner: "openclaw",
+        repositories: "openclaw",
+        "permission-contents": "write",
+      },
+    });
+    expect(writerSteps[record]?.env).toEqual({
+      GH_TOKEN: "${{ steps.release-ref-token.outputs.token }}",
+    });
+    expect(writerSteps[record]?.run).toContain("gh auth setup-git");
+    expect(writerSteps[record]?.run).toContain("node scripts/ios-release-reconcile.mjs record");
+    expect(writerSteps[validateWriter]?.run).toContain("--evidence-artifact-id");
+    expect(writerSteps[validateWriter]?.run).toContain("--evidence-artifact-digest");
+    expect({
+      ...writer.env,
+      ...(writerSteps[validateWriter]?.env ?? {}),
+    }).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
+      RECONCILE_EVIDENCE_ARTIFACT_DIGEST:
+        "${{ needs.reconcile-ios-build.outputs.evidence_artifact_digest }}",
+    });
+    for (const step of [...readerSteps, ...writerSteps]) {
+      if (step.run) {
+        expect(step.run).not.toMatch(/\$\{\{\s*(?:inputs|vars)\./u);
+      }
+    }
+    expect(writerSource).not.toContain("APP_STORE_CONNECT_");
+    expect(writerSource).not.toContain("MATCH_PASSWORD");
+    expect(writerSource).not.toContain("OPENAI_API_KEY");
+    expect(writerSource).not.toContain("release_reconcile");
+  });
+
   it("installs the pinned Watch Rust toolchain before iOS store access", () => {
     const source = fs.readFileSync(".github/workflows/ios-release.yml", "utf8");
     const workflow = parse(source) as {

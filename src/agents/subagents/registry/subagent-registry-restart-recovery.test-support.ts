@@ -27,6 +27,17 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.patchSessionEntryCore,
 }));
 
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: async (
+    scope: unknown,
+    assertCurrent: () => void,
+    consume: (read: { ok: true; value: SessionEntry | undefined }) => Promise<unknown>,
+  ) => {
+    assertCurrent();
+    return await consume({ ok: true, value: mocks.loadSessionEntry(scope) });
+  },
+}));
+
 const childSessionKey = "agent:main:subagent:restart-child";
 const dispatchAgent = vi.fn();
 const gatewayRuntime: GatewayRecoveryRuntime = {
