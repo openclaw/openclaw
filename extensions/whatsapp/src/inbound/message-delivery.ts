@@ -38,7 +38,7 @@ import {
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
-import type { WebInboundCallbackMessage } from "./types.js";
+import type { WebInboundCallbackMessage, WhatsAppSendRetryOptions } from "./types.js";
 
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 const WHATSAPP_INGRESS_DRAIN_INTERVAL_MS = 1_000;
@@ -243,24 +243,31 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
       }
     };
-    const reply = async (text: string, optionsResult?: MiscMessageGenerationOptions) => {
+    const reply = async (
+      text: string,
+      optionsResult?: MiscMessageGenerationOptions,
+      retryOptions?: WhatsAppSendRetryOptions,
+    ) => {
       const resolved = await groupMetadata.resolveOutboundMentions(chatJid, text);
       const result = await sendTrackedMessage(
         chatJid,
         addWhatsAppOutboundMentionsToContent({ text: resolved.text }, resolved.mentionedJids),
         optionsResult,
+        retryOptions,
       );
       return normalizeWhatsAppSendResult(result, "text");
     };
     const sendMedia = async (
       payload: AnyMessageContent,
       optionsValue?: MiscMessageGenerationOptions,
+      retryOptions?: WhatsAppSendRetryOptions,
     ) => {
       const previewPayload = await addWhatsAppImagePreviewFields(payload);
       const result = await sendTrackedMessage(
         chatJid,
         await groupMetadata.applyOutboundMentions(chatJid, previewPayload),
         optionsValue,
+        retryOptions,
       );
       return normalizeWhatsAppSendResult(result, "media");
     };

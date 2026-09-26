@@ -103,6 +103,9 @@ type WhatsAppInboundPayload = {
   channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
 };
 
+/** One socket owner retains the message ID across each reconnect window. */
+export type WhatsAppSendRetryOptions = { reconnectWindows?: 1 | 3 };
+
 type WhatsAppInboundPlatform = {
   chatJid: string;
   recipientJid: string;
@@ -117,10 +120,15 @@ type WhatsAppInboundPlatform = {
   selfE164?: string | null;
   fromMe?: boolean;
   sendComposing: () => Promise<void>;
-  reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<WhatsAppSendResult>;
+  reply: (
+    text: string,
+    options?: MiscMessageGenerationOptions,
+    retryOptions?: WhatsAppSendRetryOptions,
+  ) => Promise<WhatsAppSendResult>;
   sendMedia: (
     payload: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
+    retryOptions?: WhatsAppSendRetryOptions,
   ) => Promise<WhatsAppSendResult>;
 };
 

@@ -37,6 +37,57 @@ describe("web monitor inbox", () => {
     }
   }
 
+  it("captures media path for image messages", async () => {
+    const { onMessage, listener, sock } = await runSingleUpsertAndCapture({
+      type: "notify",
+      messages: [
+        {
+          key: { id: "med1", fromMe: false, remoteJid: "888@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/jpeg" } },
+          messageTimestamp: 1_700_000_100,
+        },
+      ],
+    });
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.media?.kind).toBe("image");
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "888@s.whatsapp.net",
+        id: "med1",
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+    await listener.close();
+  });
+
+  it("sets gifPlayback on outbound video payloads when requested", async () => {
+    const onMessage = vi.fn();
+    const listener = await openMonitor(onMessage);
+    const sock = getSock();
+    const buf = Buffer.from("gifvid");
+
+    await listener.sendMessage("+1555", "gif", buf, "video/mp4", {
+      gifPlayback: true,
+    });
+
+    expect(sock.sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      {
+        video: buf,
+        caption: "gif",
+        mimetype: "video/mp4",
+        gifPlayback: true,
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
+
+    await listener.close();
+  });
+
   it("socket session resolves onClose when the socket closes", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();

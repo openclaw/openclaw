@@ -30,13 +30,14 @@ import {
   normalizeWhatsAppPayloadTextPreservingIndentation,
   prepareWhatsAppOutboundMedia,
 } from "../outbound-media-contract.js";
-import { sendWhatsAppOutboundWithRetry } from "../outbound-retry.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
 import { markdownToWhatsAppChunks } from "../targets-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide } from "./util.js";
+
+const AUTO_REPLY_SEND_RETRY_OPTIONS = { reconnectWindows: 3 } as const;
 
 export type WhatsAppReplyDeliveryResult = {
   results: WhatsAppSendResult[];
@@ -250,21 +251,13 @@ async function deliverWebReplyInActivityScope(
     });
   };
 
-  const sendWithRetry = async <T>(
+  const sendAndPreserveAccepted = async <T>(
     fn: () => Promise<T>,
-    label: string,
     kind: WhatsAppSendKind,
     mediaUrl?: string,
   ) => {
     try {
-      return await sendWhatsAppOutboundWithRetry({
-        send: fn,
-        onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
-          logVerbose(
-            `Retrying ${label} to ${conversationId} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
-          );
-        },
-      });
+      return await fn();
     } catch (error: unknown) {
       if (
         isChannelPartialDeliveryError(error) ||
@@ -282,7 +275,12 @@ async function deliverWebReplyInActivityScope(
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
       const quote = getQuote();
-      rememberSendResult(await sendWithRetry(() => transport.reply(chunk, quote), "text", "text"));
+      rememberSendResult(
+        await sendAndPreserveAccepted(
+          () => transport.reply(chunk, quote, AUTO_REPLY_SEND_RETRY_OPTIONS),
+          "text",
+        ),
+      );
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -341,9 +339,13 @@ async function deliverWebReplyInActivityScope(
               ? { video: media.buffer, caption }
               : { document: media.buffer, fileName: media.fileName, caption };
       rememberSendResult(
-        await sendWithRetry(
-          () => transport.sendMedia({ ...mediaContent, mimetype: media.mimetype }, quote),
-          `media:${media.kind}`,
+        await sendAndPreserveAccepted(
+          () =>
+            transport.sendMedia(
+              { ...mediaContent, mimetype: media.mimetype },
+              quote,
+              AUTO_REPLY_SEND_RETRY_OPTIONS,
+            ),
           "media",
           mediaUrl,
         ),
@@ -351,7 +353,10 @@ async function deliverWebReplyInActivityScope(
       );
       if (media.kind === "audio" && caption) {
         rememberSendResult(
-          await sendWithRetry(() => transport.reply(caption, quote), "media:audio-text", "text"),
+          await sendAndPreserveAccepted(
+            () => transport.reply(caption, quote, AUTO_REPLY_SEND_RETRY_OPTIONS),
+            "text",
+          ),
         );
       }
       whatsappOutboundLog.info(
@@ -386,9 +391,9 @@ async function deliverWebReplyInActivityScope(
         // so they know a trailing attachment did not arrive.
         whatsappOutboundLog.warn(`Trailing media failed; sent warning to ${conversationId}`);
         rememberSendResult(
-          await sendWithRetry(
-            () => transport.reply("⚠️ Media unavailable.", getQuote()),
-            "media:fallback-unavailable",
+          await sendAndPreserveAccepted(
+            () =>
+              transport.reply("⚠️ Media unavailable.", getQuote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
             "text",
           ),
         );
@@ -402,9 +407,8 @@ async function deliverWebReplyInActivityScope(
       }
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${conversationId}`);
       rememberSendResult(
-        await sendWithRetry(
-          () => transport.reply(fallbackText, getQuote()),
-          "media:fallback-text",
+        await sendAndPreserveAccepted(
+          () => transport.reply(fallbackText, getQuote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
           "text",
         ),
       );
@@ -414,7 +418,10 @@ async function deliverWebReplyInActivityScope(
   // Remaining text chunks after media
   for (const chunk of remainingText) {
     rememberSendResult(
-      await sendWithRetry(() => transport.reply(chunk, getQuote()), "media:text", "text"),
+      await sendAndPreserveAccepted(
+        () => transport.reply(chunk, getQuote(), AUTO_REPLY_SEND_RETRY_OPTIONS),
+        "text",
+      ),
     );
   }
   return finishDelivery();
