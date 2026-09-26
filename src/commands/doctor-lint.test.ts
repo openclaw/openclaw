@@ -8,6 +8,7 @@ import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
 import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -556,6 +557,15 @@ describe("runDoctorLintCli", () => {
       detect: inspectSourceConfig,
     });
 
+    let sourceAvailableBytes = 50 * 1024 * 1024;
+    const readDiskSpace = vi
+      .spyOn(diskSpace, "tryReadDiskSpace")
+      .mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: targetPath === stateDir ? sourceAvailableBytes : 10 * 1024 ** 3,
+        totalBytes: 20 * 1024 ** 3,
+      }));
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       await expect(
@@ -577,7 +587,41 @@ describe("runDoctorLintCli", () => {
       expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
       expect(sourceOpenStacks).toEqual([]);
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+
+      const diskCheckId = "core/doctor/disk-space";
+      for (const [freeMiB, severityMin, mixed, expectedSeverity, expectedExitCode] of [
+        [50, "error", false, "error", 1],
+        [100, "warning", false, "warning", 1],
+        [100, "error", false, undefined, 0],
+        [50, "error", true, "error", 1],
+      ] as const) {
+        sourceAvailableBytes = freeMiB * 1024 * 1024;
+        readDiskSpace.mockClear();
+        sourceOpenStacks.length = 0;
+        const exitCode = await runDoctorLintCli(runtime, {
+          json: true,
+          severityMin,
+          onlyIds: mixed
+            ? [diskCheckId, "memory-core/managed-local-embedding-setup"]
+            : [diskCheckId],
+        });
+
+        expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+        if (mixed) {
+          expect(sourceOpenStacks).toEqual([]);
+        }
+        expect(readDiskSpace.mock.calls.map(([targetPath]) => targetPath)).toEqual([stateDir]);
+        expect(exitCode).toBe(expectedExitCode);
+        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: expectedExitCode === 0,
+          checksRun: mixed ? 2 : 1,
+          findings: expectedSeverity
+            ? [{ checkId: diskCheckId, severity: expectedSeverity, path: stateDir }]
+            : [],
+        });
+      }
     } finally {
+      readDiskSpace.mockRestore();
       stdout.mockRestore();
       restoreDoctorLintTestEnv(originalEnv);
       fs.rmSync(rootDir, { recursive: true, force: true });
