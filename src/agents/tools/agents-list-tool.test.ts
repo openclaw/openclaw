@@ -268,4 +268,32 @@ describe("agents_list tool", () => {
       agents: [{ id: "ops", configured: true }],
     });
   });
+
+  it("keeps an unconfigured scoped requester first in a wildcard fleet", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          sessionStore: { agentId: "ops" },
+          subagents: { allowAgents: ["*"] },
+        },
+        entries: { ops: { name: " Ops " }, research: {} },
+      },
+    });
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:visitor:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+
+    expect(details).toMatchObject({ requester: "visitor", allowAny: true });
+    const agents = details.agents?.map(({ id, name, configured }) => ({ id, name, configured }));
+    expect(agents).toStrictEqual([
+      { id: "visitor", name: undefined, configured: false },
+      { id: "ops", name: "Ops", configured: true },
+      { id: "research", name: undefined, configured: true },
+    ]);
+  });
 });

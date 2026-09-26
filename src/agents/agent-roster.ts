@@ -19,17 +19,17 @@ export type ListedAgentEntry = {
 
 function collectAgentEntries(
   cfg: AgentRosterConfig,
-  withSource: true,
+  projection: "source",
   limit?: number,
 ): ListedAgentEntry[];
 function collectAgentEntries(
   cfg: AgentRosterConfig,
-  withSource: false,
+  projection: "entry" | "id",
   limit?: number,
 ): AgentEntry[];
 function collectAgentEntries(
   cfg: AgentRosterConfig,
-  withSource: boolean,
+  projection: "source" | "entry" | "id",
   limit?: number,
 ): Array<AgentEntry | ListedAgentEntry> {
   const roster = readAgentRosterProperty(cfg);
@@ -41,9 +41,11 @@ function collectAgentEntries(
       }
       const entry = roster.value[id];
       if (isRecord(entry)) {
-        const projected = { ...entry, id };
+        const projected = projection === "id" ? { id } : { ...entry, id };
         result.push(
-          withSource ? { entry: projected, source: { kind: "entries", key: id } } : projected,
+          projection === "source"
+            ? { entry: projected, source: { kind: "entries", key: id } }
+            : projected,
         );
         if (result.length === limit) {
           break;
@@ -55,25 +57,28 @@ function collectAgentEntries(
   if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
     return [];
   }
-  const listed: ListedAgentEntry[] = [];
+  const listed: Array<AgentEntry | ListedAgentEntry> = [];
   roster.value.some((entry, index) => {
     if (entry !== null && typeof entry === "object") {
       // SAFETY: Raw roster compatibility keeps objects verbatim; callers normalize ids.
-      listed.push({ entry: entry as AgentEntry, source: { kind: "list", index } });
+      const projected = entry as AgentEntry;
+      listed.push(
+        projection === "source" ? { entry: projected, source: { kind: "list", index } } : projected,
+      );
     }
     return listed.length === limit;
   });
-  return withSource ? listed : listed.map(({ entry }) => entry);
+  return listed;
 }
 
 /** Lists valid configured agent entries from config. */
 export function listAgentEntriesWithSource(cfg: AgentRosterConfig): ListedAgentEntry[] {
-  return collectAgentEntries(cfg, true);
+  return collectAgentEntries(cfg, "source");
 }
 
 /** Lists valid configured agent entries from either supported representation. */
 export function listAgentEntries(cfg: AgentRosterConfig): AgentEntry[] {
-  return collectAgentEntries(cfg, false);
+  return collectAgentEntries(cfg, "entry");
 }
 
 /** Reads the explicitly owned raw roster without normalizing malformed values. */
@@ -103,7 +108,7 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 
 /** Lists unique configured agent ids. */
 export function listAgentIds(cfg: AgentRosterConfig): string[] {
-  const agents = listAgentEntries(cfg);
+  const agents = collectAgentEntries(cfg, "id");
   if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
     // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
     return [LEGACY_IMPLICIT_AGENT_ID];
@@ -122,7 +127,7 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
 }
 
 export function tryResolveSoleAgentId(cfg: AgentRosterConfig): string | undefined {
-  const agents = collectAgentEntries(cfg, false, 2);
+  const agents = collectAgentEntries(cfg, "entry", 2);
   if (agents.length === 0) {
     if (!hasAgentRosterProperty(cfg)) {
       return LEGACY_IMPLICIT_AGENT_ID;
