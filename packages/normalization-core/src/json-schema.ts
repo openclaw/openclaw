@@ -45,7 +45,8 @@ export function normalizeTypeBoxValidationErrors<T extends TypeBoxValidationErro
           return (
             typeof property === "string" &&
             child.schemaPath === `${error.schemaPath}/additionalProperties` &&
-            child.instancePath === `${error.instancePath}/${property}`
+            child.instancePath ===
+              `${error.instancePath}/${property.replace(/~/g, "~0").replace(/\//g, "~1")}`
           );
         })
       ) {

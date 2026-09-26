@@ -198,7 +198,12 @@ export function parseJsonSchemaIssuePath(
 }
 
 function normalizeErrorPath(instancePath: string | undefined): string {
-  const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");
+  // Decode ~1 before ~0 so a literal ~1 is not interpreted as a slash.
+  const path = instancePath
+    ?.replace(/~1/g, "/")
+    .replace(/~0/g, "~")
+    .replace(/^\//, "")
+    .replace(/\//g, ".");
   return path && path.length > 0 ? path : "<root>";
 }
 
