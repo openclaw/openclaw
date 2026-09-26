@@ -150,11 +150,8 @@ async function addMatrixAccount(params: {
         };
       } catch (err) {
         profile = {
+          ...profile,
           attempted: true,
-          displayNameUpdated: false,
-          avatarUpdated: false,
-          resolvedAvatarUrl: null,
-          convertedAvatarFromHttp: false,
           error: formatErrorMessage(err),
         };
       }
@@ -226,27 +223,14 @@ export function registerMatrixAccountCommands(root: Command): void {
     .option("--verbose", "Show setup details")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        name?: string;
-        avatarUrl?: string;
-        homeserver?: string;
-        proxy?: string;
-        allowPrivateNetwork?: boolean;
-        userId?: string;
-        accessToken?: string;
-        password?: string;
-        deviceName?: string;
-        initialSyncLimit?: string;
-        enableE2ee?: boolean;
-        encryption?: boolean;
-        useEnv?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+      async (
+        options: cli.MatrixCliOptions &
+          Omit<Parameters<typeof addMatrixAccount>[0], "enableEncryption"> & {
+            enableE2ee?: boolean;
+            encryption?: boolean;
+          },
+      ) => {
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await addMatrixAccount({
               account: options.account,
@@ -316,8 +300,9 @@ export function registerMatrixAccountCommands(root: Command): void {
                 }
               }
             }
-            const bindHint = `openclaw agents bind --agent <id> --bind matrix:${result.accountId}`;
-            console.log(`Bind this account to an agent: ${bindHint}`);
+            console.log(
+              `Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:${result.accountId}`,
+            );
           },
           errorPrefix: "Account setup failed",
         });

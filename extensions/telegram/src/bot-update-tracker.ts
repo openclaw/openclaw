@@ -69,7 +69,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       : initialUpdateId;
   const ackPolicy = options.ackPolicy ?? "after_receive_record";
   const recentUpdates = createTelegramUpdateDedupe();
-  const pendingUpdateKeys = new Set<string>();
   const activeHandledUpdateKeys = new Map<string, boolean>();
   const pendingUpdateIds = new Set<number>();
   const failedUpdateIds = new Set<number>();
@@ -173,20 +172,14 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       return null;
     }
     let safeCompletedUpdateId = highestCompletedUpdateId;
-    for (const updateId of pendingUpdateIds) {
-      if (persistenceFloorUpdateId !== null && updateId <= persistenceFloorUpdateId) {
-        continue;
-      }
-      if (updateId <= safeCompletedUpdateId) {
-        safeCompletedUpdateId = updateId - 1;
-      }
-    }
-    for (const updateId of failedUpdateIds) {
-      if (persistenceFloorUpdateId !== null && updateId <= persistenceFloorUpdateId) {
-        continue;
-      }
-      if (updateId <= safeCompletedUpdateId) {
-        safeCompletedUpdateId = updateId - 1;
+    for (const ids of [pendingUpdateIds, failedUpdateIds]) {
+      for (const updateId of ids) {
+        if (persistenceFloorUpdateId !== null && updateId <= persistenceFloorUpdateId) {
+          continue;
+        }
+        if (updateId <= safeCompletedUpdateId) {
+          safeCompletedUpdateId = updateId - 1;
+        }
       }
     }
     return safeCompletedUpdateId;
@@ -229,11 +222,10 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       }
     }
     if (updateKey) {
-      if (pendingUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
+      if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
         skip(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }
-      pendingUpdateKeys.add(updateKey);
       activeHandledUpdateKeys.set(updateKey, false);
     }
     let receiveContext: MessageReceiveContext<TelegramUpdateKeyContext> | undefined;
@@ -265,7 +257,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       if (finish.completed) {
         recentUpdates.check(update.key);
       }
-      pendingUpdateKeys.delete(update.key);
     }
     if (typeof update.updateId === "number") {
       pendingUpdateIds.delete(update.updateId);

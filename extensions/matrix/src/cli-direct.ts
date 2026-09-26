@@ -149,24 +149,18 @@ export function registerMatrixDirectCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(
-      async (options: { userId: string; account?: string; verbose?: boolean; json?: boolean }) => {
-        const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
-          run: async () =>
-            await inspectMatrixDirectRoom({
-              accountId,
-              userId: options.userId,
-            }),
-          onText: (result) => {
-            printDirectRoomInspection(result);
-          },
-          errorPrefix: "Direct room inspection failed",
-        });
-      },
-    );
+    .action(async (options: cli.MatrixCliOptions & { userId: string }) => {
+      const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
+      await cli.runMatrixCliCommand(options, {
+        run: async () =>
+          await inspectMatrixDirectRoom({
+            accountId,
+            userId: options.userId,
+          }),
+        onText: printDirectRoomInspection,
+        errorPrefix: "Direct room inspection failed",
+      });
+    });
 
   direct
     .command("repair")
@@ -175,33 +169,29 @@ export function registerMatrixDirectCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(
-      async (options: { userId: string; account?: string; verbose?: boolean; json?: boolean }) => {
-        const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
-          run: async () =>
-            await repairMatrixDirectRoom({
-              accountId,
-              userId: options.userId,
-            }),
-          onText: (result, verbose) => {
-            printDirectRoomInspection(result);
-            console.log(`Encrypted room creation: ${result.encrypted ? "enabled" : "disabled"}`);
-            console.log(`Created room: ${cli.formatMatrixCliText(result.createdRoomId, "none")}`);
-            console.log(`m.direct updated: ${result.changed ? "yes" : "no"}`);
-            if (verbose) {
-              console.log(
-                `m.direct before: ${cli.formatMatrixCliText(JSON.stringify(result.directContentBefore[result.remoteUserId] ?? []))}`,
-              );
-              console.log(
-                `m.direct after: ${cli.formatMatrixCliText(JSON.stringify(result.directContentAfter[result.remoteUserId] ?? []))}`,
-              );
-            }
-          },
-          errorPrefix: "Direct room repair failed",
-        });
-      },
-    );
+    .action(async (options: cli.MatrixCliOptions & { userId: string }) => {
+      const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
+      await cli.runMatrixCliCommand(options, {
+        run: async () =>
+          await repairMatrixDirectRoom({
+            accountId,
+            userId: options.userId,
+          }),
+        onText: (result, verbose) => {
+          printDirectRoomInspection(result);
+          console.log(`Encrypted room creation: ${result.encrypted ? "enabled" : "disabled"}`);
+          console.log(`Created room: ${cli.formatMatrixCliText(result.createdRoomId, "none")}`);
+          console.log(`m.direct updated: ${result.changed ? "yes" : "no"}`);
+          if (verbose) {
+            console.log(
+              `m.direct before: ${cli.formatMatrixCliText(JSON.stringify(result.directContentBefore[result.remoteUserId] ?? []))}`,
+            );
+            console.log(
+              `m.direct after: ${cli.formatMatrixCliText(JSON.stringify(result.directContentAfter[result.remoteUserId] ?? []))}`,
+            );
+          }
+        },
+        errorPrefix: "Direct room repair failed",
+      });
+    });
 }

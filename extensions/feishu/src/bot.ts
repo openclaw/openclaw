@@ -1557,48 +1557,6 @@ export async function handleFeishuMessage(params: {
       type BroadcastInboundVariant =
         | { kind: "observeOnly" }
         | { kind: "active"; dispatcher: ReturnType<typeof createFeishuReplyDispatcher> };
-      const createBroadcastInboundAdapter = (paramsLocal: {
-        agentId: string;
-        sessionKey: string;
-        ctxPayload: Awaited<ReturnType<typeof buildCtxPayloadForAgent>>;
-        record: {
-          updateLastRoute: ReturnType<typeof buildFeishuInboundLastRouteUpdate>;
-          onRecordError: (err: unknown) => void;
-        };
-        lifecycle: FeishuIngressLifecycle;
-        variant: BroadcastInboundVariant;
-      }) => ({
-        ingest: () => ({
-          id: ctx.messageId,
-          timestamp: messageCreateTimeMs,
-          rawText: ctx.content,
-          textForAgent: paramsLocal.ctxPayload.BodyForAgent,
-          textForCommands: paramsLocal.ctxPayload.CommandBody,
-          raw: ctx,
-        }),
-        resolveTurn: () => ({
-          cfg,
-          channel: "feishu" as const,
-          accountId: route.accountId,
-          route: { agentId: paramsLocal.agentId, sessionKey: paramsLocal.sessionKey },
-          ctxPayload: paramsLocal.ctxPayload,
-          record: paramsLocal.record,
-          ...(paramsLocal.variant.kind === "observeOnly"
-            ? {
-                admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
-                delivery: { deliver: async () => ({ visibleReplySent: false }) },
-                replyOptions: bindIngressLifecycleToReplyOptions(paramsLocal.lifecycle),
-              }
-            : {
-                dispatcherOptions: paramsLocal.variant.dispatcher.dispatcherOptions,
-                delivery: paramsLocal.variant.dispatcher.delivery,
-                replyOptions: {
-                  ...paramsLocal.variant.dispatcher.replyOptions,
-                  ...bindIngressLifecycleToReplyOptions(paramsLocal.lifecycle),
-                },
-              }),
-        }),
-      });
 
       const dispatchForAgent = async (agentId: string) => {
         const normalizedAgentId = normalizeAgentId(agentId);
@@ -1701,14 +1659,38 @@ export async function handleFeishuMessage(params: {
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
-            adapter: createBroadcastInboundAdapter({
-              agentId,
-              sessionKey: agentSessionKey,
-              ctxPayload: agentCtx,
-              record: agentRecord,
-              lifecycle: lane.lifecycle,
-              variant,
-            }),
+            adapter: {
+              ingest: () => ({
+                id: ctx.messageId,
+                timestamp: messageCreateTimeMs,
+                rawText: ctx.content,
+                textForAgent: agentCtx.BodyForAgent,
+                textForCommands: agentCtx.CommandBody,
+                raw: ctx,
+              }),
+              resolveTurn: () => ({
+                cfg,
+                channel: "feishu",
+                accountId: route.accountId,
+                route: { agentId, sessionKey: agentSessionKey },
+                ctxPayload: agentCtx,
+                record: agentRecord,
+                ...(variant.kind === "observeOnly"
+                  ? {
+                      admission: { kind: "observeOnly" as const, reason: "broadcast-observer" },
+                      delivery: { deliver: async () => ({ visibleReplySent: false }) },
+                      replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                    }
+                  : {
+                      dispatcherOptions: variant.dispatcher.dispatcherOptions,
+                      delivery: variant.dispatcher.delivery,
+                      replyOptions: {
+                        ...variant.dispatcher.replyOptions,
+                        ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                      },
+                    }),
+              }),
+            },
           });
           if (
             variant.kind === "active" &&

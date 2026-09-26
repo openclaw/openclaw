@@ -98,7 +98,3 @@ export function shouldSuppressTelegramError(params: {
   errorCooldownStore.set(scopeKey, nextScopeStore);
   return false;
 }
-
-export function isSilentErrorPolicy(policy: TelegramErrorPolicy): boolean {
-  return policy === "silent";
-}

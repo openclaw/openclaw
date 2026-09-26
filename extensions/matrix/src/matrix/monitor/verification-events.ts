@@ -1,5 +1,8 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeNullableString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
@@ -141,18 +144,12 @@ function resolveVerificationFlowCandidates(params: {
     transaction_id?: unknown;
     "m.relates_to"?: { event_id?: unknown };
   };
-  const candidates = new Set<string>();
-  const add = (value: unknown) => {
-    const normalized = normalizeNullableString(value);
-    if (normalized) {
-      candidates.add(normalized);
-    }
-  };
-  add(flowId);
-  add(event.event_id);
-  add(content.transaction_id);
-  add(content["m.relates_to"]?.event_id);
-  return Array.from(candidates);
+  return normalizeUniqueTrimmedStringList([
+    flowId,
+    event.event_id,
+    content.transaction_id,
+    content["m.relates_to"]?.event_id,
+  ]);
 }
 
 function resolveSummaryRecency(summary: MatrixVerificationSummary): number {

@@ -35,13 +35,11 @@ type ResolvedVcInviter = {
   openId?: string;
   userId?: string;
   unionId?: string;
-  name?: string;
 };
 
 type VcMeetingInvitedTurn = {
   turnId: string;
   meetingNo: string;
-  topic?: string;
   inviteTime?: string;
   inviter: ResolvedVcInviter;
   prompt: string;
@@ -56,13 +54,11 @@ function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter
   if (!senderId) {
     return null;
   }
-  const name = pickString(event.inviter?.user_name);
   return {
     senderId,
     ...(openId ? { openId } : {}),
     ...(userId ? { userId } : {}),
     ...(unionId ? { unionId } : {}),
-    ...(name ? { name } : {}),
   };
 }
 
@@ -86,7 +82,6 @@ function resolveVcMeetingInvitedTurn(
   const eventId = pickString(event.event_id);
   const inviteTime = pickString(event.invite_time);
   const callId = pickString(event.call_id);
-  const topic = pickString(event.meeting?.topic);
   const turnId = eventId
     ? `vc-invited:event:${eventId}`
     : `vc-invited:${meetingNo}:${inviteTime ?? uuid()}`;
@@ -97,7 +92,6 @@ function resolveVcMeetingInvitedTurn(
     meetingNo,
     inviter,
     prompt,
-    ...(topic ? { topic } : {}),
     ...(inviteTime ? { inviteTime } : {}),
   };
 }

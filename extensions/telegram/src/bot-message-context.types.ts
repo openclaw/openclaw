@@ -5,14 +5,9 @@ import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type {
-  OpenClawConfig,
-  DmPolicy,
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
@@ -63,23 +58,6 @@ export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
 
-type ResolveTelegramGroupConfig = (
-  chatId: string | number,
-  messageThreadId: number | undefined,
-  cfg: OpenClawConfig,
-) => {
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-};
-
-type ResolveGroupActivation = (params: {
-  agentId?: string;
-  sessionKey: string;
-  cfg: OpenClawConfig;
-}) => boolean | undefined;
-
-type ResolveGroupRequireMention = (chatId: string | number, cfg: OpenClawConfig) => boolean;
-
 type TelegramMessageContextRuntimeOverrides = Partial<
   typeof import("./bot-message-context.runtime.js")
 >;
@@ -108,9 +86,9 @@ export type BuildTelegramMessageContextParams = {
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
-  resolveGroupActivation: ResolveGroupActivation;
-  resolveGroupRequireMention: ResolveGroupRequireMention;
-  resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  resolveGroupActivation: RegisterTelegramHandlerParams["resolveGroupActivation"];
+  resolveGroupRequireMention: RegisterTelegramHandlerParams["resolveGroupRequireMention"];
+  resolveTelegramGroupConfig: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   runtime?: TelegramMessageContextRuntimeOverrides;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;

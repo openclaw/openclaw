@@ -15,13 +15,11 @@ import type {
   OpenClawConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
-  const normalized = normalizeOptionalString(String(value)) ?? "";
-  const chatId = normalizeTelegramChatId(normalized);
+  const chatId = normalizeTelegramChatId(String(value));
   if (!chatId || chatId.startsWith("-")) {
     return undefined;
   }

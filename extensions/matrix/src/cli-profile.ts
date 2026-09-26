@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import * as cli from "./cli-shared.js";
-import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
+import { applyMatrixProfileUpdate } from "./profile-update.js";
 
 export function registerMatrixProfileCommands(root: Command): void {
   const profile = root.command("profile").description("Manage Matrix bot profile");
@@ -14,23 +14,20 @@ export function registerMatrixProfileCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        name?: string;
-        avatarUrl?: string;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+      async (
+        options: cli.MatrixCliOptions & {
+          name?: string;
+          avatarUrl?: string;
+        },
+      ) => {
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await applyMatrixProfileUpdate({
               account: options.account,
               displayName: options.name,
               avatarUrl: options.avatarUrl,
             }),
-          onText: (result: MatrixProfileUpdateResult) => {
+          onText: (result) => {
             cli.printAccountLabel(result.accountId);
             console.log(`Config path: ${result.configPath}`);
             console.log(

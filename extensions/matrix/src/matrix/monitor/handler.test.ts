@@ -2938,7 +2938,9 @@ describe("matrix monitor handler draft streaming", () => {
 
   it("records a failed block typing restart without replaying the accepted delivery", async () => {
     const acceptedDelivery = createMockMatrixDeliveryResult("$accepted", "Already delivered block");
-    const { dispatch, logVerboseMessage } = createStreamingHarness({ streaming: "off" });
+    const { dispatch, logVerboseMessage, redactEventMock } = createStreamingHarness({
+      streaming: "off",
+    });
     deliverMatrixRepliesMock.mockResolvedValueOnce(acceptedDelivery);
     sendTypingMatrixMock.mockRejectedValueOnce(new Error("typing unavailable"));
     const { deliver, finish } = await dispatch();
@@ -2948,12 +2950,9 @@ describe("matrix monitor handler draft streaming", () => {
     ).resolves.toMatchObject(acceptedDelivery);
 
     expect(deliverMatrixRepliesMock).toHaveBeenCalledOnce();
-    expect(sendTypingMatrixMock).toHaveBeenCalledExactlyOnceWith(
-      "!room:example.org",
-      true,
-      undefined,
-      expect.anything(),
-    );
+    expect(sendTypingMatrixMock).toHaveBeenCalledExactlyOnceWith("!room:example.org", true, {
+      client: expect.objectContaining({ redactEvent: redactEventMock }),
+    });
     const expectedDiagnostic =
       "matrix typing action=start failed target=!room:example.org: Error: typing unavailable";
     await waitForMatrixState(() =>

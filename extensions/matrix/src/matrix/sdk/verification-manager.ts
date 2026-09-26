@@ -653,7 +653,6 @@ export class MatrixVerificationManager {
     }
     const verifier = await session.request.startVerification(VerificationMethod.Sas);
     this.attachVerifierToVerificationSession(session, verifier);
-    this.ensureVerificationStarted(session);
     return this.buildVerificationSummary(session);
   }
 
@@ -678,7 +677,6 @@ export class MatrixVerificationManager {
     }
     const verifier = await session.request.scanQRCode(new Uint8ClampedArray(qrBytes));
     this.attachVerifierToVerificationSession(session, verifier);
-    this.ensureVerificationStarted(session);
     return this.buildVerificationSummary(session);
   }
 

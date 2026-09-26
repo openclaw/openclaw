@@ -50,21 +50,6 @@ type MatrixThreadBindingMigrationMarker = {
   importedAt: number;
 };
 
-async function resolveBindingsPath(params: {
-  auth: MatrixAuth;
-  accountId: string;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-}): Promise<string> {
-  return resolveMatrixStateFilePath({
-    auth: params.auth,
-    accountId: params.accountId,
-    env: params.env,
-    stateDir: params.stateDir,
-    filename: "thread-bindings.json",
-  });
-}
-
 function createThreadBindingStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
   return getMatrixRuntime().state.openKeyedStore<MatrixThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
@@ -299,11 +284,12 @@ export async function createMatrixThreadBindingManager(params: {
       `Matrix thread binding account mismatch: requested ${params.accountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const legacyFilePath = await resolveBindingsPath({
+  const legacyFilePath = await resolveMatrixStateFilePath({
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
     stateDir: params.stateDir,
+    filename: "thread-bindings.json",
   });
   const sqliteStateDir = path.dirname(legacyFilePath);
   const storageKey = resolveMatrixSqliteStateKey({ env: params.env, stateDir: sqliteStateDir });

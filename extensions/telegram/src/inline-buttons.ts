@@ -13,9 +13,6 @@ const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
 function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  if (!trimmed) {
-    return undefined;
-  }
   if (
     trimmed === "off" ||
     trimmed === "dm" ||
@@ -23,7 +20,7 @@ function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope
     trimmed === "all" ||
     trimmed === "allowlist"
   ) {
-    return trimmed as TelegramInlineButtonsScope;
+    return trimmed;
   }
   return undefined;
 }

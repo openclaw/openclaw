@@ -251,7 +251,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           log(`matrix: local promotion cleared room=${roomId}`);
         }
 
-        if (hasRecentInviteCandidate(roomId, senderId) && (await canPromoteRecentInvite(roomId))) {
+        const promoteDirectRoom = async (source: string): Promise<boolean> => {
           const promotion = await promoteMatrixDirectRoomCandidate({
             client,
             remoteUserId: senderId ?? "",
@@ -261,26 +261,24 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           if (promotion.classifyAsDirect) {
             rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
             log(
-              `matrix: dm detected via recent invite room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
+              `matrix: dm detected via ${source} room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
             );
-            return true;
           }
-        }
+          return promotion.classifyAsDirect;
+        };
 
-        if (await canPromoteUnmappedStrictRoom(roomId)) {
-          const promotion = await promoteMatrixDirectRoomCandidate({
-            client,
-            remoteUserId: senderId ?? "",
-            roomId,
-            selfUserId,
-          });
-          if (promotion.classifyAsDirect) {
-            rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
-            log(
-              `matrix: dm detected via per-room strict fallback room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
-            );
-            return true;
-          }
+        if (
+          hasRecentInviteCandidate(roomId, senderId) &&
+          (await canPromoteRecentInvite(roomId)) &&
+          (await promoteDirectRoom("recent invite"))
+        ) {
+          return true;
+        }
+        if (
+          (await canPromoteUnmappedStrictRoom(roomId)) &&
+          (await promoteDirectRoom("per-room strict fallback"))
+        ) {
+          return true;
         }
       }
 

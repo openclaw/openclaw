@@ -351,10 +351,6 @@ class GroupRequestScheduler {
 
 const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
 
-function getAccountThrottlers(): Map<string, TelegramAccountThrottler> {
-  return resolveGlobalMap(TELEGRAM_ACCOUNT_THROTTLERS_KEY);
-}
-
 function readPayload(payload: unknown): TelegramApiPayload | undefined {
   return payload && typeof payload === "object" ? (payload as TelegramApiPayload) : undefined;
 }
@@ -458,7 +454,9 @@ export function getOrCreateAccountThrottler(
   token: string,
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): TelegramAccountThrottler {
-  const throttlerByToken = getAccountThrottlers();
+  const throttlerByToken = resolveGlobalMap<string, TelegramAccountThrottler>(
+    TELEGRAM_ACCOUNT_THROTTLERS_KEY,
+  );
   let throttler = throttlerByToken.get(token);
   if (!throttler) {
     throttler = createTelegramAccountThrottler(createThrottler);

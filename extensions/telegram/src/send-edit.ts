@@ -31,9 +31,6 @@ import {
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
-type TelegramEditMessageCaptionParams = Parameters<
-  TelegramApiContext["api"]["editMessageCaption"]
->[2];
 
 type TelegramEditReplyMarkupOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "buttons" | "signal" | "assertPlatformSendAuthorized">;
@@ -127,29 +124,16 @@ export async function editMessageTelegram(
       // - buttons === undefined → don't send reply_markup (keep existing)
       // - buttons is [] (or filters to empty) → send { inline_keyboard: [] } (remove)
       // - otherwise → send built inline keyboard
-      const shouldTouchButtons = opts.buttons !== undefined;
-      const builtKeyboard = shouldTouchButtons ? buildInlineKeyboard(opts.buttons) : undefined;
-      const replyMarkup = shouldTouchButtons
-        ? (builtKeyboard ?? { inline_keyboard: [] })
-        : undefined;
+      const replyMarkup =
+        opts.buttons === undefined
+          ? undefined
+          : (buildInlineKeyboard(opts.buttons) ?? { inline_keyboard: [] });
+      const replyMarkupParams = replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
 
       const commonTextParams: TelegramEditMessageTextParams = {
         ...(linkPreviewEnabled ? {} : { link_preview_options: { is_disabled: true } }),
-        ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
+        ...replyMarkupParams,
       };
-      const captionEditParams: TelegramEditMessageCaptionParams = {
-        caption: htmlText,
-        parse_mode: "HTML",
-      };
-      if (replyMarkup !== undefined) {
-        captionEditParams.reply_markup = replyMarkup;
-      }
-      const plainCaptionParams: TelegramEditMessageCaptionParams = {
-        caption: plainText,
-      };
-      if (replyMarkup !== undefined) {
-        plainCaptionParams.reply_markup = replyMarkup;
-      }
 
       const performTextEdit = async () => {
         const richPlan = useRichMessages
@@ -220,11 +204,23 @@ export async function editMessageTelegram(
           warn: (message) => sendLogger.warn(message),
           sendFormatted: () =>
             edit(
-              () => api.editMessageCaption(chatId, messageId, captionEditParams),
+              () =>
+                api.editMessageCaption(chatId, messageId, {
+                  caption: htmlText,
+                  parse_mode: "HTML",
+                  ...replyMarkupParams,
+                }),
               "editMessageCaption",
             ),
           sendPlain: (_plan, label) =>
-            edit(() => api.editMessageCaption(chatId, messageId, plainCaptionParams), label),
+            edit(
+              () =>
+                api.editMessageCaption(chatId, messageId, {
+                  caption: plainText,
+                  ...replyMarkupParams,
+                }),
+              label,
+            ),
         });
 
       let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
@@ -244,9 +240,7 @@ export async function editMessageTelegram(
           }
         }
       } catch (err) {
-        if (isTelegramMessageNotModifiedError(err)) {
-          // no-op: Telegram reports message content unchanged, treat as success
-        } else {
+        if (!isTelegramMessageNotModifiedError(err)) {
           throw err;
         }
       }

@@ -5,7 +5,6 @@ import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -74,9 +73,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
   const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
-
-  if (opts.useWebhook) {
-    const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
+  const registerApprovalRuntime = () => {
     if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
       registerChannelRuntimeContext({
         channelRuntime: opts.channelRuntime,
@@ -87,6 +84,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
       });
     }
+  };
+
+  if (opts.useWebhook) {
+    const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
+    registerApprovalRuntime();
     const webhook = await startTelegramWebhook({
       token,
       accountId: account.accountId,
@@ -95,7 +97,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       path: opts.webhookPath,
       legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
       secret: opts.webhookSecret ?? account.config.webhookSecret,
-      runtime: opts.runtime as RuntimeEnv,
+      runtime: opts.runtime,
       buildContext: pluginChannelRuntime?.inbound.buildContext,
       // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
       dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
@@ -137,16 +139,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   }
 
   try {
-    if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
-      registerChannelRuntimeContext({
-        channelRuntime: opts.channelRuntime,
-        channelId: "telegram",
-        accountId: account.accountId,
-        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-        context: { token },
-        abortSignal: opts.abortSignal,
-      });
-    }
+    registerApprovalRuntime();
 
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,

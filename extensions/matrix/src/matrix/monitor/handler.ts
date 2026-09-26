@@ -309,11 +309,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const typingCallbacks = createTypingCallbacks({
         start: async () => {
           const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, true, undefined, client);
+          await sendTypingMatrix(roomId, true, { client });
         },
         stop: async () => {
           const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, false, undefined, client);
+          await sendTypingMatrix(roomId, false, { client });
         },
         onStartError: (err) => {
           logTypingFailure({

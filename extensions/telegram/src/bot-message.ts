@@ -11,16 +11,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
-  type TelegramMediaRef,
 } from "./bot-message-context.js";
-import type {
-  TelegramMessageContextOptions,
-  TelegramPromptContextEntry,
-} from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import {
   createTelegramSpooledReplayParticipant,
@@ -32,9 +27,7 @@ import {
 } from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
-import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
@@ -117,7 +110,9 @@ export function resolveTelegramMessageTurnSettings(params: {
   };
 }
 
-export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
+export const createTelegramMessageProcessor = (
+  deps: TelegramMessageProcessorDeps,
+): RegisterTelegramHandlerParams["processMessage"] => {
   const {
     bot,
     account,
@@ -164,16 +159,16 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     ? { recordChannelActivity: telegramDeps.recordChannelActivity }
     : undefined;
 
-  return async (
-    primaryCtx: TelegramContext,
-    allMedia: TelegramMediaRef[],
-    storeAllowFrom: string[],
-    turnContext: TelegramMessageProcessorTurnContext,
-    options?: TelegramMessageContextOptions,
-    replyMedia?: TelegramMediaRef[],
-    replyChain?: TelegramReplyChainEntry[],
-    promptContext?: TelegramPromptContextEntry[],
-  ) => {
+  return async ({
+    ctx: primaryCtx,
+    allMedia,
+    storeAllowFrom,
+    turnContext,
+    options,
+    replyMedia,
+    replyChain,
+    promptContext,
+  }) => {
     const turnCfg = turnContext.cfg;
     const turnTelegramCfg = turnContext.telegramCfg;
     const turnSettings = resolveTelegramMessageTurnSettings({
@@ -225,8 +220,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
-      const result: TelegramMessageProcessingResult = { kind: "skipped" };
-      return result;
+      return { kind: "skipped" };
     }
     if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
       logVerbose(
@@ -279,11 +273,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           turnAdoptionLifecycle: params.turnAdoptionLifecycle,
         });
         if (dispatchResult?.kind === "failed-retryable") {
-          const result: TelegramMessageProcessingResult = {
+          return {
             kind: "failed-retryable",
             error: dispatchResult.error,
           };
-          return result;
         }
         if (ingressDebugEnabled && ingressReceivedAtMs) {
           logVerbose(
@@ -291,8 +284,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
           );
         }
-        const result: TelegramMessageProcessingResult = { kind: "completed" };
-        return result;
+        return { kind: "completed" };
       } catch (err) {
         runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
         if (!spooledReplay) {
@@ -304,11 +296,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
             );
           } catch {}
         }
-        const result: TelegramMessageProcessingResult = {
+        return {
           kind: "failed-retryable",
           error: err,
         };
-        return result;
       }
     };
 

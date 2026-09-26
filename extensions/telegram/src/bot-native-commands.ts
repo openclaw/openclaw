@@ -140,12 +140,11 @@ export const registerTelegramNativeCommands = ({
   for (const issue of pluginCatalog.issues) {
     runtime.error?.(danger(issue));
   }
-  const firstSkillCommandIndex = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, {
-        provider: "telegram",
-        includeBundledChannelFallback: false,
-      }).length
-    : 0;
+  const builtinCommands = listNativeCommandSpecsForConfig(cfg, {
+    provider: "telegram",
+    includeBundledChannelFallback: false,
+  });
+  const firstSkillCommandIndex = nativeEnabled ? builtinCommands.length : 0;
   const nativeMenuCommands = nativeCommands
     .map((command, index): TelegramMenuCommand | null => {
       const normalized = normalizeTelegramCommandName(command.name);
@@ -184,10 +183,7 @@ export const registerTelegramNativeCommands = ({
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
   }
-  const loginCommand = listNativeCommandSpecsForConfig(cfg, {
-    provider: "telegram",
-    includeBundledChannelFallback: false,
-  }).find(
+  const loginCommand = builtinCommands.find(
     (command) =>
       findCommandByNativeName(command.name, "telegram", { includeBundledChannelFallback: false })
         ?.key === "login",
