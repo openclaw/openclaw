@@ -129,6 +129,10 @@ enablement and sizing.
 
 ## Sidebar navigation
 
+The agent switcher and workspace header preview their menu when you move the
+pointer over them and pause. Click the header to keep the menu open. Returning
+from Settings leaves menus closed under a stationary pointer.
+
 Drag page destinations, including plugin-provided pages, to reorder them together.
 The order is saved in your sidebar preferences and survives reloads. A temporarily
 unavailable plugin keeps its saved position for when it returns. **Home** stays
