@@ -1,10 +1,7 @@
 import { resolveMaxActiveTranscriptBytes } from "../../auto-reply/reply/memory-flush.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
-import {
-  persistCompactionBoundaryWithSessionEntrySync,
-  readSessionTranscriptActiveStats,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import { type SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { readSessionTranscriptActiveStatsAsync } from "../../config/sessions/session-transcript-hydration.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -25,13 +22,13 @@ export function hasMatchingTranscriptByteCompactionLatch(
 }
 
 /** Apply the ordinary turn's host byte budget before an explicit native compaction. */
-export function prepareManualTranscriptByteCompaction(
+export async function prepareManualTranscriptByteCompaction(
   params: CompactEmbeddedAgentSessionParams,
   host: QueuedCompactionHostOptions,
   target: SessionTranscriptRuntimeTarget,
   entry: SessionEntry | undefined,
   selectedHarnessRuntime: string | undefined,
-): { params: CompactEmbeddedAgentSessionParams; host: QueuedCompactionHostOptions } {
+): Promise<{ params: CompactEmbeddedAgentSessionParams; host: QueuedCompactionHostOptions }> {
   const maxBytes = resolveMaxActiveTranscriptBytes(params.config);
   if (
     params.trigger !== "manual" ||
@@ -41,7 +38,12 @@ export function prepareManualTranscriptByteCompaction(
   ) {
     return { params, host };
   }
-  const { sizeBytes: activeBytes } = readSessionTranscriptActiveStats(target);
+  const { sizeBytes: activeBytes } = await readSessionTranscriptActiveStatsAsync(
+    target,
+    params.abortSignal,
+  );
+  params.abortSignal?.throwIfAborted();
+  host.assertActive?.();
   if (
     activeBytes < maxBytes ||
     hasMatchingTranscriptByteCompactionLatch(entry, activeBytes, maxBytes)
@@ -82,10 +84,12 @@ export function createCompactionAccounting(params: {
     let postCompactionBytes: number | undefined;
     if (byteBudget) {
       try {
-        postCompactionBytes = readSessionTranscriptActiveStats({
-          ...params.target,
-          sessionId: acceptedEntry.sessionId,
-        }).sizeBytes;
+        postCompactionBytes = (
+          await readSessionTranscriptActiveStatsAsync({
+            ...params.target,
+            sessionId: acceptedEntry.sessionId,
+          })
+        ).sizeBytes;
       } catch {
         // Preserve the atomic boundary's latch when the post-commit read is unavailable.
         postCompactionBytes = byteBudget.activeBytes;
@@ -116,25 +120,23 @@ export function createCompactionAccounting(params: {
     ...params.host,
     ...(params.host.transcriptBytePreflightHarness && byteBudget
       ? {
-          withCompactionPersistence: (prepared) => {
-            params.host.assertActive?.();
-            const result = persistCompactionBoundaryWithSessionEntrySync(
-              {
+          withCompactionPersistence: {
+            assertActive: () => params.host.assertActive?.(),
+            prepare: () => ({
+              scope: {
                 ...params.target,
                 sessionId: entry.sessionId,
                 expectedLifecycleRevision: entry.lifecycleRevision,
                 expectedWriterRunId: entry.activeWriterRunId,
               },
-              {
-                prepared,
-                transcriptByteCompactionLatch: {
-                  sessionId: entry.sessionId,
-                  ...byteBudget,
-                },
+              transcriptByteCompactionLatch: {
+                sessionId: entry.sessionId,
+                ...byteBudget,
               },
-            );
-            committed = true;
-            return result;
+            }),
+            onCommitted: () => {
+              committed = true;
+            },
           },
         }
       : {}),

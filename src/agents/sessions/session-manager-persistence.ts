@@ -2,6 +2,7 @@ import {
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-compaction.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
 import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
@@ -19,6 +20,7 @@ import {
   getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
+  withSessionTranscriptWriteAssertion,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
@@ -34,12 +36,16 @@ import {
   copyCodeModeSourceAppendOptions,
   getCodeModeSourceAppend,
 } from "../transcript-code-mode-source.js";
-import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
+import {
+  getSessionCompactionPersistence,
+  type PreparedCompactionAppend,
+} from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
 import type {
   AppendPersistenceOptions,
+  CompactionEntry,
   ModelChangeEntry,
   SessionEntry,
   SessionMessageEntry,
@@ -64,6 +70,7 @@ export type PersistWorkerRecordResult = {
   reload?: PreparedSessionTranscriptReload;
   committedVersion: SessionTranscriptContextVersion;
   viewFailure?: Error;
+  publicationFailure?: Error;
 };
 
 type PersistRecordOptions = AppendPersistenceOptions & {
@@ -163,12 +170,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
   }
 
   protected async persistWorkerRecord(
-    entry: ModelChangeEntry | ThinkingLevelChangeEntry | SessionMessageEntry,
+    entry: ModelChangeEntry | ThinkingLevelChangeEntry | SessionMessageEntry | CompactionEntry,
     appendIntent: "active-branch" | undefined,
     writeAdmission: SessionManagerWriteAdmission,
     message?: NonNullable<
       SessionMetadataWorkerOperations["session.metadata.append"]["input"]["message"]
     >,
+    compaction?: { assertActive?: () => void; onCommitted?: () => void },
   ): Promise<PersistWorkerRecordResult> {
     this.assertTranscriptWriteActive();
     const target = this.persistenceTarget;
@@ -188,6 +196,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     const initialWriter = this.#initialWriter;
     const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
+    const compactionPersistence =
+      entry.type === "compaction" ? getSessionCompactionPersistence(this) : undefined;
+    if (compactionPersistence && this.persistenceHeaderPending) {
+      throw new Error("Compaction boundary validation failed");
+    }
+    let compactionAccounting:
+      | SessionMetadataWorkerOperations["session.metadata.append"]["input"]["compactionAccounting"]
+      | undefined;
+    let assertCompactionAccounting: (() => void) | undefined;
     const assertBinding = () => {
       const current = this.persistenceTarget;
       if (
@@ -201,6 +218,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       assertBinding();
       initialWriter?.assertActive();
       assertOwned();
+      compactionPersistence?.assertActive();
+      assertCompactionAccounting?.();
+      compaction?.assertActive?.();
     };
     const admission = resolveSessionTranscriptReadFence(captured);
     const { withSessionMetadataWorker } = await runInDetachedAsyncContext(
@@ -243,6 +263,25 @@ export class SessionManagerPersistence extends SessionManagerCore {
         }
         assertCurrent();
       }
+      if (compactionPersistence && entry.type === "compaction") {
+        const accounting = compactionPersistence.prepare({
+          scope: withOwnedSessionTranscriptWriterFence(target),
+          event: entry,
+          ...(appendIntent ? { appendIntent } : {}),
+          ...(this.transcriptMutationAt !== undefined
+            ? { expectedMutationAt: this.transcriptMutationAt }
+            : {}),
+        });
+        assertCompactionAccounting = captureOwnedTranscriptWriteAssertion(accounting.scope);
+        const { env: _accountingEnv, ...accountingScope } = accounting.scope;
+        compactionAccounting = {
+          scope: accountingScope,
+          transcriptByteCompactionLatch: { ...accounting.transcriptByteCompactionLatch },
+        };
+        assertCurrent();
+      }
+      let compactionCommitted = false;
+      const compactionPublicationFailures: unknown[] = [];
       const appendEvent = async (
         event: Parameters<typeof worker.execute<"session.metadata.append">>[0]["input"]["event"],
         expectedMutationAt: number | null | undefined,
@@ -254,6 +293,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
             scope: captured,
             event,
             ...(event.type === "message" ? { message } : {}),
+            ...(event.type === "compaction" && compactionAccounting
+              ? { compactionAccounting }
+              : {}),
             options: {
               ...(intent ? { appendIntent: intent } : {}),
               ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
@@ -269,6 +311,24 @@ export class SessionManagerPersistence extends SessionManagerCore {
               : {}),
           },
         });
+        if (
+          event.type === "compaction" &&
+          result.snapshot.ok &&
+          result.snapshot.value.result?.appended
+        ) {
+          // The durable accounting fact survives a later view or native compactor failure.
+          compactionCommitted = true;
+          for (const publish of [
+            () => compactionPersistence?.onCommitted(),
+            () => compaction?.onCommitted?.(),
+          ]) {
+            try {
+              publish();
+            } catch (error) {
+              compactionPublicationFailures.push(error);
+            }
+          }
+        }
         if (result.projectionNeedsReconcile) {
           startSessionTranscriptIndexReconcile({
             ...options,
@@ -321,7 +381,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       try {
         outcome = await append(this.transcriptMutationAt);
       } catch (error) {
-        if (!isSqliteTranscriptMutationConflict(error)) {
+        if (compactionCommitted || !isSqliteTranscriptMutationConflict(error)) {
           throw error;
         }
         const fresh = await worker.execute({
@@ -373,6 +433,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
         reload: reload?.ok ? reload.value : undefined,
         committedVersion: committed.after,
         viewFailure,
+        publicationFailure:
+          compactionPublicationFailures.length > 0
+            ? new AggregateError(
+                compactionPublicationFailures,
+                "Compaction committed, but its receipt publication failed",
+              )
+            : undefined,
       };
     });
   }
@@ -417,13 +484,25 @@ export class SessionManagerPersistence extends SessionManagerCore {
         options?.expectedMutationAt !== undefined
           ? options.expectedMutationAt
           : this.transcriptMutationAt;
-      const committed = persistCompaction({
+      const prepared: PreparedCompactionAppend = {
         scope: { ...scope },
         event: entry,
         ...(options?.appendIntent ? { appendIntent: options.appendIntent } : {}),
         ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
         ...(initialWriter && !initialWriter.committedFence ? { initializeEntry: true } : {}),
-      });
+      };
+      persistCompaction.assertActive();
+      const accounting = persistCompaction.prepare(prepared);
+      const committed = withSessionTranscriptWriteAssertion(
+        accounting.scope,
+        persistCompaction.assertActive,
+        () =>
+          persistCompactionBoundaryWithSessionEntrySync(accounting.scope, {
+            prepared,
+            transcriptByteCompactionLatch: accounting.transcriptByteCompactionLatch,
+          }),
+      );
+      persistCompaction.onCommitted();
       if (initialWriter?.committedFence) {
         Object.assign(scope, initialWriter.committedFence);
       }

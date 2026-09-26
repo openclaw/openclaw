@@ -367,6 +367,12 @@ AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await thes
 operations before using the resulting model or thinking state. Other synchronous
 SessionManager operations still need an appropriate caller-owned write boundary.
 
+`SessionManager.appendCompactionAsync` returns a promise for the committed
+compaction entry ID. AgentSession uses it to persist durable compaction boundaries
+through the existing database worker before replacing model context. The
+synchronous `appendCompaction` method remains available for existing SDK callers;
+it can execute SQLite on the calling thread.
+
 `SessionManager.appendMessageToTranscript` is a deprecated public SDK compatibility
 method, retained for plugins using the v2026.9.5 contract. It accepts ordinary,
 custom, and Bash execution messages and synchronously returns the persisted

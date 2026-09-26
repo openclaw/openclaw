@@ -23,6 +23,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,
@@ -49,6 +50,43 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
 }
 
 describe("SessionManager.open", () => {
+  it.each(["memory", "sqlite"] as const)(
+    "fences a committed %s compaction when receipt publication fails",
+    async (storage) => {
+      const dir = tempDirs.make("openclaw-compaction-publication-");
+      const target = {
+        agentId: "main",
+        sessionId: "compaction-publication",
+        sessionKey: "agent:main:compaction-publication",
+        storePath: path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      const manager =
+        storage === "memory" ? SessionManager.inMemory() : SessionManager.open(target, dir);
+      const kept = manager.appendMessage(makeUserMessage("keep", 1));
+      const onCommitted = vi.fn(() => {
+        throw new Error("publication failed");
+      });
+      const failure = await manager
+        .appendCompactionAsync("summary", kept, 100, undefined, undefined, undefined, 20, {
+          onCommitted,
+        })
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({ name: "SessionCompactionCommittedError" });
+      expect(isRecordedModelFallbackStop(failure)).toBe(true);
+      expect(onCommitted).toHaveBeenCalledOnce();
+      expect(() => manager.appendCompaction("retry", kept, 100)).toThrow(
+        "do not replay the append",
+      );
+      if (storage === "sqlite") {
+        expect(
+          SessionManager.open(target, dir)
+            .getEntries()
+            .filter((entry) => entry.type === "compaction"),
+        ).toMatchObject([{ summary: "summary" }]);
+      }
+    },
+  );
+
   it.each(["native", "windows"])(
     "commits ordered metadata with a %s environment without host transcript writes",
     async (environment) => {
@@ -64,16 +102,15 @@ describe("SessionManager.open", () => {
       // oxlint-disable-next-line typescript/unbound-method
       const nativePrepare = DatabaseSync.prototype.prepare;
       const hostWrites: string[] = [];
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
-        if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
-          hostWrites.push(mutation);
-        }
-        return nativePrepare.call(this, sql);
-      });
+      const prepare = vi
+        .spyOn(DatabaseSync.prototype, "prepare")
+        .mockImplementation(function (this: DatabaseSync, sql) {
+          const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
+          if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
+            hostWrites.push(mutation);
+          }
+          return nativePrepare.call(this, sql);
+        });
       const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
       const clone =
         environment === "windows"

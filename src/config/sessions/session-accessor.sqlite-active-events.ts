@@ -31,6 +31,7 @@ import {
   resolveVisibleMessagePositions,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
+import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -299,11 +300,14 @@ export function withRecentSessionTranscriptActiveEvents<T>(
 }
 
 /** Reads logical transcript event count and JSONL byte size. */
-export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadScope): {
+export function readSessionTranscriptActiveStats(
+  scope: SessionTranscriptReadScope,
+  options: { readOnly?: boolean; resolvedScope?: ResolvedTranscriptReadScope } = {},
+): {
   eventCount: number;
   sizeBytes: number;
 } {
-  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
+  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats, options);
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */

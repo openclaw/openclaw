@@ -3,6 +3,7 @@ import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import { persistCompactionBoundaryWithSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-compaction.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -49,7 +50,9 @@ import {
   type OpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
 import type { CustomMessage } from "./messages.js";
+import type { PreparedCompactionAccounting } from "./session-compaction-persistence.js";
 import type {
+  CompactionEntry,
   ModelChangeEntry,
   SessionHeader,
   SessionMessageEntry,
@@ -81,7 +84,15 @@ export type SessionMetadataOperations = {
   "session.metadata.append": {
     input: {
       scope: MetadataTarget;
-      event: SessionHeader | ModelChangeEntry | ThinkingLevelChangeEntry | SessionMessageEntry;
+      event:
+        | SessionHeader
+        | ModelChangeEntry
+        | ThinkingLevelChangeEntry
+        | SessionMessageEntry
+        | CompactionEntry;
+      compactionAccounting?: Omit<PreparedCompactionAccounting, "scope"> & {
+        scope: Omit<PreparedCompactionAccounting["scope"], "env">;
+      };
       message?: {
         prepared: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]>;
         cwd: string;
@@ -300,9 +311,30 @@ export function bindSqliteWorkerBackend(
           projectionNeedsReconcile = true;
         },
       } as const;
-      const { event, message } = command.input;
-      const snapshot =
-        event.type === "message" && message
+      const { event, message, compactionAccounting } = command.input;
+      const snapshot = (() => {
+        if (compactionAccounting) {
+          if (event.type !== "compaction") {
+            throw new Error("Compaction accounting requires a compaction boundary");
+          }
+          const committed = persistCompactionBoundaryWithSessionEntrySync(
+            { ...compactionAccounting.scope, env: scope.env },
+            {
+              prepared: { scope, event, ...command.input.options },
+              transcriptByteCompactionLatch: compactionAccounting.transcriptByteCompactionLatch,
+            },
+            projection,
+          );
+          return {
+            ok: true as const,
+            value: {
+              before: committed.before,
+              after: committed.after,
+              result: { appended: true as const, effectiveParentId: committed.result.parentId },
+            },
+          };
+        }
+        return event.type === "message" && message
           ? appendTranscriptMessageSnapshotSync(
               scope,
               {
@@ -318,6 +350,7 @@ export function bindSqliteWorkerBackend(
               projection,
             )
           : appendTranscriptEventSnapshotSync(scope, event, command.input.options, projection);
+      })();
       context.admit("commit");
       return { ok: true, value: { snapshot, projectionNeedsReconcile } };
     }, options);

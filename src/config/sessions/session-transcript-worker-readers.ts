@@ -81,6 +81,16 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readActiveStats: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "active-stats", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          assertResultKind(value, "active-stats", "active transcript statistics");
+          return value.stats;
+        },
+        signal,
+      ),
     searchTranscripts: async (params) =>
       await runRequest(
         () => ({ kind: "transcript-search", params }),

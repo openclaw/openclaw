@@ -147,7 +147,7 @@ export async function compactEmbeddedAgentSession(
         activeWriterRunId: entry?.activeWriterRunId,
       };
       const agentHarnessId = resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId;
-      const prepared = prepareManualTranscriptByteCompaction(
+      const prepared = await prepareManualTranscriptByteCompaction(
         { ...params, agentHarnessId },
         host,
         runtimeTarget,
@@ -162,6 +162,7 @@ export async function compactEmbeddedAgentSession(
           allowPluginNormalization: false,
         }).selectedHarnessRuntime,
       );
+      assertQueuedCompactionPreparationActive(params, host);
       const projectedConfig = projectCodexHostTranscriptBytePreflightConfig(
         prepared.params.config,
         Boolean(prepared.host.transcriptBytePreflightHarness),

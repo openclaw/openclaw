@@ -32,7 +32,10 @@ import {
 import { resolveAppendedMessageSeq } from "./session-tool-result-guard.transcript-seq.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import type { SessionManager } from "./sessions/index.js";
-import { withSessionCompactionPersistence } from "./sessions/session-compaction-persistence.js";
+import {
+  withSessionCompactionPersistence,
+  withSessionCompactionPersistenceAsync,
+} from "./sessions/session-compaction-persistence.js";
 import type { CompactionAppendPersistence } from "./sessions/session-compaction-persistence.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
 import {
@@ -389,6 +392,15 @@ export function installSessionToolResultGuard(
       originalAppendCompaction(...args),
     );
   }) as SessionManager["appendCompaction"];
+  const originalAppendCompactionAsync = sessionManager.appendCompactionAsync.bind(sessionManager);
+  const guardedAppendCompactionAsync: SessionManager["appendCompactionAsync"] = (...args) => {
+    args[5] = { runId: transcriptRunId, ...args[5] };
+    return withSessionCompactionPersistenceAsync(
+      sessionManager,
+      opts?.withCompactionPersistence,
+      () => originalAppendCompactionAsync(...args),
+    );
+  };
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -634,6 +646,7 @@ export function installSessionToolResultGuard(
       ),
     );
   sessionManager.appendCompaction = guardedAppendCompaction;
+  sessionManager.appendCompactionAsync = guardedAppendCompactionAsync;
 
   return {
     hasPendingToolResults: () => pending.size > 0,

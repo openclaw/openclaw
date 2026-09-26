@@ -3,6 +3,7 @@ import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-age
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
 import { readSessionTranscriptCurrentTurnEntry } from "./session-accessor.sqlite-current-turn.js";
 import { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import {
@@ -12,10 +13,12 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -110,5 +113,36 @@ export function prepareSessionTranscriptHydration(
         owner.readCurrentTurnEntry({ ...request, target, resolvedScope, admission }, signal),
     );
   };
-  return { target, read, readCurrentTurnEntry, assertCurrent };
+  const readActiveStats = () =>
+    readInOwner(
+      () => readSessionTranscriptActiveStats(target),
+      async (owner, resolvedScope) => {
+        try {
+          return await owner.readActiveStats({ target, resolvedScope, admission }, signal);
+        } catch (error) {
+          owner.assertCurrent();
+          if (isSessionTranscriptProjectionUnavailableError(error)) {
+            startSessionTranscriptIndexReconcile({
+              ...toDatabaseOptions(resolvedScope),
+              preferredSessionId: resolvedScope.sessionId,
+            });
+          }
+          throw error;
+        }
+      },
+    );
+  return { target, read, readCurrentTurnEntry, readActiveStats, assertCurrent };
+}
+
+/** Keep active-byte accounting on the captured transcript's existing reader lane. */
+export async function readSessionTranscriptActiveStatsAsync(
+  target: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
+  signal?: AbortSignal,
+): Promise<ReturnType<typeof readSessionTranscriptActiveStats>> {
+  const reader = prepareSessionTranscriptHydration(target, undefined, signal);
+  try {
+    return await reader.readActiveStats();
+  } finally {
+    reader.assertCurrent();
+  }
 }

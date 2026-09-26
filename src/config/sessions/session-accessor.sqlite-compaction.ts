@@ -41,13 +41,14 @@ import type { InternalSessionEntry } from "./types.js";
 /** Commits one compaction boundary and its session accounting as one SQLite write. */
 export function persistCompactionBoundaryWithSessionEntrySync(
   scope: SessionTranscriptRuntimeTarget &
-    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
+    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId" | "env">,
   params: {
     prepared: PreparedCompactionAppend;
     transcriptByteCompactionLatch: NonNullable<
       InternalSessionEntry["transcriptByteCompactionLatch"]
     >;
   },
+  projection?: Parameters<typeof appendTranscriptEventSnapshotSync>[3],
 ): CommittedCompactionAppend {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
@@ -87,9 +88,12 @@ export function persistCompactionBoundaryWithSessionEntrySync(
         }),
       };
       const firstAppendedSeq = readNextTranscriptSeq(database, resolved.sessionId);
-      const appended = appendTranscriptEventSnapshotSync(preparedScope, event, {
-        expectedMutationAt: params.prepared.expectedMutationAt,
-      });
+      const appended = appendTranscriptEventSnapshotSync(
+        preparedScope,
+        event,
+        { expectedMutationAt: params.prepared.expectedMutationAt },
+        projection,
+      );
       const committed = requireTranscriptEventAppendSnapshot(
         appended,
         `Session transcript entry was not persisted: ${event.id}`,
