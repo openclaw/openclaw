@@ -3,6 +3,7 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { drainBackgroundTasksForTeardown } from "./background-tasks-teardown.js";
 import {
   WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
   WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
@@ -861,10 +862,7 @@ export class WhatsAppConnectionController {
     if (connection.watchdogTimer) {
       clearInterval(connection.watchdogTimer);
     }
-    if (connection.backgroundTasks.size > 0) {
-      await Promise.allSettled(connection.backgroundTasks);
-      connection.backgroundTasks.clear();
-    }
+    await drainBackgroundTasksForTeardown(connection.backgroundTasks);
     try {
       await connection.listener.close?.();
     } catch {
