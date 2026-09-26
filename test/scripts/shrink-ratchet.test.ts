@@ -12,6 +12,7 @@ import {
   parseRatchetCounts,
   parseRatchetPaths,
   parseRatchetScalar,
+  resolveRatchetBase,
 } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -87,6 +88,63 @@ describe("shrink-ratchet", () => {
     () => parseRatchetCounts("src/a.ts\t1.5\n", "counts.txt"),
   ])("rejects malformed count-map baselines", (parse) => {
     expect(parse).toThrow(/Invalid counts\.txt entry/u);
+  });
+  it("prefers an exact prepared merge parent over merge-base recovery", () => {
+    const root = tempDirs.make("openclaw-shrink-ratchet-prepared-");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["branch", "-m", "main"], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(path.join(root, "base.txt"), "base\n");
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["branch", "feature"], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(path.join(root, "prepared.txt"), "prepared\n");
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw",
+        "-c",
+        "user.email=test@openclaw.local",
+        "commit",
+        "-m",
+        "prepared base",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    const preparedBase = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+
+    execFileSync("git", ["checkout", "feature"], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(path.join(root, "feature.txt"), "feature\n");
+    execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw",
+        "-c",
+        "user.email=test@openclaw.local",
+        "commit",
+        "-m",
+        "feature",
+      ],
+      { cwd: root, stdio: "ignore" },
+    );
+    execFileSync("git", ["checkout", "main"], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["merge", "--no-ff", "feature", "-m", "prepared merge"],
+      { cwd: root, stdio: "ignore" },
+    );
+
+    expect(resolveRatchetBase(root, { base: preparedBase, staged: false })).toBe(preparedBase);
   });
 
   it.each([

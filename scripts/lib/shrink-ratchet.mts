@@ -61,13 +61,40 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
     return resolved ?? null;
   }
 
+  const resolvedSha = readGitText(root, ["rev-parse", resolved]).trim();
+
+  // The CI preflight has already proved that CHECKOUT_BASE_SHA is the first
+  // parent of the two-parent PR merge tree. Trust that verified handoff before
+  // asking merge-base to walk a shallow checkout.
+  if (
+    process.env.RATCHET_PR_HEAD_SHA &&
+    process.env.CHECKOUT_BASE_SHA?.trim() === resolvedSha
+  ) {
+    return resolved;
+  }
+
+  const headParents = readGitText(root, ["cat-file", "-p", "HEAD"])
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("parent "))
+    .map((line) => line.slice("parent ".length).trim());
+  if (headParents.includes(resolvedSha)) {
+    return resolved;
+  }
+
   // Branches own their grandfathered debt from the fork. Comparing against a
   // moving base tip turns unrelated cleanup there into a local expansion.
   try {
-    return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
+    const mergeBase = readGitText(root, ["merge-base", "HEAD", resolved]).trim();
+    if (mergeBase) {
+      return mergeBase;
+    }
   } catch {
-    return resolved;
+    // Fall through to the explicit failure below.
   }
+
+  throw new Error(
+    `Ratchet base ${resolved} (${resolvedSha}) is disconnected from HEAD; no verified CI or Git merge base was found.`,
+  );
 }
 
 export function loadRatchetSnapshot<T>(

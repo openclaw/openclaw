@@ -260,4 +260,48 @@ describe("line-cap growth ratchet", () => {
     );
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
   });
+  it("rejects disconnected line-cap bases instead of guessing a merge", () => {
+    const root = fixture(3);
+    const target = path.join(root, "src/file.ts");
+
+    git(root, "branch", "upstream");
+    git(root, "branch", "-m", "release");
+    fs.writeFileSync(target, source(6));
+    git(root, "add", ".");
+    git(root, "commit", "-m", "grow release file");
+    fs.writeFileSync(
+      path.join(root, "src/branch-change.ts"),
+      "export const branchChange = true;\n",
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-m", "later release commit");
+
+    git(root, "checkout", "upstream");
+    fs.writeFileSync(
+      path.join(root, "src/upstream-change.ts"),
+      "export const upstreamChange = true;\n",
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-m", "upstream update");
+
+    git(root, "checkout", "release");
+    git(root, "merge", "--no-ff", "upstream", "-m", "Merge branch 'main' into main");
+    git(root, "checkout", "--orphan", "unrelated");
+    fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
+    fs.rmSync(path.join(root, ".oxlintrc.json"), { force: true });
+    fs.writeFileSync(path.join(root, "unrelated.txt"), "unrelated\n");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "disconnected base");
+    const disconnectedBase = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "release");
+
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", disconnectedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "is disconnected from HEAD; no verified sync merge was found",
+      ),
+    );
+  });
 });

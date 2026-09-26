@@ -58,6 +58,19 @@ function git(cwd: string, args: string[]): void {
   });
 }
 
+function gitOutput(cwd: string, args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args],
+    {
+      cwd,
+      env: fixtureEnv(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
+}
+
 function commitFixture(root: string, message = "base"): void {
   for (const args of [["init"], ["add", "."], ["commit", "-m", message]]) {
     git(root, args);
@@ -322,23 +335,59 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
-  it("falls back to main when no merge base is available", () => {
+  it("preserves baseline growth rejection across earlier branch commits", () => {
     const root = tempDirs.make("openclaw-max-lines-disconnected-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
-    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    commitFixture(root, "release");
-    git(root, ["branch", "-m", "release"]);
-    git(root, ["checkout", "--orphan", "main"]);
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
+    commitFixture(root, "upstream base");
+    git(root, ["branch", "upstream"]);
+    git(root, ["branch", "-m", "release"]);
+
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
     git(root, ["add", "."]);
-    git(root, ["commit", "-m", "disconnected main"]);
-    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, ["commit", "-m", "grow release baseline"]);
+    fs.writeFileSync(
+      path.join(root, "src/branch-change.ts"),
+      "export const branchChange = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "later release commit"]);
+
+    git(root, ["checkout", "upstream"]);
+    fs.writeFileSync(
+      path.join(root, "src/upstream-change.ts"),
+      "export const upstreamChange = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "upstream update"]);
+
+    git(root, ["checkout", "release"]);
+    git(root, [
+      "merge",
+      "--no-ff",
+      "upstream",
+      "-m",
+      "Merge branch 'main' into main",
+    ]);
+    git(root, ["checkout", "--orphan", "unrelated"]);
+    fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
+    fs.rmSync(path.join(root, "config"), { recursive: true, force: true });
+    fs.writeFileSync(path.join(root, "unrelated.txt"), "unrelated\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "disconnected base"]);
+    const disconnectedBase = gitOutput(root, ["rev-parse", "HEAD"]);
     git(root, ["checkout", "release"]);
 
-    expect(main(root)).toBe(1);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--base", disconnectedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "is disconnected from HEAD; no verified sync merge was found",
+      ),
+    );
   });
 
   it("checks staged content instead of unstaged worktree edits", () => {
