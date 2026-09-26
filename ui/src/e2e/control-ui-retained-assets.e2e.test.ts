@@ -12,15 +12,13 @@ import {
   type ControlUiAssetManifestEntry,
 } from "../../../src/gateway/control-ui-asset-manifest.ts";
 import { createControlUiAssetRetention } from "../../../src/gateway/control-ui-asset-retention.ts";
-import { handleControlUiHttpRequest } from "../../../src/gateway/control-ui.ts";
+import {
+  handleControlUiHttpRequest,
+  type ControlUiRootState,
+} from "../../../src/gateway/control-ui.ts";
 import { withEnvAsync } from "../../../src/test-utils/env.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../test-helpers/control-ui-e2e.ts";
-
-type BundledControlUiRoot = Extract<
-  NonNullable<Parameters<typeof handleControlUiHttpRequest>[2]>["root"],
-  { kind: "bundled" }
->;
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
@@ -83,7 +81,7 @@ async function writeReplacementBuild(root: string): Promise<void> {
   });
 }
 
-async function startGatewayAssetServer(root: BundledControlUiRoot) {
+async function startGatewayAssetServer(root: Extract<ControlUiRootState, { kind: "bundled" }>) {
   const requests: string[] = [];
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -134,7 +132,7 @@ it("keeps an old document's unvisited lazy module available across builds", asyn
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const retainedA = createControlUiAssetRetention(buildA);
       await retainedA.prepare();
-      const root: BundledControlUiRoot = {
+      const root: Extract<ControlUiRootState, { kind: "bundled" }> = {
         kind: "bundled",
         path: buildA,
         realPath: await realpath(buildA),
