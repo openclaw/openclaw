@@ -1,6 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
@@ -31,7 +32,9 @@ import {
   readSessionMaintenanceCapCandidates,
   readSessionMaintenanceKeyProjection,
 } from "./session-accessor.sqlite-maintenance-candidates.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import {
@@ -119,7 +122,7 @@ export function applySessionEntryMaintenanceInDatabase(
   return prepareSessionEntryMaintenanceInDatabase(database, params, readPreservation)(database);
 }
 
-/** The caller must fence this read snapshot before applying its selected changes. */
+/** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
@@ -148,14 +151,16 @@ export function prepareSessionEntryMaintenanceInDatabase(
   >();
   const archivedKeys = new Set<string>();
   let preserveKeys: ReadonlySet<string> | undefined;
+  let baseKeys: string[] = [];
   const readPreserveKeys = () => {
     if (!preserveKeys) {
       const snapshot = readPreservation();
       const keyProjection = readSessionMaintenanceKeyProjection(reader);
+      baseKeys = collectSqliteSessionMaintenanceBaseKeys(keyProjection, activeSessionKeys);
       preserveKeys = resolveSessionMaintenancePreserveKeys({
         snapshot,
         store: keyProjection,
-        baseKeys: collectSqliteSessionMaintenanceBaseKeys(keyProjection, activeSessionKeys),
+        baseKeys,
       });
     }
     return preserveKeys;
@@ -192,8 +197,45 @@ export function prepareSessionEntryMaintenanceInDatabase(
       onArchived: ({ key }) => archivedKeys.add(key),
     });
   const ageFact = recordSessionEntryMaintenanceAgeFact(reader, maintenance, plannedAt);
+  const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
+  const readInputs = (database: Pick<OpenClawAgentDatabase, "db">) => {
+    const db = getSessionKysely(database.db);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_nodes")
+        .selectAll()
+        .where("session_key", "in", sqliteStringSet(selectedKeys))
+        .orderBy("session_key"),
+    ).rows;
+    return {
+      rows,
+      transcripts: uniqueStrings(rows.map((row) => row.current_session_id)).map((sessionId) =>
+        readTranscriptContextVersionInTransaction(database, sessionId),
+      ),
+      parents: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["session_key", "parent_session_key"])
+          .where("archived_at", "is", null)
+          .where("session_key", "in", sqliteStringSet(baseKeys))
+          .orderBy("session_key"),
+      ).rows,
+    };
+  };
+  const expected = selectedKeys.length > 0 ? readInputs(reader) : undefined;
   return (database) => {
-    const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
+    if (
+      expected &&
+      (!isDeepStrictEqual(expected, readInputs(database)) ||
+        (capArchived + capped > 0 &&
+          readSessionEntryCount(database, { includeArchived: false }) < entryCount))
+    ) {
+      throw new SqliteReclamationInputsChangedError(
+        "SQLite maintenance candidate rows changed before commit",
+      );
+    }
     const selectedEntries = readSessionEntryStore(database, { sessionKeys: selectedKeys });
     const archivedSessionKeys: string[] = [];
     const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
