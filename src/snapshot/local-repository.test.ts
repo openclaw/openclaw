@@ -13,7 +13,6 @@ import {
   createAgentDatabase,
   createGlobalDatabase,
   createUnsafeIndexDrift,
-  disableDefensiveModeForSchemaCorruption,
   DURABLE_PLUGIN_BLOB_MARKER,
   seedGlobalPluginBlobSnapshotFixtures,
   seedStateLease,
