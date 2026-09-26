@@ -1,3 +1,4 @@
+import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
@@ -86,6 +87,15 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "userProfiles.avatar.read") {
+    return { ...command, expected: { ...command.expected } };
+  }
+  if (command.type === "channelIngress.failedHealth") {
+    return { type: command.type };
+  }
+  if (command.type === "channelIngress.pressureHealth") {
+    return { type: command.type, input: { now: command.input.now } };
+  }
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
   }
@@ -226,6 +236,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (isChannelIngressReadCommand(command)) {
+    return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
+  }
   if (command.type === "cron.jobNames") {
     return command.jobIds.reduce(
       (sum, id) => sum + Buffer.byteLength(id, "utf8"),
@@ -240,6 +253,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         Buffer.byteLength(owner.sessionKey, "utf8"),
       bytes,
     );
+  }
+  if (command.type === "agentDatabaseDeletion.snapshot") {
+    return bytes + Buffer.byteLength(command.purpose, "utf8");
+  }
+  if (command.type === "agentDeletionJournal.status") {
+    return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {
     return (
@@ -394,10 +413,21 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (
     command.type === "userProfiles.reconcile" ||
+    command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||
     command.type === "userProfiles.authority.resolve"
   ) {
     return bytes + Buffer.byteLength(command.profileId, "utf8");
+  }
+  if (command.type === "userProfiles.avatar.read") {
+    return (
+      bytes +
+      Buffer.byteLength(command.profileId, "utf8") +
+      Object.values(command.expected).reduce(
+        (total, value) => total + Buffer.byteLength(value, "utf8"),
+        0,
+      )
+    );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
     return bytes + Buffer.byteLength(command.email, "utf8") + 8;

@@ -23,7 +23,7 @@ function hasDoctorContractArtifact(pluginRoot: string): boolean {
 }
 
 /** Inspects one manifest-owned plugin root without loading its runtime or doctor contract. */
-export function inspectPluginStartupMetadata(params: {
+function inspectPluginStartupMetadata(params: {
   pluginId: string;
   rootDir: string;
 }): PluginStartupMetadata | undefined {

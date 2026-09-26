@@ -1,4 +1,3 @@
-// Slack plugin module owns session routing for non-message events.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRuntimeConversationBindingRouteAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";

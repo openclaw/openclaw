@@ -213,6 +213,13 @@ and its local executor have settled. A late ownership or release failure returns
 an error instead of publishing an earlier success. Existing terminal history is
 not overwritten.
 
+Unexpected executor admission, settlement, or report publication failures also
+record the last reached phase, the redacted error, and whether rollback was needed
+or attempted before offering an interactive failure report. If ownership is lost
+or pending recovery prevents a safe history write, the command reports recovery
+pending and preserves the existing history for its owning updater instead of
+starting interactive triage.
+
 Activation has an enclosing deadline derived from the update's existing phase
 budget. If it expires, the updater cancels owned work and waits within that budget
 for its child processes to settle, then records `update-activation-timeout` as a
@@ -241,6 +248,12 @@ openclaw gateway call update.runs.get --params '{"runId":"<run-id>"}'
 fields and adds optional `activeRun` and `lastRun` records. While a run is active,
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
+
+The Gateway's `update.status` reports current automatic-update policy and any live
+campaign independently of checkout discovery. Installation details can arrive
+later; reading status does not start scheduling or clear an active campaign. If
+the update channel cannot be resolved, `schedule` remains absent rather than
+claiming the scheduler is idle.
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source

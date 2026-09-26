@@ -344,26 +344,22 @@ function renderTableBlock(table: MarkdownTableMeta): {
       degradation: "table-ascii",
     };
   }
-  const headerRow: RichBlockTableCell[] = table.headerCells.map((cell, index) => {
-    const align = table.aligns?.[index];
+  const renderCell = (
+    cell: MarkdownTableCell | undefined,
+    index: number,
+    header = false,
+  ): RichBlockTableCell => {
     const text = cellToRichText(cell);
     return {
-      is_header: true,
-      align: align ?? "left",
+      ...(header ? { is_header: true as const } : {}),
+      align: table.aligns?.[index] ?? "left",
       valign: "middle",
       ...(text !== undefined ? { text } : {}),
     };
-  });
+  };
+  const headerRow = table.headerCells.map((cell, index) => renderCell(cell, index, true));
   const bodyRows: RichBlockTableCell[][] = table.rowCells.map((row) =>
-    Array.from({ length: columnCount }, (_value, index) => {
-      const align = table.aligns?.[index];
-      const text = cellToRichText(row[index]);
-      return {
-        align: align ?? "left",
-        valign: "middle",
-        ...(text !== undefined ? { text } : {}),
-      };
-    }),
+    Array.from({ length: columnCount }, (_value, index) => renderCell(row[index], index)),
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {

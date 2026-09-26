@@ -84,6 +84,7 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   createChatDirectiveSuiteResources,
   expectClaimOnlyTranscriptMedia,
+  readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -834,14 +835,7 @@ function createChatContext() {
           input: ["text", "image"],
         },
       ],
-    getRuntimeConfig: () =>
-      ({
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
-      }) as never,
+    getRuntimeConfig: () => readChatDirectiveConfig(mockState),
     registerToolEventRecipient: vi.fn<GatewayRequestContext["registerToolEventRecipient"]>(),
     broadcastToConnIds: vi.fn<GatewayRequestContext["broadcastToConnIds"]>(),
     getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
@@ -3216,6 +3210,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       const respond = vi.fn();
       const context = createChatContext();
+      const cfg = context.getRuntimeConfig();
+      context.getRuntimeConfig = () => cfg;
       await initializeSessionReadContext(context);
 
       await expectDefined(

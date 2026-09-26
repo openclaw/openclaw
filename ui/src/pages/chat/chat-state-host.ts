@@ -43,6 +43,7 @@ export type ChatPageHost = ChatHost &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
     reviewQueuedMessageEdit?: () => void;
+    captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
     password: string;
     onboarding: boolean;

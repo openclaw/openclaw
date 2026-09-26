@@ -104,23 +104,6 @@ const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
     warnings: [],
   })),
 );
-const readMigrationCheckpointStatus = vi.hoisted(() =>
-  vi.fn<() => "stale" | "state-current" | "startup-current">(() => "startup-current"),
-);
-const startupMigrationLeaseHeartbeat = vi.hoisted(() => vi.fn());
-const startupMigrationLeaseRelease = vi.hoisted(() => vi.fn());
-const startupMigrationLeaseAssertOwnedInTransaction = vi.hoisted(() => vi.fn());
-const startupMigrationLease = vi.hoisted(() => ({
-  assertOwnedInTransaction: startupMigrationLeaseAssertOwnedInTransaction,
-  heartbeat: startupMigrationLeaseHeartbeat,
-  owner: "startup-test-owner",
-  release: startupMigrationLeaseRelease,
-}));
-const acquireStartupMigrationLeaseWithWait = vi.hoisted(() =>
-  vi.fn(async (_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
-);
-const recordSuccessfulStateMigrations = vi.hoisted(() => vi.fn());
-const recordSuccessfulStartupMigrations = vi.hoisted(() => vi.fn());
 const runPostCorePluginConvergence = vi.hoisted(() =>
   vi.fn(async (): Promise<StartupConvergenceResult> => ({
     changes: [],
@@ -139,12 +122,6 @@ const runActivePluginPayloadSmokeCheck = vi.hoisted(() =>
 );
 const planStartupPluginConvergence = vi.hoisted(() =>
   vi.fn(async () => ({ required: true, installRecords: {} })),
-);
-const planPristineStartupStateMigrations = vi.hoisted(() =>
-  vi.fn(() => ({
-    skipAllStateMigrations: false,
-    skipCoreStateMigrations: false,
-  })),
 );
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async (): Promise<ReturnType<typeof makePreflightConfigSnapshot>> => ({
@@ -248,33 +225,6 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
   repairLegacyCronStoreWithoutPrompt,
 }));
 
-vi.mock("../infra/startup-migration-checkpoint.js", () => ({
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
-  acquireStartupMigrationLeaseWithWait,
-  inspectStartupMigrationCheckpointWithLease: async (params: {
-    env: NodeJS.ProcessEnv;
-    stateMigrations: boolean;
-    startupMigrations: boolean;
-    forceLease: boolean;
-  }) => {
-    const status =
-      params.stateMigrations || params.startupMigrations
-        ? readMigrationCheckpointStatus()
-        : "stale";
-    const required =
-      params.forceLease ||
-      (params.stateMigrations && status === "stale") ||
-      (params.startupMigrations && status !== "startup-current");
-    return {
-      status,
-      lease: required ? await acquireStartupMigrationLeaseWithWait(params) : undefined,
-    };
-  },
-  readMigrationCheckpointStatus,
-  recordSuccessfulStateMigrations,
-  recordSuccessfulStartupMigrations,
-}));
-
 vi.mock("../plugins/active-payload-verification.js", () => ({
   runActivePluginPayloadSmokeCheck,
 }));
@@ -285,10 +235,6 @@ vi.mock("./doctor/shared/post-core-plugin-convergence.js", () => ({
 
 vi.mock("./doctor/shared/startup-plugin-convergence-plan.js", () => ({
   planStartupPluginConvergence,
-}));
-
-vi.mock("./doctor/shared/pristine-startup-state.js", () => ({
-  planPristineStartupStateMigrations,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -304,6 +250,8 @@ vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
 }));
 
 vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
+  completeDoctorPluginMetadataSnapshot: ({ snapshot }: { snapshot?: PluginMetadataSnapshot }) =>
+    snapshot,
   createDoctorPluginMetadataSnapshotScope: (params: {
     getBaseSnapshot: () => PluginMetadataSnapshot | undefined;
   }) => ({
@@ -326,17 +274,9 @@ export const preflightStateMigrationMocks = {
   autoMigrateLegacyPluginDoctorState,
   repairLegacyCronStoreWithoutPrompt,
   collectCronCodexRuntimePolicyTargetsReadOnly,
-  readMigrationCheckpointStatus,
-  startupMigrationLeaseHeartbeat,
-  startupMigrationLeaseRelease,
-  startupMigrationLease,
-  acquireStartupMigrationLeaseWithWait,
-  recordSuccessfulStateMigrations,
-  recordSuccessfulStartupMigrations,
   runPostCorePluginConvergence,
   runActivePluginPayloadSmokeCheck,
   planStartupPluginConvergence,
-  planPristineStartupStateMigrations,
   readConfigFileSnapshot,
   pluginMigrationFingerprint,
   readConfigFileSnapshotWithPluginMetadata,
@@ -360,21 +300,14 @@ export function resetStateMigrationPreflightMocks(): void {
     statelessPluginIds: [],
     runtimePluginAliases: [],
   });
-  acquireStartupMigrationLeaseWithWait.mockResolvedValue(startupMigrationLease);
   pluginMigrationFingerprint.mockReset();
   pluginMigrationFingerprint.mockReturnValue("plugin-migrations");
   findDoctorLegacyConfigIssues.mockReset();
   findDoctorLegacyConfigIssues.mockReturnValue([]);
   setActiveDegradedPlugins([]);
-  readMigrationCheckpointStatus.mockReset();
-  readMigrationCheckpointStatus.mockReturnValue("startup-current");
   runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
   runActivePluginPayloadSmokeCheck.mockReset().mockResolvedValue({ checked: [], failures: [] });
   planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
-  planPristineStartupStateMigrations.mockReturnValue({
-    skipAllStateMigrations: false,
-    skipCoreStateMigrations: false,
-  });
   autoMigrateLegacyStateDir.mockResolvedValue(makeStateMigrationResult([], false));
   autoMigrateLegacyState.mockResolvedValue(makeStateMigrationResult(["imported"]));
   autoMigrateLegacyPluginDoctorState.mockResolvedValue(

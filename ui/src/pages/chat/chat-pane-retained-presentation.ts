@@ -477,6 +477,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           message: state.chatMessage,
           mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
+          replyTarget: state.chatReplyTarget,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
         });
@@ -510,6 +511,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatAttachments = [...handoff.attachments];
     state.chatGoalDraftMode = handoff.goalMode ?? null;
+    state.chatReplyTarget = handoff.replyTarget ?? null;
     state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     state.requestUpdate?.();
     if (handoff.send) {
@@ -526,6 +528,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
         const goalMode = state.chatGoalDraftMode;
+        const replyTarget = state.chatReplyTarget;
         const presentationOwner = this.headerOutcomeOwner;
         const isCurrent = () =>
           this.state === state &&
@@ -542,7 +545,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           state.chatMessage === handoff.draft &&
           state.chatAttachments === attachments &&
           state.chatMentions === mentions &&
-          state.chatGoalDraftMode === goalMode;
+          state.chatGoalDraftMode === goalMode &&
+          state.chatReplyTarget === replyTarget;
         if (!isCurrent()) {
           return;
         }

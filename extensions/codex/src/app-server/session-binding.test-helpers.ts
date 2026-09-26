@@ -8,12 +8,42 @@ import {
   createCodexAppServerBindingStore,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
+  type CodexBindingStateStore,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
 
-export function createCodexTestBindingStateStore(): PluginStateSyncKeyedStore<StoredCodexAppServerBinding> {
-  const values = new Map<string, StoredCodexAppServerBinding>();
+export function createCodexTestBindingStateStore(
+  values = new Map<string, StoredCodexAppServerBinding>(),
+): PluginStateSyncKeyedStore<StoredCodexAppServerBinding> & CodexBindingStateStore {
+  const observe = (key: string) => ({
+    value: structuredClone(values.get(key)),
+    comparison: JSON.stringify([key, values.get(key)]),
+  });
   return {
+    withCurrent({ assertCurrent }) {
+      assertCurrent();
+      return {
+        async observe(key) {
+          assertCurrent();
+          return observe(key);
+        },
+        async compareAndApply(key, comparison, intent) {
+          assertCurrent();
+          const current = observe(key);
+          if (current.comparison !== comparison) {
+            return { status: "conflict", current };
+          }
+          if (intent.action === "keep") {
+            return { status: "unchanged" };
+          }
+          if (intent.operation === "delete") {
+            return { status: values.delete(key) ? "applied" : "unchanged" };
+          }
+          values.set(key, structuredClone(intent.value));
+          return { status: "applied" };
+        },
+      };
+    },
     register(key, value) {
       values.set(key, value);
     },

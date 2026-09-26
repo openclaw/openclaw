@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   writeConfigMachineState,
   updateConfigMachineState,
@@ -12,6 +12,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { TuiSessionList } from "./tui-backend.js";
+import { matchesOwnedTuiSession } from "./tui-session-events.js";
 import type { SessionScope } from "./tui-types.js";
 
 type TuiLastSessionDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
@@ -185,20 +186,15 @@ export function resolveRememberedTuiSessionKey(params: {
     return null;
   }
   const currentAgentId = normalizeAgentId(params.currentAgentId);
-  const parsed = parseAgentSessionKey(rememberedKey);
-  if (parsed && normalizeAgentId(parsed.agentId) !== currentAgentId) {
-    return null;
-  }
-  const rememberedRest = parsed?.rest ?? rememberedKey;
-  // Agent-prefixed and bare keys can refer to the same session; compare the session rest too.
-  const match = params.sessions.find((session) => {
-    if (isHeartbeatLikeTuiSession(session)) {
-      return false;
-    }
-    if (session.key === rememberedKey) {
-      return true;
-    }
-    return parseAgentSessionKey(session.key)?.rest === rememberedRest;
-  });
+  const match = params.sessions.find(
+    (session) =>
+      !isHeartbeatLikeTuiSession(session) &&
+      matchesOwnedTuiSession(
+        rememberedKey,
+        currentAgentId,
+        { sessionKey: session.key },
+        currentAgentId,
+      ),
+  );
   return match?.key ?? null;
 }

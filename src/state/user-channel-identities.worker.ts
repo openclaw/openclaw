@@ -52,6 +52,7 @@ export function executeUserChannelIdentityChange(
     action: input.action,
     subject,
     profiles,
+    channels: subject === undefined ? [] : [subject],
   };
   let changed = false;
   const mutationOptions = {
@@ -74,7 +75,10 @@ export function executeUserChannelIdentityChange(
           mutationOptions.beforeChange();
         }
         if (input.action === "policy") {
-          facts.profiles = publishUserChannelPolicyInDatabase(db, input.policy);
+          Object.assign(
+            facts,
+            publishUserChannelPolicyInDatabase(db, input.policy, input.configuredOwnersHash),
+          );
         }
         const value =
           input.action === "policy"

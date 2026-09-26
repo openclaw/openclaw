@@ -249,6 +249,13 @@ export type SessionRowPresenceWorkerInput = {
   scope: SessionAccessScope & { databaseAgentId: string };
 };
 
+type SessionProjectionStatusWorkerInput = {
+  kind: "projection-status";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  sessionId?: string;
+};
+
 type SessionMembersWorkerInput = {
   kind: "session-members";
   database: { agentId: string; path: string };
@@ -285,6 +292,14 @@ type SessionEntryReadWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+export type SessionDiagnosticTextWorkerInput = {
+  kind: "session-diagnostic-text";
+  database: { agentId: string; path: string };
+  scope: SessionEntryReadScope & { agentId: string; databaseAgentId: string; sessionId: string };
+  continuation?: CanonicalSessionReaderContinuation;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
 type SessionEntryReadWorkerResult = {
   kind: "session-entry-read";
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
@@ -313,7 +328,7 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation";
+  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -339,6 +354,7 @@ export type SessionExactEntriesWorkerResult = {
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
+    databasePath: string;
   };
   sharing?: {
     source: { agentId: string; path: string };
@@ -422,11 +438,13 @@ export type SessionHistoryWorkerInput =
   | SessionTitleFieldsWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
+  | SessionProjectionStatusWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionDiagnosticTextWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
   | SessionStoreTargetWorkerInput
@@ -471,11 +489,17 @@ export type SessionTranscriptWorkerValues = {
   "session-title-fields": SessionTitleFieldsWorkerResult;
   "session-row-backfill": SessionRowBackfillWorkerResult;
   "session-row-presence": boolean;
+  "projection-status": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-diagnostic-text": {
+    kind: "session-diagnostic-text";
+    text: string | undefined;
+    source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  };
   "session-exact-entries": SessionExactEntriesWorkerResult;
   "session-row-facts": SessionRowFactsWorkerResult;
   "session-store-target":
@@ -544,6 +568,10 @@ export type SessionHistoryWorkerDatabase = {
     params: SessionRowBackfillWorkerInput["params"],
   ) => Promise<SessionRowBackfillWorkerResult["fields"]>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
+  readProjectionStatus: (
+    input: Omit<SessionProjectionStatusWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   readIdentityEvidence: (
     input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
   ) => Promise<SessionIdentityEvidenceResult[]>;
@@ -573,6 +601,9 @@ export type SessionHistoryWorkerDatabase = {
       unknown
     >
   >;
+  readDiagnosticText: (
+    input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
+  ) => Promise<string | undefined>;
   readMembers: (
     input: Omit<SessionMembersWorkerInput, "kind" | "database">,
   ) => Promise<SessionMember[]>;

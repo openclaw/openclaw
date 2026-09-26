@@ -13,20 +13,23 @@ Runner placement is separate from coverage selection. On automatic canonical hyb
 
 ## Scope and routing
 
-Full main CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci).
+Main-tier CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci).
 Main-push lane selection below describes the opt-in `OPENCLAW_CI_ON_PUSH=true`
-path. Hourly runs use ordinary full manual coverage, including Android, without
-changed-path filtering.
+path. Hourly runs select the complete main tier, including Android, without
+changed-path filtering. Full manual and release validation additionally select
+the release-only proofs described in the scheduled-workflow guide.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 
 Labeler skips PR edits without title or base-branch changes. These ignored edits use isolated per-run concurrency groups so they cannot cancel running labeling or replace useful pending work. Opened, reopened, synchronize, and title/base-edit events retain the shared per-PR group and supersede older labeling runs. Issue labeling and manual backfills retain their existing non-cancelling ref group.
 
-Affected pull requests, `main` pushes, and exact-head `release_gate` fallbacks run one required `ios-build (smoke)` phase: the existing `pnpm ios:build` command and Swift lint, with their Xcode, Swift, and Watch Rust tooling. The smoke phase does not run Rust tests or lifecycle/Watch simulator tests. A failed, cancelled, or unexpectedly skipped smoke still fails `openclaw/ci-gate`.
+Affected pull requests, `main` pushes, and exact-head `release_gate` fallbacks run one required `ios-build (smoke)` phase: the existing `pnpm ios:build` command, Swift lint, focused voice cleanup tests, and native Access client, transfer, and session-store tests, with their Xcode, Swift, and Watch Rust tooling. Smoke omits Rust tests and the broader app/notification lifecycle and Watch simulator suites. A failed, cancelled, or unexpectedly skipped smoke still fails `openclaw/ci-gate`.
 
-Hourly main-tier CI retains `ios-build (tests)`, including Rust, lifecycle, and Watch tests, while excluding screenshot capture. Screenshot-input changes on pull requests, admitted pushes, and their exact-head `release_gate` fallbacks select both device shards and the evidence reducer through `shouldRunIosScreenshots`: iOS UI/resources/UI tests and Fastlane configuration, linked Swift sources, and capture/build tooling. Native unit-test-only Swift edits do not select screenshots.
+Hourly main-tier CI retains `ios-build (tests)`, including Rust, voice cleanup, native Access, and every focused app/notification lifecycle test, including its Watch messaging and activation coverage. Managed attachment UI/export proof, Watch operation simulator suites, and Watch delivery UI proof belong to full-tier manual/release validation; hourly runs also exclude screenshot capture. Main-tier and smoke builds use the selected simulator's native architecture without compiler indexing; voice and lifecycle tests retain logs and xcresult bundles without Xcode's verbose diagnostic collection. Only a canceled selected scheduled `ios-build` on canonical `main` can pass the aggregate with a coalescing notice; this delegates proof to a later job rather than validating the canceled revision. Other failures, unexpected skips, and cancellations remain failures. See [scheduled iOS aggregation](/ci/scheduled-workflows#hourly-main-ci).
 
-Full-tier manual CI (`workflow_dispatch` with `validation_tier=full`, `release_gate=false`, and `release_scope=full`), including full-scope release validation, retains separate Release device and Debug/native-test phases plus the full iPhone, iPad, and Watch screenshot matrix. The test phase runs the Rust engine, lifecycle, and Watch operation tests. The two device shards build their own simulator apps independently of `ios-build`; scenarios stay serial within each device, with Watch evidence in the iPad shard. A hosted reducer verifies the exact evidence union and provenance before publishing the canonical screenshot artifact. The final gate requires both build phases, both screenshot shards, and the reducer. Frozen compatibility targets retain their existing Debug-only full-manual contract and screenshot exclusion; `npm-beta` and `npm-stable` still defer native qualification. All iOS build phases and screenshot shards use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27 image. A pure iOS app change does not select macOS jobs by itself.
+Screenshot-input changes on pull requests, admitted pushes, and their exact-head `release_gate` fallbacks select both device shards and the evidence reducer through `shouldRunIosScreenshots`: iOS UI/resources/UI tests and Fastlane configuration, linked Swift sources, and capture/build tooling. Native unit-test-only Swift edits do not select screenshots.
+
+Full-tier manual CI (`workflow_dispatch` with `validation_tier=full`, `release_gate=false`, and `release_scope=full`), including full-scope release validation, retains separate Release device and Debug/native-test phases plus the full iPhone, iPad, and Watch screenshot matrix. The test phase keeps universal simulator builds, failure diagnostics, Rust, voice cleanup, native Access, lifecycle, managed attachment UI/export, Watch operation, and Watch delivery UI tests. Every case and assertion moved out of hourly CI remains in this phase. The two device shards build their own simulator apps independently of `ios-build`; scenarios stay serial within each device, with Watch evidence in the iPad shard. A hosted reducer verifies the exact evidence union and provenance before publishing the canonical screenshot artifact. The final gate requires both build phases, both screenshot shards, and the reducer. Frozen compatibility targets retain their existing Debug-only full-manual contract and screenshot exclusion; `npm-beta` and `npm-stable` still defer native qualification. All iOS build phases and screenshot shards use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27 image. A pure iOS app change does not select macOS jobs by itself.
 
 The iPad shard captures Watch from the Watch app compiled by its own fresh screenshot build, after all four iPad captures pass. It does not rebuild Watch or transfer simulator products between jobs. The standalone `watch_screenshot` lane still prepares and builds a fresh Watch app. A missing or invalid product fails capture without a rebuild fallback; completed iOS screenshots and result bundles remain available in the failure artifact.
 
@@ -79,8 +82,9 @@ not replace their process proofs. Push gates compare the triggering event's
 every commit in that push. They do not accumulate changes from earlier pushes
 whose pending runs were coalesced away (cancelled). If a coalesced or otherwise
 cancelled main run never executes a selected owner-path proof, that proof can
-remain unexecuted until hourly full CI, a later non-cancelled opt-in main run
-selecting the same lane, or applicable manual/release validation runs. The published-upgrade survivor is
+remain unexecuted until a later run selects it. Hourly main-tier CI covers its
+retained lanes; release-only compositions require applicable full manual or
+release validation unless a direct edit selects them. The published-upgrade survivor is
 selected on every admitted canonical main run, so it does not depend on a later
 owner-path match. Ordinary manual CI and Full Release Validation also select it
 independently of changed paths, subject to the target's Docker seed capability.

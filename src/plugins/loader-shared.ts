@@ -315,6 +315,7 @@ function createManifestPluginRecord(params: {
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
     controlUi: manifestRecord.controlUi,
+    uiCapabilities: manifestRecord.uiCapabilities,
     mcpServers: manifestRecord.mcpServers,
   });
   if (!params.shouldLoadModules) {

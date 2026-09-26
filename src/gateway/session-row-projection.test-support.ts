@@ -146,6 +146,16 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    observeGeneration() {
+      const observedRevision = revision;
+      let active = true;
+      return {
+        isCurrent: (row) => active && revision === observedRevision && projection.isCurrent(row),
+        dispose() {
+          active = false;
+        },
+      };
+    },
     readPreparedRowContext: () => rowContext,
     capture: describe,
     findBySessionId: (query) =>
@@ -232,6 +242,9 @@ export function createSessionRowProjectionFixture(params: {
     dirtyRowCount: 0,
     needsMaterialization: false,
     getPolicyConfig: () => cfg,
+    get sharingRevision() {
+      return revisionToken;
+    },
     state: {
       get revision() {
         return revisionToken;

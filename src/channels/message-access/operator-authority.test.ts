@@ -15,6 +15,7 @@ import {
   registerVirtualTestPlugin,
 } from "../../plugin-sdk/test-helpers/contracts-testkit.js";
 import { stageActivePluginRegistry } from "../../plugins/runtime.js";
+import { readConfigMachineState } from "../../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -22,11 +23,25 @@ import {
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
+  resolveUserChannelAuthorizationPolicy,
 } from "../../state/user-channel-identities.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
 
 installDiscordRegistryHooks();
+
+it("keeps native policy readable by schema-19 predecessors without configured owners", async () => {
+  await withAdminIngress(async ({ cfg, activatePolicy }) => {
+    for (const owners of [undefined, []]) {
+      cfg.commands!.ownerAllowFrom = owners;
+      await activatePolicy({});
+      // Predecessor authority readers compare this entire persisted value to the role policy.
+      expect
+        .soft(readConfigMachineState("operator.channelPolicy"))
+        .toEqual(resolveUserChannelAuthorizationPolicy(cfg.gateway));
+    }
+  });
+});
 
 it("recognizes every linked Team admin through host ingress and gives Guardian operator provenance", async () => {
   await withAdminIngress(async ({ cfg, admins, context }) => {

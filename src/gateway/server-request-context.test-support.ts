@@ -83,6 +83,7 @@ export function makeContextParams(
       readPreparedGatewayModelCatalog: undefined,
       refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
       broadcast: vi.fn(),
+      publishPresence: vi.fn(),
       broadcastToConnIds: vi.fn(),
       nodeSendToSession: vi.fn(),
       nodeSendToAllSubscribed: vi.fn(),

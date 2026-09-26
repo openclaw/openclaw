@@ -113,20 +113,16 @@ function buildQaProfileScorecardEvidence(params: {
     }
   }
   const secondaryCoverageIds = coverageIdsForRole(entries, "secondary");
-  const categoryInputs = params.categories.map((category) => ({
-    category,
-    features: category.features,
-    coverageIds: normalizeSortedUniqueTrimmedStringList(category.coverageIds),
-  }));
-  const categoryReports = categoryInputs.map(({ category, features, coverageIds }) => {
+  const categoryReports = params.categories.map((category) => {
+    const coverageIds = normalizeSortedUniqueTrimmedStringList(category.coverageIds);
     const fulfilledCoverageIdCount = coverageIds.filter((coverageId) =>
       primaryCoverageIds.has(coverageId),
     ).length;
     const secondaryOnlyCoverageIdCount = coverageIds.filter(
       (coverageId) => !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
     ).length;
-    const missingCoverageIds = normalizeSortedUniqueTrimmedStringList(
-      coverageIds.filter((coverageId) => !primaryCoverageIds.has(coverageId)),
+    const missingCoverageIds = coverageIds.filter(
+      (coverageId) => !primaryCoverageIds.has(coverageId),
     );
     const missingCoverageIdCount = coverageIds.length - fulfilledCoverageIdCount;
     return {
@@ -137,7 +133,7 @@ function buildQaProfileScorecardEvidence(params: {
         coverageIdCount: coverageIds.length,
         fulfilledCoverageIdCount,
       }),
-      features: featureCounts(features, primaryCoverageIds),
+      features: featureCounts(category.features, primaryCoverageIds),
       coverageIds: {
         total: coverageIds.length,
         fulfilled: fulfilledCoverageIdCount,
@@ -149,7 +145,7 @@ function buildQaProfileScorecardEvidence(params: {
     };
   });
   const profileCoverageIds = normalizeSortedUniqueTrimmedStringList(
-    categoryInputs.flatMap((input) => input.coverageIds),
+    params.categories.flatMap((category) => category.coverageIds),
   );
   const coverageIdCount = profileCoverageIds.length;
   const fulfilledCoverageIdCount = profileCoverageIds.filter((coverageId) =>
@@ -165,7 +161,7 @@ function buildQaProfileScorecardEvidence(params: {
   const missingCategoryCount = categoryReports.filter(
     (category) => category.status === "missing",
   ).length;
-  const profileFeatures = categoryInputs.flatMap((input) => input.features);
+  const profileFeatures = params.categories.flatMap((category) => category.features);
   return {
     filters: {
       surface: nullableFilter(params.filters.surface),

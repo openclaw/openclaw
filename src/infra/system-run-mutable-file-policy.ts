@@ -70,14 +70,7 @@ export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean
 }
 
 export function looksLikePathToken(token: string): boolean {
-  return (
-    token.startsWith(".") ||
-    token.startsWith("/") ||
-    token.startsWith("\\") ||
-    token.includes("/") ||
-    token.includes("\\") ||
-    path.extname(token).length > 0
-  );
+  return looksLikeExplicitPathToken(token) || path.extname(token).length > 0;
 }
 
 export function looksLikeExplicitPathToken(token: string): boolean {

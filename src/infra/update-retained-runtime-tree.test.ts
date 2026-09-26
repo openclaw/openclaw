@@ -7,6 +7,7 @@ import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
@@ -260,18 +261,48 @@ it("retains files by hard link so the inodes outlive package replacement", async
 });
 
 it("copies overlay files without copy-up changing their admitted identity", async () => {
-  const f = await fixture();
+  const nestedFiles = Array.from({ length: 8 }, (_, index) =>
+    path.join("node_modules", "fixture", "dist", "deep", "chunks", `part-${index}.js`),
+  );
+  const f = await fixture(async (source) => {
+    for (const file of nestedFiles) {
+      const destination = path.join(source, file);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.writeFile(destination, `// ${file}\n`, { mode: 0o444 });
+    }
+    await fs.chmod(path.dirname(path.join(source, nestedFiles[0]!)), 0o751);
+  });
+  // Discovery can encounter a file before its parent directory's inventory entry.
+  f.plan.entries.sort(
+    (left, right) => Number(left.kind === "directory") - Number(right.kind === "directory"),
+  );
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   const disk = await fs.statfs(f.source);
   disk.type = 0x794c7630;
   vi.spyOn(fs, "statfs").mockResolvedValue(disk);
   const link = vi.spyOn(fs, "link");
-  expect(await f.link()).toEqual({ linked: 0, copied: 3 });
+  const mkdir = vi.spyOn(fs, "mkdir");
+  expect(await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, f.link)).toEqual({
+    linked: 0,
+    copied: 3 + nestedFiles.length,
+  });
   expect(link).not.toHaveBeenCalled();
+  // Nested leaves must not repeat an ancestor-creation walk for every copied file.
+  expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
+    f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
+  );
   const retainedWorker = path.join(f.destination, "dist", "state", "worker.js");
   expect((await fs.stat(retainedWorker)).ino).not.toBe((await fs.stat(f.worker)).ino);
   expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
   expect((await fs.stat(retainedWorker)).mode & 0o777).toBe(0o444);
+  for (const file of nestedFiles) {
+    const retained = path.join(f.destination, file);
+    expect(await fs.readFile(retained, "utf8")).toBe(`// ${file}\n`);
+    expect((await fs.stat(retained)).mode & 0o777).toBe(0o444);
+  }
+  expect(
+    (await fs.stat(path.dirname(path.join(f.destination, nestedFiles[0]!)))).mode & 0o777,
+  ).toBe(0o751);
 });
 
 it.each([0, 1])("copies shared inode occurrence %i when hard links are refused", async (index) => {

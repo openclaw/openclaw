@@ -7,6 +7,13 @@ import {
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
+  getMemoryCapabilityRegistration: vi.fn<() => { pluginId: string } | undefined>(),
+  prewarmMemorySearchWorker: vi.fn(async () => {
+    mocks.events.push("memory-search");
+  }),
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(() => ({
+    prewarmMemorySearchWorker: mocks.prewarmMemorySearchWorker,
+  })),
   loadCombinedSessionStoreForGatewayCore: vi.fn((_cfg: unknown, options: { agentId: string }) => {
     mocks.events.push(`sessions.load.${options.agentId}`);
     return {
@@ -29,12 +36,23 @@ vi.mock("../plugins/management-service.js", () => ({
   listManagedPlugins: mocks.listManagedPlugins,
 }));
 
+vi.mock("../plugins/memory-state.js", () => ({
+  getMemoryCapabilityRegistration: mocks.getMemoryCapabilityRegistration,
+}));
+
+vi.mock("../plugins/public-surface-loader.js", () => ({
+  loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
+}));
+
 const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
 
 beforeEach(() => {
   mocks.events.length = 0;
   mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listManagedPlugins.mockClear();
+  mocks.getMemoryCapabilityRegistration.mockReset();
+  mocks.prewarmMemorySearchWorker.mockClear();
+  mocks.loadBundledPluginPublicArtifactModuleSync.mockClear();
 });
 
 afterEach(() => {
@@ -43,25 +61,34 @@ afterEach(() => {
 });
 
 describe("scheduleGatewayHandlerPrewarm", () => {
-  it("warms process-stable plugin data without rebuilding resident session rows", async () => {
-    vi.useFakeTimers();
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-    } as never;
+  it.each([undefined, "memory-lancedb", "memory-core"])(
+    "warms retrieval only for active Memory Core (memory plugin: %s)",
+    async (pluginId) => {
+      vi.useFakeTimers();
+      mocks.getMemoryCapabilityRegistration.mockReturnValue(pluginId ? { pluginId } : undefined);
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      } as never;
 
-    const sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: cfg,
-      log: { warn: vi.fn() },
-    });
+      const sidecar = scheduleGatewayHandlerPrewarm({
+        cfgAtStart: cfg,
+        log: { warn: vi.fn() },
+      });
 
-    expect(mocks.events).toEqual([]);
-    await vi.runAllTimersAsync();
+      expect(mocks.events).toEqual([]);
+      await vi.runAllTimersAsync();
 
-    expect(mocks.events).toEqual(["plugins"]);
-    expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
-    expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
-    await sidecar.stop();
-  });
+      expect(mocks.events).toEqual(
+        pluginId === "memory-core" ? ["memory-search", "plugins"] : ["plugins"],
+      );
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledTimes(
+        pluginId === "memory-core" ? 1 : 0,
+      );
+      expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
+      expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
+      await sidecar.stop();
+    },
+  );
 
   it("waits for gateway readiness before warming handler data", async () => {
     vi.useFakeTimers();

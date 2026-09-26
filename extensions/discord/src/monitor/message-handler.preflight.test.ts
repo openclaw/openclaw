@@ -1,3 +1,4 @@
+import { createUserOwnedAcpTarget } from "../test-support/conversation-bindings.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
@@ -2992,10 +2993,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     const binding = await manager.bindTarget({
       threadId: "thread-1",
       channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:main:acp:user-thread",
-      boundBy: "owner-1",
-      agentId: "main",
+      ...createUserOwnedAcpTarget("agent:main:acp:user-thread"),
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });

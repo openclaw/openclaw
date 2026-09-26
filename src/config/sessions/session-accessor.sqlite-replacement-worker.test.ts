@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -45,6 +46,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 it("commits platform-normalized replacements without entering a caller-thread SQLite write transaction", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const file = statSync(database.path, { bigint: true });
     const sessionKey = "agent:main:replacement-worker";
     writeSessionEntry(database, sessionKey, {
       sessionId: "replacement",
@@ -90,6 +92,7 @@ it("commits platform-normalized replacements without entering a caller-thread SQ
       expect(mutations).toEqual([
         {
           agentId: "main",
+          databaseIdentity: `${file.dev}:${file.ino}`,
           kind: "reset",
           previous: { sessionId: "replacement", sessionKeys: [sessionKey] },
           current: { sessionId: "replacement", sessionKeys: [sessionKey] },
@@ -157,13 +160,13 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       let current = true;
       const admitted = vi
         .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback) =>
+        .mockImplementation((callback, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "commit") {
               current = false;
             }
             return callback(request, grant);
-          }),
+          }, attachment),
         );
       const followup = vi.fn();
       const move = () =>
@@ -335,13 +338,13 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
     let current = true;
     const hook = vi
       .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback) =>
+      .mockImplementation((callback, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "transaction") {
             current = false;
           }
           callback(request, grant);
-        }),
+        }, attachment),
       );
     try {
       await expect(

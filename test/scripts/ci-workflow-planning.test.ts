@@ -2048,10 +2048,97 @@ describe("ci workflow guards", () => {
       expect(
         evaluateWorkflowExpression(workflow.jobs["ios-build"].strategy.matrix.phase, context),
       ).toEqual(release ? ["release", "tests"] : ["tests"]);
+      for (const name of [
+        "Test Watch RTC engine",
+        "Run focused iOS voice cleanup simulator tests",
+        "Run focused iOS lifecycle simulator tests",
+        "Prove native managed document download and export",
+        "Run focused Apple Watch operation simulator tests",
+      ]) {
+        const step = workflow.jobs["ios-build"].steps.find(
+          (candidate: WorkflowStep) => candidate.name === name,
+        );
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            ...context,
+            matrix: { phase: "tests" },
+            env: { HISTORICAL_TARGET: "false" },
+          }),
+          name,
+        ).toBe(
+          release ||
+            ![
+              "Prove native managed document download and export",
+              "Run focused Apple Watch operation simulator tests",
+            ].includes(name),
+        );
+      }
       const packageStep = workflow.jobs["docker-seed-e2e"].steps.find(
         (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
       );
       expect(evaluateWorkflowExpression("${{ " + packageStep.if + " }}", context)).toBe(!release);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "hourly iOS executes the complete full-tier unit selection without launching Watch UI",
+    () => {
+      const root = tempDirs.make("openclaw-ios-tier-commands-");
+      const bin = path.join(root, "bin");
+      const helpers = path.join(root, ".ci-harness/scripts/lib");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(helpers, { recursive: true });
+      copyFileSync("scripts/lib/swift-toolchain.sh", path.join(helpers, "swift-toolchain.sh"));
+      writeExecutable(path.join(bin, "xcodebuild"), [
+        `#!${testNodeExecPath}`,
+        'require("node:fs").appendFileSync(process.env.COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
+      ]);
+      const job = readCiWorkflow().jobs["ios-build"];
+      for (const name of [
+        "Run focused iOS voice cleanup simulator tests",
+        "Run focused iOS lifecycle simulator tests",
+      ]) {
+        const step = job.steps.find((candidate: WorkflowStep) => candidate.name === name);
+        const commands: string[][][] = [];
+        for (const tier of ["main", "full"]) {
+          const commandFile = path.join(root, "commands.jsonl");
+          writeFileSync(commandFile, "");
+          const result = runWorkflowShellScript(step.run, {
+            cwd: root,
+            env: {
+              ...process.env,
+              PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+              COMMANDS: commandFile,
+              IOS_CI_PHASE: "tests",
+              IOS_MAIN_TIER: String(tier === "main"),
+              IOS_SIMULATOR_ID: "fixture-phone",
+            },
+          });
+          expect(result.status, result.stderr).toBe(0);
+          const calls = readFileSync(commandFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as string[]);
+          expect(calls[0]).toContain(tier === "main" ? "never" : "on-failure");
+          commands.push(calls);
+        }
+        const main = expectDefined(commands[0], "main-tier commands");
+        const full = expectDefined(commands[1], "full-tier commands");
+        const selectors = (args: string[]) =>
+          args.filter((arg) => arg.startsWith("-only-testing:"));
+        expect(main).toHaveLength(1);
+        const mainUnits = selectors(expectDefined(main[0], "main-tier unit command"));
+        expect(mainUnits).toEqual(selectors(expectDefined(full[0], "full-tier unit command")));
+        expect(mainUnits.length).toBeGreaterThan(0);
+        if (name.includes("lifecycle")) {
+          expect(full).toHaveLength(2);
+          expect(full[1]).toContain(
+            "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
+          );
+        } else {
+          expect(full).toHaveLength(1);
+        }
+      }
     },
   );
 
@@ -9548,6 +9635,7 @@ describe("ci workflow guards", () => {
       "macos-node",
       "macos-swift",
       "ios-build",
+      "ios-release-e2e",
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
@@ -9924,6 +10012,40 @@ describe("ci workflow guards", () => {
   });
 
   it.skipIf(process.platform === "win32").each([
+    ["schedule", "ios-build", "cancelled", "true", 0],
+    ["schedule", "ios-build", "failure", "true", 1],
+    ["schedule", "ios-build", "skipped", "true", 1],
+    ["schedule", "ios-build", "cancelled", "false", 1],
+    ["schedule", "android", "cancelled", "true", 1],
+    ["pull_request", "ios-build", "cancelled", "true", 1],
+    ["push", "ios-build", "cancelled", "true", 1],
+    ["workflow_dispatch", "ios-build", "cancelled", "true", 1],
+  ] as const)(
+    "ci-gate handles coalesced hourly iOS: %s %s %s selected=%s",
+    (eventName, job, result, selected, exit) => {
+      const gate = readCiWorkflow().jobs["ci-gate"];
+      const step = gate.steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+      );
+      const context = {
+        eventName,
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runAttempt: 1,
+      };
+      const outcome = runCiGateFixture(`preflight=success|true\n${job}=${result}|${selected}`, {
+        ALLOW_COALESCED_IOS: String(
+          evaluateWorkflowExpression(step.env.ALLOW_COALESCED_IOS ?? "${{ false }}", context),
+        ),
+      });
+      expect(outcome.status, outcome.stdout).toBe(exit);
+      if (eventName === "schedule") {
+        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(true);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
     [true, "success", 0],
     [true, "skipped", 1],
     [true, "failure", 1],
@@ -9941,10 +10063,12 @@ describe("ci workflow guards", () => {
     (selected, result, exit) => {
       const workflow = readCiWorkflow();
       const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(2);
+      const qualificationSha = "a".repeat(40);
       const jobResults = renderCiGateEnvironment(
         {
           eventName: selected ? "workflow_dispatch" : "pull_request",
           runnerProfile: "hybrid",
+          sha: qualificationSha,
           additionalNeeds: {
             "check-plan": {
               outputs: {
@@ -9954,11 +10078,15 @@ describe("ci workflow guards", () => {
               },
             },
           },
-          preflightOutputs: Object.fromEntries(
-            Object.keys(workflow.jobs.preflight.outputs)
-              .filter((key) => key.startsWith("run_"))
-              .map((key) => [key, String(selected)]),
-          ),
+          preflightOutputs: {
+            ...Object.fromEntries(
+              Object.keys(workflow.jobs.preflight.outputs)
+                .filter((key) => key.startsWith("run_"))
+                .map((key) => [key, String(selected)]),
+            ),
+            validation_tier: "full",
+            checkout_revision: qualificationSha,
+          },
         },
         Object.fromEntries(jobs.map((job) => [job, result])),
       );

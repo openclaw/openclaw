@@ -35,8 +35,8 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
   };
 });
 
-vi.mock("./telegram-media.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./telegram-media.runtime.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
     saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
@@ -61,7 +61,7 @@ const {
   runWithTelegramSpooledReplayUpdate,
   runWithTelegramUpdateProcessingFrame,
 } = await import("./bot-processing-outcome.js");
-const { MediaFetchError } = await import("./telegram-media.runtime.js");
+const { MediaFetchError } = await import("openclaw/plugin-sdk/media-runtime");
 
 let createTelegramBot: (
   opts: import("./bot.types.js").TelegramBotOptions,

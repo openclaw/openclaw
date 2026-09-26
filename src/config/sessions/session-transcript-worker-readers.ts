@@ -273,6 +273,15 @@ export function createSessionHistoryWorkerReaders(
             : ok(value.entry);
         },
       ),
+    readDiagnosticText: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-diagnostic-text", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          assertResultKind(value, "session-diagnostic-text", "diagnostic text");
+          return value.text;
+        },
+      ),
     readEntries: async (scope) =>
       await runRequest(
         () => ({ kind: "session-entry-list", scope }),
@@ -290,6 +299,18 @@ export function createSessionHistoryWorkerReaders(
           assertResultKind(value, "session-identity-evidence", "identity evidence");
           return value.evidence;
         },
+      ),
+    readProjectionStatus: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "projection-status", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (typeof value !== "boolean") {
+            throw new Error("Session history worker returned history instead of projection status");
+          }
+          return value;
+        },
+        signal,
       ),
     readEntryPresence: async (scope) =>
       await runRequest(

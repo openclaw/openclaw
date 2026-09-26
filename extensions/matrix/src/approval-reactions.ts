@@ -1,5 +1,4 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Matrix plugin module implements approval reactions behavior.
 import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -91,7 +90,9 @@ function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | nu
     !Array.isArray(value.allowedDecisions) ||
     !roomId ||
     !eventId ||
-    (value.approvalKind !== "exec" && value.approvalKind !== "plugin")
+    (value.approvalKind !== "exec" &&
+      value.approvalKind !== "plugin" &&
+      value.approvalKind !== "system-agent")
   ) {
     return null;
   }
@@ -217,7 +218,9 @@ export async function registerMatrixApprovalReactionTarget(params: {
   if (
     !key ||
     !approvalId ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     allowedDecisions.length === 0
   ) {
     return;

@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredCodexBinding } from "../test-support/conversation-bindings.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
@@ -723,14 +724,10 @@ describe("Discord native plugin command dispatch", () => {
         sessionKey: pluginSessionKey,
         agentId: "main",
       }),
-      configuredBinding: {
-        statefulTarget: {
-          kind: "stateful",
-          driverId: "codex",
-          sessionKey: pluginSessionKey,
-          agentId: "codex",
-        },
-      } as never,
+      configuredBinding: createConfiguredCodexBinding(
+        pluginSessionKey,
+        interaction.channel.id,
+      ) as never,
     });
     runtimeModuleMocks.getSessionEntry.mockReturnValue({
       sessionId: "codex-session",

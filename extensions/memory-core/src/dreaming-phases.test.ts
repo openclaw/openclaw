@@ -15,6 +15,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
   filterRecallEntriesWithinLookback,
   previewRemDreaming,
@@ -29,7 +30,7 @@ import {
 } from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
-import { appendSessionCorpusLines, writeSessionIngestionState } from "./session-ingestion.js";
+import { appendSessionCorpusLines } from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -252,28 +253,17 @@ function createHarness(
     error: vi.fn(),
   };
 
-  const resolvedConfig = workspaceDir
-    ? {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            workspace: workspaceDir,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      }
-    : {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      };
+  const resolvedConfig = {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: {
+        ...config.agents?.defaults,
+        ...(workspaceDir ? { workspace: workspaceDir } : {}),
+        userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
+      },
+    },
+  };
   const pluginConfig = resolveMemoryDreamingPluginConfig(resolvedConfig) ?? {};
   const beforeAgentReply = async (
     event: { cleanedBody: string },
