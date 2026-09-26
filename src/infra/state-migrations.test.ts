@@ -1708,12 +1708,11 @@ describe("state migrations", () => {
     // The write the locked section DID make is on disk, so the file is a live witness.
     expect(beforeIds).toContain("inside-section");
 
-    // Both retained handles are now outside the section that owned the state, and the
-    // guard refuses before any promise is created, so no write ever starts.
+    // The factory rejects synchronously; the retained queue rejects through its async API.
     expect(() => retainedOpen?.({ accountId: "default" })).toThrow(
       /ingress queue access has expired/i,
     );
-    expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
+    await expect(retainedQueue?.enqueue("after-section", { note: "leaked" })).rejects.toThrow(
       /ingress queue access has expired/i,
     );
 
@@ -1769,8 +1768,8 @@ describe("state migrations", () => {
     // The latch keeps the predicate pending until the migration has returned and the
     // section has closed, which is the exact window the guard has to cover.
     const { promise: predicateGate, resolve: releasePredicate } = createDeferred();
-    let recoveryOutcome: string | undefined;
-    const { promise: recoveryDone, resolve: recoverySettled } = createDeferred();
+    const { promise: predicateEntered, resolve: enterPredicate } = createDeferred();
+    let recovery: Promise<number> | undefined;
 
     const seeded = createChannelIngressQueue<{ note: string }>({
       channelId: "line",
@@ -1789,30 +1788,30 @@ describe("state migrations", () => {
           id: "line-ingress-latch-test",
           label: "LINE ingress latch test",
           detectLegacyState: () => ({ preview: ["ingress latch preview"] }),
-          migrateLegacyState({ context }) {
+          async migrateLegacyState({ context }) {
             const line = (context.channelIngressQueues ?? []).find(
               (entry) => entry.channelId === "line",
             );
             const open = line?.openChannelIngressQueue;
-            if (open) {
-              const queue = open<{ note: string }>({ accountId: "default" });
-              // Started but deliberately not awaited: the migration returns first.
-              void queue
-                .recoverStaleClaims({
-                  staleMs: 0,
-                  shouldRecover: async () => {
-                    await predicateGate;
-                    return true;
-                  },
-                })
-                .then(() => {
-                  recoveryOutcome = "completed";
-                })
-                .catch((error: unknown) => {
-                  recoveryOutcome = String(error);
-                })
-                .finally(() => recoverySettled());
+            if (!open) {
+              throw new Error("Expected Doctor's writable ingress queue");
             }
+            const queue = open<{ note: string }>({ accountId: "default" });
+            recovery = queue.recoverStaleClaims({
+              staleMs: 0,
+              shouldRecover: async () => {
+                enterPredicate();
+                await predicateGate;
+                return true;
+              },
+            });
+            // The snapshot must reach the predicate while the repair section is still active.
+            await Promise.race([
+              predicateEntered,
+              recovery.then(() => {
+                throw new Error("Ingress recovery completed before entering its predicate");
+              }),
+            ]);
             return { changes: ["ingress latch test migrated"], warnings: [] };
           },
         },
@@ -1824,13 +1823,16 @@ describe("state migrations", () => {
       env,
       homedir: () => root,
     });
-    await runLegacyStateMigrations({ detected, config: createConfig(), env });
+    try {
+      const result = await runLegacyStateMigrations({ detected, config: createConfig(), env });
+      expect(result.changes).toContain("ingress latch test migrated");
+    } finally {
+      // Only now, with the section closed, does the predicate resolve.
+      releasePredicate();
+      await Promise.allSettled(recovery ? [recovery] : []);
+    }
 
-    // Only now, with the section closed, does the predicate resolve.
-    releasePredicate();
-    await recoveryDone;
-
-    expect(recoveryOutcome).toMatch(/ingress queue access has expired/i);
+    await expect(recovery).rejects.toThrow(/ingress queue access has expired/i);
     // The claim is still held: the post-await write never reached SQLite.
     const claims = await createChannelIngressQueue<{ note: string }>({
       channelId: "line",

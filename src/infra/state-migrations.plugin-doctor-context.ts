@@ -223,93 +223,6 @@ function resolveDoctorSessionIdentityEvidence(params: {
   });
 }
 
-/** Re-assert the caller's authority before every write, so a queue handle retained
- *  past the locked repair section fails instead of mutating durable rows. */
-function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
-  queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>,
-  assertCurrent: () => void,
-): ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> {
-  const guarded: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> = {
-    ...queue,
-    enqueue: (...args) => {
-      assertCurrent();
-      return queue.enqueue(...args);
-    },
-    claimNext: (...args) => {
-      assertCurrent();
-      return queue.claimNext(...args);
-    },
-    claim: (...args) => {
-      assertCurrent();
-      return queue.claim(...args);
-    },
-    complete: (...args) => {
-      assertCurrent();
-      return queue.complete(...args);
-    },
-    release: (...args) => {
-      assertCurrent();
-      return queue.release(...args);
-    },
-    fail: (...args) => {
-      assertCurrent();
-      return queue.fail(...args);
-    },
-    delete: (...args) => {
-      assertCurrent();
-      return queue.delete(...args);
-    },
-    // Recovery predicates may await, so asserting once at call time is not enough: a
-    // migration could start recovery, return, release the section, and only then let a
-    // predicate resolve into the tombstone or claim-release write. Re-assert after every
-    // predicate settles, immediately before the write it authorizes.
-    recoverStaleClaims: (recoverOptions) => {
-      assertCurrent();
-      if (!recoverOptions) {
-        return queue.recoverStaleClaims();
-      }
-      const { shouldRecover, shouldRecoverCorrupt, ...rest } = recoverOptions;
-      const guardedRecovery: typeof recoverOptions = { ...rest };
-      if (shouldRecover) {
-        guardedRecovery.shouldRecover = async (claim) => {
-          const decision = await shouldRecover(claim);
-          assertCurrent();
-          return decision;
-        };
-      }
-      if (shouldRecoverCorrupt) {
-        guardedRecovery.shouldRecoverCorrupt = async (claim) => {
-          const decision = await shouldRecoverCorrupt(claim);
-          assertCurrent();
-          return decision;
-        };
-      }
-      return queue.recoverStaleClaims(guardedRecovery);
-    },
-    prune: (...args) => {
-      assertCurrent();
-      return queue.prune(...args);
-    },
-  };
-  // Optional members stay optional: bind the receiver up front so the wrapper needs
-  // neither a detached method reference nor a type assertion to call it.
-  const refreshClaim = queue.refreshClaim?.bind(queue);
-  if (refreshClaim) {
-    guarded.refreshClaim = (...args) => {
-      assertCurrent();
-      return refreshClaim(...args);
-    };
-  }
-  const resubmit = queue.resubmit?.bind(queue);
-  if (resubmit) {
-    guarded.resubmit = (...args) => {
-      assertCurrent();
-      return resubmit(...args);
-    };
-  }
-  return guarded;
-}
-
 /** Build a genuinely read-only object rather than a narrowed view of the queue.
  *  A `Pick<...>` return type would still hand the caller every mutating method at
  *  runtime, so the boundary has to exist in the value, not only in the type. */
@@ -359,13 +272,8 @@ function buildChannelIngressQueueAccess(
     };
     if (mutation) {
       const assertCurrent = () => mutation.assertCurrent();
-      access.openChannelIngressQueue = (openOptions) => {
-        assertCurrent();
-        return guardIngressQueueMutations(
-          open(openOptions, "read-write", assertCurrent),
-          assertCurrent,
-        );
-      };
+      access.openChannelIngressQueue = (openOptions) =>
+        open(openOptions, "read-write", assertCurrent);
     }
     return access;
   });
