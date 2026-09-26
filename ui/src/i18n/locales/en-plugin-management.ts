@@ -282,6 +282,7 @@ const enPluginManagement = {
     detailEnable: "Enable",
     detailDisable: "Disable",
     detailTools: "Tools",
+    detailToolInputs: "Inputs",
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
