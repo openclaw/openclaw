@@ -507,12 +507,12 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
     return root;
   };
   return {
-    startMaintenance(scheduler: GatewayScheduler) {
+    startMaintenance(ownerScheduler: GatewayScheduler) {
       if (released || retained.closing) {
         throw new Error("Plugin source instance has been released");
       }
-      scheduler.signal.throwIfAborted();
-      reference.scheduler = scheduler;
+      ownerScheduler.signal.throwIfAborted();
+      reference.scheduler = ownerScheduler;
       scheduleCaptureCleanup(key, retained);
       return sweepPluginSourceCaptureDirectories(key);
     },
