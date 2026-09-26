@@ -65,6 +65,21 @@ function advancePendingTagProbe(probe: PendingTagProbe, text: string): void {
 
 export interface ReasoningTagTextPartitioner {
   markStrict(): void;
+  /**
+   * Selects the stream-safe strict level: keeps incremental streaming (same
+   * safe-prefix emission as visible mode) but on flush classifies unclosed
+   * pending reasoning as thinking instead of recovering it as visible text.
+   *
+   * Unlike `markStrict` it never holds text before the final flush, unmatched
+   * or orphan close tags keep visible-mode recovery, and the hiding guarantee
+   * applies per flush segment: content arriving after an intermediate flush is
+   * classified fresh.
+   *
+   * If the same stream also emits native reasoning deltas, the transport
+   * escalates the shared partitioner to full strict at that boundary, so the
+   * incremental-streaming benefit applies to tag-only segments.
+   */
+  markStrictOnFlush(): void;
   push(chunk: string): ReasoningTagTextDelta[];
   pushVisible(chunk: string): ReasoningTagTextDelta[];
   flush(): ReasoningTagTextDelta[];
@@ -84,6 +99,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
   let holdStart: number | undefined;
   let heldBacktickStart: number | undefined;
   let strictMode = false;
+  let strictFlush = false;
   let pendingTagProbe: PendingTagProbe | undefined;
   let fastPathCheckedThrough = 0;
   let fastPathCodeSafe = false;
@@ -277,7 +293,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         output,
         reduceReasoningText("", [], reduction, {
           final: true,
-          mode: strictMode ? "hide" : "visible",
+          mode: strictMode || strictFlush ? "hide" : "visible",
           scope: "all",
         }),
       );
@@ -317,7 +333,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         output,
         reduceReasoningText(block, blockCodeSpans, reduction, {
           final,
-          mode: strictMode ? "hide" : "visible",
+          mode: strictMode || (strictFlush && final) ? "hide" : "visible",
           scope: "all",
           start,
         }),
@@ -535,6 +551,10 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     markStrict() {
       strictMode = true;
       holdStart ??= emitted;
+    },
+    markStrictOnFlush() {
+      // Stream-safe strict: hold nothing back; classify only at final.
+      strictFlush = true;
     },
     push(chunk) {
       return consume(chunk, true, false);

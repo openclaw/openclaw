@@ -600,6 +600,79 @@ describe("createReasoningTagTextPartitioner", () => {
     expect(partitioner.flush()).toEqual([]);
   });
 
+  it("streams visible text incrementally when strict-on-flush is marked", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    partitioner.markStrictOnFlush();
+    expect(partitioner.pushVisible("Hello ")).toEqual([{ kind: "text", text: "Hello " }]);
+    expect(partitioner.pushVisible("world")).toEqual([{ kind: "text", text: "world" }]);
+    expect(partitioner.flush()).toEqual([]);
+  });
+
+  it("drops unclosed reasoning at flush when strict-on-flush is marked", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    partitioner.markStrictOnFlush();
+    expect(partitioner.pushVisible("pre ")).toEqual([{ kind: "text", text: "pre " }]);
+    expect(partitioner.pushVisible("<thinking>secret")).toEqual([]);
+    expect(partitioner.flush()).toEqual([{ kind: "thinking", text: "secret" }]);
+  });
+
+  it("hides complete reasoning while streaming surrounding text under strict-on-flush", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+    partitioner.markStrictOnFlush();
+    const deltas = [
+      ...partitioner.pushVisible("a"),
+      ...partitioner.pushVisible("<thinking>x</thinking>"),
+      ...partitioner.pushVisible("b"),
+      ...partitioner.flush(),
+    ];
+
+    const text = deltas
+      .filter((delta) => delta.kind === "text")
+      .map((delta) => delta.text)
+      .join("");
+    expect(text).toBe("ab");
+    for (const delta of deltas) {
+      if (delta.kind !== "text") {
+        continue;
+      }
+      expect(delta.text).not.toContain("x");
+      expect(delta.text).not.toMatch(/[<>]/u);
+    }
+    // Strict-on-flush hides nothing mid-stream, so a closed block still lands
+    // in the thinking lane instead of being silently discarded.
+    expect(deltas).toContainEqual({ kind: "thinking", text: "x" });
+  });
+
+  it("resolves an incomplete opener as text when strict-on-flush flushes", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    partitioner.markStrictOnFlush();
+    // Ordinary visible text streams immediately and holds nothing back.
+    expect(partitioner.pushVisible("Interim answer.")).toEqual([
+      { kind: "text", text: "Interim answer." },
+    ]);
+    expect(partitioner.hasPending()).toBe(false);
+    // Incomplete tag syntax is still opaque until the next byte arrives.
+    expect(partitioner.pushVisible("<thi")).toEqual([]);
+    expect(partitioner.hasPendingSyntax()).toBe(true);
+    // Pinned actual behavior: a trailing "<thi" never completed into a reasoning
+    // tag, so flush recovers it as text (an opener with real content, e.g.
+    // "<thinking>secret", is hidden as thinking instead).
+    expect(partitioner.flush()).toEqual([{ kind: "text", text: "<thi" }]);
+    expect(partitioner.hasPendingSyntax()).toBe(false);
+  });
+
+  it("replays nothing extra when strict-on-flush starts mid-stream", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+
+    expect(partitioner.pushVisible("abc")).toEqual([{ kind: "text", text: "abc" }]);
+    partitioner.markStrictOnFlush();
+    expect(partitioner.pushVisible("def")).toEqual([{ kind: "text", text: "def" }]);
+    expect(partitioner.flush()).toEqual([]);
+  });
+
   it("keeps unterminated reasoning as thinking on flush", () => {
     const partitioner = createReasoningTagTextPartitioner();
 

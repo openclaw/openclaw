@@ -4,7 +4,7 @@ import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import {
   codeModeToolSurfaceObserver,
-  reasoningTagTextPolicy,
+  resolveStrictReasoningTagsMode,
   type OpenAICompletionsOptions,
 } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
@@ -296,7 +296,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         await processCompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
-          strictReasoningTags: reasoningTagTextPolicy.isStrict(options),
+          strictReasoningTags: resolveStrictReasoningTagsMode(options),
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),

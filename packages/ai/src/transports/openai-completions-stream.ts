@@ -58,7 +58,12 @@ type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> 
 type CompletionsStreamOptions = {
   signal?: AbortSignal;
   emitReasoning?: boolean;
-  strictReasoningTags?: boolean;
+  /**
+   * `true` = full strict (buffer + classify everything at final; no incremental text).
+   * `"on-flush"` = stream-safe strict (incremental text keeps flowing; an unclosed reasoning
+   * block is hidden only at flush).
+   */
+  strictReasoningTags?: boolean | "on-flush";
   firstEventTimeoutMs?: number;
   abortFirstEventStream?: (reason: Error) => void;
   onFirstEventTimeout?: (reason: Error) => void;
@@ -109,8 +114,12 @@ export async function processCompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
-  if (options?.strictReasoningTags) {
+  if (options?.strictReasoningTags === true) {
     reasoningTagTextPartitioner.markStrict();
+  } else if (options?.strictReasoningTags === "on-flush") {
+    // Stream-safe strict: incremental text keeps flowing; unclosed inline
+    // reasoning is dropped at flush/tool boundary instead of leaking as text.
+    reasoningTagTextPartitioner.markStrictOnFlush();
   }
   type ToolCallBlock = {
     type: "toolCall";

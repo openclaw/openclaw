@@ -727,6 +727,9 @@ export {
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";
+// Reusable strict reasoning-tag stream wrapper; provider model selection
+// stays in provider plugins/fallbacks.
+export { createStrictReasoningTagsWrapper } from "../llm/providers/stream-wrappers/strict-reasoning-tags.js";
 
 export { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
 export { projectCopilotRequestFacts } from "@openclaw/ai/internal/shared";

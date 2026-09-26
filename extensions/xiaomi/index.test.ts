@@ -1,4 +1,5 @@
 // Xiaomi tests cover index plugin behavior.
+import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -20,6 +21,8 @@ type OpenAICompletionsModel = Model<"openai-completions">;
 type PayloadCapture = {
   payload?: Record<string, unknown>;
 };
+
+type CapturedStreamOptions = Parameters<StreamFn>[2];
 
 type ThinkingPayload = {
   type?: unknown;
@@ -138,8 +141,10 @@ function mimoReasoningToolReplayContext(provider = "xiaomi") {
 function createPayloadCapturingStream(
   capture: PayloadCapture,
   model: OpenAICompletionsModel,
+  capturedOptions: CapturedStreamOptions[] = [],
 ): StreamFn {
   return (_streamModel, streamContext, options) => {
+    capturedOptions.push(options);
     capture.payload = buildOpenAICompletionsParams(model, streamContext, {
       reasoning: "high",
     });
@@ -154,6 +159,7 @@ async function createRegisteredThinkingStream(
   capture: PayloadCapture,
   model: OpenAICompletionsModel,
   thinkingLevel: "off" | "high",
+  capturedOptions: CapturedStreamOptions[] = [],
 ) {
   const { providers } = await registerXiaomiPlugin();
   const provider = requireRegisteredProvider(providers, model.provider);
@@ -162,7 +168,7 @@ async function createRegisteredThinkingStream(
       provider: model.provider,
       modelId: model.id,
       model,
-      streamFn: createPayloadCapturingStream(capture, model),
+      streamFn: createPayloadCapturingStream(capture, model, capturedOptions),
       thinkingLevel,
     }),
     "Registered MiMo thinking stream",
@@ -597,5 +603,25 @@ describe("xiaomi provider plugin", () => {
     expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );
+  });
+
+  it("marks strict-on-flush reasoning tags only for MiMo v2.5+ streams", async () => {
+    const optionsList: CapturedStreamOptions[] = [];
+    const strictModel = mimoReasoningModel("mimo-v2.6-pro");
+    const legacyModel: OpenAICompletionsModel = {
+      ...strictModel,
+      id: "mimo-v2-pro",
+      name: "mimo-v2-pro",
+    };
+
+    const strictStream = await createRegisteredThinkingStream({}, strictModel, "off", optionsList);
+    await strictStream(strictModel, { messages: [] } as Context, {});
+    const legacyStream = await createRegisteredThinkingStream({}, legacyModel, "off", optionsList);
+    await legacyStream(legacyModel, { messages: [] } as Context, {});
+
+    // Pins `shouldMarkStrictOnFlush: isMiMoStrictReasoningTagsModelRef`: only
+    // v2.5+ reasoning_content models get the stream-safe strict level.
+    expect(reasoningTagTextPolicy.isStrictOnFlush(optionsList[0])).toBe(true);
+    expect(reasoningTagTextPolicy.isStrictOnFlush(optionsList[1])).toBe(false);
   });
 });

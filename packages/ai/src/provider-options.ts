@@ -16,6 +16,7 @@ export type CodeModeToolSurfaceObservation = {
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
 const CODE_MODE_TOOL_SURFACE_COLLECTOR = Symbol("openaiCodeModeToolSurfaceCollector");
 const STRICT_REASONING_TAG_TEXT = Symbol("openaiStrictReasoningTagText");
+const STRICT_REASONING_TAG_TEXT_ON_FLUSH = Symbol("openaiStrictReasoningTagTextOnFlush");
 type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
 
 function markStrictReasoningTagText(options: object): void {
@@ -24,6 +25,14 @@ function markStrictReasoningTagText(options: object): void {
 
 function isStrictReasoningTagText(options: object | undefined): boolean {
   return options ? Reflect.get(options, STRICT_REASONING_TAG_TEXT) === true : false;
+}
+
+function markStrictReasoningTagTextOnFlush(options: object): void {
+  Reflect.set(options, STRICT_REASONING_TAG_TEXT_ON_FLUSH, true);
+}
+
+function isStrictReasoningTagTextOnFlush(options: object | undefined): boolean {
+  return options ? Reflect.get(options, STRICT_REASONING_TAG_TEXT_ON_FLUSH) === true : false;
 }
 
 export const codeModeToolSurfaceObserver = {
@@ -53,16 +62,47 @@ export const codeModeToolSurfaceObserver = {
   },
 };
 
-/** Internal output policy for callers that must not recover ambiguous reasoning as visible text. */
+/**
+ * Internal output policy for reasoning-tag text, with two explicit strictness levels:
+ *
+ * - `markStrict` (full strict): buffers text and classifies every reasoning tag only at the
+ *   final flush, so ambiguous reasoning is never recovered as visible text. Meant for
+ *   non-streaming internal consumers (TTS, titles/labels via host-prepared isolated
+ *   completion, simple-completion-execution compaction) that must not leak reasoning.
+ * - `markStrictOnFlush` (strict-on-flush): keeps incremental streaming intact and hides an
+ *   unclosed reasoning block only at flush. Meant for interactive chat streams (e.g. the
+ *   MiMo inline-thinking leak) where visible text must keep flowing token by token. If the
+ *   same stream also emits native reasoning deltas, the transport escalates the shared
+ *   partitioner to full strict at that boundary, so the incremental-streaming benefit
+ *   applies to tag-only segments.
+ */
 export const reasoningTagTextPolicy = {
   markStrict: markStrictReasoningTagText,
   isStrict: isStrictReasoningTagText,
+  markStrictOnFlush: markStrictReasoningTagTextOnFlush,
+  isStrictOnFlush: isStrictReasoningTagTextOnFlush,
   copy(source: object | undefined, target: object): void {
     if (isStrictReasoningTagText(source)) {
       markStrictReasoningTagText(target);
     }
+    if (isStrictReasoningTagTextOnFlush(source)) {
+      markStrictReasoningTagTextOnFlush(target);
+    }
   },
 };
+
+/** Resolve the transport-level strict reasoning-tag mode from request options. */
+export function resolveStrictReasoningTagsMode(
+  options: object | undefined | null,
+): boolean | "on-flush" {
+  if (isStrictReasoningTagText(options ?? undefined)) {
+    return true;
+  }
+  if (isStrictReasoningTagTextOnFlush(options ?? undefined)) {
+    return "on-flush";
+  }
+  return false;
+}
 
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
