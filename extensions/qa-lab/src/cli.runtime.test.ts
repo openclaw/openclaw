@@ -119,6 +119,7 @@ import type { QaProviderModeInput } from "./run-config.js";
 import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
 import type { QaSuiteRunParams } from "./suite.js";
 
+const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
 const LEGACY_TEST_REPO_ROOT = path.resolve("/tmp/openclaw-repo");
 const nativeRealpath = fs.realpath.bind(fs);
 const tempDirs = createTempDirHarness();

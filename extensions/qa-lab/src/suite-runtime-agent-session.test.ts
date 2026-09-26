@@ -517,7 +517,7 @@ describe("qa suite runtime agent session helpers", () => {
     const tempRoot = await makeTempDir("qa-session-transcript-nested-tool-");
     const sessionKey = "agent:qa:nested-tool";
     const sessionId = "session-nested-tool";
-    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
     const execCallId = "call_mock_exec_1|fc_mock_exec_1";
     const nestedActivity = (toolCallId: string, isError: boolean) => ({
       role: "custom",
@@ -557,12 +557,10 @@ describe("qa suite runtime agent session helpers", () => {
         timestamp: 200,
       },
     ]) {
-      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+      await transcript.append(message);
     }
 
-    await expect(
-      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
-    ).resolves.toMatchObject({
+    await expect(transcript.read()).resolves.toMatchObject({
       assistantToolCallCounts: { exec: 1, web_fetch: 2 },
       completedToolCallCounts: { exec: 1, web_fetch: 2 },
       successfulToolCallCounts: { exec: 1, web_fetch: 1 },
