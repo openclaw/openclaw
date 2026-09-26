@@ -210,3 +210,17 @@ export function resolveManagedLlamaServerPaths(asset = selectLlamaServerAsset())
     presetPath: path.join(resolveLlamaCppDataDir(), "models.ini"),
   };
 }
+
+export function findManagedLlamaServerAsset(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): LlamaServerAsset | undefined {
+  // Recover only this host's pinned installation, including its selected backend.
+  return LLAMA_SERVER_ASSETS.find(
+    (asset) =>
+      asset.platform === platform &&
+      asset.arch === arch &&
+      resolveManagedLlamaServerPaths(asset).command === command,
+  );
+}
