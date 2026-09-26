@@ -90,6 +90,8 @@ export function buildEmbeddedRunPayloads(params: {
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Only the settled-turn owner can authorize its successful tool-free answer. */
+  settledTurnFinalizationAnswered?: boolean;
   agentId?: string;
   runId?: string;
   runAborted?: boolean;
@@ -132,8 +134,9 @@ export function buildEmbeddedRunPayloads(params: {
   const suppressAssistantArtifacts =
     params.heartbeatToolResponse !== undefined ||
     params.didSendDeterministicApprovalPrompt === true ||
-    (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
-    deliveredSourceReplyViaMessageTool;
+    (((params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
+      deliveredSourceReplyViaMessageTool) &&
+      !(params.settledTurnFinalizationAnswered === true && !completedSourceReplyViaMessageTool));
   const suppressFailureArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyViaMessageTool);
