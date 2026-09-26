@@ -442,9 +442,14 @@ describe("Dockerfile", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each(["extensions", "bundled-plugins"])(
-    "assembles built assets onto production dependencies with %s",
-    async (bundledPluginDir) => {
+  it.runIf(process.platform !== "win32").each([
+    { bundledPluginDir: "extensions", privateQa: false },
+    { bundledPluginDir: "extensions", privateQa: true },
+    { bundledPluginDir: "bundled-plugins", privateQa: false },
+    { bundledPluginDir: "bundled-plugins", privateQa: true },
+  ])(
+    "assembles built assets onto production dependencies with $bundledPluginDir, private QA=$privateQa",
+    async ({ bundledPluginDir, privateQa }) => {
       const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
       const stages = new Map(
         [...dockerfile.matchAll(/^FROM (\S+) AS (\S+)\n([\s\S]*?)(?=^FROM |(?![\s\S]))/gm)].map(
@@ -467,7 +472,9 @@ describe("Dockerfile", () => {
       const buildCopy = runtime.match(/^COPY --from=(\S+) \/app\/ \.\/$/m);
       const buildOutput = stages.get(buildCopy?.[1]);
       expect(buildOutput?.parent).toBe("build");
-      const cleanCommand = buildOutput?.body?.match(/^RUN (rm -rf node_modules[^\n]+)/m)?.[1];
+      const cleanCommand = [...(buildOutput?.body?.matchAll(/^RUN ([^\n]+)/gm) ?? [])]
+        .map(([, command]) => command)
+        .join(" && ");
       if (!cleanCommand) {
         throw new Error(
           "Runtime assembly must remove development dependencies before copying build output",
@@ -492,7 +499,11 @@ describe("Dockerfile", () => {
           "dist/index.js",
           "dist/extensions/node_modules/openclaw/package.json",
           `${bundledPluginDir}/selected/index.js`,
+          `${bundledPluginDir}/selected/src/runtime.ts`,
+          `${bundledPluginDir}/selected/src/test-support.ts`,
+          `${bundledPluginDir}/selected/skills/example/SKILL.md`,
         ];
+        const testFile = `${bundledPluginDir}/selected/src/runtime.test.ts`;
         const prodFiles = [
           "node_modules/native-addon/addon.node",
           "node_modules/.modules.yaml",
@@ -501,7 +512,7 @@ describe("Dockerfile", () => {
           "pnpm-lock.yaml",
         ];
         for (const [root, files] of [
-          [build, [...oldFiles, ...builtFiles]],
+          [build, [...oldFiles, ...builtFiles, testFile]],
           [app, prodFiles],
         ] as const) {
           for (const file of files) {
@@ -511,9 +522,19 @@ describe("Dockerfile", () => {
         }
         await writeFile(join(app, "package.json"), JSON.stringify({ version: "2026.8.1" }));
         await writeFile(join(build, "package.json"), JSON.stringify({ version: "2026.8.1-1" }));
-        execFileSync("/bin/sh", ["-eu", "-c", cleanCommand], {
+        const selectionPath = join(fixture, "selected-plugin-dirs");
+        await writeFile(selectionPath, privateQa ? "selected\nqa-lab\n" : "selected\n");
+        const command = cleanCommand.replaceAll(
+          "/tmp/openclaw-selected-plugin-dirs",
+          '"$OPENCLAW_DOCKER_SELECTION_FIXTURE"',
+        );
+        execFileSync("/bin/sh", ["-eu", "-c", command], {
           cwd: build,
-          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_DIR: bundledPluginDir },
+          env: {
+            ...process.env,
+            OPENCLAW_BUNDLED_PLUGIN_DIR: bundledPluginDir,
+            OPENCLAW_DOCKER_SELECTION_FIXTURE: selectionPath,
+          },
         });
         await mkdir(join(app, "node_modules/@openclaw"), { recursive: true });
         await symlink("../../packages/ai", join(app, "node_modules/@openclaw/ai"));
@@ -523,6 +544,11 @@ describe("Dockerfile", () => {
         }
         for (const file of [...builtFiles, ...prodFiles]) {
           expect(await readFile(join(app, file), "utf8")).toBe(file);
+        }
+        if (privateQa) {
+          expect(await readFile(join(app, testFile), "utf8")).toBe(testFile);
+        } else {
+          await expect(access(join(app, testFile))).rejects.toThrow();
         }
         expect(await readFile(join(app, "node_modules/@openclaw/ai/dist/index.mjs"), "utf8")).toBe(
           "packages/ai/dist/index.mjs",

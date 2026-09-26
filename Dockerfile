@@ -190,6 +190,11 @@ FROM build AS runtime-build-output
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 RUN rm -rf node_modules ui/node_modules && \
     find packages "${OPENCLAW_BUNDLED_PLUGIN_DIR}" -name node_modules -prune -exec rm -rf {} +
+# Private QA scenarios execute plugin test sources; normal runtime images do not.
+# Prune only this runtime overlay so the build stage remains usable for tests.
+RUN if ! grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
+      find "${OPENCLAW_BUNDLED_PLUGIN_DIR}" -type f -name '*.test.ts' -delete; \
+    fi
 
 # Inherit production dependencies instead of copying their full tree again.
 # The build overlay also carries the stamped release package.json.
