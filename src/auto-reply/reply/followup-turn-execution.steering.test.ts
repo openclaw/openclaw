@@ -13,6 +13,7 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const state = getFollowupTurnTestState();
 beforeEach(resetFollowupTurnTestState);
@@ -35,6 +36,8 @@ describe("queued turn steering", () => {
       assertCurrent: () => {},
     });
     turn.queued.operatorAuthority = operatorAuthority;
+    // This execution fixture represents a turn whose admission already froze authority.
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
     const queueMessage = vi.fn(async () => {});
     state.execute.mockImplementation(async () => {
       operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude" });
