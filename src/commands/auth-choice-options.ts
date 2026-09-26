@@ -46,25 +46,36 @@ function resolveProviderChoiceOptions(params?: {
   return resolveProviderSetupFlowContributions({
     ...params,
     scope: "text-inference",
-  }).map(({ option, providerId }) => ({
-    value: option.value,
-    label: option.label,
-    providerId,
-    ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
-    ...(option.hint ? { hint: option.hint } : {}),
-    ...(option.assistantPriority !== undefined
-      ? { assistantPriority: option.assistantPriority }
-      : {}),
-    ...(option.assistantVisibility ? { assistantVisibility: option.assistantVisibility } : {}),
-    ...(option.group
-      ? {
-          groupId: option.group.id,
-          groupLabel: option.group.label,
-          ...(option.group.hint ? { groupHint: option.group.hint } : {}),
-        }
-      : {}),
-    ...(option.onboardingFeatured ? { onboardingFeatured: true } : {}),
-  }));
+  }).map(({ option, providerId }) => {
+    const choice: AuthChoiceOption = {
+      value: option.value,
+      label: option.label,
+      providerId,
+    };
+    if (option.modelTarget) {
+      choice.modelTarget = option.modelTarget;
+    }
+    if (option.hint) {
+      choice.hint = option.hint;
+    }
+    if (option.assistantPriority !== undefined) {
+      choice.assistantPriority = option.assistantPriority;
+    }
+    if (option.assistantVisibility) {
+      choice.assistantVisibility = option.assistantVisibility;
+    }
+    if (option.group) {
+      choice.groupId = option.group.id;
+      choice.groupLabel = option.group.label;
+      if (option.group.hint) {
+        choice.groupHint = option.group.hint;
+      }
+    }
+    if (option.onboardingFeatured) {
+      choice.onboardingFeatured = true;
+    }
+    return choice;
+  });
 }
 
 /**

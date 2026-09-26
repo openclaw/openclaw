@@ -42,7 +42,11 @@ export function loadPluginRuntimeArtifactIdentitySources(
   const registry = loadPluginRegistrySnapshot(params);
   const metadata = loadPluginMetadataSnapshot({ ...params, index: registry });
   return registry.plugins.map((record) => ({
-    ...record,
+    pluginId: record.pluginId,
+    origin: record.origin,
+    rootDir: record.rootDir,
+    source: record.source,
+    packageBuild: record.packageBuild,
     // Source overlays and explicit bundled paths are process-local selection facts.
     sourcePreferred: metadata.byPluginId.get(record.pluginId)?.sourcePreferred,
   }));

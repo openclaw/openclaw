@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsArchiveCommand, sessionsDeleteCommand } from "./sessions-lifecycle.js";
 
@@ -316,7 +316,13 @@ describe("sessions lifecycle commands", () => {
     },
   );
 
-  it("deletes archived sessions with the same gated artifact contract as Control UI", async () => {
+  it.each([
+    { keys: ["agent:main:archived"] },
+    { keys: ["agent:main:archived", " agent:main:archived "] },
+  ])("deletes archived sessions once with the Control UI gates ($keys)", async ({ keys }) => {
+    onTestFinished(() => {
+      mocks.callGateway.mockReset();
+    });
     mocks.callGateway
       .mockResolvedValueOnce({
         session: {
@@ -337,11 +343,13 @@ describe("sessions lifecycle commands", () => {
           path: "/worktree",
           reason: "owner-mismatch",
         },
-      });
+      })
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:archived", deleted: false });
     const runtime = createNonExitingRuntimeEnv();
 
-    await sessionsDeleteCommand({ keys: ["agent:main:archived"], yes: true, json: true }, runtime);
+    await sessionsDeleteCommand({ keys, yes: true, json: true }, runtime);
 
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     expect(mocks.callGateway).toHaveBeenNthCalledWith(
       2,
       "sessions.delete",
@@ -376,6 +384,7 @@ describe("sessions lifecycle commands", () => {
       },
       2,
     );
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([

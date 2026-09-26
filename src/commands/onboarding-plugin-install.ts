@@ -673,7 +673,7 @@ function startPluginInstallProgress(prompter: WizardPrompter, safeLabel: string)
   progress.update(t("wizard.plugins.preparingInstall"));
   return {
     progress,
-    updateProgress(message: string) {
+    updateProgress: (message: string) => {
       const sanitized = sanitizeTerminalText(message).trim();
       if (sanitized) {
         progress.update(sanitized);
