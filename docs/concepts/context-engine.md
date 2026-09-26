@@ -278,6 +278,11 @@ the durable target rather than requiring a live session manager.
 Failed commits remain queued and do
 not trigger this handoff. Pre-run outbox recovery reconciles ingestion before
 bootstrap and assembly; it does not start concurrent background maintenance.
+Native harness turns retain the runtime settings from their successful context
+assembly, including its prompt token budget, for durable commit and maintenance.
+Accepted and ready outbox rows preserve those settings through recovery and
+commit retries. Native model identity alone does not supply a context window or
+budget; older queued rows without assembly settings retain their existing behavior.
 Maintenance is best effort, not a crash-durable job for every committed turn, and
 one invocation does not guarantee that an engine drains all pending compaction.
 

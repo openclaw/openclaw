@@ -11,6 +11,8 @@ import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -104,7 +106,7 @@ describe("context-engine turn outbox", () => {
     });
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     let valid = false;
-    const commitTurn = vi.fn(async () =>
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () =>
       valid ? { status: "committed" as const } : ({ status: "ignored" } as never),
     );
     const engine = {
@@ -145,6 +147,7 @@ describe("context-engine turn outbox", () => {
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ advancementKey: payload.boundary.admission.logicalTurnId }),
     );
+    expect(commitTurn.mock.lastCall?.[0]).not.toHaveProperty("runtimeSettings");
     expect(warn).toHaveBeenCalledWith(
       "[context-engine] committed turn notification failed: maintenance handoff failed",
     );
@@ -680,13 +683,20 @@ describe("context-engine turn outbox", () => {
       sequence: 1,
       sessionId: "session-a",
     });
+    const runtimeSettings = buildContextEngineRuntimeSettings({
+      contextEngineHost: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      harnessId: "codex",
+      provider: "fixture",
+      resolvedModel: "fixture/native-model",
+      promptTokenBudget: 272_000,
+    });
     Object.assign(payload, {
       runtimeContext: {
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-        tokenBudget: 180_000,
-        modelContextWindow: 200_000,
+        provider: "fixture",
+        modelId: "native-model",
+        tokenBudget: 272_000,
       },
+      runtimeSettings,
     });
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
 
@@ -742,8 +752,10 @@ describe("context-engine turn outbox", () => {
     expect(commitTurn).toHaveBeenCalledTimes(2);
     for (const [call] of commitTurn.mock.calls) {
       expect(call).toMatchObject({
-        runtimeContext: { tokenBudget: 180_000, modelContextWindow: 200_000 },
+        runtimeContext: { tokenBudget: 272_000 },
+        runtimeSettings,
       });
+      expect(call.runtimeContext).not.toHaveProperty("modelContextWindow");
     }
     expect(degradeBeforeStart).not.toHaveBeenCalled();
 

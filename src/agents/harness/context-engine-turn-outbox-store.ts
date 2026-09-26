@@ -5,6 +5,7 @@ import type {
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import type { ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
@@ -123,6 +124,7 @@ export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
         boundary: TranscriptTurnBoundary;
         isHeartbeat: boolean;
         runtimeContext?: ContextEngineTurnRuntimeContext;
+        runtimeSettings?: ContextEngineRuntimeSettings;
       },
     ): Promise<void>;
     publishClosedTurn(
@@ -131,7 +133,6 @@ export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
         isHeartbeat: boolean;
         maxBytes: number;
         maxEvents: number;
-        runtimeContext?: ContextEngineTurnRuntimeContext;
       },
     ): Promise<ContextEngineTurnOutboxWorkerOperations["publishClosedTurn"]["output"]>;
     discardIntent(input: OutboxOwner & { admission: TranscriptTurnAdmission }): Promise<void>;

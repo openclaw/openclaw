@@ -5,8 +5,10 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { registerContextEngineInRegistry } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -104,7 +106,14 @@ async function createAcceptedTurn(
     promptError: false,
     aborted: false,
     yieldAborted: false,
-    runtimeContext: { provider: "fixture", modelId: "fixture-model", tokenBudget: 1_000 },
+    runtimeContext: { provider: "fixture", modelId: "fixture-model", tokenBudget: 272_000 },
+    runtimeSettings: buildContextEngineRuntimeSettings({
+      contextEngineHost: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      harnessId: "codex",
+      provider: "fixture",
+      resolvedModel: "fixture/fixture-model",
+      promptTokenBudget: 272_000,
+    }),
   };
 
   // The logical lease must retain this database after its supplying inspection
@@ -233,6 +242,9 @@ describe("durable accepted-turn maintenance handoff", () => {
               ]),
             ).toBe("maintenance");
             expect(fixture.pendingTurn()).toBeUndefined();
+            expect(fixture.maintain.mock.calls[0]?.[0].runtimeSettings).toEqual(
+              fixture.facts.runtimeSettings,
+            );
             const runtimeContext = fixture.maintain.mock.calls[0]?.[0].runtimeContext;
             expect(runtimeContext).toMatchObject({
               ...fixture.facts.runtimeContext,
@@ -294,6 +306,7 @@ describe("durable accepted-turn maintenance handoff", () => {
         expect(fixture.maintain.mock.calls[0]?.[0]).toMatchObject({
           sessionId: fixture.facts.sessionIdUsed,
           sessionKey: fixture.facts.sessionKey,
+          runtimeSettings: fixture.facts.runtimeSettings,
           runtimeContext: {
             ...fixture.facts.runtimeContext,
             allowDeferredCompactionExecution: true,

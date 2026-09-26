@@ -1,3 +1,4 @@
+import type { ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
 /**
  * Selects and invokes native agent harnesses for embedded run attempts.
@@ -39,6 +40,10 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
+import {
+  buildHarnessContextEngineTurnRuntimeFacts,
+  captureHarnessContextEngineAssembly,
+} from "./context-engine-assembly.js";
 import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import { AgentHarnessPreflightError } from "./errors.js";
@@ -212,6 +217,7 @@ export async function runAgentHarnessAttempt(
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
   const nativeModelPolicySupported = harness.nativeModelPolicySupport === "exact";
   assertHarnessModelPolicySupport(harness, params);
+  let assemblyRuntimeSettings: ContextEngineRuntimeSettings | undefined;
   const runPreparedAttempt = async (
     prepared: Parameters<typeof runAgentHarnessLifecycleAttempt>[1],
   ) => {
@@ -237,20 +243,23 @@ export async function runAgentHarnessAttempt(
           );
     try {
       modelExecution?.assertCurrent();
-      const result = await runAgentHarnessLifecycleAttempt(
-        harness,
-        modelExecution
-          ? {
-              ...prepared,
-              abortSignal: prepared.abortSignal
-                ? AbortSignal.any([prepared.abortSignal, modelExecution.signal])
-                : modelExecution.signal,
-            }
-          : prepared,
+      const captured = await captureHarnessContextEngineAssembly(prepared, () =>
+        runAgentHarnessLifecycleAttempt(
+          harness,
+          modelExecution
+            ? {
+                ...prepared,
+                abortSignal: prepared.abortSignal
+                  ? AbortSignal.any([prepared.abortSignal, modelExecution.signal])
+                  : modelExecution.signal,
+              }
+            : prepared,
+        ),
       );
       await nativeSessionRuntime?.assertCurrent();
       modelExecution?.assertCurrent();
-      return result;
+      assemblyRuntimeSettings = captured.runtimeSettings;
+      return captured.result;
     } finally {
       modelExecution?.release();
     }
@@ -434,19 +443,11 @@ export async function runAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      // Native model identity does not attest the host's window or context cap.
-      runtimeContext:
-        nativeSessionRuntime && result.runtimeModelSelection
-          ? {
-              provider: result.runtimeModelSelection.provider,
-              modelId: result.runtimeModelSelection.model,
-            }
-          : {
-              provider: internalParams.provider,
-              modelId: internalParams.modelId,
-              modelContextWindow: internalParams.modelContextWindow,
-              tokenBudget: internalParams.contextTokenBudget,
-            },
+      ...buildHarnessContextEngineTurnRuntimeFacts({
+        runtimeSettings: assemblyRuntimeSettings,
+        nativeModelSelection: nativeSessionRuntime ? result.runtimeModelSelection : undefined,
+        fallbackAttempt: internalParams,
+      }),
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;

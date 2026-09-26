@@ -22,6 +22,7 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { beginHarnessContextEngineAssembly } from "./context-engine-assembly.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -173,6 +174,12 @@ export async function assembleHarnessContextEngine(
   ).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const recordAssembly = beginHarnessContextEngineAssembly({
+    contextEngine,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runtimeSettings,
+  });
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,
@@ -200,7 +207,9 @@ export async function assembleHarnessContextEngine(
           assemble,
         ),
   );
-  return ensureAssembleResultShape(result, contextEngine.info.id);
+  const assembled = ensureAssembleResultShape(result, contextEngine.info.id);
+  recordAssembly?.();
+  return assembled;
 }
 
 /**

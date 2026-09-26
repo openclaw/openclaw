@@ -9,6 +9,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -841,6 +843,18 @@ describe("accepted context-engine turn finalization", () => {
       sessionId: "publication-failure-turn",
     });
     const { commitTurn, lease } = createDurableLease();
+    const runtimeSettings = buildContextEngineRuntimeSettings({
+      contextEngineHost: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      harnessId: "codex",
+      provider: "fixture",
+      resolvedModel: "fixture/native-model",
+      promptTokenBudget: 272_000,
+    });
+    const acceptedFacts = {
+      ...facts,
+      runtimeContext: { provider: "fixture", modelId: "native-model", tokenBudget: 272_000 },
+      runtimeSettings,
+    };
     const warn = vi.fn();
     const readState = () =>
       (
@@ -865,7 +879,7 @@ describe("accepted context-engine turn finalization", () => {
         .run(eventJson, facts.sessionIdUsed, terminalEvent.seq);
     setTerminalEventJson("{");
     try {
-      await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      await finalizeAcceptedContextEngineTurn({ facts: acceptedFacts, lease, warn });
     } finally {
       setTerminalEventJson(terminalEvent.event_json);
     }
@@ -874,7 +888,11 @@ describe("accepted context-engine turn finalization", () => {
       expect.stringContaining("[context-engine] skipped accepted turn advancement:"),
     );
     expect(commitTurn).not.toHaveBeenCalled();
-    expect(JSON.parse(readState() ?? "{}")).toMatchObject({ state: "accepted" });
+    expect(JSON.parse(readState() ?? "{}")).toMatchObject({
+      state: "accepted",
+      runtimeContext: acceptedFacts.runtimeContext,
+      runtimeSettings,
+    });
 
     await drainPendingContextEngineTurnsBeforeRun({
       admission: { ...admission, logicalTurnId: "logical-turn-after-publication-failure" },
@@ -886,6 +904,8 @@ describe("accepted context-engine turn finalization", () => {
     expect(commitTurn).toHaveBeenCalledOnce();
     expect(commitTurn.mock.calls[0]?.[0]).toMatchObject({
       advancementKey: admission.logicalTurnId,
+      runtimeContext: acceptedFacts.runtimeContext,
+      runtimeSettings,
       messages: [
         expect.objectContaining({ role: "user", content: "current" }),
         expect.objectContaining({ role: "assistant", content: "answer" }),

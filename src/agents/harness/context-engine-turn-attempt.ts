@@ -4,7 +4,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsContextEngineDurableTurnAdvancement } from "../../context-engine/host-compat.js";
-import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type {
+  ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
+} from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -27,6 +30,7 @@ export type ContextEngineTurnAttemptFacts = {
   yieldAborted: boolean;
   isHeartbeat?: boolean;
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
@@ -213,11 +217,14 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       engineId: params.lease.effectiveEngineId,
       isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
-      runtimeContext: params.facts.runtimeContext,
     };
     // Acceptance commits before the fallible read and publication, so their
     // failure leaves the turn accepted for the next recovery to advance.
-    await store.acceptIntent(accepted);
+    await store.acceptIntent({
+      ...accepted,
+      runtimeContext: params.facts.runtimeContext,
+      runtimeSettings: params.facts.runtimeSettings,
+    });
     const closedTurnKind = await store.publishClosedTurn({
       ...accepted,
       maxBytes: ACCEPTED_TURN_MAX_BYTES,
@@ -245,6 +252,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
           sessionFile: turn.admission.sessionKey,
           reason: "turn",
           runtimeContext: turn.runtimeContext,
+          runtimeSettings: turn.runtimeSettings,
           config: params.config,
           onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
         });

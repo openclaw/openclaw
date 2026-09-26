@@ -9,7 +9,7 @@ import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -53,6 +53,7 @@ type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   isHeartbeat: boolean;
   state: "accepted";
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
 }>;
 
 type ReadyContextEngineTurnOutboxPayload = Readonly<{
@@ -61,6 +62,7 @@ type ReadyContextEngineTurnOutboxPayload = Readonly<{
   messages: AgentMessage[];
   state: "ready";
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
 }>;
 
 type ContextEngineTurnReadFailureKind = Exclude<
@@ -219,6 +221,7 @@ export function acceptContextEngineTurnIntent(params: {
   isHeartbeat: boolean;
   ownerPluginId?: string;
   runtimeContext?: ContextEngineTurnRuntimeContext;
+  runtimeSettings?: ContextEngineRuntimeSettings;
 }): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
@@ -227,6 +230,7 @@ export function acceptContextEngineTurnIntent(params: {
       isHeartbeat: params.isHeartbeat,
       state: "accepted",
       runtimeContext: params.runtimeContext,
+      runtimeSettings: params.runtimeSettings,
     },
   });
 }
@@ -292,7 +296,6 @@ function publishClosedContextEngineTurn(params: {
   maxBytes: number;
   maxEvents: number;
   ownerPluginId?: string;
-  runtimeContext?: ContextEngineTurnRuntimeContext;
 }): ClosedTranscriptTurnReadResult["kind"] {
   // Recovery may already have advanced or completed this turn in the gap after
   // acceptance; only a still-accepted row is published, so it cannot reappear.
@@ -330,7 +333,8 @@ function publishClosedContextEngineTurn(params: {
       boundary: params.boundary,
       isHeartbeat: params.isHeartbeat,
       messages: closedTurn.messages,
-      runtimeContext: params.runtimeContext,
+      runtimeContext: existingPayload.runtimeContext,
+      runtimeSettings: existingPayload.runtimeSettings,
     },
   });
   return closedTurn.kind;
@@ -410,6 +414,7 @@ export function recoverContextEngineTurnOutbox(params: {
         isHeartbeat: payload.isHeartbeat,
         messages: closedTurn.messages,
         runtimeContext: payload.runtimeContext,
+        runtimeSettings: payload.runtimeSettings,
       },
     });
   }
@@ -622,6 +627,7 @@ async function commitPendingContextEngineTurn(params: {
       },
       isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
+      ...(payload.runtimeSettings ? { runtimeSettings: payload.runtimeSettings } : {}),
     };
     const result = await params.engine.commitTurn?.(commonParams);
     if (!result) {
@@ -684,6 +690,7 @@ export type ContextEngineTurnOutboxWorkerOperations = {
       boundary: TranscriptTurnBoundary;
       isHeartbeat: boolean;
       runtimeContext?: ContextEngineTurnRuntimeContext;
+      runtimeSettings?: ContextEngineRuntimeSettings;
     };
     output: undefined;
   };
@@ -693,7 +700,6 @@ export type ContextEngineTurnOutboxWorkerOperations = {
       isHeartbeat: boolean;
       maxBytes: number;
       maxEvents: number;
-      runtimeContext?: ContextEngineTurnRuntimeContext;
     };
     output: ClosedTranscriptTurnReadResult["kind"];
   };

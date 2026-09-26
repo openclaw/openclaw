@@ -1,14 +1,19 @@
+import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { getPluginRegistryForContext, requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../embedded-agent-runner/run/types.js";
 import { retainPreparedPluginRegistry } from "../prepared-model-runtime.plugin-lifetime.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 
@@ -86,4 +91,78 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
   } finally {
     await release();
   }
+}
+
+export function createTranscriptRecorder(
+  admission: ReturnType<typeof createTranscriptAnchor> & {
+    logicalTurnId: string;
+    role: "user";
+  },
+): UserTurnTranscriptRecorder {
+  const message = { role: "user" as const, content: "hello", timestamp: 1 };
+  return {
+    message,
+    resolveMessage: async () => message,
+    getAdmissionReceipt: () => admission,
+    markRuntimePersistencePending: () => {},
+    markRuntimePersisted: () => {},
+    markBlocked: () => {},
+    hasPersisted: () => true,
+    isBlocked: () => false,
+    hasRuntimePersistencePending: () => false,
+    waitForRuntimePersistence: async () => {},
+    persistApproved: async () => undefined,
+    persistBlocked: async () => undefined,
+    persistFallback: async () => undefined,
+  };
+}
+
+export function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
+  return {
+    terminal: { kind: "ok" },
+    sessionIdUsed,
+    messagesSnapshot: [],
+    assistantTexts: [`${sessionIdUsed} ok`],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+export function createTranscriptAnchor(
+  entryId: string,
+  rawSeq: number,
+  activeMessagePosition: number,
+): TranscriptEntryAnchor {
+  return {
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    storePath: "/tmp/openclaw-agent.sqlite",
+    generation: "generation-1",
+    entryId,
+    effectiveParentId: rawSeq === 1 ? null : "user-1",
+    rawSeq,
+    activeMessagePosition,
+  };
+}
+
+export function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        [provider]: {
+          baseUrl: "https://api.openai.com/v1",
+          agentRuntime: { id: runtime },
+          models: [],
+        },
+      },
+    },
+  } as OpenClawConfig;
 }
