@@ -538,7 +538,7 @@ describe("createAcpxRuntimeService", () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
     const ctx = createServiceContext(testWorkspace.dir);
     const service = createAcpxRuntimeService(ctx);
-    const sessionsDir = path.join(testWorkspace.dir, "state", "sessions");
+    const sessionsDir = path.join(ctx.stateDir, "acpx", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     for (const id of ["global", "openclaw-owner-v1-existing", "agent:free:acp:test"]) {
       await fs.writeFile(path.join(sessionsDir, `${encodeURIComponent(id)}.json`), "{}");

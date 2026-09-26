@@ -29,6 +29,7 @@ function sessionDirectory(input: MigrationInput): string {
     resolveAcpxPluginConfig({
       rawConfig: input.config.plugins?.entries?.acpx?.config,
       workspaceDir: input.serviceWorkspaceDir,
+      stateDir: input.stateDir,
     }).stateDir,
     "sessions",
   );

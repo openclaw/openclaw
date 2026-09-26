@@ -47,6 +47,9 @@ session reset and `withSessionDeletion(params, run)` for removal of a session
 key, including expiry and maintenance. A physical session ID changing at the
 same key is a transfer, not deletion; preserve any compaction adoption path.
 
+Core logs reset-hook failures once per harness ID per process, including across
+plugin reloads. Later resets still invoke the hook so it can recover.
+
 `withSessionDeletion` acquires the native owner's lease before calling
 `run({ commit, rollback })`. Core invokes the synchronous `commit()` at the
 session row deletion boundary and `rollback()` if the transaction fails.

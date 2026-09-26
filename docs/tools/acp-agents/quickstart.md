@@ -31,6 +31,13 @@ settings govern subsequent turns. Admitted turns retain their session ownership.
 The ACPX health check selects from the current allowed agents unless its plugin
 config sets an explicit `probeAgent`.
 
+ACPX session state defaults to `acpx/` inside the OpenClaw state directory
+(`OPENCLAW_STATE_DIR`, normally `~/.openclaw`). The working directory and installed
+package directory do not need to be writable for session resets. An explicit
+`plugins.entries.acpx.config.stateDir` still overrides this location. If an older
+installation stored sessions under `<workspace>/state`, set that existing option
+to the old directory before upgrading to keep using those sessions.
+
 <AccordionGroup>
   <Accordion title="First-run gotchas">
     - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`, or the installed ACP backend is intentionally blocked (`/acp doctor` reports the missing allowlist entry).

@@ -129,7 +129,7 @@ describe("acpx doctor state migration", () => {
     "does not load runtime helpers or inspect claims when the legacy directory is %s",
     async (directoryState) => {
       if (directoryState === "empty") {
-        await fs.mkdir(path.join(stateDir, "state", "sessions"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "acpx", "sessions"), { recursive: true });
       }
       const migration = expectDefined(
         stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
