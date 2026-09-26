@@ -139,9 +139,50 @@ describe("parseMessageContent media captions", () => {
     ];
     const before = structuredClone(items);
     expect(parseMergeForwardContent(items)).toBe(
-      '[Merged and Forwarded Messages]\n- <sticker key="file_forwarded_sticker"/>\n- Forwarded\n\n**Status** *[Docs](https://example.com)*',
+      '[Merged and Forwarded Messages]\n- [1970-01-01T00:00:01.000Z] <sticker key="file_forwarded_sticker"/>\n- [1970-01-01T00:00:02.000Z] Forwarded\n\n**Status** *[Docs](https://example.com)*',
     );
     expect(items).toEqual(before);
+  });
+
+  it("attributes each sub-message to its sender and timestamp", () => {
+    const items = [
+      { message_id: "om_forward", msg_type: "merge_forward" },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "text",
+        create_time: "1700000000000",
+        sender: { id: "ou_aaa111" },
+        body: { content: JSON.stringify({ text: "hello" }) },
+      },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "text",
+        create_time: "1700000001000",
+        sender: { id: "ou_bbb222" },
+        body: { content: JSON.stringify({ text: "world" }) },
+      },
+    ];
+    expect(parseMergeForwardContent(items)).toBe(
+      "[Merged and Forwarded Messages]\n" +
+        "- [2023-11-14T22:13:20.000Z] ou_aaa111: hello\n" +
+        "- [2023-11-14T22:13:21.000Z] ou_bbb222: world",
+    );
+  });
+
+  it("retains sender and body when a sub-message timestamp exceeds Date's range", () => {
+    const items = [
+      { message_id: "om_forward", msg_type: "merge_forward" },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "text",
+        create_time: "8640000000000001",
+        sender: { id: "ou_ccc333" },
+        body: { content: JSON.stringify({ text: "out of range" }) },
+      },
+    ];
+    expect(parseMergeForwardContent(items)).toBe(
+      "[Merged and Forwarded Messages]\n- ou_ccc333: out of range",
+    );
   });
 });
 
