@@ -655,6 +655,50 @@ describe("createCliJsonlStreamingParser", () => {
 
     expect(commentaryTexts).toEqual(expectedCommentary);
   });
+
+  it("reports each replayed compaction lifecycle record once per stream", () => {
+    const compactionDeltas: unknown[] = [];
+    const autoBoundary = (uuid: string) =>
+      JSON.stringify({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto" },
+        uuid,
+        session_id: "session-replay",
+      });
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+      },
+      providerId: "claude-cli",
+      parseJsonlLifecycleEvent: (line) => {
+        const parsed = JSON.parse(line) as {
+          subtype?: unknown;
+          compact_metadata?: { trigger?: unknown };
+        };
+        return parsed.subtype === "compact_boundary" &&
+          parsed.compact_metadata?.trigger === "auto"
+          ? { kind: "compaction", phase: "end", completed: true }
+          : null;
+      },
+      onAssistantDelta: () => undefined,
+      onCompaction: (delta) => compactionDeltas.push(delta),
+    });
+
+    const first = autoBoundary("boundary-uuid-1");
+    const second = autoBoundary("boundary-uuid-2");
+    // A resumed or retried stream replays history byte-identically: the first
+    // boundary recurs, then a genuinely new compaction follows it.
+    parser.push([first, first, second].join("\n"));
+    parser.finish();
+
+    expect(compactionDeltas).toEqual([
+      { phase: "end", completed: true },
+      { phase: "end", completed: true },
+    ]);
+  });
 });
 
 it.each([

@@ -83,6 +83,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let sawTerminalResult = false;
   let sawClaudeSyntheticNoResponse = false;
   const toolTracker = createToolUseTracker();
+  // Source lines that already produced a compaction lifecycle event in this
+  // stream. A resumed or retried stream replays history byte-identically; each
+  // compaction is reported once no matter how many times its record recurs.
+  const reportedCompactionLifecycleLines = new Set<string>();
   const outputLimits = CLI_STREAM_JSON_OUTPUT_LIMITS;
   // Classification is keyed on consumer presence so reclassified pre-tool text
   // always has a destination; a separate enable flag let it be dropped (#92092).
@@ -244,6 +248,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           observeSessionId(parsed);
         }
         for (const event of lifecycle.events) {
+          if (event.kind === "compaction") {
+            if (reportedCompactionLifecycleLines.has(line)) {
+              continue;
+            }
+            reportedCompactionLifecycleLines.add(line);
+          }
           params.onCompaction?.(cliOutputLifecycle.projectCliBackendLifecycleEvent(event));
         }
       }
