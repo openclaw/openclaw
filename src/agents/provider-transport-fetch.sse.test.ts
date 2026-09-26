@@ -1,3 +1,4 @@
+import { onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { Stream } from "openai/streaming";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -42,6 +43,41 @@ describe("buildGuardedModelFetch SSE readability", () => {
     }
 
     expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("reports filtered keepalive frames as request activity", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(': keepalive\n\nevent: message\n\ndata: {"ok": true}\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl: "https://openrouter.ai/api/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = makeProviderModelFixture<"openai-responses">({
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-responses",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      const response = await buildGuardedModelFetch(model)(
+        "https://openrouter.ai/api/v1/responses",
+        { method: "POST", signal: controller.signal },
+      );
+      const items = [];
+      for await (const item of Stream.fromSSEResponse(response, controller)) {
+        items.push(item);
+      }
+
+      expect(items).toEqual([{ ok: true }]);
+      expect(onActivity).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("leaves official OpenAI SSE streams unmodified", async () => {
