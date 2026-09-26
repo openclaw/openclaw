@@ -807,31 +807,24 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.context.theme.refresh();
   }
 
-  private setTheme(
-    theme: ThemeName,
-    context?: Parameters<typeof startThemeTransition>[0]["context"],
-  ) {
+  private setTheme(theme: ThemeName) {
     const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
     startThemeTransition({
       currentTheme: resolveTheme(this.settings.theme, this.settings.themeMode),
       nextTheme: resolveTheme(theme, this.settings.themeMode),
-      context,
       applyTheme: () =>
         reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({}, theme),
     });
   }
 
-  private setThemeMode(
-    mode: ThemeMode,
-    context?: Parameters<typeof startThemeTransition>[0]["context"],
-  ) {
+  private setThemeMode(mode: ThemeMode) {
     const preference = this.currentSyncedPref("themeMode");
     if (preference.overridden && mode === preference.resetValue) {
       this.resetSyncedAppearancePref("themeMode");
     } else {
-      this.context.theme.setMode(mode, context?.element);
+      this.context.theme.setMode(mode);
     }
   }
 
@@ -1020,8 +1013,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       onLocaleChange: (locale) => this.setLocale(locale),
       themeCatalog: this.pageId === "appearance" ? this.context.theme.catalog : undefined,
       onRetryThemeCatalog: () => this.context.theme.retryCatalog?.(),
-      setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
-      setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      setTheme: (theme) => this.setTheme(theme),
+      setThemeMode: (mode) => this.setThemeMode(mode),
       setAccent: (accent) =>
         accent === undefined
           ? this.resetSyncedAppearancePref("accent")

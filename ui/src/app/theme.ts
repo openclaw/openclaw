@@ -2,37 +2,15 @@ import {
   isBuiltinThemeId,
   isThemeId,
   normalizeThemeMode,
+  type BuiltinThemeId,
   type ThemeId,
   type ThemeMode,
 } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 export type ThemeName = ThemeId | "custom";
 export type { ThemeMode };
-export type ResolvedTheme =
-  | "dark"
-  | "light"
-  | "openknot"
-  | "openknot-light"
-  | "dash"
-  | "dash-light"
-  | "absolutely"
-  | "absolutely-light"
-  | "tide"
-  | "tide-light"
-  | "beacon"
-  | "beacon-light"
-  | "phosphor"
-  | "phosphor-light"
-  | "crt"
-  | "crt-light"
-  | "manuscript"
-  | "manuscript-light"
-  | "rose"
-  | "rose-light"
-  | "miami"
-  | "miami-light"
-  | "custom"
-  | "custom-light";
+type ThemeFamily = Exclude<BuiltinThemeId, "claw" | "knot"> | "openknot" | "custom";
+export type ResolvedTheme = "dark" | "light" | ThemeFamily | `${ThemeFamily}-light`;
 
 function prefersLightScheme(): boolean {
   if (typeof globalThis.matchMedia !== "function") {

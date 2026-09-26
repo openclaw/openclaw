@@ -8,6 +8,7 @@ import {
 } from "../plugins/runtime.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { dispatchCronDelivery } from "./isolated-agent/delivery-dispatch.js";
@@ -51,6 +52,7 @@ describe("manual cron delivery occurrence", () => {
           const events: CronEvent[] = [];
           const finished = createDeferred<CronEvent>();
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
             storePath: state.path("cron", "jobs.json"),
             cronEnabled: false,
             defaultAgentId: "main",

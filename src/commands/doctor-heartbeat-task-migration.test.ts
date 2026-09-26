@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron,
@@ -32,6 +33,7 @@ function createTestCronService(storePath: string, cfg: OpenClawConfig, nowMs: nu
   const noop = () => {};
   const log = { debug: noop, info: noop, warn: noop, error: noop };
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     nowMs: () => nowMs,
     cronEnabled: false,

@@ -83,6 +83,13 @@ keep their existing owners. Orphaned runs settle their background task before
 cleanup, so retained child sessions do not leave phantom running activity. If the
 task update fails, completion remains available for retry.
 
+Recovery remembers live session ownership without retaining saved prompt snapshots.
+Unchanged owned rows skip session reads; ownership release or a published session
+change requests another sweep within one second. Unavailable recovery reads retry
+per row with exponential backoff from one second to one minute. Registry lifecycle
+changes and session publications clear that backoff. Persisted rows without a live
+owner still require a fresh read before recovery can change their state.
+
 Startup session maintenance reports retained run/task owners in one informational
 summary. Those rows remain with registry recovery; the session-only orphan repair
 does not compete for their ownership. Ownership changes during a repair and failed

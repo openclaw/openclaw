@@ -1,8 +1,3 @@
-/**
- * music_generate action helpers.
- *
- * Handles provider listing, task status, and duplicate-guard output for the music generation tool.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
@@ -19,9 +14,6 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-type MusicGenerateActionResult = MediaGenerateActionResult;
-
-/** Formats provider capability details for the music generation `list` action. */
 function summarizeMusicGenerationCapabilities(
   provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
 ): string {
@@ -62,11 +54,10 @@ function summarizeMusicGenerationCapabilities(
   return capabilities;
 }
 
-/** Builds the music-generation provider listing result shown to the agent. */
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
   options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
-): MusicGenerateActionResult {
+): MediaGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
     kind: "music_generation",
@@ -81,7 +72,6 @@ export function createMusicGenerateListActionResult(
   });
 }
 
-/** Builds status and duplicate-guard output for music-generation tasks. */
 export const {
   createStatusActionResult: createMusicGenerateStatusActionResult,
   createDuplicateGuardResult: createMusicGenerateDuplicateGuardResult,

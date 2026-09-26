@@ -36,7 +36,12 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
-import { cacheChatSessionSnapshot, observeChatCache } from "./session-message-cache.ts";
+import {
+  applyChatCacheSnapshot,
+  cacheChatSessionSnapshot,
+  observeChatCache,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -179,18 +184,14 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
 }
 
 function seedCursor(state: ReturnType<Awaited<ReturnType<typeof fixture>>["makeState"]>) {
-  state.currentSessionId = initial.sessionId;
-  cacheChatSessionSnapshot(
-    state.chatMessagesBySession,
-    state,
-    { sessionKey: key },
-    {
-      messages: [],
-      sessionId: initial.sessionId,
-      pagination: { hasMore: false },
-      deltaCursor: "cursor-observation",
-    },
-  );
+  const snapshot = {
+    messages: [{ role: "assistant", content: "Cached transcript" }],
+    sessionId: initial.sessionId,
+    pagination: { hasMore: false },
+    deltaCursor: "cursor-observation",
+  } satisfies ChatSessionSnapshot;
+  applyChatCacheSnapshot(state, snapshot);
+  cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: key }, snapshot);
 }
 
 describe("history descriptor observation order", () => {
@@ -312,6 +313,11 @@ describe("history descriptor observation order", () => {
       }
       const oldList = h.holdManaged();
       const loaded = h.begin(state);
+      if (mode === "delta") {
+        expect(h.reads[0]!.params).toHaveProperty("cursor", "cursor-observation");
+      } else {
+        expect(h.reads[0]!.params).not.toHaveProperty("cursor");
+      }
       const fresh = { ...initial, updatedAt: 20, label: "Newer history read" };
       h.reads[0]!.pending.resolve(
         mode === "page"
@@ -438,6 +444,7 @@ describe("history descriptor observation order", () => {
     const state = h.makeState();
     seedCursor(state);
     const loaded = h.begin(state);
+    expect(h.reads[0]!.params).toHaveProperty("cursor", "cursor-observation");
     await h.refreshManaged({ ...initial, updatedAt: 5, label: "Between cursor and page" });
     h.reads[0]!.pending.resolve({ kind: "reset" });
     await vi.waitFor(() => expect(h.reads).toHaveLength(2));

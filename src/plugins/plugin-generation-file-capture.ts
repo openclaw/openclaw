@@ -4,8 +4,11 @@ import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
-import { copyPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
-import { pluginSourceContentHash } from "./plugin-source-verification.js";
+import { copyPluginSourceFile } from "./plugin-source-file.js";
+import {
+  readPluginSourceDirectory,
+  pluginSourceInputIdentity,
+} from "./plugin-source-verification.js";
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -83,7 +86,7 @@ export function createPluginGenerationFileCapture({
       contentHash: string,
       sizeBytes = 0,
       native = false,
-      identity = pluginSourceStatIdentity(stat),
+      identity = pluginSourceInputIdentity(stat),
       admittedBoundary = inputBoundary,
     ) => {
       if (!captured) {
@@ -116,12 +119,10 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      const names = fs.readdirSync(real).toSorted();
-      recordContent(pluginSourceContentHash(names));
+      const { names, contentHash } = readPluginSourceDirectory(real);
+      recordContent(contentHash);
       for (const name of names) {
         if (
-          name !== "node_modules" &&
-          name !== ".git" &&
           !(
             deferExternalLinks &&
             !nativeAdmission.isRetainedReference(path.join(source, name)) &&
