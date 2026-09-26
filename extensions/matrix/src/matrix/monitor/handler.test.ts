@@ -25,6 +25,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
+import { registerMatrixLifecycleTests } from "./handler.lifecycle.test-support.js";
 import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
 import { registerMatrixProgressCompletionTests } from "./handler.progress-completion.test-support.js";
 import {
@@ -4116,41 +4117,13 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
-  it("retains visible live drafts when generation aborts mid-stream", async () => {
-    sendSingleTextMessageMatrixMock
-      .mockReset()
-      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
-    editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
-    deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
-
-    const redactEventMock = vi.fn(async () => "$redacted");
-    let capturedReplyOpts: GetReplyOptions | undefined;
-
-    const { handler } = createMatrixHandlerTestHarness({
-      streaming: "partial",
-      client: { redactEvent: redactEventMock },
-      createReplyDispatcherWithTyping: () => ({
-        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
-        replyOptions: {},
-        markDispatchIdle: () => {},
-        markRunComplete: () => {},
-      }),
-      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: GetReplyOptions }) => {
-        capturedReplyOpts = args?.replyOptions;
-        await capturedReplyOpts?.onPartialReply?.({ text: "partial" });
-        await waitForMatrixState(() => {
-          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-        });
-        throw new Error("model timeout");
-      }) as never,
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
-    );
-
-    expect(redactEventMock).not.toHaveBeenCalled();
+  registerMatrixLifecycleTests({
+    sendSingleTextMessageMatrixMock,
+    editMessageMatrixMock,
+    deliverMatrixRepliesMock,
+    waitForMatrixState,
+    createMockMatrixDeliveryResult,
+    expectEditLiveFlag,
   });
 
   it.each([

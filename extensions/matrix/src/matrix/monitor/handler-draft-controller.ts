@@ -207,6 +207,31 @@ export async function createMatrixDraftController(params: {
     progressDraft.beginNewTurn({ force: true });
   };
 
+  const finalizeAcceptedPartialDraft = async () => {
+    if (streaming !== "partial" || previewLifecycle.previewFinalized || !draftStream?.eventId()) {
+      return;
+    }
+    // Only an already-visible partial may become the terminal reply. Drafts accepted
+    // during shutdown stay active so the handler's final cleanup removes them.
+    const draftEventId = await draftStream.stop().catch(() => undefined);
+    if (draftEventId && (await draftStream.finalizeLive())) {
+      previewLifecycle.retainPreview();
+    }
+  };
+
+  const settleAcceptedDraftAfterError = async () => {
+    if (previewLifecycle.previewFinalized || !draftStream?.eventId()) {
+      return;
+    }
+    if (streaming === "partial") {
+      await finalizeAcceptedPartialDraft();
+      return;
+    }
+    // Quiet and progress previews are ordinary Matrix events rather than live
+    // drafts. Preserve current behavior once Matrix has accepted the event.
+    previewLifecycle.retainPreview();
+  };
+
   return {
     draftStream,
     previewLifecycle,
@@ -218,6 +243,8 @@ export async function createMatrixDraftController(params: {
     beginAssistantMessage: () => progressDraft.beginAssistantMessage(),
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
+    finalizeAcceptedPartialDraft,
+    settleAcceptedDraftAfterError,
     beginDraftGeneration: () => {
       previewLifecycle.reset();
       progressDraft.beginNewTurn({ force: true });
