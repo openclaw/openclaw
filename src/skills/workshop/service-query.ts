@@ -44,7 +44,10 @@ export async function listSkillProposals(
   options: SkillProposalScopeOptions,
 ): Promise<SkillProposalManifest> {
   const store = captureSkillWorkshopStoreOptions(options);
-  const manifest = await readSkillProposalManifest(store, store);
+  const manifest = await readSkillProposalManifest(store, {
+    agentId: store.agentId,
+    status: "pending",
+  });
   const missingDrafts = new Set<string>();
   // The agent collection lease bounds concurrent manifest reconciliation.
   for (const proposal of manifest.proposals) {
@@ -65,7 +68,7 @@ export async function listSkillProposals(
       missingDrafts.add(error.proposalId);
     }
   }
-  const reconciled = await readSkillProposalManifest(store, store);
+  const reconciled = await readSkillProposalManifest(store, { agentId: store.agentId });
   // Freshly read manifest rows are locally owned; mark degraded entries in place.
   for (const proposal of reconciled.proposals) {
     if (missingDrafts.has(proposal.id)) {

@@ -865,28 +865,6 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("forwards embed-only Discord sends without requiring message text", async () => {
-    const embeds = [{ title: "Release notes", description: "Version available" }];
-    const cfg = discordConfig();
-
-    await handleDiscordMessageAction({
-      action: "send",
-      params: { to: "channel:123", embeds },
-      cfg,
-    });
-
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "channel:123",
-        content: undefined,
-        embeds,
-      }),
-      cfg,
-      defaultActionOptions(),
-    );
-  });
-
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

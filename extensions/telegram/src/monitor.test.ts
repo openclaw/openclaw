@@ -165,7 +165,7 @@ describe("monitorTelegramProvider", () => {
     });
   });
 
-  it.each(["lookup", "purge"])(
+  it.each(["lookup", "purge-admission", "purge"])(
     "preserves replacement rows and the offset when aborted during %s",
     async (phase) => {
       await withStateDirEnv("telegram-aborted-reset-", async ({ stateDir }) => {
@@ -183,15 +183,21 @@ describe("monitorTelegramProvider", () => {
           accountId: "default",
           stateDir,
         });
-        if (phase === "purge") {
+        if (phase !== "lookup") {
           const purge = queue.purge?.bind(queue);
           if (!purge) {
             throw new Error("Expected core purge capability");
           }
-          queue.purge = async () => {
-            const count = await purge();
-            paused.resolve();
-            await resume.promise;
+          queue.purge = async (options) => {
+            if (phase === "purge-admission") {
+              paused.resolve();
+              await resume.promise;
+            }
+            const count = await purge(options);
+            if (phase === "purge") {
+              paused.resolve();
+              await resume.promise;
+            }
             return count;
           };
         }

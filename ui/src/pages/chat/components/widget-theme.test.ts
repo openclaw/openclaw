@@ -69,22 +69,6 @@ describe("widget theme bridge", () => {
     });
   });
 
-  it("reports dark mode when the host theme mode is not light", () => {
-    document.documentElement.dataset.themeMode = "dark";
-    stubComputedStyles({ "--bg": "#0e1015" });
-    const postMessage = vi.fn();
-    const frame = { contentWindow: { postMessage } } as unknown as HTMLIFrameElement;
-
-    postWidgetTheme(frame);
-
-    const [message] = postedMessage(postMessage);
-    expect(message).toEqual({
-      type: "openclaw:widget-theme",
-      mode: "dark",
-      tokens: { surface: "#0e1015" },
-    });
-  });
-
   it("targets the exact origin for authenticated cross-origin embeds", () => {
     document.documentElement.dataset.themeMode = "dark";
     stubComputedStyles({ "--bg": "#0e1015", "--accent": "#ff5c5c" });

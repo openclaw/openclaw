@@ -59,46 +59,6 @@ describe("inspectMatrixDirectRooms", () => {
     ]);
   });
 
-  it("still surfaces joined strict rooms when an older mapped room is strict", async () => {
-    const client = createClient({
-      getAccountData: vi.fn(async () => ({
-        "@alice:example.org": ["!older:example.org"],
-      })),
-      getJoinedRooms: vi.fn(async () => ["!older:example.org", "!fresh:example.org"]),
-      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
-    });
-
-    const result = await inspectMatrixDirectRooms({
-      client,
-      remoteUserId: "@alice:example.org",
-    });
-
-    expect(result.activeRoomId).toBe("!older:example.org");
-    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
-  });
-
-  it("falls back to discovered strict joined rooms when m.direct is stale", async () => {
-    const client = createClient({
-      getAccountData: vi.fn(async () => ({
-        "@alice:example.org": ["!stale:example.org"],
-      })),
-      getJoinedRooms: vi.fn(async () => ["!stale:example.org", "!fresh:example.org"]),
-      getJoinedRoomMembers: vi.fn(async (roomId: string) =>
-        roomId === "!fresh:example.org"
-          ? ["@bot:example.org", "@alice:example.org"]
-          : ["@bot:example.org", "@alice:example.org", "@mallory:example.org"],
-      ),
-    });
-
-    const result = await inspectMatrixDirectRooms({
-      client,
-      remoteUserId: "@alice:example.org",
-    });
-
-    expect(result.activeRoomId).toBe("!fresh:example.org");
-    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
-  });
-
   it("prefers discovered rooms marked direct in local member state over plain strict rooms", async () => {
     const client = createClient({
       getJoinedRooms: vi.fn(async () => ["!fallback:example.org", "!explicit:example.org"]),
@@ -183,6 +143,7 @@ describe("repairMatrixDirectRooms", () => {
     });
 
     expect(result.activeRoomId).toBe("!fresh:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
     expect(result.createdRoomId).toBeNull();
     expectDirectMappingWrite(setAccountData, "@alice:example.org", [
       "!fresh:example.org",

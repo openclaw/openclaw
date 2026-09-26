@@ -69,6 +69,12 @@ interrupted and that partially completed actions need checking. A parent waiting
 for its child batch receives the settled results, including children that finished
 before the restart, and decides what work remains.
 
+An already-admitted completion turn for a yielded nested requester is different
+from an orphaned child launch. Its frozen child-result batch retains the exact
+saved continuation across restart. Registry recovery waits for that owner instead
+of reporting interruption while the same continuation is being replayed. This
+does not authorize automatic relaunch of unrelated interrupted child work.
+
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
 session must still identify the exact run from the retired Gateway, with no newer
@@ -76,6 +82,13 @@ run or admitted work owning that session. Live executions and queued collectors
 keep their existing owners. Orphaned runs settle their background task before
 cleanup, so retained child sessions do not leave phantom running activity. If the
 task update fails, completion remains available for retry.
+
+Recovery remembers live session ownership without retaining saved prompt snapshots.
+Unchanged owned rows skip session reads; ownership release or a published session
+change requests another sweep within one second. Unavailable recovery reads retry
+per row with exponential backoff from one second to one minute. Registry lifecycle
+changes and session publications clear that backoff. Persisted rows without a live
+owner still require a fresh read before recovery can change their state.
 
 Startup session maintenance reports retained run/task owners in one informational
 summary. Those rows remain with registry recovery; the session-only orphan repair

@@ -7,118 +7,37 @@ import {
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
 
-type ReasonCase = {
-  reason: FailoverReason | null | undefined;
-  allowCooldownProbe: boolean;
-  useTransientProbeSlot: boolean;
-  preserveTransientProbeSlot: boolean;
-};
+type ReasonCase = [
+  reason: FailoverReason | null | undefined,
+  allowCooldownProbe: boolean,
+  useTransientProbeSlot: boolean,
+  preserveTransientProbeSlot: boolean,
+];
 
-// Keep the three decisions in one matrix so reason additions update cooldown
-// eligibility, transient-slot use, and slot preservation together.
 const CASES: ReasonCase[] = [
-  {
-    reason: "rate_limit",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "overloaded",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "billing",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "unknown",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "empty_response",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "no_error_details",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "unclassified",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "model_not_found",
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: true,
-  },
-  {
-    reason: "format",
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: true,
-  },
-  {
-    reason: "auth",
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: true,
-  },
-  {
-    reason: "auth_permanent",
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: true,
-  },
-  {
-    reason: "session_expired",
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: true,
-  },
-  {
-    reason: "timeout",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: null,
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: undefined,
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
-    preserveTransientProbeSlot: false,
-  },
+  ["rate_limit", true, true, false],
+  ["overloaded", true, true, false],
+  ["billing", true, false, false],
+  ["unknown", true, true, false],
+  ["empty_response", true, true, false],
+  ["no_error_details", true, true, false],
+  ["unclassified", true, true, false],
+  ["model_not_found", false, false, true],
+  ["format", false, false, true],
+  ["auth", false, false, true],
+  ["auth_permanent", false, false, true],
+  ["session_expired", false, false, true],
+  ["timeout", true, true, false],
+  [null, false, false, false],
+  [undefined, false, false, false],
 ];
 
 describe("failover-policy", () => {
   it("maps failover reasons to cooldown-probe decisions", () => {
-    for (const testCase of CASES) {
-      expect(shouldAllowCooldownProbeForReason(testCase.reason)).toBe(testCase.allowCooldownProbe);
-      expect(shouldUseTransientCooldownProbeSlot(testCase.reason)).toBe(
-        testCase.useTransientProbeSlot,
-      );
-      expect(shouldPreserveTransientCooldownProbeSlot(testCase.reason)).toBe(
-        testCase.preserveTransientProbeSlot,
-      );
+    for (const [reason, allow, useTransient, preserveTransient] of CASES) {
+      expect(shouldAllowCooldownProbeForReason(reason)).toBe(allow);
+      expect(shouldUseTransientCooldownProbeSlot(reason)).toBe(useTransient);
+      expect(shouldPreserveTransientCooldownProbeSlot(reason)).toBe(preserveTransient);
     }
   });
 });

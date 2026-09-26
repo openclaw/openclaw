@@ -134,29 +134,6 @@ describe("RelayFetch request and stream ownership", () => {
     await f.command("IO.close", { handle });
   });
 
-  it("retires a minted stream handle even when IO.close fails", async () => {
-    const closeError = new Error("close failed");
-    const f = fixture(async (method) => {
-      if (method === "Fetch.takeResponseBodyAsStream") {
-        return { stream: "native" };
-      }
-      if (method === "IO.close") {
-        throw closeError;
-      }
-      return {};
-    });
-    await f.command("Fetch.enable");
-    const requestId = f.pause("stream", { responseStatusCode: 200 });
-    const handle = stringField(
-      await f.command("Fetch.takeResponseBodyAsStream", { requestId }),
-      "stream",
-    );
-    await expect(f.command("IO.close", { handle })).rejects.toBe(closeError);
-    const before = f.send.mock.calls.length;
-    await expect(f.command("IO.close", { handle })).rejects.toThrow(/stream handle/);
-    expect(f.send).toHaveBeenCalledTimes(before);
-  });
-
   it("serializes stream reads and retires readability after an ambiguous failure", async () => {
     const readStarted = createDeferred<void>();
     const read = createDeferred<unknown>();

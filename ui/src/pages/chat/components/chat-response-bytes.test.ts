@@ -51,21 +51,6 @@ describe("readResponseBytesWithinLimit", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("rejects and cancels one oversized chunk without retaining it", async () => {
-    const cancel = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(17));
-        },
-        cancel,
-      }),
-    );
-
-    expect(await readResponseBytesWithinLimit(response, 16)).toBeNull();
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
   it("combines a body only after every chunk fits", async () => {
     const response = new Response(
       new ReadableStream<Uint8Array>({

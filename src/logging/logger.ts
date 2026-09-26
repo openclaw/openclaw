@@ -22,7 +22,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
-import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import {
   isLegacyRollingLogFilePath,
   resolveRollingLogFilePathForDate,
@@ -527,14 +527,7 @@ function getRuntimeSettings(): ResolvedRuntimeSettings {
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = getRuntimeSettings();
-  if (level === "silent") {
-    return false;
-  }
-  if (settings.level === "silent") {
-    return false;
-  }
-  return levelToMinLevel(level) >= levelToMinLevel(settings.level);
+  return isLogLevelEnabled(level, getRuntimeSettings().level);
 }
 
 type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;

@@ -77,12 +77,7 @@ export type SandboxFsBridge = {
    * Consumers that filter protected sources must require this capability;
    * a separate path lookup cannot establish the source of the returned bytes.
    */
-  readFileWithSource?(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-    maxBytes?: number;
-  }): Promise<{
+  readFileWithSource?(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<{
     data: Buffer;
     canonicalPath: string;
     /** Canonical POSIX path within the workspace mount; absent for other mounts. */
@@ -113,16 +108,9 @@ export type SandboxFsBridge = {
    * Backends without this capability must omit it rather than emulate it with
    * a check followed by writeFile.
    */
-  createFileExclusive?(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
-    pinnedPath?: string;
-    signal?: AbortSignal;
-  }): Promise<"created" | "exists">;
+  createFileExclusive?(
+    params: Parameters<SandboxFsBridge["writeFile"]>[0],
+  ): Promise<"created" | "exists">;
   mkdirp(params: {
     filePath: string;
     cwd?: string;

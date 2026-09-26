@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -577,12 +578,15 @@ export async function executePluginOwnedProcess(params: {
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
-      requestToolPermission: createPluginToolPermissionHandler({
-        context: params.context,
-        abortSignal: signal,
-        onPendingApproval: updatePendingApproval,
-        env: params.env,
-      }),
+      // Warm transports retain their first turn's async context across plugin refreshes.
+      requestToolPermission: AsyncLocalStorage.bind(
+        createPluginToolPermissionHandler({
+          context: params.context,
+          abortSignal: signal,
+          onPendingApproval: updatePendingApproval,
+          env: params.env,
+        }),
+      ),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,

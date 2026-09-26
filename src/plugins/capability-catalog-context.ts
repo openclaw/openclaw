@@ -10,14 +10,14 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { captureWsEvent } from "../proxy-capture/runtime.js";
+import { captureWsEvent, captureWsEventAsync } from "../proxy-capture/runtime.js";
 import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 
 export function createPluginCapabilityCatalogContext(
   availability: ReturnType<typeof createProviderAuthAvailability>,
-): PluginCapabilityCatalogContext {
+): PluginCapabilityCatalogHostContext {
   const {
     isProviderApiKeyConfigured,
     isProviderAuthProfileConfigured,
@@ -31,12 +31,13 @@ export function createPluginCapabilityCatalogContext(
     resolveProviderRequestHeaders,
     resolveProviderAuthProfileApiKey,
     resolveApiKeyForProvider: async (
-      params: Parameters<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>[0],
+      params: Parameters<PluginCapabilityCatalogHostContext["resolveApiKeyForProvider"]>[0],
     ) =>
       (await import("./runtime/runtime-model-auth.runtime.js")).resolveProviderRuntimeApiKey(
         params,
       ),
     captureWsEvent,
+    captureWsEventAsync,
     createDebugProxyWebSocketAgent,
     resolveDebugProxySettings,
     fetchWithSsrFGuard,

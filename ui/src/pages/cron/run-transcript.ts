@@ -1,36 +1,29 @@
+import type { CronHistoryResult } from "@openclaw/gateway-protocol";
 import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
-import "../../styles/chat/sidebar.css";
 import { t } from "../../i18n/index.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  normalizeTaskEventPayload,
-  normalizeTasksGetResult,
-  normalizeTasksListResult,
-  taskTitle,
-} from "../../lib/tasks/data.ts";
-import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
-import {
-  observeTaskDetailEvent,
-  resetTaskDetail,
-  type TaskTranscriptHost,
-} from "../chat/components/chat-task-detail-state.ts";
-import { renderTaskTranscript } from "../chat/components/chat-task-detail.ts";
+import { attachHistoryActivity } from "../chat/chat-history-request.ts";
+import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
+import { renderChatHistoryBoundary } from "../chat/components/chat-history-boundary.ts";
+import { renderChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
 
 type Scope = { client: GatewayBrowserClient; epoch: number; isCurrent: () => boolean };
 
+/** The run log owns transcript identity; never resolve a client-selected session alias. */
 export class CronRunTranscript implements ReactiveController {
   private attempt = 0;
   private entry: CronRunLogEntry | null = null;
-  private task: TaskSummary | null = null;
-  private candidateId: string | null = null;
+  private trigger: HTMLButtonElement | null = null;
+  private scope: Scope | null = null;
+  private messages: unknown[] = [];
+  private nextCursor: string | undefined;
+  private readonly cursors = new Set<string>();
+  private loading = false;
   private error: string | null = null;
-  private readonly transcript: TaskTranscriptHost = {
-    client: null,
-    connected: false,
-    requestUpdate: () => this.host.requestUpdate(),
-  };
+  private failedCursor: string | undefined;
 
   constructor(
     private readonly host: HTMLElement & ReactiveControllerHost,
@@ -43,121 +36,95 @@ export class CronRunTranscript implements ReactiveController {
     this.close();
   }
 
-  close() {
+  close(restoreFocus = false) {
+    const trigger = this.trigger;
+    this.trigger = null;
     this.attempt++;
-    resetTaskDetail(this.transcript);
     this.entry = null;
-    this.task = null;
-    this.candidateId = null;
+    this.scope = null;
+    this.messages = [];
+    this.nextCursor = undefined;
+    this.cursors.clear();
+    this.loading = false;
     this.error = null;
+    this.failedCursor = undefined;
     this.host.requestUpdate();
+    if (restoreFocus && trigger?.isConnected) {
+      trigger.focus();
+    }
   }
 
-  observe(payload: unknown) {
-    const event = normalizeTaskEventPayload(payload);
-    if (!event) {
-      return;
-    }
-    if (
-      event.action === "deleted" &&
-      (event.taskId === this.task?.id || event.taskId === this.candidateId)
-    ) {
-      this.close();
-      return;
-    }
-    observeTaskDetailEvent(this.transcript, event);
-  }
-
-  async open(entry: CronRunLogEntry) {
+  async open(entry: CronRunLogEntry, trigger: HTMLButtonElement) {
     this.close();
     const scope = this.capture();
     if (!scope) {
       return;
     }
     this.entry = entry;
-    const attempt = this.attempt;
-    const current = () => attempt === this.attempt && this.host.isConnected && scope.isCurrent();
-    const matches = (task: TaskSummary) =>
-      task.runtime === "cron" &&
-      task.sourceId === entry.jobId &&
-      task.childSessionKey === entry.sessionKey &&
-      task.startedAt === entry.runAtMs;
-    try {
-      if (
-        !entry.jobId ||
-        !entry.sessionKey?.trim() ||
-        typeof entry.runAtMs !== "number" ||
-        !Number.isFinite(entry.runAtMs)
-      ) {
-        throw new Error(t("cron.runEntry.transcriptMissingMetadata"));
-      }
-      const matchesById = new Map<string, TaskSummary>();
-      const cursors = new Set<string>();
-      let cursor: string | undefined;
-      do {
-        const result = normalizeTasksListResult(
-          await scope.client.request("tasks.list", {
-            sessionKey: entry.sessionKey,
-            limit: 500,
-            ...(cursor ? { cursor } : {}),
-          }),
-        );
-        if (!current()) {
-          return;
-        }
-        if (!result) {
-          throw new Error(t("tasksPage.invalidResponse"));
-        }
-        for (const task of result.tasks) {
-          if (matches(task)) {
-            matchesById.set(task.id, task);
-          }
-        }
-        cursor = result.nextCursor;
-        if (cursor) {
-          if (cursors.has(cursor)) {
-            throw new Error(t("tasksPage.invalidResponse"));
-          }
-          cursors.add(cursor);
-        }
-      } while (cursor);
-      const [task] = matchesById.values();
-      if (matchesById.size !== 1 || !task) {
-        throw new Error(t("cron.runEntry.transcriptUnavailable"));
-      }
-      this.candidateId = task.id;
-      const fresh = normalizeTasksGetResult(
-        await scope.client.request("tasks.get", { taskId: task.id }),
-      );
-      if (!current()) {
-        return;
-      }
-      if (!fresh || fresh.id !== task.id || !matches(fresh) || !fresh.hasTranscript) {
-        throw new Error(t("cron.runEntry.transcriptUnavailable"));
-      }
-      this.task = fresh;
-      Object.assign(this.transcript, {
-        client: scope.client,
-        connected: true,
-        connectionEpoch: scope.epoch,
-      });
-    } catch (error) {
-      if (!current()) {
-        return;
-      }
-      this.error = formatUiError(error, t("tasksPage.loadFailed"));
-    }
-    if (!current()) {
+    this.trigger = trigger;
+    this.scope = scope;
+    await this.load();
+    if (this.entry !== entry || this.scope !== scope || !scope.isCurrent()) {
       return;
     }
-    this.host.requestUpdate();
     await this.host.updateComplete;
-    if (!current()) {
+    if (this.entry !== entry || this.scope !== scope || !scope.isCurrent()) {
       return;
     }
     const region = this.host.querySelector<HTMLElement>("[data-cron-run-transcript]");
     region?.focus({ preventScroll: true });
     region?.scrollIntoView({ block: "start", behavior: "instant" });
+  }
+
+  private async load(cursor?: string) {
+    const { entry, scope, attempt } = this;
+    if (!entry || !scope || this.loading || !scope.isCurrent()) {
+      return;
+    }
+    const current = () => this.attempt === attempt && this.host.isConnected && scope.isCurrent();
+    this.loading = true;
+    this.error = null;
+    this.failedCursor = cursor;
+    this.host.requestUpdate();
+    try {
+      if (
+        !entry.jobId ||
+        (!entry.runId && (typeof entry.runAtMs !== "number" || !Number.isFinite(entry.runAtMs)))
+      ) {
+        throw new Error(t("cron.runEntry.transcriptMissingMetadata"));
+      }
+      const result = await scope.client.request<CronHistoryResult>("cron.history", {
+        id: entry.jobId,
+        ...(entry.runId ? { runId: entry.runId } : { runAtMs: entry.runAtMs }),
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!current()) {
+        return;
+      }
+      if (!Array.isArray(result.messages)) {
+        throw new Error(t("cron.runEntry.transcriptUnavailable"));
+      }
+      const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
+      if (cursor) {
+        this.cursors.add(cursor);
+      }
+      this.messages = cursor
+        ? mergeChatTranscriptPages(messages, this.messages).messages
+        : messages;
+      this.nextCursor =
+        result.nextCursor && !this.cursors.has(result.nextCursor) ? result.nextCursor : undefined;
+      this.failedCursor = undefined;
+    } catch (error) {
+      if (!current()) {
+        return;
+      }
+      this.error = formatUiError(error, t("cron.runEntry.transcriptUnavailable"));
+    }
+    if (current()) {
+      this.loading = false;
+      this.host.requestUpdate();
+    }
   }
 
   render() {
@@ -168,23 +135,37 @@ export class CronRunTranscript implements ReactiveController {
       class="card"
       role="region"
       tabindex="-1"
-      aria-label=${t("tasksPage.transcript")}
+      aria-label=${t("cron.runEntry.transcript")}
       data-cron-run-transcript
     >
       <div class="row">
-        <h2>${this.task ? taskTitle(this.task) : t("tasksPage.transcript")}</h2>
-        <button class="btn btn--sm" @click=${() => this.close()}>${t("common.close")}</button>
+        <h2>${t("cron.runEntry.transcript")}</h2>
+        <button class="btn btn--sm" @click=${() => this.close(true)}>${t("common.close")}</button>
       </div>
       ${
         this.error
           ? html`<p role="alert">${this.error}</p>
-              <button class="btn btn--sm" @click=${() => this.entry && void this.open(this.entry)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${this.loading}
+                @click=${() => void this.load(this.failedCursor)}
+              >
                 ${t("common.retry")}
               </button>`
-          : this.task
-            ? renderTaskTranscript({ host: this.transcript, task: this.task })
-            : html`<p role="status">${t("tasksPage.loading")}</p>`
+          : nothing
       }
+      ${this.loading ? html`<p role="status">${t("common.loading")}</p>` : nothing}
+      ${
+        this.nextCursor
+          ? renderChatHistoryBoundary({
+              hasMore: true,
+              loading: this.loading,
+              onShowEarlier: () => void this.load(this.nextCursor),
+            })
+          : nothing
+      }
+      ${!this.loading && !this.error && this.messages.length === 0 ? html`<p>${t("cron.runEntry.transcriptEmpty")}</p>` : nothing}
+      ${renderChatTranscriptFeed(this.messages)}
     </section>`;
   }
 }

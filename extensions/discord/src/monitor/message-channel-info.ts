@@ -25,17 +25,13 @@ type DiscordMessageWithChannelId = Message & {
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
-function resolveDiscordChannelInfoCacheExpiresAt(ttlMs: number, nowMs: number): number | undefined {
-  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
-}
-
 function cacheDiscordChannelInfo(
   channelId: string,
   value: DiscordChannelInfo | null,
   ttlMs: number,
   nowMs: number,
 ): void {
-  const expiresAt = resolveDiscordChannelInfoCacheExpiresAt(ttlMs, nowMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
   if (expiresAt !== undefined) {
     discordChannelInfoCacheState.entries.set(channelId, { value, expiresAt });
     pruneMapToMaxSize(discordChannelInfoCacheState.entries, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);

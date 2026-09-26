@@ -573,14 +573,7 @@ private fun AudioPlayerSurface(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
           )
-          val status =
-            when {
-              error != null -> error
-              preparingPlayback -> nativeString("Preparing playback…")
-              playbackBlocked -> nativeString("Paused for voice playback")
-              else -> null
-            }
-          status?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
+          MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
         }
       }
       Slider(
@@ -657,17 +650,24 @@ private fun VideoPlayerSurface(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    val status =
-      when {
-        error != null -> error
-        preparingPlayback -> nativeString("Preparing playback…")
-        playbackBlocked -> nativeString("Paused for voice playback")
-        else -> null
-      }
-    status?.let {
-      Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-    }
+    MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
   }
+}
+
+@Composable
+private fun MediaPlaybackStatus(
+  error: String?,
+  preparingPlayback: Boolean,
+  playbackBlocked: Boolean,
+) {
+  val status =
+    when {
+      error != null -> error
+      preparingPlayback -> nativeString("Preparing playback…")
+      playbackBlocked -> nativeString("Paused for voice playback")
+      else -> null
+    }
+  status?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
 }
 
 @OptIn(UnstableApi::class)

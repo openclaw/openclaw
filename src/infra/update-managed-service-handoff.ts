@@ -13,7 +13,6 @@ import { resolveUpdatedInstallCommandEnv } from "../cli/update-cli/update-comman
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
-import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import {
   GatewayDrainingError,
@@ -66,6 +65,10 @@ import {
   type ManagedHandoffLease,
 } from "./update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
+import {
+  prepareManagedHandoffCliRuntime,
+  resolveManagedHandoffNodeExecutable,
+} from "./update-managed-service-handoff-node.js";
 import { MANAGED_HANDOFF_PARENT_SOURCE } from "./update-managed-service-handoff-parent-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
@@ -1420,6 +1423,8 @@ async function spawnManagedServiceUpdateHandoff(
     }
     await assertForegroundUpdateOrigin(params.foregroundOrigin, false, serviceEnv);
   }
+  const handoffNodeExecutable =
+    params.execPath ?? (await resolveManagedHandoffNodeExecutable(serviceEnv, params.supervisor));
   const updateLeaseDatabasePath =
     owner.leaseDatabaseIdentity?.databasePath ?? resolveManagedUpdateLeaseDatabasePath();
   // The helper and its parent retain one database identity through settlement.
@@ -1480,7 +1485,7 @@ async function spawnManagedServiceUpdateHandoff(
     ? [params.action.nodeRunner, params.action.entrypoint, "triage"]
     : resolveUpdateCliArgv({
         ...commandOptions,
-        execPath: params.execPath ?? process.execPath,
+        execPath: handoffNodeExecutable,
         argv1: params.argv1 ?? process.argv[1],
       });
   if (owner.operatorRestartWarning) {
@@ -1500,7 +1505,7 @@ async function spawnManagedServiceUpdateHandoff(
       ...(params.foregroundOrigin ? { foregroundOrigin: params.foregroundOrigin } : {}),
     },
   };
-  let spawnCommand = params.execPath ?? process.execPath;
+  let spawnCommand = handoffNodeExecutable;
   const spawnArgs = [scriptPath, paramsPath];
   let scopeUnit: string | undefined;
   let systemdRunPath: string | undefined;
@@ -1553,24 +1558,11 @@ async function spawnManagedServiceUpdateHandoff(
     processEnv: childEnv,
     invocationCwd: process.cwd(),
   });
-  const nodeCommand =
-    commandArgv[0] === process.execPath ||
-    /^(?:node|bun)(?:\.exe)?$/iu.test(path.basename(commandArgv[0] ?? ""));
-  const startup = nodeCommand
-    ? buildCliRespawnPlan({
-        argv: commandArgv,
-        env: preparedEnv,
-        execArgv: [],
-        execPath: commandArgv[0],
-      })
-    : null;
-  const nodeExecArgv = nodeCommand
-    ? (startup?.argv.slice(0, startup.argv.length - commandArgv.length + 1) ?? [])
-    : undefined;
-  if (startup) {
-    commandArgv[0] = startup.command;
-  }
-  const readyEnv = startup?.env ?? preparedEnv;
+  const { nodeExecArgv, readyEnv } = prepareManagedHandoffCliRuntime(
+    commandArgv,
+    preparedEnv,
+    handoffNodeExecutable,
+  );
   const env = params.devTarget ? applyDevUpdateTargetEnv(readyEnv, params.devTarget) : readyEnv;
 
   const helperParams = {
@@ -1593,12 +1585,12 @@ async function spawnManagedServiceUpdateHandoff(
     invocationCwd: params.invocationCwd,
     commandArgv,
     recoveryCommandArgv: resolveManagedServiceCliArgv(
-      { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
+      { execPath: handoffNodeExecutable, argv1: params.argv1 ?? process.argv[1] },
       ["gateway", "restart", "--preserve-definition", "--json"],
     ),
     recoveryTimeoutMs: owner.recoveryTimeoutMs,
     triageCommandArgv: resolveManagedServiceCliArgv(
-      { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
+      { execPath: handoffNodeExecutable, argv1: params.argv1 ?? process.argv[1] },
       ["triage", "--json", "--non-interactive"],
     ),
     triageContextPath,

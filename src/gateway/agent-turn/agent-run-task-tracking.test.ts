@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  withFollowupRequest,
+  withFollowupSuccessor,
+} from "../../agents/subagents/completion/session-followup-completion.js";
+import type { FollowupRequest } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
 import type { PreparedDetachedTaskRun } from "../../tasks/detached-task-runtime.js";
-import {
-  withFollowupRequest,
-  withFollowupSuccessor,
-} from "../../tasks/task-followup-completion.js";
-import type { FollowupRequest } from "../../tasks/task-followup-completion.types.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import type { TaskRunOwner } from "../../tasks/task-run-owner.types.js";
 import { bindInProcessSubagentResume } from "../in-process-subagent-resume.js";

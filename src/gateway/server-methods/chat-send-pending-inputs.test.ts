@@ -6,6 +6,12 @@ import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/c
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import {
+  createQueueSettings,
+  createQueueTestRun,
+} from "../../auto-reply/reply/queue.test-helpers.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -33,6 +39,9 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import { abortChatRunById } from "../chat-abort.js";
+import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
@@ -44,6 +53,106 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("ordinary chat input admission", () => {
+  it.each([
+    { target: "admitted", stopReason: "timeout", reason: "timeout" },
+    { target: "queued", stopReason: "stop", reason: "stop" },
+    { target: "queued", stopReason: "restart", reason: "restart" },
+    { target: "signal", stopReason: undefined, reason: "aborted" },
+    { target: "consumed", stopReason: "rpc", reason: undefined },
+  ] as const)(
+    "records one content-free cancellation outcome for $target input ($stopReason)",
+    async ({ target, stopReason, reason }) => {
+      const fixture = await createBrowserFollowupFixture();
+      let dispatchCompletion: Promise<void> | undefined;
+      try {
+        await fixture.send();
+        const recorder = await fixture.dispatchedRecorder;
+        const runId = fixture.params.idempotencyKey;
+        const active = fixture.context.chatAbortControllers.get(runId);
+        if (!active) {
+          throw new Error("Expected the pending input's abort owner");
+        }
+        if (target === "queued") {
+          const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
+            | Parameters<typeof dispatchInboundMessage>[0]
+            | undefined;
+          const run = createQueueTestRun({ prompt: fixture.params.message });
+          run.abortSignal = active.controller.signal;
+          run.turnAdoptionLifecycle = dispatch?.replyOptions?.turnAdoptionLifecycle;
+          expect(run.turnAdoptionLifecycle).toBeDefined();
+          expect(
+            enqueueFollowupRun(
+              fixture.scope.sessionKey,
+              run,
+              createQueueSettings({ mode: "followup" }),
+              "none",
+              async () => {},
+              false,
+            ),
+          ).toBe(true);
+          const detached = createDeferred();
+          vi.mocked(fixture.context.removeChatRun).mockImplementationOnce(() => {
+            detached.resolve();
+            return undefined;
+          });
+          dispatchCompletion = fixture.finishDispatch();
+          await detached.promise;
+          expect(fixture.context.chatAbortControllers.has(runId)).toBe(false);
+          expect(fixture.context.chatQueuedTurns.has(runId)).toBe(true);
+          expect(
+            abortQueuedChatTurnById(fixture.context.chatQueuedTurns, {
+              runId,
+              sessionKey: fixture.scope.sessionKey,
+              stopReason,
+            }).aborted,
+          ).toBe(true);
+        } else if (target === "signal") {
+          active.controller.abort(new Error("Private cancellation payload must stay out of logs"));
+        } else {
+          if (target === "consumed") {
+            await recorder.persistApproved();
+          }
+          expect(
+            abortChatRunById(createChatAbortOps(fixture.context), {
+              runId,
+              sessionKey: fixture.scope.sessionKey,
+              stopReason,
+            }).aborted,
+          ).toBe(true);
+        }
+        await (dispatchCompletion ?? fixture.finishDispatch());
+        const disposition = reason === "restart" ? "interrupted" : "cancelled";
+        expect(
+          vi
+            .mocked(fixture.context.logGateway.info)
+            .mock.calls.filter(([message]) => message.startsWith("chat pending input aborted:")),
+        ).toEqual(
+          reason
+            ? [
+                [
+                  `chat pending input aborted: ${reason} (${disposition})`,
+                  {
+                    runId,
+                    sessionKey: fixture.scope.sessionKey,
+                    sessionId: fixture.scope.sessionId,
+                    agentId: "main",
+                    disposition,
+                    reason,
+                  },
+                ],
+              ]
+            : [],
+        );
+        expect(listSessionPendingInputs(fixture.scope)).toMatchObject(
+          reason ? { items: [{ state: disposition }], total: 1 } : { items: [], total: 0 },
+        );
+      } finally {
+        clearFollowupQueue(fixture.scope.sessionKey);
+        await fixture.cleanup();
+      }
+    },
+  );
+
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},
   ) {
@@ -196,6 +305,7 @@ describe("ordinary chat input admission", () => {
         expect.anything(),
       );
       await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+      const accepted = listSessionPendingInputs(fixture.scope);
       const reconnect = await fixture.send();
       expect(reconnect).toHaveBeenCalledWith(
         true,
@@ -208,6 +318,9 @@ describe("ordinary chat input admission", () => {
         total: 1,
         items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
       });
+      expect(listSessionPendingInputs(fixture.scope)).toEqual(accepted);
+      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
       expect(fixture.context.removeChatRun).not.toHaveBeenCalled();
       expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
         "chat",
@@ -496,27 +609,6 @@ describe("ordinary chat input admission", () => {
       }
     },
   );
-
-  it("keeps one approved source when an accepted browser request is retried", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    try {
-      await fixture.send();
-      const accepted = listSessionPendingInputs(fixture.scope);
-      expect(accepted.total).toBe(1);
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
-        undefined,
-        expect.objectContaining({ cached: true }),
-      );
-      expect(listSessionPendingInputs(fixture.scope)).toEqual(accepted);
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
 
   it("does not execute a consumed collected source when retried after the session becomes idle", async () => {
     const fixture = await createBrowserFollowupFixture();

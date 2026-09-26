@@ -117,17 +117,9 @@ export function createHostRegistrars(state: PluginRegistryState) {
       return;
     }
     if (normalizedSessionEntrySlotKey) {
-      const existingSlot = registry.sessionExtensions.find((entry) => {
-        const existingSlotKey = entry.extension.sessionEntrySlotKey;
-        if (existingSlotKey === undefined) {
-          return false;
-        }
-        const normalizedExistingSlotKey = normalizeSessionEntrySlotKey(existingSlotKey);
-        return (
-          normalizedExistingSlotKey.ok &&
-          normalizedExistingSlotKey.key === normalizedSessionEntrySlotKey
-        );
-      });
+      const existingSlot = registry.sessionExtensions.find(
+        (entry) => entry.extension.sessionEntrySlotKey === normalizedSessionEntrySlotKey,
+      );
       if (existingSlot) {
         reportRegistrationError(
           record,

@@ -521,8 +521,6 @@ internal fun ChatScreen(
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendStates
-  val pickerActivity = LocalActivity.current
-  val pickerView = LocalView.current
 
   // Admission reads current settings, not the last composed enabled state.
   fun currentEffortSession() =
@@ -562,20 +560,12 @@ internal fun ChatScreen(
     )
 
   val modelPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected) &&
-          viewModel.gatewayConnectionDisplay.value.isConnected &&
-          operatorScopesAllowWrite(viewModel.operatorScopes.value)
-      }
+    rememberChatPicker(viewModel) {
+      viewModel.gatewayConnectionDisplay.value.isConnected && operatorScopesAllowWrite(viewModel.operatorScopes.value)
     }
   val contextPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected) &&
-          viewModel.gatewayConnectionDisplay.value.isConnected &&
-          operatorScopesAllowRead(viewModel.operatorScopes.value)
-      }
+    rememberChatPicker(viewModel) {
+      viewModel.gatewayConnectionDisplay.value.isConnected && operatorScopesAllowRead(viewModel.operatorScopes.value)
     }
   var modelPickerPage by remember { mutableStateOf(ChatComposerPickerPage.Models) }
   var composerAnchor by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -586,12 +576,7 @@ internal fun ChatScreen(
     if (modelPicker.visible !== previous) modelPickerPage = page
   }
 
-  val effortPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected) && (canChangeThinking() || canChangeFastMode(expected))
-      }
-    }
+  val effortPicker = rememberChatPicker(viewModel) { expected -> canChangeThinking() || canChangeFastMode(expected) }
   var effortPreview by remember(
     effortPicker.visible,
     composerOwner,
@@ -601,30 +586,10 @@ internal fun ChatScreen(
     thinkingLevelSelection.options,
     canAdminSessionSettings,
   ) { mutableStateOf<String?>(null) }
-  val backgroundTasks =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
-  val reviewDiff =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
-  val attachmentPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
-  val branchPicker =
-    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
-      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
-        viewModel.isCurrentChatComposerOwner(expected)
-      }
-    }
+  val backgroundTasks = rememberChatPicker(viewModel)
+  val reviewDiff = rememberChatPicker(viewModel)
+  val attachmentPicker = rememberChatPicker(viewModel)
+  val branchPicker = rememberChatPicker(viewModel)
   var branchOpening by remember(branchPicker) { mutableStateOf<ChatBranchOpening?>(null) }
 
   fun isCurrentBranchOpening(opening: ChatBranchOpening): Boolean {
@@ -1490,6 +1455,21 @@ internal fun ChatScreen(
         admit = { backgroundTasks.admit(opening) },
         onDismiss = { if (backgroundTasks.admit(opening)) backgroundTasks.retire(opening) },
       )
+    }
+  }
+}
+
+@Composable
+private fun rememberChatPicker(
+  viewModel: MainViewModel,
+  targetAllowed: (ChatComposerOwner) -> Boolean = { true },
+): ChatModelPickerSessionOwner {
+  val activity = LocalActivity.current
+  val view = LocalView.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  return remember(viewModel, activity, view, lifecycleOwner) {
+    ChatModelPickerSessionOwner(activity, view, lifecycleOwner.lifecycle) { expected ->
+      viewModel.isCurrentChatComposerOwner(expected) && targetAllowed(expected)
     }
   }
 }

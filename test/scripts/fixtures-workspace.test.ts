@@ -39,20 +39,30 @@ function runOpenWebUiWorkspace(workspaceDir: string) {
   });
 }
 
+function runSharedWorkspaceDelete(transport: string | undefined) {
+  const root = tempDirs.make("openclaw-fixture-workspace-");
+  const workspace = path.join(root, "workspace");
+  const outputPath = path.join(root, "agents-delete.json");
+  const agentsPath = path.join(root, "agents.json");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(
+    outputPath,
+    JSON.stringify({
+      agentId: "ops",
+      workspace,
+      workspaceRetained: true,
+      workspaceRetainedReason: "shared",
+      workspaceSharedWith: ["alpha"],
+      transport,
+    }) + "\n",
+  );
+  writeFileSync(agentsPath, JSON.stringify([{ id: "alpha", workspace }]) + "\n");
+  return runAgentsDeleteAssert(root, outputPath, agentsPath);
+}
+
 describe("workspace fixture assertions", () => {
   it("requires gateway deletion and retains the shared surviving agent", () => {
-    const root = tempDirs.make("openclaw-fixture-workspace-");
-    const workspace = path.join(root, "workspace");
-    const outputPath = path.join(root, "agents-delete.json");
-    const agentsPath = path.join(root, "agents.json");
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(
-      outputPath,
-      `${JSON.stringify({ agentId: "ops", workspace, workspaceRetained: true, workspaceRetainedReason: "shared", workspaceSharedWith: ["alpha"], transport: "gateway" })}\n`,
-    );
-    writeFileSync(agentsPath, `${JSON.stringify([{ id: "alpha", workspace }])}\n`);
-
-    const result = runAgentsDeleteAssert(root, outputPath, agentsPath);
+    const result = runSharedWorkspaceDelete("gateway");
     expect(result.status).toBe(0);
   });
 
@@ -118,51 +128,8 @@ describe("workspace fixture assertions", () => {
     expect(result.stderr).toContain(outputPath);
   });
 
-  it("rejects an agents delete result that explicitly reports local transport", () => {
-    const root = tempDirs.make("openclaw-fixture-workspace-");
-    const workspace = path.join(root, "workspace");
-    const outputPath = path.join(root, "agents-delete.json");
-    const agentsPath = path.join(root, "agents.json");
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(
-      outputPath,
-      `${JSON.stringify({
-        agentId: "ops",
-        workspace,
-        workspaceRetained: true,
-        workspaceRetainedReason: "shared",
-        workspaceSharedWith: ["alpha"],
-        transport: "local",
-      })}\n`,
-    );
-    writeFileSync(agentsPath, `${JSON.stringify([{ id: "alpha", workspace }])}\n`);
-
-    const result = runAgentsDeleteAssert(root, outputPath, agentsPath);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("transport mismatch");
-  });
-
-  it("rejects deletion output without the gateway transport marker", () => {
-    const root = tempDirs.make("openclaw-fixture-workspace-");
-    const workspace = path.join(root, "workspace");
-    const outputPath = path.join(root, "agents-delete.json");
-    const agentsPath = path.join(root, "agents.json");
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(
-      outputPath,
-      `${JSON.stringify({
-        agentId: "ops",
-        workspace,
-        workspaceRetained: true,
-        workspaceRetainedReason: "shared",
-        workspaceSharedWith: ["alpha"],
-      })}\n`,
-    );
-    writeFileSync(agentsPath, `${JSON.stringify([{ id: "alpha", workspace }])}\n`);
-
-    const result = runAgentsDeleteAssert(root, outputPath, agentsPath);
-
+  it.each(["local", undefined])("rejects deletion output with transport %s", (transport) => {
+    const result = runSharedWorkspaceDelete(transport);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("transport mismatch");
   });

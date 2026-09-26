@@ -21,10 +21,17 @@ import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
-import { retireMissingWorktreeInWorker } from "../agents/worktrees/registry-retirement.worker.js";
+import {
+  retireMissingWorktreeInWorker,
+  deferWorktreeCleanupInWorker,
+} from "../agents/worktrees/registry-retirement.worker.js";
 import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
+import {
+  isChannelIngressCommand,
+  executeChannelIngressCommand,
+} from "../channels/message/ingress-queue.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
@@ -68,7 +75,7 @@ import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
 import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
 import { readPersistedVapidKeyPairInDatabase } from "../infra/push-web-store.kernel.js";
-import { executeWebPushCommand } from "../infra/push-web-store.worker.js";
+import { executeWebPushCommand, isWebPushCommand } from "../infra/push-web-store.worker.js";
 import { isSessionDeliveryCommand } from "../infra/session-delivery-queue.worker-contract.js";
 import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
 import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
@@ -121,12 +128,14 @@ import {
   executeTranscriptWrite,
   isTranscriptWriteCommand,
 } from "../transcripts/store-worker-write.js";
+import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
@@ -292,21 +301,7 @@ export function executeSharedStateCommand(
       env: getSqliteWorkerStateContext().environment,
     });
   }
-  if (
-    command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
-    command.type === "webPush.setWebPushSubscriptionPreferences" ||
-    command.type === "webPush.listWebPushSubscriptions" ||
-    command.type === "webPush.hasBoundWebPushSubscriptions" ||
-    command.type === "webPush.listBoundWebPushSubscriptions" ||
-    command.type === "webPush.prepareWebPushApprovalDeliveries" ||
-    command.type === "webPush.listWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.deleteWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.listTerminalWebPushApprovalDeliveryIds" ||
-    command.type === "webPush.upsertWebPushSubscription" ||
-    command.type === "webPush.deleteBoundWebPushSubscription" ||
-    command.type === "webPush.deleteWebPushSubscriptionIfCurrent" ||
-    command.type === "webPush.insertVapidKeyPairIfAbsent"
-  ) {
+  if (isWebPushCommand(command)) {
     return executeWebPushCommand(command, open());
   }
   if (command.type === "nativeHookRelay.read") {
@@ -428,6 +423,13 @@ export function executeSharedStateCommand(
   if (isNodeWorkerJournalCommand(command)) {
     return executeNodeWorkerJournalCommand(command, context.databasePath, open);
   }
+  if (isChannelIngressCommand(command)) {
+    return executeChannelIngressCommand(
+      command,
+      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      open,
+    );
+  }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>
       command.type === "deviceAuth.read"
@@ -516,6 +518,16 @@ export function executeSharedStateCommand(
     command.type === "nativeHookRelay.prune"
   ) {
     return executeNativeHookRelayMutation(command, writeOptions);
+  }
+  if (command.type === "tui.lastSession.write") {
+    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+  }
+  if (command.type === "tui.lastSession.clear") {
+    return clearRetiredTuiPointers(
+      command.input.stateKeys,
+      new Set(command.input.retiredSessionKeys),
+      writeOptions,
+    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
@@ -654,6 +666,9 @@ export function executeSharedStateCommand(
   }
   if (command.type === "worktrees.retireMissing") {
     return retireMissingWorktreeInWorker(command.input, writeOptions);
+  }
+  if (command.type === "worktrees.deferCleanup") {
+    return deferWorktreeCleanupInWorker(command.input, writeOptions);
   }
   if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
     return executeWorktreeRunLeaseCommand(command, writeOptions);

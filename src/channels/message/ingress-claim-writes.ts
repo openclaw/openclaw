@@ -1,7 +1,8 @@
 /** Bounded claim-token-fenced writes for durable ingress settlement. */
 import { sleepWithAbort } from "@openclaw/retry";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { IngressAdoptionLostError, isIngressAdoptionLostError } from "./ingress-drain-state.js";
-import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
+import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.types.js";
 import {
   DEFAULT_INGRESS_RETRY_BASE_MS,
   DEFAULT_INGRESS_RETRY_MAX_MS,
@@ -53,7 +54,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
         }
         return committed;
       } catch (err) {
-        if (isIngressAdoptionLostError(err)) {
+        if (isIngressAdoptionLostError(err) || hasSqliteWorkerOutcomeUnknown(err)) {
           throw err;
         }
         attempt += 1;

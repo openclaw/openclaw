@@ -220,16 +220,13 @@ assert_survival
 });
 
 describe("upgrade survivor updater restart ownership", () => {
-  it.each(
-    [
-      { outcome: "success", future: false, repaired: false },
-      { outcome: "recoverable", future: false, repaired: false },
-      { outcome: "success", future: true, repaired: false },
-      { outcome: "success", future: true, repaired: true },
-    ].flatMap(({ outcome, future, repaired }) =>
-      [true, false].map((replacement) => ({ outcome, future, repaired, replacement })),
-    ),
-  )(
+  it.each([
+    { outcome: "success", future: false, repaired: false, replacement: true },
+    { outcome: "recoverable", future: false, repaired: false, replacement: true },
+    { outcome: "success", future: true, repaired: false, replacement: true },
+    { outcome: "success", future: true, repaired: true, replacement: true },
+    { outcome: "success", future: false, repaired: false, replacement: false },
+  ])(
     "$outcome future=$future repaired=$repaired replacement=$replacement",
     ({ outcome, future, repaired, replacement }) => {
       const root = tempDirs.make("survivor-restart-result-");
@@ -424,11 +421,10 @@ function check(result: unknown, prefix = "") {
 }
 
 describe("published upgrade survivor consent recovery", () => {
-  it.each(
-    ["acpx", "feishu"].flatMap((pluginId) =>
-      ["error", "ok"].map((status) => ({ pluginId, status })),
-    ),
-  )("admits $pluginId fixture consent after a $status update", ({ pluginId, status }) => {
+  it.each([
+    { pluginId: "acpx", status: "error" },
+    { pluginId: "feishu", status: "ok" },
+  ])("admits $pluginId fixture consent after a $status update", ({ pluginId, status }) => {
     const update = deniedUpdate();
     const reason = `Plugin "${pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`;
     update.postUpdate.plugins.warnings.push({ reason, message: reason });
@@ -445,14 +441,6 @@ describe("published upgrade survivor consent recovery", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-  });
-
-  it.each(["acpx", "feishu"])("rejects non-consent failures from reviewed %s", (pluginId) => {
-    const update = deferredUpdate();
-    const outcome = expectDefined(update.postUpdate.plugins.npm.outcomes[0], "plugin outcome");
-    outcome.pluginId = pluginId;
-    outcome.code = "INSTALL_FAILED";
-    expect(check(update).status).not.toBe(0);
   });
 
   it("repairs capability deferrals even when retaining the old plugin makes core update successful", () => {

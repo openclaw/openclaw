@@ -3,11 +3,25 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  AgentDatabaseRegistryChangedError,
+  invalidateRegisteredAgentDatabasesMemo,
+} from "../state/openclaw-agent-db-registry-listing.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
+import {
+  prepareGatewaySessionStoreReadSources,
+  prepareGatewaySessionStoreReadSourcesAsync,
+  resolveGatewaySessionStoreReadSources,
+} from "./session-utils-store-sources.js";
 
 it("bounds roster reads per preparation and observes later mutable fleet changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -214,3 +228,186 @@ it("rejects replacement of the existing parent of a missing source", async () =>
     expect(prepared.assertCurrent).toThrow("Session store changed");
   });
 });
+
+it("captures fixed, missing, and retired routing without main-thread SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storeDir = state.path("stores");
+    fs.mkdirSync(storeDir, { recursive: true });
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: { name: "not-a-routing-field" }, ops: {}, future: {} },
+        defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+      },
+      session: { store: path.join(storeDir, "shared.json") },
+    };
+    const main = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: state.env,
+      path: path.join(storeDir, "shared.sqlite"),
+    });
+    const ops = openOpenClawAgentDatabase({
+      agentId: "ops",
+      env: state.env,
+      path: path.join(storeDir, "shared.ops.sqlite"),
+    });
+    const retired = openOpenClawAgentDatabase({
+      agentId: "retired",
+      env: state.env,
+      path: state.path("retired-location", "history.sqlite"),
+    });
+    const currentSource = { agentId: main.agentId, path: main.path };
+    const registryPath = openOpenClawStateDatabase().path;
+    invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+    const sql = observeMainThreadSql();
+    let prepared: Awaited<ReturnType<typeof prepareGatewaySessionStoreReadSourcesAsync>>;
+    try {
+      sql.calibrate();
+      prepared = await prepareGatewaySessionStoreReadSourcesAsync({
+        cfg,
+        currentSource,
+        env: state.env,
+        registryPath,
+      });
+      await prepared.revalidate(() => {});
+      prepared.assertCurrent();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    if (!prepared.request) {
+      throw new Error("Expected source routing request");
+    }
+    expect(JSON.stringify(prepared.request)).not.toContain("not-a-routing-field");
+    const { sources } = resolveGatewaySessionStoreReadSources(prepared.request);
+    expect(sources).toEqual({
+      main: [currentSource],
+      ops: [{ agentId: "ops", path: ops.path }],
+      future: [{ agentId: "future", path: path.join(storeDir, "shared.future.sqlite") }],
+      retired: [{ agentId: "retired", path: retired.path }],
+    });
+  });
+});
+
+it.each([false, true])(
+  "keeps failed auxiliary discovery isolated (recovers after yield: %s)",
+  async (recovers) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storeDir = state.path("stores");
+      fs.mkdirSync(storeDir, { recursive: true });
+      const blockedPath = path.join(storeDir, "blocked");
+      fs.writeFileSync(blockedPath, "not a directory\n");
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, blocked: {} },
+          defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+        },
+        session: { store: path.join(storeDir, "{agentId}", "history.json") },
+      };
+      const main = openOpenClawAgentDatabase({
+        agentId: "main",
+        env: state.env,
+        path: path.join(storeDir, "main", "history.sqlite"),
+      });
+      const pending = prepareGatewaySessionStoreReadSourcesAsync({
+        cfg,
+        env: state.env,
+        registryPath: openOpenClawStateDatabase().path,
+        currentSource: { agentId: main.agentId, path: main.path },
+      });
+      if (recovers) {
+        fs.unlinkSync(blockedPath);
+        fs.mkdirSync(blockedPath);
+      }
+      const prepared = await pending;
+      if (!prepared.request) {
+        throw new Error("Expected source routing request");
+      }
+      expect(resolveGatewaySessionStoreReadSources(prepared.request).sources).toEqual({
+        main: [{ agentId: "main", path: main.path }],
+        blocked: [],
+      });
+      await prepared.revalidate(() => {});
+      prepared.assertCurrent();
+    });
+  },
+);
+
+it.each(["registration", "repeated registration", "source retirement", "read failure"] as const)(
+  "preserves source discovery after %s during the first registry read",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const registryPath = openOpenClawStateDatabase().path;
+      const currentSource = { agentId: database.agentId, path: database.path };
+      const register = () => registerOpenClawAgentDatabase({ ...currentSource, env: state.env });
+      invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const failure = new Error("Synthetic registry read failure");
+      const read = stateReads.executeExistingOpenClawStateRead;
+      let firstRead = true;
+      const observation = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const reply = await read(...args);
+          if (args[1].type !== "agentDatabaseRegistry.read") {
+            return reply;
+          }
+          if (firstRead) {
+            firstRead = false;
+            held.resolve();
+            await release.promise;
+          } else if (change === "repeated registration") {
+            register();
+          }
+          if (change === "read failure") {
+            throw failure;
+          }
+          return reply;
+        });
+      const pending = prepareGatewaySessionStoreReadSourcesAsync({
+        cfg: {},
+        currentSource,
+        env: state.env,
+        registryPath,
+      });
+      try {
+        await Promise.race([
+          held.promise,
+          pending.then(() => {
+            throw new Error("Source discovery completed before the held registry reply");
+          }),
+        ]);
+        if (change === "source retirement") {
+          await closeOpenClawStateDatabaseByPathAsync(registryPath);
+          openOpenClawStateDatabase({ env: state.env });
+        } else {
+          register();
+        }
+        release.resolve();
+        if (change === "source retirement") {
+          await expect(pending).rejects.toMatchObject({
+            code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+          });
+        } else if (change === "read failure") {
+          await expect(pending).rejects.toBe(failure);
+        } else if (change === "repeated registration") {
+          await expect(pending).rejects.toBeInstanceOf(AgentDatabaseRegistryChangedError);
+        } else {
+          const prepared = await pending;
+          expect(prepared.request).toBeDefined();
+          expect(resolveGatewaySessionStoreReadSources(prepared.request!).sources.main).toEqual([
+            currentSource,
+          ]);
+          prepared.assertCurrent();
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => undefined);
+        observation.mockRestore();
+      }
+    });
+  },
+);

@@ -157,6 +157,7 @@ scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
 scripts/lib/vitest-worker-run.mts
+scripts/lib/watch-pr-ci-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
@@ -542,7 +543,9 @@ src/daemon/service-process-env.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
+src/gateway/github-publication-base.ts
 src/gateway/github-remote.ts
+src/gateway/github-repository-publication-snapshot.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
@@ -838,6 +841,7 @@ src/infra/update-run-driver-schema.ts
 src/infra/update-run-schema.ts
 src/infra/update-run-timeouts.ts
 src/infra/update-runtime-path-index.ts
+src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
@@ -1169,10 +1173,14 @@ src/process/windows-command.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
+src/proxy-capture/runtime-cleanup.ts
+src/proxy-capture/runtime-fetch-patch.ts
 src/proxy-capture/runtime-owner.ts
+src/proxy-capture/runtime-response-body.ts
 src/proxy-capture/runtime.ts
 src/proxy-capture/store-lifecycle.ts
 src/proxy-capture/store-readonly.ts
+src/proxy-capture/store.async.ts
 src/proxy-capture/store.kernel.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/account-id.ts
@@ -1238,6 +1246,7 @@ src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/lifecycle/upload-store-error.ts
+src/state/agent-deletion-journal-history.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/openclaw-agent-board-schema.ts
@@ -1338,7 +1347,9 @@ src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts
+src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-operation.ts
+src/state/openclaw-state-worker-owner.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

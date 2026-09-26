@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
@@ -58,10 +59,6 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
   );
 }
 
-function normalizeOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   if (!isRecord(value)) {
     return null;
@@ -101,10 +98,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
-  const createdAt =
-    typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
-      ? entry.createdAt
-      : Date.now();
+  const createdAt = asFiniteNumber(entry.createdAt) ?? Date.now();
   if (
     !id ||
     (!text.trim() &&
@@ -208,9 +202,8 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (attachments.length) {
     item.attachments = attachments;
   }
-  const refreshSessions = normalizeOptionalBoolean(entry.refreshSessions);
-  if (refreshSessions !== undefined) {
-    item.refreshSessions = refreshSessions;
+  if (typeof entry.refreshSessions === "boolean") {
+    item.refreshSessions = entry.refreshSessions;
   }
   const replyToId = normalizeOptionalString(entry.replyToId);
   if (replyToId) {
@@ -234,6 +227,7 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.sendState = "failed";
     item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
+  // Keep this before sendAttempts: queue admission compares canonical JSON bytes.
   const sendError = normalizeOptionalString(entry.sendError);
   if (sendError) {
     item.sendError = sendError;
@@ -245,17 +239,11 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (typeof entry.sendAttempts === "number" && Number.isFinite(entry.sendAttempts)) {
     item.sendAttempts = entry.sendAttempts;
   }
-  const localCommandArgs = normalizeOptionalString(entry.localCommandArgs);
-  if (localCommandArgs) {
-    item.localCommandArgs = localCommandArgs;
-  }
-  const localCommandName = normalizeOptionalString(entry.localCommandName);
-  if (localCommandName) {
-    item.localCommandName = localCommandName;
-  }
-  const sessionKey = normalizeOptionalString(entry.sessionKey);
-  if (sessionKey) {
-    item.sessionKey = sessionKey;
+  for (const key of ["localCommandArgs", "localCommandName", "sessionKey"] as const) {
+    const fieldValue = normalizeOptionalString(entry[key]);
+    if (fieldValue) {
+      item[key] = fieldValue;
+    }
   }
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
@@ -310,10 +298,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     : undefined;
   const removedIds = new Set(removedQueueItemIds ?? []);
   const queue = normalizedQueue?.filter((item) => !removedIds.has(item.id));
-  const updatedAt =
-    typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-      ? entry.updatedAt
-      : Date.now();
+  const updatedAt = asFiniteNumber(entry.updatedAt) ?? Date.now();
   const storedDraftRevision =
     typeof entry.draftRevision === "number" && Number.isSafeInteger(entry.draftRevision)
       ? entry.draftRevision

@@ -4,11 +4,34 @@ import { WebPushSubscriptionBindingError } from "./push-web-store.records.js";
 import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
+type WebPushCommand = Exclude<
+  SqliteWorkerCommand<WebPushWorkerOperations>,
+  { type: "webPush.readPersistedVapidKeyPair" }
+>;
+
+export function isWebPushCommand(command: {
+  type: string;
+  input: unknown;
+}): command is WebPushCommand {
+  return (
+    command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
+    command.type === "webPush.setWebPushSubscriptionPreferences" ||
+    command.type === "webPush.listWebPushSubscriptions" ||
+    command.type === "webPush.hasBoundWebPushSubscriptions" ||
+    command.type === "webPush.listBoundWebPushSubscriptions" ||
+    command.type === "webPush.prepareWebPushApprovalDeliveries" ||
+    command.type === "webPush.listWebPushApprovalDeliveryTargets" ||
+    command.type === "webPush.deleteWebPushApprovalDeliveryTargets" ||
+    command.type === "webPush.listTerminalWebPushApprovalDeliveryIds" ||
+    command.type === "webPush.upsertWebPushSubscription" ||
+    command.type === "webPush.deleteBoundWebPushSubscription" ||
+    command.type === "webPush.deleteWebPushSubscriptionIfCurrent" ||
+    command.type === "webPush.insertVapidKeyPairIfAbsent"
+  );
+}
+
 export function executeWebPushCommand(
-  command: Exclude<
-    SqliteWorkerCommand<WebPushWorkerOperations>,
-    { type: "webPush.readPersistedVapidKeyPair" }
-  >,
+  command: WebPushCommand,
   database: OpenClawStateDatabase,
 ): WebPushWorkerOperations[keyof WebPushWorkerOperations]["output"] {
   switch (command.type) {

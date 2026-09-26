@@ -3,7 +3,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type RestartRecoveryResult =
   | { status: "ignored" }
-  | { status: "handled" }
+  | { status: "handled"; retained?: { isCurrent: () => boolean; released?: Promise<void> } }
   | { status: "deferred" }
   | {
       status: "terminal";

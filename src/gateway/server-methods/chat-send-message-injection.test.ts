@@ -2,7 +2,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
-import { replyMessageInjectionTargetOperation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
@@ -10,7 +9,6 @@ import {
   replyRunRegistry,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
-  type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
@@ -236,6 +234,12 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       updatedAt: 2,
     } as never);
     const params = makeStarterParams();
+    params.session.clientRunId = "incoming-input";
+    params.target = {
+      ...expectDefined(params.target, "Expected a steering target"),
+      runId: "active-run",
+      sourceTurnId: "source-1",
+    };
     const begin = createChatSendMessageInjectionStarter(params);
 
     const attempt = begin();
@@ -245,7 +249,21 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       expect.objectContaining({ readConsistency: "latest" }),
     );
     expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-    expect(params.logGateway.warn).toHaveBeenCalled();
+    expect(params.logGateway.warn).toHaveBeenCalledWith(
+      "chat steering rejected; falling back to follow-up dispatch",
+      {
+        reason: "delivered-terminal",
+        runId: "incoming-input",
+        activeRunId: "active-run",
+        sourceTurnId: "source-1",
+        sourceTurnIdOrigin: "active-run",
+        sessionKey: "agent:main:dashboard:s",
+        sessionId: "session-1",
+        sessionStatus: "running",
+        recoveryRunId: "recovery-1",
+        recoverySourceTurnId: "source-1",
+      },
+    );
   });
 
   it.each(["unbound", "current", "refused"] as const)(
@@ -351,8 +369,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       entry: { sessionId: "session-1", status: "running", updatedAt: 1 } as never,
     });
     params.target = {
-      [replyMessageInjectionTargetOperation]: {} as unknown as ReplyOperation,
-      runId: "run-1",
+      ...expectDefined(params.target, "injection target"),
       sourceTurnId: "source-1",
     };
     const begin = createChatSendMessageInjectionStarter(params);
@@ -374,8 +391,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     } as never);
     const params = makeStarterParams();
     params.target = {
-      [replyMessageInjectionTargetOperation]: {} as unknown as ReplyOperation,
-      runId: "run-1",
+      ...expectDefined(params.target, "injection target"),
       sourceTurnId: "source-1",
     };
     const begin = createChatSendMessageInjectionStarter(params);

@@ -221,10 +221,15 @@ vi.mock("../state/openclaw-state-ownership.js", async (importOriginal) => ({
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
-  resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    resolveOpenClawPackageRoot: vi.fn(),
+    resolveOpenClawPackageRootSync: vi.fn((options) =>
+      options.moduleUrl ? actual.resolveOpenClawPackageRootSync(options) : process.cwd(),
+    ),
+  };
+});
 
 vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/gateway-entrypoint.js")>();

@@ -51,27 +51,44 @@ describe("SQLite reset boundary transcript header", () => {
     return readTranscriptEventRows(owner, sessionId).map((row) => JSON.parse(row.eventJson));
   }
 
-  // Regression: a session window can exist with a still-empty transcript when a
-  // reset arrives (created moments earlier, before its first message). Appending
-  // the boundary made seq 0 a reset event; ensureTranscriptHeader only fires on
-  // an empty transcript, so the first message append skipped it and the window
-  // stayed permanently headerless -- rejected on every later load as a legacy
-  // transcript, before any model ran.
-  it.each(["empty-window", "next-window"])(
-    "keeps an empty reset transcript readable with next session %s",
-    async (nextSessionId) => {
+  async function reset(writer: "single" | "batched", sessionKey: string, nextSessionId: string) {
+    const entry = { sessionId: nextSessionId, updatedAt: 20 };
+    const resetBoundary = {
+      context: "clear" as const,
+      reason: "new" as const,
+      cwd: "/tmp/reset-session-workspace",
+    };
+    if (writer === "single") {
+      await resetSessionEntryLifecycle({
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        resetBoundary,
+        buildNextEntry: () => entry,
+      });
+    } else {
+      await applySessionEntryLifecycleMutation({
+        storePath,
+        upserts: [{ sessionKey, entry, resetBoundary }],
+        skipMaintenance: true,
+      });
+    }
+  }
+
+  // A reset before the first message must not make the window permanently headerless.
+  it.each(
+    (["single", "batched"] as const).flatMap((writer) =>
+      ["empty-window", "next-window"].map((nextSessionId) => ({ writer, nextSessionId })),
+    ),
+  )(
+    "keeps an empty $writer reset readable with next session $nextSessionId",
+    async ({ writer, nextSessionId }) => {
       const sessionKey = "agent:main:empty-window-reset";
       await replaceSessionEntry(
         { sessionKey, storePath },
         { sessionId: "empty-window", updatedAt: 10 },
       );
 
-      await resetSessionEntryLifecycle({
-        storePath,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-        resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/reset-session-workspace" },
-        buildNextEntry: () => ({ sessionId: nextSessionId, updatedAt: 20 }),
-      });
+      await reset(writer, sessionKey, nextSessionId);
 
       expect(
         SessionManager.open({
@@ -90,106 +107,42 @@ describe("SQLite reset boundary transcript header", () => {
     },
   );
 
-  it.each(["projection-window", "next-projection"])(
-    "keeps an empty batched reset readable with next session %s",
-    async (nextSessionId) => {
-      const sessionKey = "agent:main:projection-window-reset";
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        { sessionId: "projection-window", updatedAt: 10 },
-      );
-
-      await applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey,
-            entry: { sessionId: nextSessionId, updatedAt: 20 },
-            resetBoundary: {
-              context: "clear",
-              reason: "new",
-              cwd: "/tmp/projection-session-workspace",
-            },
-          },
-        ],
-        skipMaintenance: true,
-      });
-
-      expect(
-        SessionManager.open({
-          agentId: "main",
-          sessionKey,
-          sessionId: "projection-window",
-          storePath,
-        }).getHeader(),
-      ).toMatchObject({
-        version: CURRENT_SESSION_VERSION,
-        cwd: "/tmp/projection-session-workspace",
-      });
-      const events = readEvents("projection-window");
-      expect(events[0]?.type).toBe("session");
-      expect(events[0]?.cwd).toBe("/tmp/projection-session-workspace");
-      expect(events[1]?.type).toBe("reset");
-    },
-  );
-
-  // The header is written for the prior row's session, so a custom-workspace
-  // session keeps its own cwd even when the reset caller only knows the
-  // configured agent workspace. Otherwise later transcript cut/fork paths would
-  // carry the wrong workspace forward.
-  it("prefers the prior row's spawned cwd over the caller workspace", async () => {
-    const sessionKey = "agent:main:custom-workspace-reset";
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "custom-window",
-        updatedAt: 10,
+  // The prior session's workspace must survive callers that know only the agent workspace.
+  it.each([
+    {
+      writer: "single" as const,
+      previous: {
         spawnedWorkspaceDir: "/tmp/custom-session-workspace",
         spawnedCwd: "/tmp/custom-session-workspace/task",
       },
-    );
-
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/agent-default-workspace" },
-      buildNextEntry: () => ({ sessionId: "next-custom", updatedAt: 20 }),
-    });
-
-    const events = readEvents("custom-window");
-    expect(events[0]?.type).toBe("session");
-    expect(events[0]?.cwd).toBe("/tmp/custom-session-workspace/task");
-    expect(events[1]?.type).toBe("reset");
-  });
-
-  it("prefers the prior row's spawned workspace via the batched upsert path too", async () => {
-    const sessionKey = "agent:main:custom-projection-reset";
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "custom-projection-window",
-        updatedAt: 10,
-        spawnedWorkspaceDir: "/tmp/custom-projection-workspace",
-      },
-    );
-
-    await applySessionEntryLifecycleMutation({
-      storePath,
-      upserts: [
+      expectedCwd: "/tmp/custom-session-workspace/task",
+    },
+    {
+      writer: "batched" as const,
+      previous: { spawnedWorkspaceDir: "/tmp/custom-projection-workspace" },
+      expectedCwd: "/tmp/custom-projection-workspace",
+    },
+  ])(
+    "preserves the prior workspace for a $writer reset",
+    async ({ writer, previous, expectedCwd }) => {
+      const sessionKey = "agent:main:custom-workspace-reset";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
         {
-          sessionKey,
-          entry: { sessionId: "next-custom-projection", updatedAt: 20 },
-          resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/agent-default-workspace" },
+          sessionId: "custom-window",
+          updatedAt: 10,
+          ...previous,
         },
-      ],
-      skipMaintenance: true,
-    });
+      );
 
-    const events = readEvents("custom-projection-window");
-    expect(events[0]?.type).toBe("session");
-    expect(events[0]?.cwd).toBe("/tmp/custom-projection-workspace");
-    expect(events[1]?.type).toBe("reset");
-  });
+      await reset(writer, sessionKey, "next-custom");
+
+      const events = readEvents("custom-window");
+      expect(events[0]?.type).toBe("session");
+      expect(events[0]?.cwd).toBe(expectedCwd);
+      expect(events[1]?.type).toBe("reset");
+    },
+  );
 
   it("still records the boundary after the header on a populated transcript", async () => {
     const sessionKey = "agent:main:populated-window-reset";
@@ -202,12 +155,7 @@ describe("SQLite reset boundary transcript header", () => {
       { message: { role: "user", content: "first" } },
     );
 
-    await resetSessionEntryLifecycle({
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/reset-session-workspace" },
-      buildNextEntry: () => ({ sessionId: "next-populated", updatedAt: 20 }),
-    });
+    await reset("single", sessionKey, "next-populated");
 
     const events = readEvents("populated-window");
     expect(events[0]?.type).toBe("session");

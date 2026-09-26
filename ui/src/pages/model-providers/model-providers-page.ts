@@ -218,7 +218,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.agentEpoch === owner.agentEpoch,
       ),
     onClose: () => void this.refresh("replacement"),
-    onConnectChoice: (authChoice) => void this.login.open(undefined, authChoice),
     onError: (error) =>
       this.setMessage("connection", { kind: "error", text: modelProviderErrorMessage(error) }),
   });

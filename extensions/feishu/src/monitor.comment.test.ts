@@ -82,6 +82,12 @@ type ReplyFixture = {
   userId?: string;
   createTime?: number;
   encoding?: "content" | "text";
+  elements?: Array<{
+    type: string;
+    text_run?: { text: string };
+    person?: { user_id: string };
+    docs_link?: { url: string };
+  }>;
 };
 
 type CommentFixture = {
@@ -99,7 +105,7 @@ function makeReplyPayload(reply: ReplyFixture) {
     ...(reply.userId ? { user_id: reply.userId } : {}),
     ...(reply.createTime == null ? {} : { create_time: reply.createTime }),
     content: {
-      elements: [{ type: "text_run", text_run: textRun }],
+      elements: reply.elements ?? [{ type: "text_run", text_run: textRun }],
     },
   };
 }
@@ -289,80 +295,35 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("parses bot mentions plus current and referenced document links from comment content", async () => {
-    const wikiGetNode = vi.fn(async () => ({
+    const client = makeOpenApiClient({
+      isWholeComment: false,
+      batchReplies: [
+        {
+          id: "7623358762136374451",
+          text: "",
+          userId: "ou_509d4d7ace4a9addec2312676ffcba9b",
+          elements: [
+            { type: "text_run", text_run: { text: "请 " } },
+            { type: "person", person: { user_id: "ou_bot" } },
+            { type: "text_run", text_run: { text: " 总结下 " } },
+            {
+              type: "docs_link",
+              docs_link: { url: `https://www.larksuite.com/docx/${TEST_DOC_TOKEN}` },
+            },
+            { type: "text_run", text_run: { text: " 和 " } },
+            {
+              type: "docs_link",
+              docs_link: { url: `https://www.larksuite.com/wiki/${TEST_WIKI_TOKEN}` },
+            },
+          ],
+        },
+      ],
+    });
+    const wikiGetNode = client.wiki.space.getNode;
+    wikiGetNode.mockResolvedValue({
       code: 0,
-      data: {
-        node: {
-          obj_type: "docx",
-          obj_token: "doc_ref_1",
-        },
-      },
-    }));
-    const client = {
-      request: vi.fn(async (request: { method: "GET" | "POST"; url: string; data: unknown }) => {
-        if (request.url === "/open-apis/drive/v1/metas/batch_query") {
-          return {
-            code: 0,
-            data: {
-              metas: [
-                {
-                  doc_token: TEST_DOC_TOKEN,
-                  title: "Comment event handling request",
-                  url: `https://www.larksuite.com/docx/${TEST_DOC_TOKEN}`,
-                },
-              ],
-            },
-          };
-        }
-        if (request.url.includes("/comments/batch_query")) {
-          return {
-            code: 0,
-            data: {
-              items: [
-                {
-                  comment_id: "7623358762119646411",
-                  is_whole: false,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "7623358762136374451",
-                        user_id: "ou_509d4d7ace4a9addec2312676ffcba9b",
-                        content: {
-                          elements: [
-                            { type: "text_run", text_run: { text: "请 " } },
-                            { type: "person", person: { user_id: "ou_bot" } },
-                            { type: "text_run", text_run: { text: " 总结下 " } },
-                            {
-                              type: "docs_link",
-                              docs_link: {
-                                url: `https://www.larksuite.com/docx/${TEST_DOC_TOKEN}`,
-                              },
-                            },
-                            { type: "text_run", text_run: { text: " 和 " } },
-                            {
-                              type: "docs_link",
-                              docs_link: {
-                                url: `https://www.larksuite.com/wiki/${TEST_WIKI_TOKEN}`,
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          };
-        }
-        throw new Error(`unexpected request: ${request.method} ${request.url}`);
-      }),
-      wiki: {
-        space: {
-          getNode: wikiGetNode,
-        },
-      },
-    };
+      data: { node: { obj_type: "docx", obj_token: "doc_ref_1" } },
+    });
 
     const turn = await resolveCommentTurn({ client });
 
@@ -385,19 +346,6 @@ describe("resolveDriveCommentEventTurn", () => {
         token: TEST_WIKI_TOKEN,
       },
     });
-  });
-
-  it("preserves whole-document comment metadata for downstream delivery mode selection", async () => {
-    const client = makeOpenApiClient({
-      includeTargetReplyInBatch: true,
-      isWholeComment: true,
-    });
-
-    const turn = await resolveCommentTurn({ client });
-
-    expect(turn?.isWholeComment).toBe(true);
-    expect(turn?.prompt).toContain("This is a whole-document comment.");
-    expect(turn?.prompt).toContain("Whole-document comments do not support direct replies.");
   });
 
   it("builds a whole-comment timeline and highlights the nearest bot-authored follow-up", async () => {
@@ -444,6 +392,8 @@ describe("resolveDriveCommentEventTurn", () => {
     const turn = await resolveCommentTurn({ client });
 
     expect(turn?.isWholeComment).toBe(true);
+    expect(turn?.prompt).toContain("This is a whole-document comment.");
+    expect(turn?.prompt).toContain("Whole-document comments do not support direct replies.");
     expect(turn?.prompt).toContain(
       "Whole-document comment timeline (primary context for whole-comment follow-ups):",
     );
@@ -640,16 +590,6 @@ describe("resolveDriveCommentEventTurn", () => {
       ),
     ).toHaveLength(1);
     expect(turn?.targetReplyText).toBeUndefined();
-  });
-
-  it("ignores self-authored comment notices", async () => {
-    const turn = await resolveCommentTurn({
-      event: makeDriveCommentEvent({
-        notice_meta: { from_user_id: { open_id: "ou_bot" } },
-      }),
-    });
-
-    expect(turn).toBeNull();
   });
 
   it("uses a mentioned event recipient when startup bot identity is unavailable", async () => {

@@ -13,6 +13,7 @@ export const gatewayPluginTestFiles = [
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
+  "src/gateway/agent-turn/agent-run-task-tracking.cleanup.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",
@@ -102,6 +103,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
   "src/gateway/server-methods/chat.abort-live-proof.test.ts",
   "src/gateway/server-methods/chat.oauth-refresh-cancel.integration.test.ts",
+  "src/gateway/server-methods/cron-creator-transports.integration.test.ts",
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.scheduled-policy-adoption.integration.test.ts",

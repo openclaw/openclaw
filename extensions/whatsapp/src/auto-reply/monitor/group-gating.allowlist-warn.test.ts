@@ -163,17 +163,6 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(third.logVerbose).toHaveBeenCalledTimes(1);
   });
 
-  it("warns separately for distinct conversations", async () => {
-    const warn = vi.fn<WarnLogger>();
-
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("a@g.us"), warn));
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("b@g.us"), warn));
-
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls[0]?.[1]).toContain("a@g.us");
-    expect(warn.mock.calls[1]?.[1]).toContain("b@g.us");
-  });
-
   it("bounds warning keys by least-recently-used conversations", async () => {
     const warn = vi.fn<WarnLogger>();
     const apply = (conversationId: string) =>

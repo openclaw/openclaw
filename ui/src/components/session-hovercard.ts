@@ -65,23 +65,6 @@ function ensureChannelAvatarElement(): void {
   channelAvatarElementLoad ??= import("./channel-avatar.ts");
 }
 
-function pullRequestStateLabel(state: ControlUiSessionPullRequest["state"]): string {
-  return t(`sessionHovercard.states.${state}`);
-}
-
-function checksLabel(checks: NonNullable<ControlUiSessionPullRequest["checks"]>): string {
-  switch (checks.state) {
-    case "passing":
-      return t("sessionHovercard.checks.passing");
-    case "failing":
-      return t("sessionHovercard.checks.failing");
-    case "pending":
-      return t("sessionHovercard.checks.pending");
-    default:
-      return checks.state satisfies never;
-  }
-}
-
 function pullRequestStateIcon(state: ControlUiSessionPullRequest["state"]) {
   switch (state) {
     case "open":
@@ -152,7 +135,7 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
     }).format(diff <= 0 ? -value : value, unit);
   }
   if (i18n.getLocale().toLowerCase().startsWith("en")) {
-    const compactSuffix: Partial<Record<SessionAgeUnit, string>> = {
+    const compactSuffix: Record<SessionAgeUnit, string> = {
       second: "s",
       minute: "m",
       hour: "h",
@@ -161,10 +144,7 @@ function formatSessionAge(timestamp: number | null | undefined, suffix: boolean)
       month: "mo",
       year: "y",
     };
-    const unitSuffix = compactSuffix[unit];
-    if (unitSuffix) {
-      return `${value}${unitSuffix}`;
-    }
+    return `${value}${compactSuffix[unit]}`;
   }
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
@@ -400,9 +380,8 @@ function renderHeader(input: SessionHovercardInput) {
         ),
       ]
     : [];
-  const hasCreatedAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt);
-  const created = hasCreatedAt ? formatSessionAge(row.createdAt, true) : "";
-  const age = hasCreatedAt ? formatSessionAge(row.createdAt, false) : "";
+  const created = formatSessionAge(row.createdAt, true);
+  const age = formatSessionAge(row.createdAt, false);
   return html`<header class="session-hovercard__header">
     <span class="session-hovercard__heading">
       ${
@@ -446,8 +425,10 @@ function renderAgentNotepad(card: ProgressCard | null | undefined) {
 }
 
 function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
-  const state = pullRequestStateLabel(pullRequest.state);
-  const checks = pullRequest.checks ? checksLabel(pullRequest.checks) : null;
+  const state = t(`sessionHovercard.states.${pullRequest.state}`);
+  const checks = pullRequest.checks
+    ? t(`sessionHovercard.checks.${pullRequest.checks.state}`)
+    : null;
   const details = [
     pullRequest.title,
     checks,

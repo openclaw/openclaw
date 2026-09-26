@@ -149,14 +149,6 @@ export function createPreviewMessageReceipt(params: {
   };
 }
 
-function visibleDelivery(result: PreviewSendResult): LivePreviewDeliveryResult | undefined {
-  if (typeof result === "object") {
-    return result.visibleReplySent ? result : undefined;
-  }
-  // Published stateless SDK callers historically acknowledge a send by resolving void.
-  return result === false ? undefined : { visibleReplySent: true };
-}
-
 function combineDelivery(
   first: LivePreviewDeliveryResult | undefined,
   next: LivePreviewDeliveryResult,
@@ -208,10 +200,8 @@ async function deliverPreview<TPayload, TId, TEdit>(
       }
       throw error;
     }
-    const normalized =
-      typeof result === "object"
-        ? result
-        : (visibleDelivery(result) ?? { visibleReplySent: false });
+    // Published stateless SDK callers acknowledge a send by resolving void.
+    const normalized = typeof result === "object" ? result : { visibleReplySent: result !== false };
     if (normalized.visibleReplySent) {
       accept(normalized);
     }

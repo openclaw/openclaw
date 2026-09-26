@@ -1,5 +1,6 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import {
@@ -11,6 +12,7 @@ import { runPostPersistCronNotifications } from "./store.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/cron-schedule-error-isolation.json",
     cronEnabled: true,
     nowMs: () => Date.now(),
