@@ -219,8 +219,11 @@ export function createProfileAvatarReader(
       const prepared: PreparedProfileAvatar = {
         ...snapshot,
         isCurrent,
-        loadBytes: () =>
-          (bytes ??= readBytes().then(
+        loadBytes() {
+          if (!isCurrent()) {
+            return Promise.resolve(undefined);
+          }
+          return (bytes ??= readBytes().then(
             (avatar) => {
               if (!avatar && row && avatarCache.get(row) === prepared) {
                 evictAvatar(row, prepared);
@@ -234,7 +237,8 @@ export function createProfileAvatarReader(
               bytes = undefined;
               throw error;
             },
-          )),
+          ));
+        },
       };
       if (
         row &&

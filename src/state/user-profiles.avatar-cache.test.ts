@@ -63,12 +63,12 @@ it("evicts the least recently used avatar at the byte budget before the entry li
   ]);
 });
 
-it.each(["catalog release", "database close and reopen"] as const)(
+it.each(["catalog release", "database close and reopen", "avatar replacement"] as const)(
   "requires fresh avatar reads after %s",
   async (boundary) => {
     const options = fixture();
     const profile = ensureProfileForEmail("lifetime@example.test", options);
-    const bytes = new Uint8Array([1, 2, 3]);
+    let bytes = new Uint8Array([1, 2, 3]);
     expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
     const release = retainUserProfileCatalog(options);
     releases.push(release);
@@ -78,9 +78,18 @@ it.each(["catalog release", "database close and reopen"] as const)(
     if (boundary === "catalog release") {
       release();
       releases.push(retainUserProfileCatalog(options));
-    } else {
+    } else if (boundary === "database close and reopen") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
       openOpenClawStateDatabase(options);
+    } else {
+      bytes = new Uint8Array([4, 5]);
+      expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+    }
+    const staleBytes = (async () => warm.loadBytes())();
+    if (boundary === "database close and reopen") {
+      await expect(staleBytes).rejects.toThrow();
+    } else {
+      await expect(staleBytes).resolves.toBeUndefined();
     }
 
     const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
