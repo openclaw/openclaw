@@ -41,6 +41,8 @@ vi.mock("../secrets/egress-proxy/registry.js", () => ({
       env: {
         HTTPS_PROXY: mocks.proxyUrl,
         HTTP_PROXY: mocks.proxyUrl,
+        https_proxy: mocks.proxyUrl,
+        http_proxy: mocks.proxyUrl,
         NODE_USE_ENV_PROXY: "1",
         NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
         SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -126,6 +128,8 @@ type StoreEnvHost = "gateway" | "sandbox" | "node";
 const EGRESS_ENV = {
   HTTPS_PROXY: mocks.proxyUrl,
   HTTP_PROXY: mocks.proxyUrl,
+  https_proxy: mocks.proxyUrl,
+  http_proxy: mocks.proxyUrl,
   NODE_USE_ENV_PROXY: "1",
   NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
@@ -432,4 +436,26 @@ describe("exec store environment", () => {
       expect(mocks.proxyBindings).toEqual([]);
     },
   );
+
+  it("replaces inherited proxy aliases without changing bypass rules", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("HTTP_PROXY", "http://uppercase.example:8080");
+    vi.stubEnv("https_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("http_proxy", "http://lowercase.example:8080");
+    vi.stubEnv("NO_PROXY", "metadata.example");
+    vi.stubEnv("no_proxy", "localhost");
+    mocks.egressActive = true;
+
+    const env = await captureStoreExecEnvironment({
+      host: "gateway",
+      callId: "call-egress-proxy-precedence",
+      config: { secrets: { egressProxy: { enabled: true } } },
+    });
+
+    expect(env).toMatchObject({
+      ...EGRESS_ENV,
+      NO_PROXY: "metadata.example",
+      no_proxy: "localhost",
+    });
+  });
 });
