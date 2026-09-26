@@ -72,9 +72,10 @@ vi.mock("./openclaw-state-worker-error.js", () => ({
   retainOpenClawStateWorkerErrorPayload() {},
 }));
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   return {
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     Worker: class extends EventEmitter implements ControlledWorker {
       data: LeaseHeartbeatWorkerData;
       shared: BigInt64Array;
