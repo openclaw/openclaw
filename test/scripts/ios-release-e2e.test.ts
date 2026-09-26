@@ -526,6 +526,7 @@ describe("native command adapter", () => {
     "cleanup-failure",
     "build-unjoined",
     "build-exit",
+    "setup-code-timeout",
     "test-unjoined",
     "test-exit",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
@@ -544,7 +545,14 @@ describe("native command adapter", () => {
       const index = instances.length + 1;
       const instance = {
         url: `ws://127.0.0.1:${20000 + index}`,
-        cli: vi.fn(async () => ({ code: 0, signal: null, stdout: `synthetic-code-${index}` })),
+        cli: vi.fn(async () => {
+          if (scenario === "setup-code-timeout") {
+            throw new Error("private fixture command failed", {
+              cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
+            });
+          }
+          return { code: 0, signal: null, stdout: `synthetic-code-${index}` };
+        }),
         startGateway: vi.fn(async () => {}),
         cleanup: vi.fn(async () => {
           if (scenario === "cleanup-failure") {
@@ -757,6 +765,26 @@ describe("native command adapter", () => {
     });
     try {
       const report = await runTrials("stock", native.dependencies);
+      if (scenario === "setup-code-timeout") {
+        expect(report.complete).toBe(true);
+        for (const trial of report.trials) {
+          expect(trial).toMatchObject({
+            status: "failed",
+            errors: ["test-timeout"],
+            diagnostics: [
+              { operation: "setup-code", code: "timeout", errorCode: "ETIMEDOUT", context: [] },
+            ],
+          });
+        }
+        expect(
+          nativeMocks.command.mock.calls.some(([{ args }]) =>
+            args.includes("test-without-building"),
+          ),
+        ).toBe(false);
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toContain("private");
+        return;
+      }
       if (scenario === "cleanup-failure" || scenario === "test-unjoined") {
         expect(report.complete).toBe(false);
         expect(report.trials).toHaveLength(1);

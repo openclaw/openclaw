@@ -1879,24 +1879,9 @@ extension OpenClawSnapshotUITests {
         let send = app.buttons["chat-send-message"]
         XCTAssertTrue(send.waitForExistence(timeout: 3))
         XCTAssertTrue(send.isEnabled)
-        // Typing can move historical replies off-screen; tap visible text without activating an action.
+        // Empty conversations may show only suggestions that replace the draft when tapped.
         let transcript = try self.chatTranscript(in: app)
-        let actionQueries = [transcript.buttons, transcript.links]
-        let dismissalText = try XCTUnwrap(
-            transcript.staticTexts.allElementsBoundByIndex.first { candidate in
-                guard candidate.isHittable,
-                      candidate.buttons.count == 0,
-                      candidate.links.count == 0
-                else {
-                    return false
-                }
-                let label = NSPredicate(format: "label == %@", candidate.label)
-                return actionQueries.allSatisfy {
-                    !$0.matching(label).firstMatch.exists && !$0.containing(label).firstMatch.exists
-                }
-            },
-            "Expected visible noninteractive transcript text")
-        dismissalText.tap()
+        transcript.swipeDown()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         XCTAssertEqual(input.value as? String, text)
         send.tap()

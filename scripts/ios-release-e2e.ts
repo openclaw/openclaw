@@ -2,6 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCodeOrErrno,
+} from "@openclaw/normalization-core/error-coercion";
 
 export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayFreshInstallSetupAndRelaunch",
@@ -82,7 +86,13 @@ export class OperationError extends Error {
 }
 
 export function operationError(operation: Operation, error: unknown): OperationError {
-  const code = (error as { code?: string })?.code;
+  const code = collectNestedErrorCandidates(error)
+    .map(extractErrorCodeOrErrno)
+    .find(
+      (candidate) =>
+        candidate &&
+        ["ETIMEDOUT", "ABORT_ERR", "ENOENT", "EACCES", "EPERM", "ENOSPC"].includes(candidate),
+    );
   const failure = new OperationError(
     operation,
     code === "ETIMEDOUT"
@@ -95,7 +105,7 @@ export function operationError(operation: Operation, error: unknown): OperationE
             ? "permission-denied"
             : "failed",
   );
-  if (code && ["ETIMEDOUT", "ABORT_ERR", "ENOENT", "EACCES", "EPERM", "ENOSPC"].includes(code)) {
+  if (code) {
     failure.diagnostic.errorCode = code;
   }
   return failure;
