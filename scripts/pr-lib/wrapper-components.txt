@@ -1089,6 +1089,7 @@ src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
+src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
