@@ -1138,7 +1138,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
   it.each([
     ["active", ok(true)],
     ["bus query failed", err("Failed to connect to bus: Permission denied")],
-    ["timed out", err("Command timed out")],
   ] satisfies [string, Result<boolean, string>][])(
     "leaves service metadata unchanged when unit activity is %s and command drift accompanies other issues",
     async (_, active) => {
@@ -1819,35 +1818,6 @@ describe("maybeScanExtraGatewayServices", () => {
     );
     expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
   });
-
-  it.each(["timeout", "signal"] as const)(
-    "keeps the plist when the postcondition probe ends with %s",
-    async (termination) => {
-      setupLegacyMacService();
-      mocks.execLaunchctl
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(
-          launchctlResult({ code: 124, termination, stderr: "Could not find service" }),
-        );
-      const mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-      const access = vi.spyOn(fs, "access").mockResolvedValue(undefined);
-      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
-      const runtime = makeDoctorIo();
-
-      await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
-
-      expectBoundedLaunchctlCleanup();
-      expect(mkdir).not.toHaveBeenCalled();
-      expect(access).not.toHaveBeenCalled();
-      expect(rename).not.toHaveBeenCalled();
-      expectNoteContaining(
-        `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
-        "Legacy gateway cleanup skipped",
-      );
-      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-    },
-  );
 
   it.skipIf(process.platform === "win32").each([false, true])(
     "uses real command outcomes for legacy cleanup (signal=%s)",

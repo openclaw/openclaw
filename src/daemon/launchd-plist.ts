@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../infra/gateway-shutdown-budget.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExec } from "../process/exec.js";
 import type {
   GatewayServiceCommandConfig,
@@ -233,19 +234,32 @@ export async function normalizeLaunchdPlistXml(
   return stdout;
 }
 
+/** A completed native phase cannot renew the caller's monotonic inspection allowance. */
+export function remainingLaunchdPlistReadTimeout(deadline: number | undefined): number | undefined {
+  if (deadline === undefined) {
+    return undefined;
+  }
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) {
+    throw new Error("LaunchAgent inspection deadline expired.");
+  }
+  return remaining;
+}
+
 export async function decodeLaunchdPlistMetadata(
   contents: Uint8Array,
   timeoutMs?: number,
 ): Promise<Record<string, unknown> | undefined> {
   const deadline = performance.now() + Math.min(timeoutMs ?? 5_000, 5_000);
-  const xml = await normalizeLaunchdPlistXml(contents, deadline - performance.now());
+  const xml = await normalizeLaunchdPlistXml(contents, remainingLaunchdPlistReadTimeout(deadline));
   // Native XML escapes literal tag text; placeholders remain invalid command fields.
   const { stdout } = await runExec("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", "-"], {
     input: xml.replace(/<(data|date)>[\s\S]*?<\/\1>/g, "<integer>0</integer>"),
-    timeoutMs: Math.max(1, deadline - performance.now()),
+    timeoutMs: remainingLaunchdPlistReadTimeout(deadline),
     maxBuffer: 1024 * 1024,
     logOutput: false,
   });
+  remainingLaunchdPlistReadTimeout(deadline);
   return asOptionalRecord(JSON.parse(stdout));
 }
 
@@ -253,6 +267,8 @@ export async function readLaunchAgentProgramArgumentsFromFile(
   plistPath: string,
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const deadline =
+    options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
   try {
     const contents = await fs.readFile(plistPath).catch(async (error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
@@ -272,7 +288,10 @@ export async function readLaunchAgentProgramArgumentsFromFile(
     if (contents === null) {
       return null;
     }
-    const plist = await decodeLaunchdPlistMetadata(contents, options?.timeoutMs);
+    const plist = await decodeLaunchdPlistMetadata(
+      contents,
+      remainingLaunchdPlistReadTimeout(deadline),
+    );
     const args = plist?.ProgramArguments;
     const workingDirectory = plist?.WorkingDirectory;
     const inlineEnvironment = plist?.EnvironmentVariables;
@@ -308,7 +327,10 @@ export async function readLaunchAgentProgramArgumentsFromFile(
       ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
       sourcePath: plistPath,
     };
-  } catch {
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (options?.requireEffective) {
       throw new Error("Effective LaunchAgent service command could not be inspected.");
     }

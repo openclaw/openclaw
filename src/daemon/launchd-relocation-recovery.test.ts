@@ -3,6 +3,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import {
   installLaunchAgent,
   readRelocatedLaunchAgentForInstall,
@@ -17,20 +18,26 @@ import {
   resolveLaunchAgentPlistPath,
   resolvePreCanonicalLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
+import { readGatewayServiceCommandForMutation } from "./service-command-mutation.js";
 import { readServiceFileState } from "./service-stage.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 
 const native = vi.hoisted(() => ({
+  decode:
+    vi.fn<
+      (
+        command: string,
+        args: string[],
+        options: { input: string | Uint8Array; timeoutMs: number },
+      ) => Promise<{ stdout: string; stderr: string }>
+    >(),
   command: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
   ownership: vi.fn<typeof import("./launchd-system.js").assertNoSystemLaunchDaemonOwnership>(),
 }));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: native.command,
-  runExec: vi.fn(
-    async (_command: string, args: string[], options: { input: string | Uint8Array }) =>
-      decodeLaunchAgentPlistFixture(options.input, args[1]),
-  ),
+  runExec: native.decode,
 }));
 vi.mock("./launchd-system.js", () => ({
   assertNoSystemLaunchDaemonOwnership: native.ownership,
@@ -55,6 +62,11 @@ describe.skipIf(process.platform === "win32")("LaunchAgent relocation and recove
   beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     native.command.mockReset();
+    native.decode
+      .mockReset()
+      .mockImplementation(async (_command, args, options) =>
+        decodeLaunchAgentPlistFixture(options.input, args[1]),
+      );
     native.ownership.mockReset().mockResolvedValue(undefined);
   });
   afterEach(() => {
@@ -622,6 +634,82 @@ describe.skipIf(process.platform === "win32")("LaunchAgent relocation and recove
         sourcePath: f.former,
       },
     });
+  });
+
+  it("shares the inspection budget across canonical and former-definition decodes", async () => {
+    const f = await fixture();
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const budgets: number[] = [];
+    native.decode.mockImplementation(async (_command, args, options) => {
+      budgets.push(options.timeoutMs);
+      now += 10;
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
+    });
+    const service = {
+      readCommand: vi.fn(async () => {
+        now = 30;
+        return null;
+      }),
+    };
+    await expect(
+      readGatewayServiceCommandForMutation(service, f.args.env, {
+        requireEffective: true,
+        timeoutMs: 100,
+      }),
+    ).resolves.toMatchObject({
+      kind: "relocated",
+      command: {
+        environment: { OPERATOR: "original value" },
+        sourcePath: f.former,
+      },
+    });
+    expect(budgets).toEqual([70, 60, 50, 40]);
+    expect(native.command).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 2])("does not admit another decode after expiry at phase %s", async (phase) => {
+    const f = await fixture();
+    let now = 0;
+    let decodes = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    native.decode.mockImplementation(async (_command, args, options) => {
+      if (++decodes === phase) now = 100;
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
+    });
+    const service = {
+      readCommand: vi.fn(async () => {
+        if (phase === 0) now = 100;
+        return null;
+      }),
+    };
+    await expect(
+      readGatewayServiceCommandForMutation(service, f.args.env, {
+        requireEffective: true,
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow();
+    expect(native.decode).toHaveBeenCalledTimes(phase);
+    expect(native.command).not.toHaveBeenCalled();
+    expect(await fs.readFile(f.former, "utf8")).toBe(f.original);
+  });
+
+  it.each([1, 3])("preserves child cleanup refusal from native decode %s", async (phase) => {
+    const f = await fixture();
+    const error = new CommandProcessCleanupError();
+    let decodes = 0;
+    native.decode.mockImplementation(async (_command, args, options) => {
+      if (++decodes === phase) throw error;
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
+    });
+    await expect(
+      readRelocatedLaunchAgentForInstall(f.args.env, {
+        requireEffective: true,
+      }),
+    ).rejects.toBe(error);
+    expect(native.decode).toHaveBeenCalledTimes(phase);
+    expect(native.command).not.toHaveBeenCalled();
+    expect(await fs.readFile(f.former, "utf8")).toBe(f.original);
   });
 
   it("rejects a dangling canonical link instead of treating it as an absent definition", async () => {

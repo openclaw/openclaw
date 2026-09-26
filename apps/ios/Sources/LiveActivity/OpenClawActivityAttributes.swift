@@ -92,16 +92,6 @@ struct OpenClawActivityAttributes: ActivityAttributes {
             self.voiceSamples = nil
         }
 
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(self.status, forKey: .status)
-            try container.encodeIfPresent(self.verbatimDetail, forKey: .verbatimDetail)
-            try container.encode(self.startedAt, forKey: .startedAt)
-            try container.encodeIfPresent(self.agentBadge, forKey: .agentBadge)
-            try container.encodeIfPresent(self.toolName, forKey: .toolName)
-            try container.encodeIfPresent(self.voiceSamples, forKey: .voiceSamples)
-        }
-
         private static func legacyPresentation(
             statusText: String?,
             isIdle: Bool,

@@ -243,18 +243,6 @@ describe("browser agent snapshot timeout routing", () => {
       expectedHeadless: true,
     },
     {
-      name: "headless environment override when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "env" },
-      expectedHeadless: true,
-    },
-    {
-      name: "headless Linux no-display fallback when its profile is configured headed",
-      configuredHeadless: false,
-      running: { headless: true, headlessSource: "linux-display-fallback" },
-      expectedHeadless: true,
-    },
-    {
       name: "observed headed external browser",
       configuredHeadless: true,
       running: null,

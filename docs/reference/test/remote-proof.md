@@ -186,9 +186,62 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
   source preparation or lease work.
 
-When remote sync uses a temporary checkout, the wrapper preserves native
+Blacksmith source capsules keep one private mirror per physical source worktree
+under the configured sync root. Later runs enumerate source eligibility again,
+compare file identity, size, timestamps, mode, and kind, and copy and hash changed
+files. Unchanged source stays in place with warm Git index stat data. Git's staged
+tracking and the final raw transport tree use separate indexes, preserving the
+same ignored-file and untracked-file selection rules. The wrapper reports copied
+and reused file counts and preparation time.
+
+The mirror remains exclusively locked for the entire command, including artifact
+preservation and lease-claim restoration. An overlapping run from the same worktree
+prints a message and builds an independent fresh capsule. Only completed cleanup
+records an idle mirror for reuse; a missing witness, unsupported staging location,
+or unresolved owner uses fresh staging. Changed source during freezing fails the
+run. Cache metadata, payload, witness, or Git-version mismatches rebuild cold before
+upload. Source enumeration and metadata checks still scale with the repository;
+source-byte copying and hashing scale with changed files on warm runs.
+Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
+fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
+and cannot make a reusable cache. Ordinary fresh-capsule behavior is unchanged.
+
+Different worktrees share a short allocation lock. A busy allocator prints
+`[crabbox] waiting for source mirror allocation...` and waits up to 120 seconds
+before falling back to a fresh capsule. Per-mirror validation, cold preparation,
+and eviction's payload deletion run under the slot lock without holding allocation.
+
+The sync root admits at most 32 mirror slots. Allocation evicts the least
+recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
+protected and count toward the limit. If no slot can be safely reclaimed, the run
+uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
+`staging recover <id>` can remove one under its exclusive lock. Automatic abandoned
+staging recovery leaves idle mirrors available for reuse. Interrupted commands
+retain the existing witness, claim, and diagnostic recovery requirements.
+An eviction records disposal before deleting bytes and keeps its slot reserved
+until deletion finishes. If interrupted, `staging inspect` reports the recorded
+disposal as a recovery candidate; automatic recovery or `staging recover <id>`
+can resume it after acquiring the exclusive slot lock. Replaced directories and
+unknown metadata remain protected. Concurrent allocators recheck capacity after
+deletion; a slot being disposed still counts toward the 32-slot limit.
+A separate disposal receipt survives the final directory and lock removal, so
+recovery can finish interrupted namespace cleanup even after the payload receipt
+is gone. Recovery preserves an already-recorded disposal instead of rewriting it.
+Slots whose producer already removed the payload also receive a cleanup record;
+that record requires the payload root to stay absent and never authorizes deleting
+a replacement root. Both forms block slot reuse until cleanup completes.
+Private Git objects reaching 256 MiB trigger a cold rebuild on the next reuse,
+bounding retained object history without pruning objects behind saved indexes.
+
+When remote sync uses an isolated checkout, the wrapper preserves native
 `.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
-`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout.
+`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout or
+returning its mirror to the idle cache. Verified native outputs are removed from
+an idle mirror so later runs retain only their own diagnostics.
+Other native `.crabbox` state uses ordinary full checkout disposal after artifact
+preservation; the next run builds a cold mirror. Mirror locks release automatically
+when their process exits, but an unresolved admitted consumer still requires the
+existing staging recovery checks before its snapshot can be removed.
 Repeated runs retain separate evidence even when native filenames match. The
 wrapper prints the old-to-new root mapping; native logs and generated proof may
 still reference the old paths. A preservation error fails the wrapper and retains

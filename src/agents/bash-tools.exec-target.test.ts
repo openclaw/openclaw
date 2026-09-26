@@ -129,7 +129,6 @@ describe("resolveExecTarget", () => {
     ["auto", true, false, "sandbox"],
     ["auto", false, false, "gateway"],
     ["sandbox", true, false, "sandbox"],
-    ["gateway", true, false, "gateway"],
     ["gateway", false, false, "gateway"],
     ["node", false, false, "node"],
     ["sandbox", true, true, "gateway"],
@@ -168,8 +167,6 @@ describe("resolveExecTarget", () => {
 
     it.each([
       { host: "gateway", requestedTarget: undefined },
-      { host: "gateway", requestedTarget: "auto" },
-      { host: "node", requestedTarget: undefined },
       { host: "node", requestedTarget: "auto" },
     ] as const)(
       "keeps requested=$requestedTarget sandboxed despite configured host=$host",

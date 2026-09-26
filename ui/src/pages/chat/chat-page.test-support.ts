@@ -1,3 +1,4 @@
+import { createRouter } from "@openclaw/uirouter";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
@@ -25,6 +26,8 @@ export function createChatPageSessions(
 }
 
 export function createChatPageNavigationContext() {
+  const router = createRouter({ routes: [] });
+  onTestFinished(() => router.stop());
   const navigate = vi.fn();
   const replace = vi.fn();
   const patch = vi.fn(async () => null);
@@ -40,6 +43,7 @@ export function createChatPageNavigationContext() {
   };
   const context = {
     basePath: "",
+    router,
     sessions: { ...createChatPageSessions(), patch },
     chatSubmissions: createChatSubmissions(),
     placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },

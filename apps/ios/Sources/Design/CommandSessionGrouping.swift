@@ -23,9 +23,7 @@ enum CommandSessionGrouping {
         let unpinned = entries.filter { $0.pinned != true }
         // Stored-but-empty groups still render as sections so they remain
         // visible move targets after their last member leaves.
-        let categoryNames = Set(unpinned.compactMap { self.normalizedCategory($0.category) })
-            .union(knownGroups.compactMap(self.normalizedCategory))
-            .sorted(by: self.categoryComesBefore)
+        let categoryNames = self.categories(from: unpinned, knownGroups: knownGroups)
         var sections: [CommandSessionSection] = []
 
         if !pinned.isEmpty {

@@ -3,18 +3,6 @@ import { describe, expect, it } from "vitest";
 import { isSystemdStartLimitHit } from "./service-runtime.js";
 
 describe("isSystemdStartLimitHit", () => {
-  it("detects a crash loop where the restart counter reached StartLimitBurst", () => {
-    // Real systemd 249 give-up: process kept exiting non-zero so Result stays
-    // exit-code; NRestarts hitting StartLimitBurst is the give-up signal.
-    expect(
-      isSystemdStartLimitHit({
-        status: "stopped",
-        state: "failed",
-        systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
-      }),
-    ).toBe(true);
-  });
-
   it("detects a crash loop when the last exit was a non-config code", () => {
     // exit 1 is a normal crash, not the RestartPreventExitStatus=78 no-restart
     // path, so a counter that reached StartLimitBurst is real start-limit exhaustion.

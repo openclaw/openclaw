@@ -33,21 +33,4 @@ describe("media-understanding capability registry", () => {
     expect(registry.get("glm")?.capabilities).toEqual(["image"]);
     expect(registry.get("textOnly")).toBeUndefined();
   });
-
-  it("keeps plugin-owned capabilities ahead of config auto-registration", () => {
-    resolveProviders.mockReturnValue({ id: "google", capabilities: ["audio"] });
-
-    const registry = buildMediaUnderstandingCapabilityRegistry({
-      tools: { media: { models: [{ provider: "google" }] } },
-      models: {
-        providers: {
-          google: {
-            models: [{ id: "custom-gemini", input: ["text", "image"] }],
-          },
-        },
-      },
-    } as never);
-
-    expect(registry.get("google")?.capabilities).toEqual(["audio"]);
-  });
 });

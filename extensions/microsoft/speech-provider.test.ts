@@ -3,9 +3,9 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  finalizeDebugProxyCapture,
-  getDebugProxyCaptureStore,
-  initializeDebugProxyCapture,
+  createDebugProxyCaptureReaderAsync,
+  finalizeDebugProxyCaptureAsync,
+  initializeDebugProxyCaptureAsync,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -203,30 +203,18 @@ describe("listMicrosoftVoices", () => {
         new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
       ) as unknown as typeof globalThis.fetch;
 
-    const store = getDebugProxyCaptureStore();
-    store.upsertSession({
-      id: "ms-voices-session",
-      startedAt: Date.now(),
-      mode: "test",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-    });
-
     await listVoicesThroughProvider();
-
-    await vi.waitFor(() => {
-      const events = store.getSessionEvents("ms-voices-session", 10);
-      expect(
-        events.some(
-          (event) => event.kind === "request" && event.host === "speech.platform.bing.com",
-        ),
-      ).toBe(true);
-      expect(
-        events.some(
-          (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
-        ),
-      ).toBe(true);
-    });
+    await finalizeDebugProxyCaptureAsync();
+    const reader = createDebugProxyCaptureReaderAsync({ env: process.env });
+    const events = await reader.getSessionEvents("ms-voices-session", 10);
+    expect(
+      events.some((event) => event.kind === "request" && event.host === "speech.platform.bing.com"),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
+      ),
+    ).toBe(true);
   });
 
   it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
@@ -238,31 +226,21 @@ describe("listMicrosoftVoices", () => {
       async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
     ) as unknown as typeof globalThis.fetch;
 
-    const store = getDebugProxyCaptureStore();
-    store.upsertSession({
-      id: "ms-voices-global-session",
-      startedAt: Date.now(),
-      mode: "test",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-    });
-    initializeDebugProxyCapture("test");
+    await initializeDebugProxyCaptureAsync("test");
 
     try {
       await listVoicesThroughProvider();
-
-      let events: Array<Record<string, unknown>> = [];
-      await vi.waitFor(() => {
-        events = store
-          .getSessionEvents("ms-voices-global-session", 10)
-          .filter((event) => event.host === "speech.platform.bing.com");
-        expect(events).toHaveLength(2);
-      });
+      await finalizeDebugProxyCaptureAsync();
+      const reader = createDebugProxyCaptureReaderAsync({ env: process.env });
+      const events = (await reader.getSessionEvents("ms-voices-global-session", 10)).filter(
+        (event) => event.host === "speech.platform.bing.com",
+      );
+      expect(events).toHaveLength(2);
       const kinds = events.map((event) => String(event.kind)).toSorted();
       expect(kinds).toEqual(["request", "response"]);
     } finally {
       globalThis.fetch = proxyReset.originalFetch;
-      finalizeDebugProxyCapture();
+      await finalizeDebugProxyCaptureAsync();
     }
   });
 });
@@ -328,4 +306,25 @@ describe("buildMicrosoftSpeechProvider", () => {
       });
     });
   }
+});
+
+it("preserves inherited Microsoft Talk settings and filters blank request overrides", () => {
+  const provider = buildMicrosoftSpeechProvider();
+  const params = { voiceId: " ", outputFormat: " ogg-24khz-16bit-mono-opus " };
+  const talk = provider.resolveTalkConfig?.({
+    cfg: {},
+    baseTtsConfig: { providers: { microsoft: { voice: "base-voice", pitch: "+10Hz" } } },
+    talkProviderConfig: { ...params, pitch: " ", rate: " +20% ", timeoutMs: 0 },
+    timeoutMs: 1000,
+  });
+  expect(talk).toMatchObject({
+    voice: "base-voice",
+    pitch: "+10Hz",
+    rate: "+20%",
+    outputFormat: "ogg-24khz-16bit-mono-opus",
+    timeoutMs: 0,
+  });
+  expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+    outputFormat: "ogg-24khz-16bit-mono-opus",
+  });
 });

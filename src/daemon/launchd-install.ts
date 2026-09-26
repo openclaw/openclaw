@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -9,7 +10,7 @@ import {
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
 import { assertValidLaunchAgentLabel, resolveLaunchAgentLabel } from "./launchd-label.js";
-import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
+import { decodeLaunchdPlistMetadata, remainingLaunchdPlistReadTimeout } from "./launchd-plist.js";
 import {
   preserveLaunchAgentRecoveryDefinition,
   verifyLaunchAgentRecoveryDefinition,
@@ -121,7 +122,7 @@ async function currentGatewayLaunchAgentLabel(
     ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
   ]);
   for (const label of candidates) {
-    if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
+    if (await isCurrentProcessInsideLaunchdService(label)) {
       return label;
     }
   }
@@ -210,6 +211,7 @@ async function readRelocatedLaunchAgentPlistForInstall(params: {
   label: string;
   targetPlistPath: string;
   options?: GatewayServiceReadOptions;
+  deadline?: number;
 }): Promise<RelocatedLaunchAgentPlist | null> {
   const plistPath = resolvePreCanonicalLaunchAgentPlistPath(params.env, params.label);
   if (plistPath === params.targetPlistPath) {
@@ -224,7 +226,16 @@ async function readRelocatedLaunchAgentPlistForInstall(params: {
   if (contents === null) {
     return null;
   }
-  const metadata = await decodeLaunchdPlistMetadata(contents).catch(() => undefined);
+  const metadata = await decodeLaunchdPlistMetadata(
+    contents,
+    remainingLaunchdPlistReadTimeout(params.deadline),
+  ).catch((error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return undefined;
+  });
+  remainingLaunchdPlistReadTimeout(params.deadline);
   const relocatedLabel = metadata?.Label;
   if (typeof relocatedLabel !== "string" || !relocatedLabel) {
     throw new Error("The pre-migration LaunchAgent definition cannot be safely inspected.");
@@ -232,12 +243,11 @@ async function readRelocatedLaunchAgentPlistForInstall(params: {
   if (relocatedLabel !== params.label) {
     throw new Error("The pre-migration LaunchAgent definition does not match the expected label.");
   }
-  const command = await readLaunchAgentProgramArgumentsAtPath(
-    params.env,
-    params.label,
-    plistPath,
-    params.options,
-  );
+  const command = await readLaunchAgentProgramArgumentsAtPath(params.env, params.label, plistPath, {
+    ...params.options,
+    timeoutMs: remainingLaunchdPlistReadTimeout(params.deadline),
+  });
+  remainingLaunchdPlistReadTimeout(params.deadline);
   if (command === null) {
     throw new Error("The pre-migration LaunchAgent definition cannot be safely inspected.");
   }
@@ -248,7 +258,10 @@ async function readRelocatedLaunchAgentPlistForInstall(params: {
 export async function readRelocatedLaunchAgentForInstall(
   env: GatewayServiceEnv,
   options?: GatewayServiceReadOptions,
+  // Preserve the mutation caller's monotonic budget across its canonical probe.
+  deadline = options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs,
 ): Promise<{ plistPath: string; command: GatewayServiceCommandConfig } | null> {
+  remainingLaunchdPlistReadTimeout(deadline);
   const label = resolveLaunchAgentLabel(env);
   const targetPlistPath = resolveLaunchAgentPlistPath(env);
   if ((await readExistingLaunchAgentPlist(targetPlistPath)) !== null) {
@@ -259,6 +272,7 @@ export async function readRelocatedLaunchAgentForInstall(
     label,
     targetPlistPath,
     options,
+    deadline,
   });
   return relocated === null ? null : { plistPath: relocated.plistPath, command: relocated.command };
 }

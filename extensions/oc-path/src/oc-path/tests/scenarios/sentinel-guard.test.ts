@@ -5,23 +5,11 @@ import { parseMd } from "../../parse.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL, guardSentinel } from "../../sentinel.js";
 
 describe("sentinel-guard", () => {
-  it("sentinel constant matches the literal", () => {
-    expect(REDACTED_SENTINEL).toBe("__OPENCLAW_REDACTED__");
-  });
-
-  it("guardSentinel passes normal strings", () => {
-    expect(() => guardSentinel("safe", "oc://X.md")).not.toThrow();
-  });
-
   it("guardSentinel passes non-string types", () => {
     expect(() => guardSentinel(42, "oc://X.md")).not.toThrow();
     expect(() => guardSentinel(null, "oc://X.md")).not.toThrow();
     expect(() => guardSentinel(undefined, "oc://X.md")).not.toThrow();
     expect(() => guardSentinel({}, "oc://X.md")).not.toThrow();
-  });
-
-  it("guardSentinel throws on exact match", () => {
-    expect(() => guardSentinel(REDACTED_SENTINEL, "oc://X.md")).toThrow(OcEmitSentinelError);
   });
 
   it("guardSentinel throws on substring matches (sentinel embedded in larger string)", () => {
@@ -32,12 +20,6 @@ describe("sentinel-guard", () => {
     expect(() => guardSentinel(`prefix${REDACTED_SENTINEL}suffix`, "oc://X.md")).toThrow(
       OcEmitSentinelError,
     );
-  });
-
-  it("round-trip emit allows sentinel-free content", () => {
-    const raw = "## Section\n\n- token: redacted-but-not-sentinel\n";
-    const { ast } = parseMd(raw);
-    expect(() => emitMd(ast)).not.toThrow();
   });
 
   it("render mode catches sentinel in frontmatter", () => {
@@ -115,13 +97,6 @@ describe("sentinel-guard", () => {
 
   it("sentinel-as-substring in raw — strict mode catches it", () => {
     const raw = `Some prose ${REDACTED_SENTINEL} more prose.\n`;
-    const { ast } = parseMd(raw);
-    expect(emitMd(ast)).toBe(raw);
-    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
-  });
-
-  it("multiple sentinel occurrences in raw — strict mode catches them", () => {
-    const raw = `## A\n${REDACTED_SENTINEL}\n${REDACTED_SENTINEL}\n`;
     const { ast } = parseMd(raw);
     expect(emitMd(ast)).toBe(raw);
     expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);

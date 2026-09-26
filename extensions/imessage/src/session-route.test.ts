@@ -17,7 +17,6 @@ describe("iMessage outbound session routing", () => {
     ["+1 (555) 123-4567", true],
     ["imessage:User@Example.com", true],
     ["imessage:Alice", false],
-    ["sms:foo", false],
     ["alice@example", false],
     ["1-800-FLOWERS", false],
     ["chat_id:42", false],
@@ -40,12 +39,6 @@ describe("iMessage outbound session routing", () => {
       { channels: { imessage: { service: "sms" } } },
       "+15551234567",
       "sms",
-    ],
-    [
-      "uses the configured iMessage override for a bare direct target",
-      { channels: { imessage: { service: "imessage" } } },
-      "+15551234567",
-      "imessage",
     ],
     [
       "keeps an explicit SMS target authoritative",

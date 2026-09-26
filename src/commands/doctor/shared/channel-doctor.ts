@@ -311,6 +311,7 @@ export async function runChannelDoctorConfigSequences(params: {
     return { changeNotes: [], warningNotes: preserved.warnings ?? [] };
   }
   const changeNotes: string[] = [];
+  const infoNotes: string[] = [];
   const warningNotes: string[] = [];
   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), {
     cfg: params.cfg,
@@ -321,9 +322,10 @@ export async function runChannelDoctorConfigSequences(params: {
       continue;
     }
     changeNotes.push(...result.changeNotes);
+    infoNotes.push(...(result.infoNotes ?? []));
     warningNotes.push(...result.warningNotes);
   }
-  return { changeNotes, warningNotes };
+  return { changeNotes, warningNotes, ...(infoNotes.length > 0 ? { infoNotes } : {}) };
 }
 
 /** Collect compatibility migrations from configured channel doctor adapters in order. */

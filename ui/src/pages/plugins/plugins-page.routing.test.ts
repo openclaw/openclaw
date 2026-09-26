@@ -29,7 +29,7 @@ function discoveryDetail(
   return {
     plugin: {
       id: plugin.catalogId,
-      catalog: { name: plugin.name, official: true, categories: [] },
+      catalog: { name: plugin.name, official: true, categories: ["productivity"] },
       local: {
         present: plugin.installed,
         installed: plugin.installed,
@@ -542,7 +542,18 @@ describe("PluginsPage routing", () => {
       };
       const { client, request } = createClient(async (method, params) => {
         if (method === "plugins.catalog.browse") {
-          return { items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [] };
+          return {
+            items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [],
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Work tools",
+                icon: "checkSquare",
+                order: 1,
+              },
+            ],
+          };
         }
         if (method === "plugins.catalog.categories") {
           return { categories: [] };
@@ -596,6 +607,15 @@ describe("PluginsPage routing", () => {
             asNullableRecord(params)?.intent === "all"
               ? details.map((detail) => detail.plugin)
               : [],
+          categories: [
+            {
+              slug: "productivity",
+              label: "Productivity",
+              description: "Work tools",
+              icon: "checkSquare",
+              order: 1,
+            },
+          ],
         };
       }
       if (method === "plugins.catalog.categories") {

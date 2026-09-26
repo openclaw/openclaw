@@ -32,11 +32,12 @@ import {
 } from "../../infra/agent-run-registry.js";
 import {
   emitTrustedDiagnosticEvent,
+  onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
-import { diagnosticLogger, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import { startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -306,53 +307,63 @@ it.each(["resumed", "replacement"] as const)(
   },
 );
 
-it("keeps resumed question work alive when attention logging settles the question", async () => {
+it("keeps resumed question work alive when attention reporting settles the question", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const recoveryAtMs = Date.now() + 900_000;
     const recovery = vi.fn(recoverStuckDiagnosticSession);
     startDiagnosticHeartbeat({}, { recoverStuckSession: recovery, sampleLiveness: () => null });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.started",
       ...ref,
       toolName: "ask_user",
-      toolCallId: "logging-settlement-call",
+      toolCallId: "reporting-settlement-call",
     });
     const id = await request("ask_user");
     const answer = manager.waitAnswer(id);
-    const warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
-      if (message.startsWith("stalled session:") && Date.now() === recoveryAtMs) {
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (
+        event.type === "session.stalled" &&
+        event.sessionId === ref.sessionId &&
+        event.sessionKey === ref.sessionKey &&
+        event.ageMs === 900_000
+      ) {
+        // Attention events can settle a question after the heartbeat captured its generation.
         manager.cancel(id);
       }
     });
     try {
       await vi.advanceTimersByTimeAsync(900_000);
-      await Promise.all(recovery.mock.results.map((result) => result.value));
+      expect(manager.observe(id)?.record.status).toBe("cancelled");
+      const outcomes = await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
+      expect(recovery).toHaveBeenCalledWith(
+        expect.objectContaining({ allowActiveAbort: true, ageMs: 900_000 }),
+      );
+      expect(outcomes).toContainEqual(
+        expect.objectContaining({ status: "skipped", reason: "stale_session_state" }),
+      );
       expect(abort).not.toHaveBeenCalled();
     } finally {
-      warning.mockRestore();
+      unsubscribe();
     }
   });
 });
 
-it.each([900_000, 3_600_000])(
-  "releases an expired %ims wait even before its timer callback runs",
-  async (timeoutMs) => {
-    const id = await request("ask_user", true, timeoutMs);
-    const answer = manager.waitAnswer(id);
-    vi.setSystemTime(Date.now() + timeoutMs - 1);
-    await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
-    vi.setSystemTime(Date.now() + 1);
-    await expect(recover()).resolves.toMatchObject({ reason: "stale_session_state" });
-    await expect(answer).resolves.toEqual({ status: "expired" });
-    expect(
-      (await call("question.resolve", { id, answers: { answers: { answer: ["late"] } } }))?.[0],
-    ).toBe(false);
-    await vi.advanceTimersByTimeAsync(900_000);
-    await expect(recover()).resolves.toMatchObject({ status: "aborted" });
-  },
-);
+it("releases an expired wait even before its timer callback runs", async () => {
+  const timeoutMs = 3_600_000;
+  const id = await request("ask_user", true, timeoutMs);
+  const answer = manager.waitAnswer(id);
+  vi.setSystemTime(Date.now() + timeoutMs - 1);
+  await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
+  vi.setSystemTime(Date.now() + 1);
+  await expect(recover()).resolves.toMatchObject({ reason: "stale_session_state" });
+  await expect(answer).resolves.toEqual({ status: "expired" });
+  expect(
+    (await call("question.resolve", { id, answers: { answers: { answer: ["late"] } } }))?.[0],
+  ).toBe(false);
+  await vi.advanceTimersByTimeAsync(900_000);
+  await expect(recover()).resolves.toMatchObject({ status: "aborted" });
+});
 
 it("does not expire a stopped RPC observer's question before its expiry callback runs", async () => {
   const id = await request("ask_user", false, 100);

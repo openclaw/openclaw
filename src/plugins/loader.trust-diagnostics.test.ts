@@ -90,7 +90,7 @@ describe("recorded plugin trust diagnostics", () => {
           installPath: plugin.dir,
           ...override,
         };
-        refreshPersistedInstalledPluginIndex({
+        await refreshPersistedInstalledPluginIndex({
           reason: "source-changed",
           installRecords: missing ? {} : { [pluginId]: install },
         });

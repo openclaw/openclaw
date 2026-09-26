@@ -181,7 +181,7 @@ beforeEach(async () => {
   native.contend = true;
   native.elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => native.elapsedMs);
-  recordDeferredPluginMigrations({ pending: [pending] });
+  await recordDeferredPluginMigrations({ pending: [pending] });
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(native.root);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
   vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess").mockResolvedValue(undefined);

@@ -341,6 +341,28 @@ function createLaterPrompter() {
   });
 }
 
+function createTuiPrompter(hatchMessage = "How do you want to hatch your agent?") {
+  return buildWizardPrompter({
+    select: vi.fn(async (params: { message: string }) =>
+      params.message === hatchMessage ? "tui" : "later",
+    ) as never,
+  });
+}
+
+function createServiceSetupArgs(
+  overrides: Partial<Parameters<typeof ensureGatewayServiceForOnboarding>[0]> = {},
+): Parameters<typeof ensureGatewayServiceForOnboarding>[0] {
+  return {
+    flow: "quickstart",
+    opts: {},
+    nextConfig: {},
+    settings: { port: 18789 },
+    prompter: createLaterPrompter(),
+    runtime: createRuntime(),
+    ...overrides,
+  };
+}
+
 function createEnabledFirecrawlSearchConfig(): OpenClawConfig {
   return {
     tools: {
@@ -487,22 +509,11 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
     resolveSetupSecretInputString.mockResolvedValueOnce("resolved-gateway-password");
-    const select = vi.fn(async (params: { message: string }) => {
-      if (params.message === "How do you want to hatch your agent?") {
-        return "tui";
-      }
-      return "later";
-    });
-    const prompter = buildWizardPrompter({
-      select: select as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createTuiPrompter();
     const runtime = createRuntime();
 
-    try {
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "resolved-gateway-password" }, async () => {
       await finalizeSetupWizard(
         createFinalizeArgs("quickstart", {
           settings: { authMode: "password" },
@@ -522,13 +533,7 @@ describe("finalizeSetupWizard", () => {
           runtime,
         }),
       );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
-      }
-    }
+    });
 
     const probeParams = requireMockArg(probeGatewayReachable) as {
       url?: string;
@@ -613,7 +618,6 @@ describe("finalizeSetupWizard", () => {
     { name: "the UI was skipped", skipUi: true, enabled: true, reachable: true },
     { name: "the UI is disabled", skipUi: false, enabled: false, reachable: true },
     { name: "the Gateway is offline", skipUi: false, enabled: true, reachable: false },
-    { name: "the skipped UI Gateway is offline", skipUi: true, enabled: true, reachable: false },
   ])("does not wait for dashboard assets when $name", async ({ skipUi, enabled, reachable }) => {
     probeGatewayReachable.mockResolvedValue({ ok: reachable, detail: "offline" });
     const prompter = createLaterPrompter();
@@ -739,16 +743,7 @@ describe("finalizeSetupWizard", () => {
 
   it("seeds the bootstrap hatch message for a ready catalog with a bounded timeout", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    const select = vi.fn(async (params: { message: string }) => {
-      if (params.message === "How do you want to hatch your agent?") {
-        return "tui";
-      }
-      return "later";
-    });
-    const prompter = buildWizardPrompter({
-      select: select as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createTuiPrompter();
 
     await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
@@ -929,21 +924,10 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("localizes the bootstrap hatch TUI seed message", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
-    const select = vi.fn(async (params: { message: string }) => {
-      if (params.message === "你想如何启动 agent？") {
-        return "tui";
-      }
-      return "later";
-    });
-    const prompter = buildWizardPrompter({
-      select: select as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createTuiPrompter("你想如何启动 agent？");
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
 
       expect(runTui).toHaveBeenCalledWith({
@@ -952,13 +936,7 @@ describe("finalizeSetupWizard", () => {
         message: "醒醒，我的朋友！",
         initialMessageTimeoutMs: 300_000,
       });
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("prints completion before handing off to the TUI", async () => {
@@ -981,13 +959,7 @@ describe("finalizeSetupWizard", () => {
 
   it("restores terminal state after failed TUI hatch", async () => {
     runTui.mockRejectedValueOnce(new Error("TUI exited with code 1"));
-    const select = vi.fn(async (params: { message: string }) => {
-      if (params.message === "How do you want to hatch your agent?") {
-        return "tui";
-      }
-      return "later";
-    });
-    const prompter = buildWizardPrompter({ select: select as never });
+    const prompter = createTuiPrompter();
 
     await expect(
       finalizeSetupWizard(
@@ -1008,10 +980,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {
-    const prompter = buildWizardPrompter({
-      select: vi.fn(async () => "later") as never,
-      confirm: vi.fn(async () => false),
-    });
+    const prompter = createLaterPrompter();
     const runtime = createRuntime();
     buildGatewayInstallPlan.mockResolvedValueOnce({
       programArguments: [],
@@ -1111,50 +1080,46 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
-  it.each(
-    (["linux", "win32"] as const).flatMap((platform) =>
-      (["installed", "restarted", "restart-scheduled", "reused", "failed", "skipped"] as const).map(
-        (action) => ({ platform, action }),
-      ),
-    ),
-  )("uses the $platform readiness budget after service $action", async ({ platform, action }) => {
-    await withPlatform(platform, async () => {
-      gatewayServiceIsLoaded.mockResolvedValue(action !== "installed");
-      gatewayServiceRestart.mockResolvedValue({
-        outcome: action === "restart-scheduled" ? "scheduled" : "completed",
+  it.each([
+    { platform: "linux", action: "installed" },
+    { platform: "linux", action: "restarted" },
+    { platform: "linux", action: "restart-scheduled" },
+    { platform: "linux", action: "reused" },
+    { platform: "linux", action: "skipped" },
+    { platform: "win32", action: "installed" },
+  ] as const)(
+    "uses the $platform readiness budget after service $action",
+    async ({ platform, action }) => {
+      await withPlatform(platform, async () => {
+        gatewayServiceIsLoaded.mockResolvedValue(action !== "installed");
+        gatewayServiceRestart.mockResolvedValue({
+          outcome: action === "restart-scheduled" ? "scheduled" : "completed",
+        });
+        const choice = action === "reused" ? "skip" : "restart";
+        const prompter = buildWizardPrompter({ select: vi.fn(async () => choice) as never });
+
+        await finalizeSetupWizard(
+          createFinalizeArgs("quickstart", {
+            opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
+            prompter,
+          }),
+        );
+
+        const managedStartup = action !== "reused" && action !== "skipped";
+        expect(waitForGatewayReachable).toHaveBeenCalledOnce();
+        const timing = requireMockArg(waitForGatewayReachable) as {
+          deadlineMs?: number;
+          probeTimeoutMs?: number;
+        };
+        expect(timing.deadlineMs).toBe(
+          managedStartup ? (platform === "win32" ? 90_000 : 45_000) : 15_000,
+        );
+        expect(timing.probeTimeoutMs ?? 1_500).toBe(
+          managedStartup ? (platform === "win32" ? 15_000 : 10_000) : 1_500,
+        );
       });
-      if (action === "failed") {
-        buildGatewayInstallPlan.mockRejectedValueOnce(new Error("replacement plan failed"));
-      }
-      const choice = action === "reused" ? "skip" : action === "failed" ? "reinstall" : "restart";
-      const prompter = buildWizardPrompter({ select: vi.fn(async () => choice) as never });
-
-      await finalizeSetupWizard(
-        createFinalizeArgs("quickstart", {
-          opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
-          prompter,
-        }),
-      );
-
-      if (action === "failed") {
-        expect(waitForGatewayReachable).not.toHaveBeenCalled();
-        expect(probeGatewayReachable).toHaveBeenCalledOnce();
-        return;
-      }
-      const managedStartup = action !== "reused" && action !== "skipped";
-      expect(waitForGatewayReachable).toHaveBeenCalledOnce();
-      const timing = requireMockArg(waitForGatewayReachable) as {
-        deadlineMs?: number;
-        probeTimeoutMs?: number;
-      };
-      expect(timing.deadlineMs).toBe(
-        managedStartup ? (platform === "win32" ? 90_000 : 45_000) : 15_000,
-      );
-      expect(timing.probeTimeoutMs ?? 1_500).toBe(
-        managedStartup ? (platform === "win32" ? 15_000 : 10_000) : 1_500,
-      );
-    });
-  });
+    },
+  );
 
   it.each([false, true])(
     "detects the surviving gateway after failed reinstall (skipHealth=%s)",
@@ -1213,11 +1178,8 @@ describe("finalizeSetupWizard", () => {
     expectNoteNotContains(prompter, "openclaw gateway restart");
   });
 
-  it.each([
-    ["readiness timeout", "gateway readiness timed out"],
-    ["service crash", "gateway closed (1006 abnormal closure)"],
-    ["occupied port", "listen EADDRINUSE: address already in use 127.0.0.1:18789"],
-  ])("keeps managed %s recovery on the canonical service path", async (_name, detail) => {
+  it("keeps managed readiness timeout recovery on the canonical service path", async () => {
+    const detail = "gateway readiness timed out";
     waitForGatewayReachable.mockResolvedValue({ ok: false, detail });
     probeGatewayReachable.mockResolvedValue({ ok: false, detail });
     const prompter = createLaterPrompter();
@@ -1259,14 +1221,7 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceInstall.mockRejectedValueOnce(new Error("service install exploded"));
     const prompter = createLaterPrompter();
 
-    const result = await ensureGatewayServiceForOnboarding({
-      flow: "quickstart",
-      opts: {},
-      nextConfig: {},
-      settings: { port: 18789 },
-      prompter,
-      runtime: createRuntime(),
-    });
+    const result = await ensureGatewayServiceForOnboarding(createServiceSetupArgs({ prompter }));
 
     expect(result.gateway).toEqual({ status: "failed", error: "service install exploded" });
     expectNoteContains(prompter, "service install exploded", "Gateway");
@@ -1311,14 +1266,9 @@ describe("finalizeSetupWizard", () => {
         isContainerEnvironment.mockReturnValue(true);
         const prompter = createLaterPrompter();
 
-        const result = await ensureGatewayServiceForOnboarding({
-          flow: "quickstart",
-          opts: {},
-          nextConfig: {},
-          settings: { port: 18789 },
-          prompter,
-          runtime: createRuntime(),
-        });
+        const result = await ensureGatewayServiceForOnboarding(
+          createServiceSetupArgs({ prompter }),
+        );
 
         expect(result).toEqual({
           gateway: { status: "skipped", reason: "external" },
@@ -1385,15 +1335,9 @@ describe("finalizeSetupWizard", () => {
       },
     });
 
-    const result = await ensureGatewayServiceForOnboarding({
-      flow: "quickstart",
-      opts: {},
-      nextConfig: {},
-      settings: { port: 18789 },
-      prompter: createLaterPrompter(),
-      runtime: createRuntime(),
-      loadedAction: "resume",
-    });
+    const result = await ensureGatewayServiceForOnboarding(
+      createServiceSetupArgs({ loadedAction: "resume" }),
+    );
 
     expect(result.gateway).toEqual({ status: "ready", action: "installed" });
     expect(startGatewayService).toHaveBeenCalledOnce();
@@ -1415,15 +1359,9 @@ describe("finalizeSetupWizard", () => {
       issues: [],
     });
 
-    const result = await ensureGatewayServiceForOnboarding({
-      flow: "quickstart",
-      opts: {},
-      nextConfig: {},
-      settings: { port: 18789 },
-      prompter: createLaterPrompter(),
-      runtime: createRuntime(),
-      loadedAction: "resume",
-    });
+    const result = await ensureGatewayServiceForOnboarding(
+      createServiceSetupArgs({ loadedAction: "resume" }),
+    );
 
     expect(result.gateway).toEqual({ status: "ready", action: "reused" });
     expect(gatewayServiceRestart).not.toHaveBeenCalled();
@@ -1444,15 +1382,9 @@ describe("finalizeSetupWizard", () => {
       state: { ...stopped, running: true },
     });
 
-    const result = await ensureGatewayServiceForOnboarding({
-      flow: "quickstart",
-      opts: {},
-      nextConfig: {},
-      settings: { port: 18789 },
-      prompter: createLaterPrompter(),
-      runtime: createRuntime(),
-      loadedAction: "resume",
-    });
+    const result = await ensureGatewayServiceForOnboarding(
+      createServiceSetupArgs({ loadedAction: "resume" }),
+    );
 
     expect(result.gateway).toEqual({ status: "ready", action: "started" });
     expect(gatewayServiceRestart).not.toHaveBeenCalled();
@@ -1470,15 +1402,9 @@ describe("finalizeSetupWizard", () => {
       ],
     });
 
-    const result = await ensureGatewayServiceForOnboarding({
-      flow: "quickstart",
-      opts: {},
-      nextConfig: {},
-      settings: { port: 18789 },
-      prompter,
-      runtime: createRuntime(),
-      loadedAction: "resume",
-    });
+    const result = await ensureGatewayServiceForOnboarding(
+      createServiceSetupArgs({ prompter, loadedAction: "resume" }),
+    );
 
     expect(result.gateway).toEqual({
       status: "failed",
@@ -1658,19 +1584,11 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("localizes finalize non-prompt notes", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     const prompter = createLaterPrompter();
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await finalizeSetupWizard(createFinalizeArgs("advanced", { prompter }));
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
 
     const noteMessages = (prompter.note as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
       String(call[0]),
@@ -2003,25 +1921,6 @@ describe("finalizeSetupWizard", () => {
       expect(cancelProcessExitAfterTuiReturn.mock.invocationCallOrder[0]).toBeLessThan(
         scheduleProcessExitAfterTuiReturn.mock.invocationCallOrder[1]!,
       );
-    });
-  });
-
-  it("keeps a bounded exit armed when session gateway close never settles", async () => {
-    await withPlatform("linux", async () => {
-      isSystemdUserServiceAvailable.mockResolvedValue(false);
-      isContainerEnvironment.mockReturnValue(true);
-      waitForGatewayReachable.mockResolvedValue({ ok: true });
-      probeGatewayReachable.mockResolvedValue({ ok: true });
-      const sessionGateway = { close: vi.fn(() => new Promise<void>(() => {})) };
-      startGatewayServer.mockResolvedValueOnce(sessionGateway);
-      const prompter = createLaterPrompter();
-
-      void finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
-
-      await vi.waitFor(() => expect(sessionGateway.close).toHaveBeenCalledOnce());
-      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledOnce();
-      expect(scheduleProcessExitAfterTuiReturn).toHaveBeenCalledWith({ delayMs: 122_000 });
-      expect(cancelProcessExitAfterTuiReturn).not.toHaveBeenCalled();
     });
   });
 

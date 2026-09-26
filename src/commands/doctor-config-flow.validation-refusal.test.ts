@@ -29,6 +29,7 @@ describe("doctor --fix with a validation-blocked candidate", () => {
         const configPath = await writeOpenClawConfig(home, {
           gatway: { port: 12345 },
           agents: { defaults: { heartbeat: { every: 5 } } },
+          plugins: { enabled: false },
         });
         const rawBefore = await fs.readFile(configPath, "utf-8");
         const ctx = await prepareDoctorContext(configPath);

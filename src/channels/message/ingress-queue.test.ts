@@ -1,20 +1,16 @@
-// Ingress queue tests cover durable queueing for inbound channel messages.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
@@ -35,13 +31,10 @@ function createTestIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
 }
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ingress-queue-"));
-  try {
-    return await fn(stateDir);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-ingress-queue-", applyEnv: false },
+    ({ stateDir }) => fn(stateDir),
+  );
 }
 
 function openIngressStateDatabase(stateDir: string) {
@@ -49,8 +42,106 @@ function openIngressStateDatabase(stateDir: string) {
 }
 
 describe("channel ingress queue", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  it.each(["refreshClaim", "complete", "release", "fail", "delete"] as const)(
+    "rejects empty %s IDs through its async result",
+    async (operation) => {
+      const queue = createChannelIngressQueue({ channelId: "invalid-input" });
+      const invalid = { id: " ", claim: { token: "fixture" } };
+      const result =
+        operation === "fail"
+          ? queue.fail(invalid, { reason: "fixture" })
+          : queue[operation]!(invalid);
+      await expect(result).rejects.toThrow("Channel ingress event id cannot be empty");
+    },
+  );
+
+  it.each(["cold", "warm"] as const)(
+    "preserves append and prune order with a %s writer",
+    async (writer) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue<{ text: string }>(stateDir);
+        if (writer === "warm") {
+          await queue.enqueue("warmup", { text: "already processed" });
+          await queue.complete("warmup");
+        }
+
+        const first = queue.enqueue("first", { text: "before prune" });
+        const pruning = queue.prune({ pendingMaxEntries: 0 });
+        const second = queue.enqueue("second", { text: "after prune" });
+        const [, deleted] = await Promise.all([first, pruning, second]);
+
+        expect(deleted).toBe(1);
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["second"]);
+      });
+    },
+  );
+
+  it("purges all states only for the selected channel and account", async () => {
+    await withTempState(async (stateDir) => {
+      const queues = [
+        createChannelIngressQueue({ channelId: "telegram", accountId: "a", stateDir }),
+        createChannelIngressQueue({ channelId: "telegram", accountId: "b", stateDir }),
+        createChannelIngressQueue({ channelId: "other", accountId: "a", stateDir }),
+      ] as const;
+      const states = ["pending", "claimed", "completed", "failed"] as const;
+      for (const queue of queues) {
+        for (const state of states) {
+          await queue.enqueue(state, { text: "old identity" });
+        }
+        await queue.claim("claimed");
+        await queue.complete("completed");
+        await queue.fail("failed", { reason: "rejected" });
+      }
+
+      expect(await queues[0].purge?.()).toBe(4);
+      expect(await queues[0].purge?.()).toBe(0);
+      for (const state of states) {
+        expect(await queues[0].enqueue(state, { text: "new identity" })).toMatchObject({
+          kind: "accepted",
+          duplicate: false,
+        });
+        for (const queue of queues.slice(1)) {
+          expect(await queue.enqueue(state, { text: "duplicate" })).toMatchObject({
+            kind: state,
+            duplicate: true,
+          });
+        }
+      }
+    });
+  });
+  it("rolls back a purge when its account is cancelled before commit", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("pending", { text: "pending" });
+      await queue.enqueue("claimed", { text: "claimed" });
+      await queue.claim("claimed");
+      const pending = await queue.listPending();
+      const claims = await queue.listClaims();
+      const controller = new AbortController();
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      let reachedCommit = false;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "commit") {
+              reachedCommit = true;
+              controller.abort(new Error("account task retired"));
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await expect(queue.purge?.({ signal: controller.signal })).rejects.toThrow(
+          "account task retired",
+        );
+        expect(reachedCommit).toBe(true);
+        expect(await queue.listPending()).toEqual(pending);
+        expect(await queue.listClaims()).toEqual(claims);
+      } finally {
+        admission.mockRestore();
+      }
+    });
   });
 
   it("deduplicates pending and completed ingress events", async () => {
@@ -61,58 +152,80 @@ describe("channel ingress queue", () => {
         { handledBy: string }
       >(stateDir, { now: () => 100 });
 
-      const accepted = await queue.enqueue(
-        "event-1",
-        { text: "first" },
-        { metadata: { source: "fixture" }, receivedAt: 50 },
-      );
-      const pending = await queue.enqueue("event-1", { text: "duplicate" });
-      await queue.complete("event-1", { metadata: { handledBy: "worker" }, completedAt: 150 });
-      const completed = await queue.enqueue("event-1", { text: "late duplicate" });
-
-      expect(accepted.kind).toBe("accepted");
-      expect(pending.kind).toBe("pending");
-      if (pending.kind !== "pending") {
-        throw new Error(`Expected pending duplicate, got ${pending.kind}`);
-      }
-      expect(pending.record.payload).toEqual({ text: "first" });
-      expect(completed).toEqual({
-        kind: "completed",
-        duplicate: true,
-        record: {
-          id: "event-1",
-          channelId: "test",
-          accountId: "account",
-          queueName: JSON.stringify(["test", "account"]),
-          completedAt: 150,
+      const rejectHostQuery = () => {
+        throw new Error("Ingress queue operations must not query SQLite on the calling thread");
+      };
+      const hostQuery = vi
+        .spyOn(sqliteQueries, "executeSqliteQuerySync")
+        .mockImplementation(rejectHostQuery);
+      const hostFirstQuery = vi
+        .spyOn(sqliteQueries, "executeSqliteQueryTakeFirstSync")
+        .mockImplementation(rejectHostQuery);
+      try {
+        const accepted = await queue.enqueue(
+          "event-1",
+          { text: "first" },
+          { metadata: { source: "fixture" }, receivedAt: 50 },
+        );
+        const pending = await queue.enqueue("event-1", { text: "duplicate" });
+        const claim = await queue.claim("event-1", { ownerId: "worker" });
+        expect(claim?.id).toBe("event-1");
+        await queue.complete(expectDefined(claim, "claimed event"), {
           metadata: { handledBy: "worker" },
-        },
-      });
-      expect(await queue.listPending()).toEqual([]);
+          completedAt: 150,
+        });
+        const completed = await queue.enqueue("event-1", { text: "late duplicate" });
 
-      expect(
-        await queue.complete("missing-event", {
-          metadata: { handledBy: "late-worker" },
-          completedAt: 200,
-        }),
-      ).toBe(true);
-      expect(await queue.enqueue("missing-event", { text: "late duplicate" })).toMatchObject({
-        kind: "completed",
-        duplicate: true,
-        record: {
-          id: "missing-event",
-          completedAt: 200,
-          metadata: { handledBy: "late-worker" },
-        },
-      });
+        expect(accepted.kind).toBe("accepted");
+        expect(pending.kind).toBe("pending");
+        if (pending.kind !== "pending") {
+          throw new Error(`Expected pending duplicate, got ${pending.kind}`);
+        }
+        expect(pending.record.payload).toEqual({ text: "first" });
+        expect(completed).toEqual({
+          kind: "completed",
+          duplicate: true,
+          record: {
+            id: "event-1",
+            channelId: "test",
+            accountId: "account",
+            queueName: JSON.stringify(["test", "account"]),
+            completedAt: 150,
+            metadata: { handledBy: "worker" },
+          },
+        });
+        expect(await queue.listPending()).toEqual([]);
 
-      await queue.enqueue(" spaced-event ", { text: "spaced" });
-      expect(await queue.complete(" spaced-event ", { completedAt: 250 })).toBe(true);
-      expect(await queue.enqueue("spaced-event", { text: "duplicate" })).toMatchObject({
-        kind: "completed",
-        duplicate: true,
-        record: { id: "spaced-event", completedAt: 250 },
-      });
+        expect(
+          await queue.complete("missing-event", {
+            metadata: { handledBy: "late-worker" },
+            completedAt: 200,
+          }),
+        ).toBe(true);
+        expect(await queue.enqueue("missing-event", { text: "late duplicate" })).toMatchObject({
+          kind: "completed",
+          duplicate: true,
+          record: {
+            id: "missing-event",
+            completedAt: 200,
+            metadata: { handledBy: "late-worker" },
+          },
+        });
+
+        await queue.enqueue(" spaced-event ", { text: "spaced" });
+        expect(await queue.complete(" spaced-event ", { completedAt: 250 })).toBe(true);
+        expect(await queue.enqueue("spaced-event", { text: "duplicate" })).toMatchObject({
+          kind: "completed",
+          duplicate: true,
+          record: { id: "spaced-event", completedAt: 250 },
+        });
+        expect(await queue.prune({ completedMaxEntries: 0 })).toBe(3);
+        expect(hostQuery).not.toHaveBeenCalled();
+        expect(hostFirstQuery).not.toHaveBeenCalled();
+      } finally {
+        hostQuery.mockRestore();
+        hostFirstQuery.mockRestore();
+      }
     });
   });
 
@@ -294,6 +407,42 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("rechecks FIFO when an earlier event arrives while claim lanes are prepared", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => 20 });
+      await queue.enqueue("original", { lane: "chat-original" }, { receivedAt: 20 });
+      const { db } = openIngressStateDatabase(stateDir);
+      let inserted = false;
+      const claim = await queue.claimNext({
+        ownerId: "worker",
+        deriveLaneKey: (record) => {
+          if (!inserted) {
+            inserted = true;
+            // A competing writer commits after the candidate snapshot was read.
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+                .insertInto("channel_ingress_events")
+                .values({
+                  queue_name: JSON.stringify(["test", "account"]),
+                  event_id: "earlier",
+                  channel_id: "test",
+                  account_id: "account",
+                  status: "pending",
+                  payload_json: JSON.stringify({ lane: "chat-earlier" }),
+                  received_at: 10,
+                  updated_at: 20,
+                }),
+            );
+          }
+          return record.payload.lane;
+        },
+      });
+      expect(claim).toMatchObject({ id: "earlier", laneKey: "chat-earlier" });
+      expect((await queue.listPending()).map((record) => record.id)).toEqual(["original"]);
+    });
+  });
+
   it("reconciles opted-in persisted lanes before blocking and claiming", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
@@ -409,111 +558,6 @@ describe("channel ingress queue", () => {
     });
   });
 
-  it("requires claim tokens before mutating claimed rows", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
-
-      expect(await queue.complete("event-1")).toBe(false);
-      expect(await queue.release("event-1")).toBe(false);
-      expect(await queue.fail("event-1", { reason: "stale-handler" })).toBe(false);
-      expect(await queue.delete("event-1")).toBe(false);
-
-      expect(await queue.complete(claimed, { completedAt: 20 })).toBe(true);
-      const duplicate = await queue.enqueue("event-1", { text: "duplicate" });
-      expect(duplicate.kind).toBe("completed");
-    });
-  });
-
-  it("refreshes claimed rows only with the active claim token", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
-
-      expect(await queue.refreshClaim?.(claimed, { refreshedAt: 20 })).toBe(true);
-      expect(
-        (await queue.listClaims()).map((claim) => ({
-          id: claim.id,
-          claimedAt: claim.claim.claimedAt,
-          updatedAt: claim.updatedAt,
-        })),
-      ).toEqual([{ id: "event-1", claimedAt: 20, updatedAt: 20 }]);
-
-      expect(
-        await queue.refreshClaim?.(
-          { id: "event-1", claim: { token: "wrong" } },
-          {
-            refreshedAt: 30,
-          },
-        ),
-      ).toBe(false);
-      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(20);
-    });
-  });
-
-  it("does not let old claim tokens refresh recovered and reclaimed rows", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const oldClaim = await queue.claim("event-1", { ownerId: "worker-1" });
-      if (!oldClaim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20 })).toBe(1);
-      const newClaim = await queue.claim("event-1", { ownerId: "worker-2" });
-      if (!newClaim) {
-        throw new Error("Expected reclaimed ingress event");
-      }
-
-      expect(await queue.refreshClaim?.(oldClaim, { refreshedAt: 30 })).toBe(false);
-      expect(await queue.refreshClaim?.(newClaim, { refreshedAt: 40 })).toBe(true);
-      expect((await queue.listClaims())[0]?.claim).toMatchObject({
-        ownerId: "worker-2",
-        claimedAt: 40,
-      });
-    });
-  });
-
-  it("does not recover a claim refreshed after stale recovery snapshots it", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
-
-      expect(
-        await queue.recoverStaleClaims({
-          staleMs: 5,
-          now: 20,
-          shouldRecover: async (claim) => {
-            expect(claim.id).toBe("event-1");
-            expect(await queue.refreshClaim?.(claim, { refreshedAt: 20 })).toBe(true);
-            return true;
-          },
-        }),
-      ).toBe(0);
-      expect((await queue.listPending()).map((record) => record.id)).toEqual([]);
-      expect((await queue.listClaims())[0]?.claim).toMatchObject({
-        ownerId: "worker",
-        claimedAt: 20,
-      });
-    });
-  });
-
   it("recovers stale claims and prunes completed or failed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => 10 });
@@ -583,6 +627,20 @@ describe("channel ingress queue", () => {
   });
 
   describe("corrupt JSON resilience", () => {
+    function readStoredRow<
+      TColumn extends keyof OpenClawStateKyselyDatabase["channel_ingress_events"],
+    >(stateDir: string, eventId: string, columns: TColumn[]) {
+      const { db } = openIngressStateDatabase(stateDir);
+      return executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+          .selectFrom("channel_ingress_events")
+          .select(columns)
+          .where("queue_name", "=", '["test","account"]')
+          .where("event_id", "=", eventId),
+      );
+    }
+
     function insertCorruptRow(
       stateDir: string,
       queueName: string,
@@ -623,21 +681,6 @@ describe("channel ingress queue", () => {
         } as Insertable<OpenClawStateKyselyDatabase["channel_ingress_events"]>),
       );
     }
-
-    it("skips a pending row with corrupt payload_json in listPending", async () => {
-      await withTempState(async (stateDir) => {
-        const queue = createTestIngressQueue<{ text: string }>(stateDir);
-
-        await queue.enqueue("good-1", { text: "hello" });
-        insertCorruptRow(stateDir, '["test","account"]', "bad-1", {
-          payload_json: "{corrupt: true, >>>NOT JSON<<<",
-        });
-        await queue.enqueue("good-2", { text: "world" });
-
-        const pending = await queue.listPending();
-        expect(pending.map((r) => r.id).toSorted()).toEqual(["good-1", "good-2"]);
-      });
-    });
 
     it("applies listPending limits after excluding corrupt payloads", async () => {
       await withTempState(async (stateDir) => {
@@ -761,15 +804,11 @@ describe("channel ingress queue", () => {
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
 
-        const database = openIngressStateDatabase(stateDir);
-        const failed = executeSqliteQueryTakeFirstSync(
-          database.db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason", "payload_json"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "bad-claim"),
-        );
+        const failed = readStoredRow(stateDir, "bad-claim", [
+          "status",
+          "failed_reason",
+          "payload_json",
+        ]);
         expect(failed).toEqual({
           status: "failed",
           failed_reason: "corrupt_payload",
@@ -839,15 +878,7 @@ describe("channel ingress queue", () => {
         expect(goodClaim).not.toBeNull();
         expect(goodClaim!.payload.text).toBe("hello");
 
-        const database = openIngressStateDatabase(stateDir);
-        const failed = executeSqliteQueryTakeFirstSync(
-          database.db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "bad-direct"),
-        );
+        const failed = readStoredRow(stateDir, "bad-direct", ["status", "failed_reason"]);
         expect(failed).toEqual({ status: "failed", failed_reason: "corrupt_payload" });
       });
     });
@@ -880,15 +911,13 @@ describe("channel ingress queue", () => {
         }
 
         // Verify the corrupt row was actually tombstoned in the DB.
-        const { db } = openIngressStateDatabase(stateDir);
-        const row = executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason", "payload_json", "claim_token", "claimed_at"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "dup-bad"),
-        ).rows[0];
+        const row = readStoredRow(stateDir, "dup-bad", [
+          "status",
+          "failed_reason",
+          "payload_json",
+          "claim_token",
+          "claimed_at",
+        ]);
         expect(row?.status).toBe("failed");
         expect(row?.failed_reason).toBe("corrupt_payload");
         expect(row?.payload_json).toBe("null");
@@ -912,15 +941,13 @@ describe("channel ingress queue", () => {
           "Corrupt claimed channel ingress event",
         );
 
-        const { db } = openIngressStateDatabase(stateDir);
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "payload_json", "claim_token", "claim_owner", "claimed_at"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "dup-claimed-bad"),
-        );
+        const row = readStoredRow(stateDir, "dup-claimed-bad", [
+          "status",
+          "payload_json",
+          "claim_token",
+          "claim_owner",
+          "claimed_at",
+        ]);
         expect(row).toEqual({
           status: "claimed",
           payload_json: "{corrupt",
@@ -950,15 +977,13 @@ describe("channel ingress queue", () => {
         expect(recovered).toBe(1);
 
         // The corrupt claimed row should now be tombstoned as failed.
-        const { db } = openIngressStateDatabase(stateDir);
-        const row = executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason", "payload_json", "claim_token", "claimed_at"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "stale-bad"),
-        ).rows[0];
+        const row = readStoredRow(stateDir, "stale-bad", [
+          "status",
+          "failed_reason",
+          "payload_json",
+          "claim_token",
+          "claimed_at",
+        ]);
         expect(row?.status).toBe("failed");
         expect(row?.failed_reason).toBe("corrupt_payload");
         expect(row?.payload_json).toBe("null");
@@ -1062,15 +1087,13 @@ describe("channel ingress queue", () => {
           },
         });
 
-        const { db } = openIngressStateDatabase(stateDir);
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "payload_json", "claim_token", "claim_owner", "claimed_at"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "stale-policy-bad"),
-        );
+        const row = readStoredRow(stateDir, "stale-policy-bad", [
+          "status",
+          "payload_json",
+          "claim_token",
+          "claim_owner",
+          "claimed_at",
+        ]);
         expect(row).toEqual({
           status: "claimed",
           payload_json: "{corrupt",
@@ -1087,14 +1110,7 @@ describe("channel ingress queue", () => {
             shouldRecoverCorrupt: () => true,
           }),
         ).resolves.toBe(1);
-        const failed = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
-            .selectFrom("channel_ingress_events")
-            .select(["status", "failed_reason"])
-            .where("queue_name", "=", '["test","account"]')
-            .where("event_id", "=", "stale-policy-bad"),
-        );
+        const failed = readStoredRow(stateDir, "stale-policy-bad", ["status", "failed_reason"]);
         expect(failed).toEqual({ status: "failed", failed_reason: "corrupt_payload" });
       });
     });

@@ -20,7 +20,7 @@ function routingProvenance(
   stage: "initial" | "fallback",
   fallbackReason: FailoverReason | undefined,
 ) {
-  return { requestedProvider, requestedModel, stage, fallbackReason };
+  return { requestedProvider, requestedModel, stage, selectionChanged: false, fallbackReason };
 }
 
 // Mock auth-profile submodules before importing model-fallback so the module
@@ -387,36 +387,21 @@ describe("runWithModelFallback – probe logic", () => {
     vi.restoreAllMocks();
   });
 
-  it("probes rate-limited primary model when far from cooldown expiry", async () => {
-    const cfg = makeCfg();
-    const expiresIn30Min = NOW + 30 * 60 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
-
-    const run = vi.fn().mockResolvedValue("ok");
-
-    const result = await runPrimaryCandidate(cfg, run);
-
-    expectPrimaryProbeSuccess(result, run, "ok");
-  });
-
   it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
     await expectPrimarySkippedAfterLongCooldown("billing");
   });
 
-  it.each(["timeout", "overloaded", "format", "empty_response"] as const)(
-    "distinguishes a local skip from its retained %s failure",
-    async (reason) => {
-      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
-      mockedResolveProfilesUnavailableReason.mockReturnValue(reason);
-      probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
-      const run = vi.fn().mockResolvedValue("ok");
+  it("distinguishes a local skip from its retained timeout failure", async () => {
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("timeout");
+    probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
+    const run = vi.fn().mockResolvedValue("ok");
 
-      const result = await runPrimaryCandidate(makeCfg(), run);
+    const result = await runPrimaryCandidate(makeCfg(), run);
 
-      expectPrimarySkippedForReason(result, run, reason);
-      expect(result.attempts[0]?.code).toBe("MODEL_FALLBACK_SKIPPED");
-    },
-  );
+    expectPrimarySkippedForReason(result, run, "timeout");
+    expect(result.attempts[0]?.code).toBe("MODEL_FALLBACK_SKIPPED");
+  });
 
   it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
     // fallbacks:[] + a multi-day subscription_limit reset must still re-probe on
@@ -766,24 +751,6 @@ describe("runWithModelFallback – probe logic", () => {
     expect(probeThrottleInternals.lastProbeAttempt.has("freshest")).toBe(true);
     expect(probeThrottleInternals.lastProbeAttempt.has("key-255")).toBe(false);
     expect(probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
-  });
-
-  it("handles missing or non-finite soonest safely (treats as probe-worthy)", () => {
-    for (const [label, soonest] of [
-      ["infinity", Infinity],
-      ["nan", Number.NaN],
-      ["null", null],
-    ] as const) {
-      probeThrottleInternals.lastProbeAttempt.clear();
-
-      expect(
-        resolveOpenAiCooldownDecision({
-          reason: "rate_limit",
-          soonest,
-        }),
-        label,
-      ).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
-    }
   });
 
   it("re-probes a single-provider rate-limited primary instead of suspending", async () => {

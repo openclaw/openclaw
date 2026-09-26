@@ -61,6 +61,10 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
+function pendingWorkshopConfig() {
+  return { skills: { workshop: { approvalPolicy: "pending" as const } } };
+}
+
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireApprovalRequestCall(label: string): {
@@ -255,13 +259,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       ctx: {
         agentId: "main",
         sessionKey: "agent:main:main",
-        config: {
-          skills: {
-            workshop: {
-              approvalPolicy: "pending",
-            },
-          },
-        },
+        config: pendingWorkshopConfig(),
       },
     });
     await vi.waitFor(() => {
@@ -635,13 +633,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       ctx: {
         agentId: "main",
         sessionKey: "main",
-        config: {
-          skills: {
-            workshop: {
-              approvalPolicy: "pending",
-            },
-          },
-        },
+        config: pendingWorkshopConfig(),
       },
     });
 
@@ -680,13 +672,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         params: { action: "inspect", proposal_id: "weather-20260530-a1b2c3d4e5" },
         toolCallId: "call-skill-hook-apply",
         ctx: {
-          config: {
-            skills: {
-              workshop: {
-                approvalPolicy: "pending",
-              },
-            },
-          },
+          config: pendingWorkshopConfig(),
         },
       });
 
@@ -776,13 +762,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       ctx: {
         agentId: "main",
         sessionKey: "main",
-        config: {
-          skills: {
-            workshop: {
-              approvalPolicy: "pending",
-            },
-          },
-        },
+        config: pendingWorkshopConfig(),
       },
     });
 
@@ -820,13 +800,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       ctx: {
         agentId: "main",
         sessionKey: "main",
-        config: {
-          skills: {
-            workshop: {
-              approvalPolicy: "pending",
-            },
-          },
-        },
+        config: pendingWorkshopConfig(),
       },
     });
 
@@ -864,13 +838,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
       toolCallId: "call-skill-apply",
       ctx: {
-        config: {
-          skills: {
-            workshop: {
-              approvalPolicy: "pending",
-            },
-          },
-        },
+        config: pendingWorkshopConfig(),
       },
     });
 

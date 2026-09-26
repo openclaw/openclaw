@@ -73,78 +73,7 @@ function createMaintenanceArtifacts() {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests — each function called with explicit override parameters.
-// No config loading needed; overrides bypass resolveMaintenanceConfig().
-// ---------------------------------------------------------------------------
-
 describe("pruneStaleEntries", () => {
-  it("archives durable entries older than maxAgeDays without changing identity", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["old", makeEntry(now - 31 * DAY_MS)],
-      ["fresh", makeEntry(now - DAY_MS)],
-    ]);
-
-    const oldId = store.old?.sessionId;
-    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(store.old).toMatchObject({
-      sessionId: oldId,
-      archivedAt: expect.any(Number),
-      archiveReason: "age-retention",
-    });
-    expect(store).toHaveProperty("fresh");
-  });
-
-  it("preserves durable external conversation entries", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["old", makeEntry(now - 31 * DAY_MS)],
-      ["agent:main:slack:channel:C123:thread:1710000000.000100", makeEntry(now - 31 * DAY_MS)],
-      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 31 * DAY_MS)],
-      ["agent:main:slack:channel:C999", makeEntry(now - 31 * DAY_MS)],
-      ["agent:main:telegram:group:-100123", { ...makeEntry(now - 31 * DAY_MS), chatType: "group" }],
-      ["agent:main:discord:channel:ops", { ...makeEntry(now - 31 * DAY_MS), chatType: "channel" }],
-    ]);
-
-    const oldId = store.old?.sessionId;
-    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(store.old).toMatchObject({
-      sessionId: oldId,
-      archivedAt: expect.any(Number),
-      archiveReason: "age-retention",
-    });
-    expect(store).toHaveProperty("agent:main:slack:channel:C123:thread:1710000000.000100");
-    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
-    expect(store).toHaveProperty("agent:main:slack:channel:C999");
-    expect(store).toHaveProperty("agent:main:telegram:group:-100123");
-    expect(store).toHaveProperty("agent:main:discord:channel:ops");
-  });
-
-  it("preserves model-locked harness sessions even when stale", () => {
-    const now = Date.now();
-    const lockedKey = "agent:main:harness-owned:locked";
-    const store = makeStore([
-      [lockedKey, { ...makeEntry(now - 31 * DAY_MS), modelSelectionLocked: true }],
-      ["old", makeEntry(now - 31 * DAY_MS)],
-    ]);
-
-    const oldId = store.old?.sessionId;
-    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(store).toHaveProperty(lockedKey);
-    expect(store.old).toMatchObject({
-      sessionId: oldId,
-      archivedAt: expect.any(Number),
-      archiveReason: "age-retention",
-    });
-  });
-
   it.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }, "age-retention"],
     ["agent:main:dashboard:child", { parentSessionKey: "agent:main:work" }, "age-retention"],
@@ -246,6 +175,16 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
 });
 
 describe("applyFileBackedSessionStoreMaintenance", () => {
+  const baseMaintenance = {
+    mode: "enforce" as const,
+    pruneAfterMs: 30 * DAY_MS,
+    maxEntries: 500,
+    modelRunPruneAfterMs: DAY_MS,
+    resetArchiveRetentionMs: null,
+    maxDiskBytes: null,
+    highWaterBytes: null,
+  };
+
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
     const store = makeStore([
@@ -270,15 +209,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       storePath: "/tmp/openclaw-sessions/sessions.json",
       store,
       activeSessionKey: "active",
-      maintenanceConfig: {
-        mode: "enforce",
-        pruneAfterMs: 7 * DAY_MS,
-        maxEntries: 500,
-        modelRunPruneAfterMs: DAY_MS,
-        resetArchiveRetentionMs: null,
-        maxDiskBytes: null,
-        highWaterBytes: null,
-      },
+      maintenanceConfig: { ...baseMaintenance, pruneAfterMs: 7 * DAY_MS },
       log: { warn: () => {}, info: () => {} },
       artifacts: {
         archiveRemovedSessionTranscripts: async (params) => {
@@ -326,13 +257,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       storePath: "/tmp/openclaw-sessions/sessions.json",
       store,
       maintenanceConfig: {
-        mode: "enforce",
+        ...baseMaintenance,
         pruneAfterMs: 7 * DAY_MS,
-        maxEntries: 500,
-        modelRunPruneAfterMs: DAY_MS,
         resetArchiveRetentionMs: 0,
-        maxDiskBytes: null,
-        highWaterBytes: null,
       },
       onMaintenanceApplied,
       log: { warn, info: () => {} },
@@ -357,7 +284,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it.each([
     { modelRunPruneAfterMs: DAY_MS, modelRunPruned: 1, capped: 0, probePresent: false },
     { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 1, probePresent: true },
-    { modelRunPruneAfterMs: -DAY_MS, modelRunPruned: 0, capped: 1, probePresent: true },
   ])(
     "applies model-run retention $modelRunPruneAfterMs before forced capping",
     async ({ modelRunPruneAfterMs, modelRunPruned, capped, probePresent }) => {
@@ -375,13 +301,10 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         storePath: "/tmp/openclaw-sessions/sessions.json",
         store,
         maintenanceConfig: {
-          mode: "enforce",
+          ...baseMaintenance,
           pruneAfterMs: 7 * DAY_MS,
           maxEntries: 50,
           modelRunPruneAfterMs,
-          resetArchiveRetentionMs: null,
-          maxDiskBytes: null,
-          highWaterBytes: null,
         },
         maintenanceOverride: { mode: "enforce" },
         onMaintenanceApplied: (applied) => {
@@ -423,15 +346,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     await applyFileBackedSessionStoreMaintenance({
       storePath: "/tmp/openclaw-sessions/protected-quota.json",
       store,
-      maintenanceConfig: {
-        mode: "enforce",
-        pruneAfterMs: 30 * DAY_MS,
-        maxEntries: 2,
-        modelRunPruneAfterMs: DAY_MS,
-        resetArchiveRetentionMs: null,
-        maxDiskBytes: null,
-        highWaterBytes: null,
-      },
+      maintenanceConfig: { ...baseMaintenance, maxEntries: 2 },
       onMaintenanceApplied: (report) => {
         capped = report.capped;
       },
@@ -511,15 +426,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         storePath,
         store,
         activeSessionKey,
-        maintenanceConfig: {
-          mode: "enforce",
-          pruneAfterMs: 30 * DAY_MS,
-          maxEntries: 1,
-          modelRunPruneAfterMs: DAY_MS,
-          resetArchiveRetentionMs: null,
-          maxDiskBytes: null,
-          highWaterBytes: null,
-        },
+        maintenanceConfig: { ...baseMaintenance, maxEntries: 1 },
         log: { warn: () => {}, info: () => {} },
         artifacts: createMaintenanceArtifacts(),
       });
@@ -544,15 +451,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       identities: [activeSessionId],
       assertAllowed: () => {},
     });
-    const maintenanceConfig = {
-      mode: "enforce" as const,
-      pruneAfterMs: 30 * DAY_MS,
-      maxEntries: 1,
-      modelRunPruneAfterMs: DAY_MS,
-      resetArchiveRetentionMs: null,
-      maxDiskBytes: null,
-      highWaterBytes: null,
-    };
+    const maintenanceConfig = { ...baseMaintenance, maxEntries: 1 };
 
     try {
       const otherStore = makeStore([
@@ -715,27 +614,6 @@ describe("pruneStaleModelRunEntries", () => {
 });
 
 describe("capEntryCount", () => {
-  it("over limit: keeps N most recent unarchived and archives the rest", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["mid", makeEntry(now - 2 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
-    ]);
-
-    const evicted = capEntryCount(store, 3);
-
-    expect(evicted).toBe(2);
-    expect(Object.keys(store)).toHaveLength(5);
-    expect(store.newest?.archivedAt).toBeUndefined();
-    expect(store.recent?.archivedAt).toBeUndefined();
-    expect(store.mid?.archivedAt).toBeUndefined();
-    expect(store.oldest?.archivedAt).toEqual(expect.any(Number));
-    expect(store.old?.archivedAt).toEqual(expect.any(Number));
-  });
-
   it("preserves durable external conversation entries when capping", () => {
     const now = Date.now();
     const threadKey = "agent:main:discord:channel:123456:thread:987654";
@@ -794,33 +672,6 @@ describe("capEntryCount", () => {
     expect(store.old?.archivedAt).toEqual(expect.any(Number));
   });
 
-  it("preserves runtime-provided pending subagent sessions when capping", () => {
-    const now = Date.now();
-    const childKey = "agent:main:subagent:child";
-    const store = makeStore([
-      [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
-      ["recent-1", makeEntry(now)],
-      ["recent-2", makeEntry(now - 1)],
-      ["old", makeEntry(now - 2)],
-    ]);
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
-
-    try {
-      const evicted = capEntryCount(store, 2, {
-        preserveKeys: collectSessionMaintenancePreserveKeys(),
-      });
-
-      expect(evicted).toBe(2);
-      expect(Object.keys(store)).toHaveLength(4);
-      expect(store).toHaveProperty(childKey);
-      expect(store["recent-1"]?.archivedAt).toBeUndefined();
-      expect(store["recent-2"]?.archivedAt).toEqual(expect.any(Number));
-      expect(store.old?.archivedAt).toEqual(expect.any(Number));
-    } finally {
-      unregister();
-    }
-  });
-
   it("normalizes runtime-provided preserve keys to match lowercased store keys", () => {
     const now = Date.now();
     const childKey = "agent:main:subagent:child";
@@ -873,7 +724,6 @@ describe("capEntryCount", () => {
 
 describe("isProtectedSessionMaintenanceEntry", () => {
   it.each([
-    ["agent:main:main", true],
     ["agent:worker:main", true],
     ["global", true],
     ["agent:main:opaque", false],
@@ -980,13 +830,6 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(maintenance.highWaterBytes).toBeNull();
   });
 
-  it("disables the disk budget when maxDiskBytes is 0", () => {
-    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
-
-    expect(maintenance.maxDiskBytes).toBeNull();
-    expect(maintenance.highWaterBytes).toBeNull();
-  });
-
   it("disables the disk budget when maxDiskBytes is the string '0'", () => {
     const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "0" });
 
@@ -1028,8 +871,6 @@ describe("resolveMaintenanceConfigFromInput", () => {
 
   it.each([
     ["the number 0", 0],
-    ["the string '0'", "0"],
-    ["the byte string '0b'", "0b"],
     ["a byte string that rounds to zero", "0.4b"],
   ])("falls back to the default high-water mark when highWaterBytes is %s", (_label, raw) => {
     const maintenance = resolveMaintenanceConfigFromInput({

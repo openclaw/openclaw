@@ -7,8 +7,9 @@ export function createNonInteractiveLoggingPrompter(
   runtime: RuntimeEnv,
   formatPromptError: (message: string) => string,
 ): WizardPrompter {
-  const unavailable = <T>(message: string): Promise<T> =>
-    Promise.reject(new Error(formatPromptError(message)));
+  const unavailable = async <T>(params: { message: string }): Promise<T> => {
+    throw new Error(formatPromptError(params.message));
+  };
   return {
     async intro(title) {
       runtime.log(title);
@@ -19,18 +20,10 @@ export function createNonInteractiveLoggingPrompter(
     async note(message, title) {
       runtime.log(title ? `${title}\n${message}` : message);
     },
-    async select(params) {
-      return unavailable(params.message);
-    },
-    async multiselect(params) {
-      return unavailable(params.message);
-    },
-    async text(params) {
-      return unavailable(params.message);
-    },
-    async confirm(params) {
-      return unavailable(params.message);
-    },
+    select: unavailable,
+    multiselect: unavailable,
+    text: unavailable,
+    confirm: unavailable,
     progress(label) {
       runtime.log(label);
       return {

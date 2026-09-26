@@ -77,6 +77,13 @@ vi.mock("./systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive,
 }));
 
+function runInstall() {
+  return maybeInstallDaemon({
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    port: 18789,
+  });
+}
+
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -106,10 +113,7 @@ describe("maybeInstallDaemon", () => {
   });
 
   it("does not serialize SecretRef token into service environment", async () => {
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    await runInstall();
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
@@ -133,10 +137,7 @@ describe("maybeInstallDaemon", () => {
       warnings: [],
     });
 
-    const outcome = await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    const outcome = await runInstall();
 
     expect(outcome).toBe("failed");
     expect(note).toHaveBeenCalledWith(
@@ -179,12 +180,7 @@ describe("maybeInstallDaemon", () => {
     select.mockResolvedValueOnce("reinstall");
     buildGatewayInstallPlan.mockRejectedValueOnce(new Error("replacement plan failed"));
 
-    await expect(
-      maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      }),
-    ).rejects.toThrow("replacement plan failed");
+    await expect(runInstall()).rejects.toThrow("replacement plan failed");
 
     expect(serviceUninstall).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
@@ -201,10 +197,7 @@ describe("maybeInstallDaemon", () => {
         new Error("existing service definition is unreadable"),
       );
 
-      const outcome = await maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      });
+      const outcome = await runInstall();
 
       expect(outcome).toBe("failed");
       expect(progressSetLabel).not.toHaveBeenCalled();
@@ -287,10 +280,7 @@ describe("maybeInstallDaemon", () => {
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
     );
 
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    await runInstall();
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
@@ -300,27 +290,11 @@ describe("maybeInstallDaemon", () => {
       new Error("systemctl is-enabled unavailable: read-only file system"),
     );
 
-    await expect(
-      maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: read-only file system");
-
-    expect(serviceInstall).not.toHaveBeenCalled();
-  });
-
-  it("continues the WSL2 daemon install flow when service status probe reports systemd unavailability", async () => {
-    serviceIsLoaded.mockRejectedValueOnce(
-      new Error("systemctl --user unavailable: Failed to connect to bus: No medium found"),
+    await expect(runInstall()).rejects.toThrow(
+      "systemctl is-enabled unavailable: read-only file system",
     );
 
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
-
-    expect(serviceInstall).toHaveBeenCalledTimes(1);
+    expect(serviceInstall).not.toHaveBeenCalled();
   });
 
   it("shows restart scheduled when a loaded service defers restart handoff", async () => {
@@ -328,10 +302,7 @@ describe("maybeInstallDaemon", () => {
     select.mockResolvedValueOnce("restart");
     serviceRestart.mockResolvedValueOnce({ outcome: "scheduled" });
 
-    await maybeInstallDaemon({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      port: 18789,
-    });
+    await runInstall();
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceInstall).not.toHaveBeenCalled();

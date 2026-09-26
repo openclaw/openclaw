@@ -4,8 +4,6 @@ import SwiftUI
 struct TranscriptTextView: NSViewRepresentable {
     @Binding var text: String
     var attributed: NSAttributedString
-    var isFinal: Bool
-    var isOverflowing: Bool
     var onBeginEditing: () -> Void
     var onEscape: () -> Void
     var onEndEditing: () -> Void

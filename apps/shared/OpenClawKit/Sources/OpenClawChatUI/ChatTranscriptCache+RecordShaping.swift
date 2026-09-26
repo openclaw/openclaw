@@ -83,21 +83,13 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func cacheableText(_ value: String) -> String {
         let limit = 64000
         let truncationMarker = "\n...(truncated)..."
-        return if value.utf16.count > limit {
-            self.utf16Prefix(value, limit: limit - truncationMarker.utf16.count) + truncationMarker
-        } else {
-            value
-        }
-    }
-
-    private static func utf16Prefix(_ value: String, limit: Int) -> String {
         let units = value.utf16
         guard units.count > limit else { return value }
-        var end = units.index(units.startIndex, offsetBy: limit)
+        var end = units.index(units.startIndex, offsetBy: limit - truncationMarker.utf16.count)
         if String.Index(end, within: value) == nil {
             end = units.index(before: end)
         }
-        guard let stringEnd = String.Index(end, within: value) else { return "" }
-        return String(value[..<stringEnd])
+        guard let stringEnd = String.Index(end, within: value) else { return truncationMarker }
+        return String(value[..<stringEnd]) + truncationMarker
     }
 }

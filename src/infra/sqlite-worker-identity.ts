@@ -90,9 +90,16 @@ export async function readDatabasePathIdentity(
     throw error;
   });
   if (file) {
-    const canonicalPath = await realpath(databasePath);
-    const canonicalFile = await stat(canonicalPath, { bigint: true });
-    return existingIdentity(file, canonicalFile, canonicalPath);
+    try {
+      const canonicalPath = await realpath(databasePath);
+      const canonicalFile = await stat(canonicalPath, { bigint: true });
+      return existingIdentity(file, canonicalFile, canonicalPath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        throw new Error("SQLite database pathname changed during admission", { cause: error });
+      }
+      throw error;
+    }
   }
   // Resolve the existing ancestor before a first open so directory aliases share admission.
   const missing: string[] = [];

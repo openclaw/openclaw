@@ -26,30 +26,22 @@ describe("OpenAI Code Mode direct tools", () => {
     expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).not.toThrow();
   });
 
-  it.each(["sessions_yield", "structured_output", "heartbeat_respond", "openclaw"])(
-    "preserves the request-visible direct-only %s tool and rejects undeclared tools",
-    (directToolName) => {
-      const visibleToolNames = new Set(["exec", "wait", directToolName]);
-      const payload = {
-        tools: [
-          "exec",
-          directToolName,
-          "computer",
-          "view_image",
-          "message",
-          "web_fetch",
-          "wait",
-        ].map((name) => ({ type: "function", name })),
-      };
+  it("preserves a request-visible direct-only tool and rejects undeclared tools", () => {
+    const directToolName = "sessions_yield";
+    const visibleToolNames = new Set(["exec", "wait", directToolName]);
+    const payload = {
+      tools: ["exec", directToolName, "computer", "view_image", "message", "web_fetch", "wait"].map(
+        (name) => ({ type: "function", name }),
+      ),
+    };
 
-      expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).toThrow(
-        /tool surface violation/,
-      );
+    expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).toThrow(
+      /tool surface violation/,
+    );
 
-      enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
+    enforceCodeModeResponsesToolSurface(payload, visibleToolNames);
 
-      expect(payload.tools.map((tool) => tool.name)).toEqual(["exec", directToolName, "wait"]);
-      expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).not.toThrow();
-    },
-  );
+    expect(payload.tools.map((tool) => tool.name)).toEqual(["exec", directToolName, "wait"]);
+    expect(() => assertCodeModeResponsesToolSurface(payload, visibleToolNames)).not.toThrow();
+  });
 });

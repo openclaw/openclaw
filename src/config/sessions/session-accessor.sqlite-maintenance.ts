@@ -129,18 +129,15 @@ function buildSessionMaintenanceBatches(params: {
     }
   };
 
-  const removalIndexesBySessionId = new Map<string, number[]>();
+  const removalIndexBySessionId = new Map<string, number>();
   const removalIndexBySessionKey = new Map<string, number>();
   const addRemovalIndex = (sessionId: string, index: number): void => {
-    const indexes = removalIndexesBySessionId.get(sessionId) ?? [];
-    if (indexes.includes(index)) {
-      return;
+    const firstIndex = removalIndexBySessionId.get(sessionId);
+    if (firstIndex === undefined) {
+      removalIndexBySessionId.set(sessionId, index);
+    } else {
+      union(firstIndex, index);
     }
-    if (indexes.length > 0) {
-      union(indexes[0] ?? index, index);
-    }
-    indexes.push(index);
-    removalIndexesBySessionId.set(sessionId, indexes);
   };
   for (const [index, removal] of params.entryRemovals.entries()) {
     if (!removal.expectedEntry) {
@@ -184,7 +181,7 @@ function buildSessionMaintenanceBatches(params: {
   const standaloneGroups: Array<SessionMaintenanceBatch & { order: number }> = [];
   let standaloneOrder = params.entryRemovals.length;
   for (const [sessionId, plans] of plansBySessionId) {
-    const removalIndex = removalIndexesBySessionId.get(sessionId)?.[0];
+    const removalIndex = removalIndexBySessionId.get(sessionId);
     const removalGroup =
       removalIndex === undefined ? undefined : groupsByRoot.get(find(removalIndex));
     const group = removalGroup ?? {

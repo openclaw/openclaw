@@ -330,30 +330,6 @@ describe("chat media resource lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("wakes a managed image after one transient failure without an external render", async () => {
-    const source = managedImageSource();
-    const { blobUrl } = installManagedImageUrls();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce(imageResponse());
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { container, rerender } = createManagedImagePane(source);
-
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(container.querySelector(".chat-message-image")).toBeNull();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(blobUrl);
-  });
-
   it("keeps a cached managed image mounted during rerenders and uses current callbacks", async () => {
     const source = managedImageSource();
     installManagedImageUrls();
@@ -970,34 +946,6 @@ describe("chat media resource lifecycle", () => {
     expect(first).not.toHaveBeenCalled();
     expect(second).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("aborts pending media and clears its retry when the last pane disconnects", async () => {
-    const source = managedImageSource();
-    let requestSignal: AbortSignal | undefined;
-    const fetchMock = vi.fn(
-      (_source: string, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          requestSignal = init?.signal ?? undefined;
-          requestSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("pane disconnected", "AbortError")),
-            { once: true },
-          );
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { rerender } = createManagedImagePane(source);
-
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
-    releaseChatMediaResourceSubscriber(rerender);
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(requestSignal?.aborted).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 

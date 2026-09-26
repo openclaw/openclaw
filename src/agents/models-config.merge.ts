@@ -187,35 +187,23 @@ export function mergeProviderModels(
       explicitMaxTokens === undefined
         ? implicitModel.maxTokensSource
         : explicitModel.maxTokensSource;
+    const catalogRoute = {
+      api: implicitModel.api ?? implicit.api,
+      baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
+    };
+    const configuredRoute = {
+      api: explicitModel.api ?? explicit.api ?? catalogRoute.api,
+      baseUrl: explicitModel.baseUrl ?? explicit.baseUrl ?? catalogRoute.baseUrl,
+    };
     const compat = resolveCatalogOwnedModelCompat({
-      catalogRoute: {
-        api: implicitModel.api ?? implicit.api,
-        baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      catalogRoute,
       catalogCompat: implicitModel.compat,
-      configuredRoute: {
-        api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-        baseUrl:
-          explicitModel.baseUrl ?? explicit.baseUrl ?? implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      configuredRoute,
       configuredCompat: explicitModel.compat,
     });
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
-      : modelTransportRoutesMatch(
-            {
-              api: implicitModel.api ?? implicit.api,
-              baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-            },
-            {
-              api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-              baseUrl:
-                explicitModel.baseUrl ??
-                explicit.baseUrl ??
-                implicitModel.baseUrl ??
-                implicit.baseUrl,
-            },
-          )
+      : modelTransportRoutesMatch(catalogRoute, configuredRoute)
         ? implicitModel
         : undefined;
 

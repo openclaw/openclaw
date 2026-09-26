@@ -44,7 +44,7 @@ enum VoicePermissionSupport {
         status: SFSpeechRecognizerAuthorizationStatus) -> String
     {
         switch status {
-        case .denied:
+        case .denied, .authorized:
             return String(
                 format: String(localized: "%@ permission denied"),
                 kind)
@@ -55,10 +55,6 @@ enum VoicePermissionSupport {
         case .notDetermined:
             return String(
                 format: String(localized: "%@ permission not granted"),
-                kind)
-        case .authorized:
-            return String(
-                format: String(localized: "%@ permission denied"),
                 kind)
         @unknown default:
             return String(

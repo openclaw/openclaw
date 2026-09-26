@@ -13,25 +13,6 @@ import {
 } from "./desktop-app-paths.js";
 import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
-type CodexComputerUsePluginCacheRepairResult =
-  | {
-      status: "disabled" | "explicit_marketplace" | "independent" | "source_missing" | "shared";
-      changed: boolean;
-      message: string;
-      cachePath?: string;
-      targetPath?: string;
-      version?: string;
-      removedStaleVersions: string[];
-      warnings: string[];
-    }
-  | {
-      status: "failed";
-      changed: false;
-      message: string;
-      removedStaleVersions: string[];
-      warnings: string[];
-    };
-
 const DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH =
   resolveMacOSDesktopCodexBundledMarketplaceCandidates("darwin")[0] ?? "";
 
@@ -44,61 +25,38 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   ownershipRoot?: string;
   assertCurrent?: () => void;
   forceRefresh?: boolean;
-}): Promise<CodexComputerUsePluginCacheRepairResult> {
-  if (!params.config.enabled) {
-    return skippedCacheResult(
-      "disabled",
-      "Computer Use cache sharing skipped because it is disabled.",
-    );
-  }
-  if (params.config.pluginCacheMode === "independent") {
-    return skippedCacheResult(
-      "independent",
-      "Computer Use cache sharing skipped because pluginCacheMode is independent.",
-    );
-  }
-  if (params.config.marketplaceName || params.config.marketplacePath) {
-    return skippedCacheResult(
-      "explicit_marketplace",
-      "Computer Use cache sharing skipped because an explicit marketplace is configured.",
-    );
+}): Promise<boolean> {
+  if (
+    !params.config.enabled ||
+    params.config.pluginCacheMode === "independent" ||
+    params.config.marketplaceName ||
+    params.config.marketplacePath
+  ) {
+    return false;
   }
 
   const bundledMarketplacePath = resolveComputerUseBundledMarketplacePath(params);
   const sourcePluginRoot = path.join(bundledMarketplacePath, "plugins", params.config.pluginName);
   const version = await readBundledPluginVersion(sourcePluginRoot);
   if (!version) {
-    return skippedCacheResult(
-      "source_missing",
-      `Computer Use bundled plugin source was not found at ${sourcePluginRoot}.`,
-    );
+    return false;
   }
 
-  const marketplaceName = params.config.marketplaceName ?? DEFAULT_BUNDLED_MARKETPLACE_NAME;
   const cacheRoot = path.join(
     params.codexHome,
     "plugins",
     "cache",
-    marketplaceName,
+    params.config.marketplaceName ?? DEFAULT_BUNDLED_MARKETPLACE_NAME,
     params.config.pluginName,
   );
   const cachePath = path.join(cacheRoot, version);
-  const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version, {
+  await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version, {
     codexHome: params.codexHome,
     ownershipRoot: params.ownershipRoot,
     assertCurrent: params.assertCurrent,
     forceRefresh: params.forceRefresh,
   });
-  return {
-    status: "shared",
-    changed,
-    cachePath,
-    targetPath: sourcePluginRoot,
-    version,
-    removedStaleVersions: [],
-    warnings: [],
-    message: `Computer Use plugin cache ${cachePath} contains bundled plugin ${sourcePluginRoot}.`,
-  };
+  return true;
 }
 
 function resolveComputerUseBundledMarketplacePath(params: {
@@ -138,7 +96,7 @@ async function ensureRealDirectoryCopy(
     assertCurrent?: () => void;
     forceRefresh?: boolean;
   },
-): Promise<boolean> {
+): Promise<void> {
   const cacheRoot = path.dirname(cachePath);
   const ownedParent = boundary.ownershipRoot
     ? await prepareOwnedServiceParent({
@@ -157,7 +115,7 @@ async function ensureRealDirectoryCopy(
   if (stat?.isDirectory() && !stat.isSymbolicLink()) {
     const cachedVersion = await readBundledPluginVersion(physicalCachePath);
     if (cachedVersion === version && !boundary.forceRefresh) {
-      return false;
+      return;
     }
   }
   const cacheName = path.basename(cachePath);
@@ -211,23 +169,9 @@ async function ensureRealDirectoryCopy(
       }
       await fs.rm(backupPath, { recursive: true, force: true });
     }
-    return true;
   } finally {
     if (!ownedParent || (await directoryIdentityIsStable(ownedParent))) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
   }
-}
-
-function skippedCacheResult(
-  status: "disabled" | "explicit_marketplace" | "independent" | "source_missing",
-  message: string,
-): CodexComputerUsePluginCacheRepairResult {
-  return {
-    status,
-    changed: false,
-    message,
-    removedStaleVersions: [],
-    warnings: status === "source_missing" ? [message] : [],
-  };
 }

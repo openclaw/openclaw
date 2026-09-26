@@ -146,8 +146,6 @@ export function createTypingSignaler(params: {
         return;
       }
       await typing.startTypingLoop();
-      typing.refreshTypingTtl();
-      return;
     }
     // Keep typing indicator alive during tool execution.
     typing.refreshTypingTtl();

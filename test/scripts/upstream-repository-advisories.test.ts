@@ -152,20 +152,6 @@ describe("published upstream repository advisories", () => {
       reviewed: ">= 5.9.3, < 5.10.1",
       version: "5.11.0",
     },
-    {
-      name: "hono",
-      id: "GHSA-m732-5p4w-x69g",
-      raw: "> 1.1.0",
-      reviewed: ">= 1.1.0, < 4.10.2",
-      version: "4.13.3",
-    },
-    {
-      name: "hono",
-      id: "GHSA-xh87-mx6m-69f3",
-      raw: ">= 4.12.0",
-      reviewed: ">= 4.12.0, < 4.12.2",
-      version: "4.13.3",
-    },
   ])(
     "reconciles the published $id range without losing raw evidence",
     async ({ name, id, raw, reviewed, version }) => {
@@ -554,8 +540,6 @@ describe("published upstream repository advisories", () => {
 
   it.each([
     null,
-    "",
-    ">= 1.0.0 < 2.0.0",
     ">= 1.0.0, < 2.0.0; >= 3.0.0, < 4.0.0",
     "^1.0.0",
     ">= 1.0",

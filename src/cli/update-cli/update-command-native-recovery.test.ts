@@ -68,7 +68,9 @@ it.each([
       const env = { HOME: dir, OPENCLAW_STATE_DIR: path.join(dir, "state") };
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
       const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env };
+      const onGatewayStartAttempted = vi.fn();
       const opts = {
+        onGatewayStartAttempted,
         jsonMode: true,
         updateRun: scenario === "ordinary" ? undefined : run,
         preManagedServiceStop: {
@@ -119,6 +121,8 @@ it.each([
         return { healthy: true, runtime: { status: "running" } };
       });
       mocks.restart.mockImplementation(async (params) => {
+        params.onGatewayStartAttempted?.();
+        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
         expect(params.opts.run).toBe(opts.updateRun);
         if (opts.updateRun) {
           params.assertCurrent();
@@ -164,6 +168,9 @@ it.each([
         await work;
         expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
       }
+      expect(onGatewayStartAttempted).toHaveBeenCalledTimes(
+        scenario === "missing executor" || scenario === "revoked at service" ? 0 : 1,
+      );
       // Helper recovery and executor settlement never publish a terminal ledger fact.
       expect(getUpdateRun(runId, { env })?.status).toBe("running");
     }),

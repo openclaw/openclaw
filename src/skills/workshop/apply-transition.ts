@@ -359,7 +359,13 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
   currentContent: string | null;
 }): Promise<void> {
   const { record, file, currentContent } = params;
-  if (file.targetExisted === false && currentContent !== null) {
+  const changed =
+    file.targetExisted === false
+      ? currentContent !== null
+      : file.targetExisted === true &&
+        (currentContent === null ? undefined : hashSkillProposalContent(currentContent)) !==
+          file.targetContentHash;
+  if (changed) {
     await markSkillProposalStale({
       store: params.store,
       record,
@@ -367,19 +373,6 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
       message: "Target support file changed after proposal creation; proposal marked stale.",
       input: params.input,
     });
-  }
-  if (file.targetExisted === true) {
-    const currentHash =
-      currentContent === null ? undefined : hashSkillProposalContent(currentContent);
-    if (currentHash !== file.targetContentHash) {
-      await markSkillProposalStale({
-        store: params.store,
-        record,
-        reason: `Target support file changed after proposal creation: ${file.path}`,
-        message: "Target support file changed after proposal creation; proposal marked stale.",
-        input: params.input,
-      });
-    }
   }
 }
 
@@ -426,31 +419,6 @@ export async function markSkillProposalStale(params: {
 }): Promise<never> {
   const transition = await transitionPendingSkillProposalToStale(params);
   throw new SkillProposalLifecycleError(params.message, transition.record, transition.event);
-}
-
-function createSkillProposalRollback(params: {
-  proposalId: string;
-  targetSkillFile: string;
-  action: "create" | "update";
-  previousContent?: string;
-  supportFiles?: SkillProposalRollback["supportFiles"];
-}): SkillProposalRollback {
-  return {
-    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-    proposalId: params.proposalId,
-    writtenAt: new Date().toISOString(),
-    targetSkillFile: params.targetSkillFile,
-    action: params.action,
-    ...(params.previousContent !== undefined
-      ? {
-          previousContent: params.previousContent,
-          previousContentHash: hashSkillProposalContent(params.previousContent),
-        }
-      : {}),
-    ...(params.supportFiles && params.supportFiles.length > 0
-      ? { supportFiles: params.supportFiles }
-      : {}),
-  };
 }
 
 async function quarantineSkillProposalAfterScan(params: {
@@ -531,12 +499,17 @@ function createSkillProposalRollbackFromMutation(
   record: SkillProposalRecord,
   mutation: PreparedWorkspaceSkillMutation,
 ): SkillProposalRollback {
-  return createSkillProposalRollback({
+  return {
+    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
     proposalId: record.id,
+    writtenAt: new Date().toISOString(),
     targetSkillFile: record.target.skillFile,
     action: record.kind,
     ...(mutation.skillFile.previousContent !== null
-      ? { previousContent: mutation.skillFile.previousContent }
+      ? {
+          previousContent: mutation.skillFile.previousContent,
+          previousContentHash: hashSkillProposalContent(mutation.skillFile.previousContent),
+        }
       : {}),
     ...(mutation.supportFiles.length > 0
       ? {
@@ -552,7 +525,7 @@ function createSkillProposalRollbackFromMutation(
           ),
         }
       : {}),
-  });
+  };
 }
 
 async function recoverAfterApplyCommitFailure(params: {

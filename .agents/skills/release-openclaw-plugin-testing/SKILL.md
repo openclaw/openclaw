@@ -165,6 +165,10 @@ Record the final artifact name and digest separately. The manifest uses
 `openclaw.plugin-publication-artifact/v1` and records the target SHA, package
 manifest hashes, publication route and policy, and tarball hashes and inventory.
 This proof is validation-only; it does not authorize or stage publication.
+The separate `trusted_publisher_preflight=true` OIDC check requires a protected
+`release-publish/<tooling-sha12>-<epoch>` dispatch tag and runs in `npm-publish`.
+Real publication also requires that tooling tag; a direct human dispatch waits
+for its `npm-release` approval job before publishing.
 For an already-published version,
 require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
 Treat only missing or provably older dist-tags as repairable; newer or

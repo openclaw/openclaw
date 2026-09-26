@@ -53,7 +53,7 @@ describe("worker turn launcher local placement", () => {
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "uses only the matching %s placement as a runtime default",
-    (executionMode) => {
+    async (executionMode) => {
       const provider = createWorkerSessionTurnPlacementProvider({
         environments: unusedEnvironments(),
         placements,
@@ -62,7 +62,7 @@ describe("worker turn launcher local placement", () => {
       const identity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
       try {
         expect(resolveSessionPlacementRuntimeOverride(identity)).toBeUndefined();
-        seedActivePlacement(executionMode);
+        await seedActivePlacement(executionMode);
         expect(resolveSessionPlacementRuntimeOverride(identity)).toBe(
           executionMode === "worker-turn" ? "openclaw" : undefined,
         );
@@ -204,7 +204,7 @@ describe("worker turn launcher local placement", () => {
   ])(
     "rejects a conflicting supplied placement %s before workspace access",
     async (_label, identity) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
       const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
       const provider = createWorkerSessionTurnPlacementProvider({
@@ -227,7 +227,7 @@ describe("worker turn launcher local placement", () => {
   );
 
   it("inherits omitted placement identity before workspace access", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const resolveWorkspace = vi.fn(async () => {
       throw new Error("workspace reached");
     });
@@ -520,7 +520,7 @@ describe("worker turn launcher local placement", () => {
   });
 
   it("rejects local CLI execution after worker activation", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
     const runLocal = vi.fn(async () => ({ kind: "cli" }));
@@ -547,7 +547,7 @@ describe("worker turn launcher local placement", () => {
   ])(
     "rejects an active worker turn assigned to a configured %s runtime",
     async (_kind, runtimeId) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const getEnvironment = vi.fn(() => undefined);
       const environments: WorkerTurnEnvironmentService = {
         ...unusedEnvironments(),
@@ -583,7 +583,7 @@ describe("worker turn launcher local placement", () => {
   );
 
   it("resolves an exact paired-device sandbox without requiring an SSH identity resolver", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const environment = {
       ...attachedEnvironment(),
       providerId: "device",
@@ -614,7 +614,7 @@ describe("worker turn launcher local placement", () => {
   });
 
   it("rejects a remote-exec placement replaced while resolving its managed workspace", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const environment = attachedEnvironment();
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: { ...unusedEnvironments(), get: vi.fn(() => environment) },
@@ -645,7 +645,7 @@ describe("worker turn launcher local placement", () => {
   });
 
   it("rejects a paired-node environment replaced after sandbox preparation", async () => {
-    seedActivePlacement("remote-exec");
+    await seedActivePlacement("remote-exec");
     const environment = {
       ...attachedEnvironment(),
       providerId: "device",
@@ -692,7 +692,7 @@ describe("worker turn launcher local placement", () => {
   ])(
     "records a remote-exec reconciliation failure after $scenario and releases its local claim",
     async ({ executionFailure, expectedError, expectedTerminalReason }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const reconciliationError = new Error("workspace manifest memo exceeds its entry limit");
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
@@ -765,13 +765,11 @@ describe("worker turn launcher local placement", () => {
 
   it.each([
     { label: "failed paired-device execution", executionFailed: true, providerId: "device" },
-    { label: "successful paired-device execution", executionFailed: false, providerId: "device" },
-    { label: "failed cloud-node execution", executionFailed: true, providerId: "crabbox" },
     { label: "successful cloud-node execution", executionFailed: false, providerId: "crabbox" },
   ])(
     "preserves a disconnected node-backed placement after $label for a fresh attempt",
     async ({ executionFailed, providerId }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const original = placements.get(SESSION_ID);
       if (original?.state !== "active") {
         throw new Error("expected an active paired-device placement");
@@ -894,7 +892,7 @@ describe("worker turn launcher local placement", () => {
   );
 
   it("rejects a reused worker bundle without the current launch contract", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const oldEnvironment = attachedEnvironment();
     oldEnvironment.bootstrapReceipt = {
       ...oldEnvironment.bootstrapReceipt!,

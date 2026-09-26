@@ -278,7 +278,11 @@ startup and isolated cron sessions do not pay for a full store cleanup.
 Ordinary entry writes also arm background maintenance at the next age boundary,
 with a periodic recheck every 30 minutes while the store remains open. This lets
 eligible sessions age out without further traffic. Writes that cannot change
-age or count maintenance outcomes skip candidate scans.
+age or count maintenance outcomes skip candidate scans. Automatic planning reads
+only retention and protection metadata before entering the foreground write queue;
+cap selection retains only the required oldest eligible entries. The writer checks
+the prepared store revision before applying changes, so concurrent updates are
+reconsidered instead of overwritten.
 If writes invalidate an automatic maintenance plan, its replacement waits for
 a quiet window after the last write (one second, then two seconds). Three
 consecutive invalidations pause automatic retries and log the cause; a new
@@ -344,6 +348,12 @@ for 30 minutes and log one warning until the pressure clears or the budget chang
 The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
+
+Cleanup first tries to truncate the WAL without waiting for readers. If readers
+prevent truncation, a complete PASSIVE checkpoint is sufficient: every observed
+frame must have reached the main database, even if the WAL file remains allocated.
+Retained WAL bytes still count toward the physical budget. Successful cleanup
+logs one outcome with the before/after bytes and removal counts.
 
 An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.

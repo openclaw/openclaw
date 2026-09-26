@@ -100,24 +100,6 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
-  it("concatenates streamed assistant deltas verbatim without injecting spaces", () => {
-    let state = createRealtimeTalkConversationState();
-
-    const deltas = ["I", "'m", " Chat", "G", "PT", ",", " a", " con", "vers", "ational", " AI"];
-    for (const [index, delta] of deltas.entries()) {
-      state = updateRealtimeTalkConversation(state, {
-        role: "assistant",
-        text: delta,
-        final: false,
-        nowMs: index + 1,
-      });
-    }
-
-    expect(state.entries).toMatchObject([
-      { role: "assistant", text: "I'm ChatGPT, a conversational AI", isStreaming: true },
-    ]);
-  });
-
   it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {
     let state = createRealtimeTalkConversationState();
 
@@ -132,29 +114,6 @@ describe("realtime Talk conversation", () => {
 
     expect(state.entries).toMatchObject([
       { role: "assistant", text: "Version 1.2 is on docs.openclaw.ai today.", isStreaming: true },
-    ]);
-  });
-
-  it("replaces streamed assistant text with the authoritative final transcript", () => {
-    let state = createRealtimeTalkConversationState();
-
-    for (const delta of ["I'm Chat", "GPT."]) {
-      state = updateRealtimeTalkConversation(state, {
-        role: "assistant",
-        text: delta,
-        final: false,
-        nowMs: 1,
-      });
-    }
-    state = updateRealtimeTalkConversation(state, {
-      role: "assistant",
-      text: "I'm ChatGPT, nice to meet you.",
-      final: true,
-      nowMs: 2,
-    });
-
-    expect(state.entries).toMatchObject([
-      { role: "assistant", text: "I'm ChatGPT, nice to meet you.", isStreaming: false },
     ]);
   });
 

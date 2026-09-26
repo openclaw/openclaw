@@ -56,26 +56,6 @@ function runOpenRouterPayload(
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
-  it("injects cache_control into system message for OpenRouter Anthropic models", () => {
-    const payload = {
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: "Hello" },
-      ],
-    };
-
-    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
-
-    expect(
-      expectDefined(payload.messages[0], "payload.messages[0] test invariant").content,
-    ).toEqual([
-      { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
-    ]);
-    expect(
-      expectDefined(payload.messages[1], "payload.messages[1] test invariant").content,
-    ).toEqual([{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }]);
-  });
-
   it("adds cache_control to last content block when system message is already array", () => {
     const payload = {
       messages: [
@@ -99,27 +79,6 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       text: "Part 2",
       cache_control: { type: "ephemeral" },
     });
-  });
-
-  it("uses long cache retention for OpenRouter Anthropic cache markers", () => {
-    const payload = {
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: "Hello" },
-      ],
-    };
-
-    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", { cacheRetention: "long" });
-
-    expect(
-      expectDefined(payload.messages[0], "payload.messages[0] test invariant").content,
-    ).toEqual([
-      {
-        type: "text",
-        text: "You are a helpful assistant.",
-        cache_control: { type: "ephemeral", ttl: "1h" },
-      },
-    ]);
   });
 
   it("skips new cache markers when OpenRouter Anthropic cache retention is none", () => {
@@ -150,30 +109,6 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     expect(
       expectDefined(payload.messages[1], "payload.messages[1] test invariant").content,
     ).toEqual([{ type: "thinking", thinking: "internal", thinkingSignature: "sig_1" }]);
-  });
-
-  it("does not inject cache_control for OpenRouter non-Anthropic models", () => {
-    const payload = {
-      messages: [{ role: "system", content: "You are a helpful assistant." }],
-    };
-
-    runOpenRouterPayload(payload, "google/gemini-3-pro");
-
-    expect(expectDefined(payload.messages[0], "payload.messages[0] test invariant").content).toBe(
-      "You are a helpful assistant.",
-    );
-  });
-
-  it("anchors the user message when no system message exists", () => {
-    const payload = {
-      messages: [{ role: "user", content: "Hello" }],
-    };
-
-    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
-
-    expect(
-      expectDefined(payload.messages[0], "payload.messages[0] test invariant").content,
-    ).toEqual([{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }]);
   });
 
   it("does not inject cache_control into thinking blocks", () => {

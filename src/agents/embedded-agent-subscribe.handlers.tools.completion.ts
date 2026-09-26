@@ -453,36 +453,29 @@ export async function handleToolExecutionEnd(
   };
   const hideFromChannelProgress = explicitHideFromChannelProgress;
   terminalMeta.activity = itemData;
+  const createResultData = () => ({
+    phase: "result",
+    name: toolName,
+    toolCallId,
+    ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
+    meta,
+    isError: isToolError,
+    commandBearing: callSummary.commandBearing,
+    ...(toolErrorSummary ? { toolErrorSummary } : {}),
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
     data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
-      meta,
-      isError: isToolError,
-      commandBearing: callSummary.commandBearing,
+      ...createResultData(),
       result: eventResult,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   emitTrackedItemEvent(ctx, itemData);
   emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
-      meta,
-      isError: isToolError,
-      commandBearing: callSummary.commandBearing,
-      ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    },
+    data: createResultData(),
   });
 
   if (isExecToolName(toolName)) {
@@ -576,7 +569,6 @@ export async function handleToolExecutionEnd(
   if (resolveFileMutationToolName(toolName) === "apply_patch") {
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
-    const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;
     if (patchSummary) {
       const patchData: AgentPatchSummaryEventData = {
         itemId: patchItemId,
@@ -587,7 +579,7 @@ export async function handleToolExecutionEnd(
         added: patchSummary.added,
         modified: patchSummary.modified,
         deleted: patchSummary.deleted,
-        summary: summaryText ?? buildPatchSummaryText(patchSummary),
+        summary: buildPatchSummaryText(patchSummary),
       };
       emitToolActivityEvent(ctx, {
         stream: "patch",

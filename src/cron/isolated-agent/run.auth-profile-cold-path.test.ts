@@ -1,4 +1,3 @@
-// Auth profile cold-path tests cover auth loading for isolated cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
@@ -7,6 +6,7 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
 }));
 
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -14,28 +14,6 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-
-function makeParams(overrides?: Record<string, unknown>) {
-  return {
-    cfg: {},
-    deps: {} as never,
-    job: {
-      id: "cron-auth-cold-path",
-      name: "Auth Cold Path",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "isolated" as const,
-      state: {},
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run task" },
-    },
-    message: "run task",
-    sessionKey: "cron:auth-cold-path",
-    ...overrides,
-  };
-}
 
 describe("runCronIsolatedAgentTurn auth-profile cold path", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -46,7 +24,7 @@ describe("runCronIsolatedAgentTurn auth-profile cold path", () => {
   });
 
   it("skips auth-profile override resolution when no sources exist", async () => {
-    const result = await runCronIsolatedAgentTurn(makeParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("ok");
     expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);

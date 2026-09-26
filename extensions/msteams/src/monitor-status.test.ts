@@ -2,16 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   publishMSTeamsBlocked,
   publishMSTeamsReady,
-  publishMSTeamsRecovering,
   publishMSTeamsStopped,
 } from "./monitor-status.js";
 
 describe("Microsoft Teams monitor status", () => {
-  it("publishes blocked, ready, recovering, and stopped lifecycle patches", () => {
+  it("publishes blocked, ready, and stopped lifecycle patches", () => {
     const statusSink = vi.fn();
     publishMSTeamsBlocked(statusSink, "credentials missing");
     publishMSTeamsReady(statusSink, 42);
-    publishMSTeamsRecovering(statusSink, "server failed");
     publishMSTeamsStopped(statusSink);
 
     expect(statusSink.mock.calls.map(([patch]) => patch)).toEqual([
@@ -22,7 +20,6 @@ describe("Microsoft Teams monitor status", () => {
         lastConnectedAt: 42,
         terminalDisconnect: undefined,
       }),
-      expect.objectContaining({ lifecycle: "recovering", lastError: "server failed" }),
       expect.objectContaining({ lifecycle: "stopped", running: false }),
     ]);
   });

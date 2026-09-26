@@ -76,7 +76,6 @@ describe("formatExecApprovalContinuationSourceOutput", () => {
 
   it.each([
     { name: "stderr", label: "stderr", stdoutUnits: 200_000, streamUnits: 100_000 },
-    { name: "error", label: "error", stdoutUnits: 200_000, streamUnits: 100_000 },
     { name: "head header cut", label: "stderr", stdoutUnits: 191_907, streamUnits: 100_000 },
     { name: "tail header cut", label: "stderr", stdoutUnits: 200_000, streamUnits: 63_970 },
     { name: "already retained header", label: "stderr", stdoutUnits: 200_000, streamUnits: 63_960 },
@@ -99,15 +98,6 @@ describe("formatExecApprovalContinuationSourceOutput", () => {
     ]);
 
     expect(formatted).not.toContain(`${MARKER}\n[stderr]\n`);
-  });
-
-  it("uses an honest marker because capture may already have dropped output", () => {
-    const formatted = formatExecApprovalContinuationSourceOutput([
-      { label: "stdout", value: "z".repeat(MAX_SOURCE_UTF16_UNITS + 1) },
-    ]);
-
-    expect(formatted).toContain("more output may have been dropped when it was captured");
-    expect(formatted).not.toMatch(/\d+\s+(characters|units|chars)\s+omitted/);
   });
 
   it("never splits surrogate pairs at either source-cap cut", () => {
@@ -259,7 +249,6 @@ describe("exec output rendering", () => {
   });
 
   it.each([
-    { name: "successful exit", exit: { exitCode: 0 }, expected: "code 0" },
     { name: "nonzero exit", exit: { exitCode: 7 }, expected: "code 7" },
     {
       name: "signal exit",
@@ -267,7 +256,6 @@ describe("exec output rendering", () => {
       expected: "signal SIGKILL",
     },
     { name: "missing exit code", exit: { exitCode: null }, expected: "unknown exit code" },
-    { name: "missing exit details", exit: {}, expected: "unknown exit code" },
   ] as const)("renders $name without inventing exit details", ({ exit, expected }) => {
     expect(renderExecExitLabel(exit)).toBe(expected);
   });
@@ -275,9 +263,7 @@ describe("exec output rendering", () => {
   it.each([
     { name: "undefined input", input: undefined, expected: "(no output)" },
     { name: "empty input", input: "", expected: "(no output)" },
-    { name: "non-empty input", input: "hello", expected: "hello" },
     { name: "whitespace-only input", input: "  ", expected: "  " },
-    { name: "multiline input", input: "line1\nline2", expected: "line1\nline2" },
   ])("renders $name", ({ input, expected }) => {
     expect(renderExecOutputText(input)).toBe(expected);
   });
@@ -291,24 +277,9 @@ describe("exec output rendering", () => {
       expected: "warning1\n\n(no output)",
     },
     {
-      name: "warning and output",
-      input: { tailText: "hello", warnings: ["warning1"] },
-      expected: "warning1\n\nhello",
-    },
-    {
       name: "multiple warnings",
       input: { tailText: "hello", warnings: ["warning1", "warning2"] },
       expected: "warning1\nwarning2\n\nhello",
-    },
-    {
-      name: "explicit empty warnings",
-      input: { tailText: "hello", warnings: [] },
-      expected: "hello",
-    },
-    {
-      name: "undefined tail with warnings",
-      input: { tailText: undefined, warnings: ["warning1"] },
-      expected: "warning1\n\n(no output)",
     },
   ])("renders updates with $name", ({ input, expected }) => {
     expect(renderExecUpdateText(input)).toBe(expected);

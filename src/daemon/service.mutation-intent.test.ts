@@ -1,6 +1,8 @@
 // Mutation-intent service reads preserve definitions that need safe migration.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import {
   readGatewayServiceCommandForMutation,
   readGatewayServiceState,
@@ -113,34 +115,34 @@ describe("readGatewayServiceCommandForMutation", () => {
     expect(readRelocatedLaunchAgentForInstall).not.toHaveBeenCalled();
   });
 
-  it("preserves ordinary non-Darwin missing-on-read-error behavior", async () => {
-    mockProcessPlatform("linux");
-    const error = new Error("systemd read failed");
-    const service = createMockGatewayService({
-      readCommand: vi.fn(async () => {
-        throw error;
-      }),
-    });
-
-    await expect(readGatewayServiceCommandForMutation(service, process.env)).resolves.toEqual({
-      kind: "missing",
-      command: null,
-    });
-  });
-
-  it("propagates effective non-Darwin command-read errors", async () => {
-    mockProcessPlatform("linux");
-    const error = new Error("systemd effective read failed");
-    const service = createMockGatewayService({
-      readCommand: vi.fn(async () => {
-        throw error;
-      }),
-    });
-
-    await expect(
-      readGatewayServiceCommandForMutation(service, process.env, { requireEffective: true }),
-    ).rejects.toBe(error);
-  });
+  it.each([
+    { platform: "linux", strict: false, kind: "ordinary" },
+    { platform: "linux", strict: true, kind: "ordinary" },
+    { platform: "linux", strict: false, kind: "ownership" },
+    { platform: "darwin", strict: true, kind: "ownership" },
+    { platform: "linux", strict: false, kind: "cleanup" },
+    { platform: "darwin", strict: true, kind: "cleanup" },
+  ] as const)(
+    "preserves $kind command-read failure on $platform (strict=$strict)",
+    async ({ platform, strict, kind }) => {
+      mockProcessPlatform(platform);
+      const error =
+        kind === "cleanup"
+          ? new CommandProcessCleanupError()
+          : kind === "ownership"
+            ? new ServiceOwnershipRefusalError("systemd-manager-changed")
+            : new Error("command read failed");
+      const service = createMockGatewayService({ readCommand: vi.fn().mockRejectedValue(error) });
+      await expect(
+        readGatewayServiceCommandForMutation(
+          service,
+          { HOME: "/fixture" },
+          strict ? { requireEffective: true } : undefined,
+        ),
+      ).rejects.toBe(error);
+      expect(readRelocatedLaunchAgentForInstall).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses a relocated command for strict pre-mutation service state", async () => {
     const command = {

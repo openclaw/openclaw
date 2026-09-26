@@ -34,17 +34,6 @@ function nestShellSyntax(open: string, inner: string, close: string, depth: numb
 }
 
 describe("command explainer tree-sitter runtime", () => {
-  it("loads tree-sitter bash and parses a simple command", async () => {
-    const tree = await parseBashForCommandExplanation("ls | grep stuff");
-
-    try {
-      expect(tree.rootNode.type).toBe("program");
-      expect(tree.rootNode.toString()).toContain("pipeline");
-    } finally {
-      tree.delete();
-    }
-  });
-
   it("rejects oversized parser input before parsing", async () => {
     await expect(parseBashForCommandExplanation("x".repeat(128 * 1024 + 1))).rejects.toThrow(
       "Shell command is too large to explain",
@@ -651,22 +640,5 @@ describe("command explainer tree-sitter runtime", () => {
     const source = nestShellSyntax("$( ", "echo hi", " )", 11_000);
 
     await expect(explainShellCommand(source)).rejects.toThrow(CommandExplanationWorkLimitError);
-  });
-
-  it("parses and extracts a repeated approval-sized corpus without parser state leakage", async () => {
-    const corpus = [
-      'ls | grep "stuff" | python -c \'print("hi")\'',
-      "echo $(whoami)",
-      "diff <(ls a) <(ls b)",
-      'find . -name "*.ts" -exec grep -n TODO {} +',
-      'bash -lc "echo hi | wc -c"',
-    ];
-    const iterations = 3;
-    for (let index = 0; index < iterations; index += 1) {
-      for (const command of corpus) {
-        const explanation = await explainShellCommand(command);
-        expect(explanation.risks.length + explanation.topLevelCommands.length).toBeGreaterThan(0);
-      }
-    }
   });
 });

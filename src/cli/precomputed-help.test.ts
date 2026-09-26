@@ -41,4 +41,31 @@ describe("tryOutputPrecomputedCommandHelp", () => {
     ).resolves.toBe(false);
     expect(outputSecretsHelp).not.toHaveBeenCalled();
   });
+
+  it("renders catalog command help after root selectors", async () => {
+    const output = vi.fn(() => true);
+    await expect(
+      tryOutputPrecomputedCommandHelp(
+        ["node", "openclaw", "--profile", "work", "gateway", "--help"],
+        { outputPrecomputedSubcommandHelpText: output, env: {} },
+      ),
+    ).resolves.toBe(true);
+    expect(output).toHaveBeenCalledExactlyOnceWith("gateway");
+  });
+
+  it.each([
+    [["gateway", "--url", "--help"]],
+    [["--help", "gateway"]],
+    [["gateway", "--", "--help"]],
+    [["gateway", "--help", "--version"]],
+  ])("defers ambiguous catalog help %j to Commander", async (args) => {
+    const output = vi.fn(() => true);
+    await expect(
+      tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
+        outputPrecomputedSubcommandHelpText: output,
+        env: {},
+      }),
+    ).resolves.toBe(false);
+    expect(output).not.toHaveBeenCalled();
+  });
 });

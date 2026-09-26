@@ -9,7 +9,7 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
@@ -35,6 +35,7 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
@@ -258,7 +259,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     });
     const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, workspaceDir);
-    const metadata = retainGatewayPluginMetadata();
+    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
     metadata.publish(initialMetadata);
     const loaded = [initial];
     let beforeAttachment: ((candidate: (typeof loaded)[number]) => void) | undefined;
@@ -341,7 +342,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     };
     // Managed npm roots live outside discovery directories and are owned by the persisted ledger.
     const writeInstall = (installedAt?: string, version = "1.0.0") =>
-      writePersistedInstalledPluginIndexSync(
+      writePersistedInstalledPluginIndex(
         loadInstalledPluginIndex({
           config,
           env,
@@ -358,7 +359,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         }),
         { env },
       );
-    writeInstall();
+    await writeInstall();
     fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
     const reload = async (
       nextConfig = config,
@@ -749,7 +750,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 
     // Same-version reinstall changes the committed install input, not the manifest.
     fs.writeFileSync(path.join(packageDir, "dist", "helper.cjs"), 'module.exports = "B";');
-    writeInstall("2026-09-07T00:00:00.000Z");
+    await writeInstall("2026-09-07T00:00:00.000Z");
     const changedReceipt = await refresh();
     expect(runtime.pluginMetadataSnapshot?.index.installRecords["installed-probe"]).toMatchObject({
       installedAt: "2026-09-07T00:00:00.000Z",
@@ -880,7 +881,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         packageManifestPath,
         JSON.stringify({ ...packageManifest, version: "1.1.0" }),
       );
-      writeInstall("2026-09-08T00:00:00.000Z", "1.1.0");
+      await writeInstall("2026-09-08T00:00:00.000Z", "1.1.0");
       const drainEntered = createDeferredCore();
       const wait = previousInstance.waitForRetainedWork.bind(previousInstance);
       const observation = vi

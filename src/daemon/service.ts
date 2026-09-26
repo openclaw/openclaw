@@ -1,7 +1,6 @@
 /** Platform service registry and shared gateway service start/repair logic. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
-import { resolveGatewayProfileSuffix } from "./constants.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
@@ -35,37 +34,19 @@ import {
   uninstallScheduledTask,
 } from "./schtasks.js";
 import { readGatewayServiceCommandForMutation } from "./service-command-mutation.js";
-import { mergeGatewayServiceEnv } from "./service-env-merge.js";
-import {
-  ServiceInspectionError,
-  ServiceOwnershipRefusalError,
-  findServiceOwnershipRefusal,
-} from "./service-inspection-error.js";
-import { readGatewayServiceLoadState } from "./service-load-state.js";
-import {
-  withGatewayServiceOperationLock,
-  withSystemdServiceReadBinding,
-} from "./service-operation-lock.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
-import {
-  createServiceRuntimeInspectionFailure,
-  type GatewayServiceRuntime,
-} from "./service-runtime.js";
 import { collectGatewayServiceStartRepairIssues } from "./service-start-repair.js";
+import { readGatewayServiceState } from "./service-state.js";
 import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceCommandInspection,
+  GatewayService,
   GatewayServiceControlArgs,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
-  GatewayServiceLoadStateReader,
   GatewayServiceManageArgs,
-  GatewayServiceReadOptions,
-  GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
-  GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
 import {
@@ -73,8 +54,7 @@ import {
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
-import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
-import { findSystemdGatewayInstallation, isSystemdServiceAbsent } from "./systemd-scope.js";
+import { isSystemdServiceAbsent } from "./systemd-scope.js";
 import {
   findInstalledSystemdGatewayScope,
   installSystemdService,
@@ -90,7 +70,9 @@ import {
 export { readGatewayServiceCommandForMutation } from "./service-command-mutation.js";
 export { describeGatewayServiceRestart } from "./service-restart-result.js";
 export { formatGatewayServiceStartRepairIssues } from "./service-start-repair.js";
+export { readGatewayServiceState } from "./service-state.js";
 export type {
+  GatewayService,
   GatewayServiceCommandConfig,
   GatewayServiceInstallArgs,
   GatewayServiceStartRepairIssue,
@@ -106,49 +88,6 @@ function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   };
 }
 
-export type GatewayService = GatewayServiceLoadStateReader & {
-  label: string;
-  loadedText: string;
-  notLoadedText: string;
-  /** Diagnostic guidance only; this does not establish service absence. */
-  unsupportedReason?: string;
-  stage: (args: GatewayServiceStageArgs) => Promise<void>;
-  install: (args: GatewayServiceInstallArgs) => Promise<void>;
-  uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
-  start: (args: GatewayServiceControlArgs) => Promise<void>;
-  stop: (args: GatewayServiceControlArgs) => Promise<void>;
-  restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
-  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  isAbsent?: (args: GatewayServiceEnvArgs & { strictCommandAbsent?: true }) => Promise<boolean>;
-  readDefinitionMutationCapability?: (
-    args: GatewayServiceEnvArgs & {
-      environment?: GatewayServiceEnv;
-      requireLoaded?: boolean;
-      systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
-      systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
-    },
-  ) => ReturnType<typeof readSystemdDefinitionMutationCapability>;
-  readCommand: (
-    env: GatewayServiceEnv,
-    opts?: GatewayServiceReadOptions,
-  ) => Promise<GatewayServiceCommandConfig | null>;
-  readRuntime: (
-    env: GatewayServiceEnv,
-    opts?: GatewayServiceReadOptions,
-  ) => Promise<GatewayServiceRuntime>;
-};
-
-type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
-  systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
-  systemdInstallation?: GatewayServiceState["systemdInstallation"];
-  requireEffective?: boolean;
-  requireLoadedCommand?: boolean;
-  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
-  systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
-  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
-};
-
 /** Reads the installed service and reports definition drift that must be repaired before launch. */
 export async function inspectGatewayServiceStartRepair(
   service: GatewayService,
@@ -157,236 +96,6 @@ export async function inspectGatewayServiceStartRepair(
 ): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
   const state = await readGatewayServiceState(service, args);
   return { state, issues: collectGatewayServiceStartRepairIssues(state, expectedPort) };
-}
-
-export async function readGatewayServiceState(
-  service: GatewayService,
-  input: ReadGatewayServiceStateArgs = {},
-): Promise<GatewayServiceState> {
-  let args = input;
-  const deadline =
-    performance.now() + (args.timeoutMs && args.timeoutMs > 0 ? args.timeoutMs : 5000);
-  const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
-  if (service.readCommand === readSystemdServiceExecStart && !args.systemdReadTarget) {
-    const installation = await findSystemdGatewayInstallation(baseEnv, {
-      requireLoaded: args.requireLoadedCommand,
-      loadForInspection: args.loadForInspection,
-      timeoutMs: deadline - performance.now(),
-    });
-    if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
-      throw new ServiceOwnershipRefusalError("systemd-competing-managers");
-    }
-    const target =
-      installation.kind === "system"
-        ? installation.system
-        : installation.kind === "user" || installation.kind === "dueling"
-          ? installation.user
-          : undefined;
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-    }
-    args = {
-      ...args,
-      systemdInstallation: installation,
-      systemdReadTarget: target,
-      timeoutMs: remaining,
-    };
-  }
-  if (
-    service.readCommand === readSystemdServiceExecStart &&
-    args.systemdReadTarget?.scope !== "system" &&
-    args.requireEffective &&
-    args.requireLoadedCommand &&
-    !args.systemdReadBinding
-  ) {
-    return await withSystemdServiceReadBinding(
-      baseEnv,
-      () => admitSystemdServiceReadBinding(baseEnv, deadline, args.systemdReadTarget?.unitName),
-      (binding) => {
-        const remaining = deadline - performance.now();
-        if (remaining <= 0) {
-          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-        }
-        return readGatewayServiceStateWithBinding(
-          service,
-          { ...args, systemdReadBinding: binding, timeoutMs: remaining },
-          deadline,
-        );
-      },
-      deadline,
-    );
-  }
-  return await readGatewayServiceStateWithBinding(service, args, deadline);
-}
-
-async function readGatewayServiceStateWithBinding(
-  service: GatewayService,
-  args: ReadGatewayServiceStateArgs,
-  deadline: number,
-): Promise<GatewayServiceState> {
-  const baseEnv = args.env ?? process.env;
-  const { systemdReadBinding, systemdReadTarget } = args;
-  const remainingTimeout = () => {
-    if (service.readCommand !== readSystemdServiceExecStart) {
-      return args.timeoutMs;
-    }
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-    }
-    return remaining;
-  };
-  systemdReadBinding?.verify();
-  let absent = systemdReadTarget
-    ? false
-    : await service.isAbsent?.({ env: baseEnv, timeoutMs: remainingTimeout() }).catch(() => false);
-  // Initial systemd absence proves no manager; strict absence below only proves no unit.
-  const managerAbsent = absent && service.readCommand === readSystemdServiceExecStart;
-  systemdReadBinding?.verify();
-  let commandInspection: GatewayServiceCommandInspection | undefined;
-  const command = absent
-    ? null
-    : args.requireEffective
-      ? await readGatewayServiceCommandForMutation(service, baseEnv, {
-          timeoutMs: remainingTimeout(),
-          requireEffective: true,
-          ...(!args.requireLoadedCommand
-            ? {
-                onCommandInspection: (inspection: GatewayServiceCommandInspection) => {
-                  commandInspection = inspection;
-                },
-              }
-            : {}),
-          ...(systemdReadBinding ? { systemdReadBinding } : {}),
-          ...(systemdReadTarget ? { systemdReadTarget } : {}),
-          ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
-          ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
-        }).then((definition) => definition.command)
-      : await service
-          .readCommand(baseEnv, {
-            timeoutMs: remainingTimeout(),
-            ...(systemdReadTarget ? { systemdReadTarget } : {}),
-            onCommandInspection: (inspection) => {
-              commandInspection = inspection;
-            },
-          })
-          .catch((error: unknown) => {
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
-            return null;
-          });
-  const env = mergeGatewayServiceEnv(
-    systemdReadTarget?.scope === "system" && !resolveGatewayProfileSuffix(baseEnv.OPENCLAW_PROFILE)
-      ? { ...baseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }
-      : baseEnv,
-    command,
-  );
-  // Reject persisted selector drift before invoking the native service manager.
-  args.validateEnvBeforeStatusRead?.(env);
-  // Strict user-unit absence still needs the platform owner's system-scope proof.
-  if (
-    !absent &&
-    service.isAbsent &&
-    args.requireEffective &&
-    args.requireLoadedCommand &&
-    command === null
-  ) {
-    systemdReadBinding?.verify();
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-    }
-    absent = await service
-      .isAbsent({ env, timeoutMs: remaining, strictCommandAbsent: true })
-      .catch(() => false);
-    systemdReadBinding?.verify();
-    if (performance.now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-    }
-  }
-  if (absent) {
-    const inspectionReason = managerAbsent ? "service-manager-unavailable" : undefined;
-    return {
-      inspectionReason,
-      installed: false,
-      loadState: { status: "not-loaded" },
-      running: false,
-      env,
-      command: null,
-      runtime: { status: "stopped", missingUnit: true, inspectionReason },
-    };
-  }
-  const statusBaseEnv = systemdReadBinding ? baseEnv : env;
-  // Reuse the selected unit for native status without changing the installation's selectors.
-  const statusEnv = systemdReadTarget
-    ? { ...statusBaseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }
-    : statusBaseEnv;
-  const readInstalled = async () =>
-    command !== null
-      ? true
-      : (service
-          .hasInstalledDefinition?.({ env: statusEnv, timeoutMs: remainingTimeout() })
-          .catch(() => false) ?? false);
-  const readLoadState = () =>
-    readGatewayServiceLoadState(service, { env: statusEnv, timeoutMs: remainingTimeout() });
-  const readRuntime = () =>
-    service
-      .readRuntime(env, {
-        timeoutMs: remainingTimeout(),
-        ...(systemdReadTarget ? { systemdReadTarget } : {}),
-        ...(commandInspection ? { commandInspection } : {}),
-        ...(systemdReadBinding ? { systemdReadBinding } : {}),
-        ...(args.requireEffective && args.requireLoadedCommand ? { requireLoaded: true } : {}),
-        ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
-      })
-      .catch((error: unknown) => createServiceRuntimeInspectionFailure(error));
-  // Update policy needs definition authority; ordinary status/start reads do not.
-  const readDefinitionCapability = async () =>
-    args.requireEffective
-      ? service
-          .readDefinitionMutationCapability?.({
-            env: baseEnv,
-            environment: env,
-            timeoutMs: remainingTimeout(),
-            ...(systemdReadTarget ? { systemdReadTarget } : {}),
-            ...(systemdReadBinding ? { systemdReadBinding } : {}),
-            ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
-          })
-          .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const)
-      : undefined;
-  // A delegated native child suspends the parent fence. Join each read before
-  // another can use the parent's direct native peer; ordinary reads stay parallel.
-  const [installed, loadState, runtime, definitionMutationCapability] =
-    getGatewayServiceUpdateNativeCommand()
-      ? ([
-          await readInstalled(),
-          await readLoadState(),
-          await readRuntime(),
-          await readDefinitionCapability(),
-        ] as const)
-      : await Promise.all([
-          readInstalled(),
-          readLoadState(),
-          readRuntime(),
-          readDefinitionCapability(),
-        ]);
-  systemdReadBinding?.verify();
-  return {
-    inspectionReason:
-      runtime?.inspectionReason ??
-      (loadState.status === "unknown" ? loadState.inspectionReason : undefined),
-    ...(args.systemdInstallation ? { systemdInstallation: args.systemdInstallation } : {}),
-    installed,
-    loadState,
-    running: runtime?.status === "running",
-    env,
-    command,
-    ...(definitionMutationCapability ? { definitionMutationCapability } : {}),
-    runtime,
-  };
 }
 
 export async function startGatewayService(

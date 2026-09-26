@@ -144,9 +144,16 @@ describe("team report attribution", () => {
         body: "automation: label backfill",
         url: "https://github.com/sample/project/issues/1#issuecomment-5",
       }),
+      ...["\ud800", "\ud801"].map((body, index) =>
+        item({
+          kind: "issue_comment",
+          body,
+          url: `https://github.com/sample/project/issues/1#unicode-${index}`,
+        }),
+      ),
     ];
     const report = day(comments);
-    expect(report.totals.github).toMatchObject({ total: 3, issueComments: 2, reviewComments: 1 });
+    expect(report.totals.github).toMatchObject({ total: 5, issueComments: 4, reviewComments: 1 });
     expect(member(report, "alpha").github.items.map((entry) => entry.url)).toContain(
       "https://github.com/sample/project/issues/2#issuecomment-2",
     );
@@ -234,42 +241,39 @@ describe("team report attribution", () => {
 });
 
 describe("stored day aggregation", () => {
-  it.each(["week", "month"] as const)(
-    "sums %s counts and reports missing elapsed days without recollection",
-    (kind) => {
-      const first = day([item()], [message()]);
-      const second = day(
-        [
-          item({
-            kind: "issue_closed",
-            actor: "beta",
-            atMs: Date.parse("2026-08-19T12:00:00Z"),
-            url: "https://github.com/sample/project/issues/2",
-          }),
-        ],
-        [],
-        "2026-08-19",
-      );
-      second.sources.github.warnings.push("One repository was unavailable");
-      const report = aggregateDays({
-        period: describePeriod(kind, "2026-08-19"),
-        nowMs: Date.parse("2026-08-19T18:00:00Z"),
-        days: [second, first, first],
-        roster: buildRoster(people),
-      });
-      expect(report.status).toBe("partial");
-      expect(report.totals.github).toMatchObject({ total: 2, commits: 1, issuesClosed: 1 });
-      expect(report.totals.discord.messages).toBe(1);
-      expect(report.sources.github.warnings).toContain("One repository was unavailable");
-      expect(
-        report.sources.github.warnings.some(
-          (warning) => warning.startsWith("Missing day reports:") && warning.includes("2026-08-17"),
-        ),
-      ).toBe(true);
-      expect(report.sources.github.warnings.join(" ")).not.toContain("2026-08-20");
-      expect(first.totals.github.total).toBe(1);
-    },
-  );
+  it("sums stored-day counts and reports missing elapsed days without recollection", () => {
+    const first = day([item()], [message()]);
+    const second = day(
+      [
+        item({
+          kind: "issue_closed",
+          actor: "beta",
+          atMs: Date.parse("2026-08-19T12:00:00Z"),
+          url: "https://github.com/sample/project/issues/2",
+        }),
+      ],
+      [],
+      "2026-08-19",
+    );
+    second.sources.github.warnings.push("One repository was unavailable");
+    const report = aggregateDays({
+      period: describePeriod("week", "2026-08-19"),
+      nowMs: Date.parse("2026-08-19T18:00:00Z"),
+      days: [second, first, first],
+      roster: buildRoster(people),
+    });
+    expect(report.status).toBe("partial");
+    expect(report.totals.github).toMatchObject({ total: 2, commits: 1, issuesClosed: 1 });
+    expect(report.totals.discord.messages).toBe(1);
+    expect(report.sources.github.warnings).toContain("One repository was unavailable");
+    expect(
+      report.sources.github.warnings.some(
+        (warning) => warning.startsWith("Missing day reports:") && warning.includes("2026-08-17"),
+      ),
+    ).toBe(true);
+    expect(report.sources.github.warnings.join(" ")).not.toContain("2026-08-20");
+    expect(first.totals.github.total).toBe(1);
+  });
 
   it("preserves historical member identity while excluding archived people from current reports", () => {
     const stored = day([item()]);

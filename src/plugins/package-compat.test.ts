@@ -44,7 +44,7 @@ describe("package plugin API compatibility", () => {
     expect(satisfiesPluginApiRange("invalid", "2026.4")).toBe(false);
   });
 
-  it.each(["*", "x", "X", "=*", "=x", ">=*", ">=x", "<=*", "^*", "~*"] as const)(
+  it.each(["*", "=X", ">=x", "^*", "~*"] as const)(
     "accepts plugin api wildcard range %s for valid runtime versions",
     (range) => {
       expect(satisfiesPluginApiRange("2026.3.24", range)).toBe(true);

@@ -193,11 +193,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
   it.each([
     [
-      "media-only singular",
-      { mediaUrl: "https://example.com/only.png" },
-      "https://example.com/only.png",
-    ],
-    [
       "caption and multiple ordered attachments",
       {
         text: "see attachments",

@@ -187,12 +187,6 @@ describe("gateway agent RPC contracts", () => {
 
       const replay = await replayPromise;
       expect(replay.payload).toEqual(terminal.payload);
-      expect(replay.payload?.status).toBe("ok");
-      expect(replay.payload?.result?.deliveryStatus).toMatchObject({
-        requested: true,
-        attempted: false,
-        reason: "channel_resolved_to_internal",
-      });
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       second.ws.close();

@@ -12,6 +12,7 @@ import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/ses
 import {
   createReplyOperation,
   forceClearReplyOperation,
+  waitForReplyRunSuccessorAdmission,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -207,6 +208,9 @@ describe("local claim recovery before backend registration", () => {
             reason: "stuck_recovery",
           }),
         ).resolves.toMatchObject({ forceCleared: true });
+        await expect(waitForReplyRunSuccessorAdmission(SESSION_KEY, null)).resolves.toMatchObject({
+          settled: true,
+        });
         expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
 
         replacement = provider.executeLocalTurn({ ...params, runId: "replacement" }, async () => {

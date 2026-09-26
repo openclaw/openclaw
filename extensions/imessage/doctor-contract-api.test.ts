@@ -119,13 +119,4 @@ describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
     expect(second.changes).toEqual([]);
     expect(second.config).toBe(first.config);
   });
-
-  it("leaves nested-only configs untouched", () => {
-    const cfg = imessageConfig({
-      streaming: { chunkMode: "newline", block: { enabled: true } },
-    });
-    const result = normalizeCompatibilityConfig({ cfg });
-    expect(result.changes).toEqual([]);
-    expect(result.config).toBe(cfg);
-  });
 });

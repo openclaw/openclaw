@@ -1,10 +1,12 @@
 /** Reads effective current or former LaunchAgent ownership before a service mutation. */
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { readRelocatedLaunchAgentForInstall } from "./launchd-install.js";
+import { remainingLaunchdPlistReadTimeout } from "./launchd-plist.js";
 import {
   readExistingLaunchAgentPlist,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
+import { findServiceOwnershipRefusal } from "./service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -30,8 +32,7 @@ export async function readGatewayServiceCommandForMutation(
   env: GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandForMutation> {
-  const mustFailClosedOnCommandRead =
-    process.platform === "darwin" || opts?.requireEffective === true;
+  const deadline = opts?.timeoutMs === undefined ? undefined : performance.now() + opts.timeoutMs;
   let command: GatewayServiceCommandConfig | null = null;
   let commandReadError: Error | undefined;
   if (process.platform === "darwin" && opts?.requireEffective) {
@@ -40,6 +41,10 @@ export async function readGatewayServiceCommandForMutation(
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
         throw error;
+      }
+      const refusal = findServiceOwnershipRefusal(error);
+      if (refusal) {
+        throw refusal;
       }
       // Strict launchd parsing rejects a missing canonical plist before a
       // pre-canonical definition can be inspected. Defer this error until a
@@ -50,14 +55,7 @@ export async function readGatewayServiceCommandForMutation(
           : new Error("The current LaunchAgent definition cannot be safely inspected.");
     }
   } else {
-    command = mustFailClosedOnCommandRead
-      ? await service.readCommand(env, opts)
-      : await service.readCommand(env, opts).catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return null;
-        });
+    command = await service.readCommand(env, opts);
   }
   if (command !== null) {
     return { kind: "current", command };
@@ -70,6 +68,7 @@ export async function readGatewayServiceCommandForMutation(
   // A managed mutation must distinguish those cases before it can replace the definition.
   // A verified pre-canonical definition is considered only after the canonical
   // parser has no command and the canonical plist is confirmed absent.
+  remainingLaunchdPlistReadTimeout(deadline);
   const canonicalPlistPath = resolveLaunchAgentPlistPath(env);
   if ((await readExistingLaunchAgentPlist(canonicalPlistPath)) !== null) {
     throw (
@@ -77,7 +76,7 @@ export async function readGatewayServiceCommandForMutation(
       new Error("The current LaunchAgent definition cannot be safely inspected.")
     );
   }
-  const relocated = await readRelocatedLaunchAgentForInstall(env, opts);
+  const relocated = await readRelocatedLaunchAgentForInstall(env, opts, deadline);
   if (relocated !== null) {
     return { kind: "relocated", ...relocated };
   }

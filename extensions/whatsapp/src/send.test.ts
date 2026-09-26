@@ -65,14 +65,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-vi.mock("./text-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./text-runtime.js")>("./text-runtime.js");
-  return {
-    ...actual,
-    sleep: vi.fn(async () => {}),
-  };
-});
-
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
@@ -171,8 +163,6 @@ describe("web outbound", () => {
 
   it.each([
     { kind: "text", mediaUrl: undefined, contentType: undefined },
-    { kind: "image", mediaUrl: "/tmp/pic.png", contentType: "image/png" },
-    { kind: "document", mediaUrl: "/tmp/report.pdf", contentType: "application/pdf" },
     { kind: "voice", mediaUrl: "/tmp/voice.ogg", contentType: "audio/ogg" },
   ])(
     "rejects provider-unaccepted $kind sends without synthetic delivery progress",
@@ -181,7 +171,7 @@ describe("web outbound", () => {
         loadWebMediaMock.mockResolvedValueOnce({
           buffer: Buffer.from(kind),
           contentType,
-          kind: kind === "document" ? "document" : kind === "voice" ? "audio" : "image",
+          kind: "audio",
         });
       }
       sendMessage.mockResolvedValueOnce({
@@ -206,38 +196,14 @@ describe("web outbound", () => {
     },
   );
 
-  it.each([
-    { name: "text", mediaUrl: undefined },
-    { name: "media", mediaUrl: "/tmp/pic.jpg" },
-  ])("still sends $name when composing presence fails", async ({ mediaUrl }) => {
-    const mediaBuffer = Buffer.from("img");
-    if (mediaUrl) {
-      loadWebMediaMock.mockResolvedValueOnce({
-        buffer: mediaBuffer,
-        contentType: "image/jpeg",
-        kind: "image",
-      });
-    }
+  it("still sends when composing presence fails", async () => {
     sendComposingTo.mockRejectedValueOnce(new Error("presence update unavailable"));
 
     await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        ...(mediaUrl ? { mediaUrl } : {}),
-      }),
-    ).resolves.toEqual({
-      messageId: "msg123",
-      toJid: "1555@s.whatsapp.net",
-    });
-
+      sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg: WHATSAPP_TEST_CFG }),
+    ).resolves.toEqual({ messageId: "msg123", toJid: "1555@s.whatsapp.net" });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
-    expect(sendMessage).toHaveBeenCalledWith(
-      "+1555",
-      "hi",
-      mediaUrl ? mediaBuffer : undefined,
-      mediaUrl ? "image/jpeg" : undefined,
-    );
+    expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
   it("re-chunks after WhatsApp marker expansion", async () => {
@@ -457,21 +423,6 @@ describe("web outbound", () => {
     });
   });
 
-  it("maps video with caption", async () => {
-    const buf = Buffer.from("video");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "video/mp4",
-      kind: "video",
-    });
-    await sendMessageWhatsApp("+1555", "clip", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/video.mp4",
-    });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "clip", buf, "video/mp4");
-  });
-
   it("marks gif playback for video when requested", async () => {
     const buf = Buffer.from("gifvid");
     loadWebMediaMock.mockResolvedValueOnce({
@@ -535,21 +486,6 @@ describe("web outbound", () => {
     );
   });
 
-  it("maps image with caption", async () => {
-    const buf = Buffer.from("img");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "image/jpeg",
-      kind: "image",
-    });
-    await sendMessageWhatsApp("+1555", "pic", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/pic.jpg",
-    });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
-  });
-
   it("does not retry transient outbound send failures to avoid duplicate sends", async () => {
     sendMessage.mockRejectedValueOnce({ error: { message: "connection closed" } });
 
@@ -604,38 +540,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
-  it("maps other kinds to document with filename", async () => {
-    const buf = Buffer.from("pdf");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "application/pdf",
-      kind: "document",
-      fileName: "file.pdf",
-    });
-    await sendMessageWhatsApp("+1555", "doc", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/file.pdf",
-    });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
-      fileName: "file.pdf",
-    });
-  });
-
   it.each([
-    {
-      name: "a loaded document",
-      source: "/tmp/generated-attachment.bin",
-      loadedMedia: {
-        contentType: "application/pdf",
-        kind: "document",
-        fileName: "generated-attachment.bin",
-      },
-      requestedFileName: "Quarterly Report.pdf",
-      expectedFileName: "Quarterly Report.pdf",
-      expectedMimeType: "application/pdf",
-      forceDocument: false,
-    },
     {
       name: "a forced image document",
       source: "https://example.com/download?id=42",

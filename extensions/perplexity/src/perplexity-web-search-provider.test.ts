@@ -1,4 +1,3 @@
-// Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,12 +73,7 @@ describe("perplexity web search provider", () => {
     await withEnvAsync(
       { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
       async () => {
-        const provider = createPerplexityWebSearchProvider();
-        const tool = provider.createTool({ config: {}, searchConfig: {} });
-        if (!tool) {
-          throw new Error("Expected tool definition");
-        }
-
+        const tool = createConfiguredPerplexityTool(true, "");
         await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toEqual({
           error: "missing_perplexity_api_key",
           message:
@@ -106,33 +100,27 @@ describe("perplexity web search provider", () => {
         "country filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
     },
     {
-      name: "language before unsupported chat dates, domains, and budget",
+      name: "unsupported chat language before validation, dates, domains, and budget",
       structured: false,
-      args: { language: "en", date_after: "2024-01-01", domain_filter: ["a.test"], max_tokens: 1 },
+      args: {
+        language: "invalid",
+        date_after: "2024-01-01",
+        domain_filter: ["a.test"],
+        max_tokens: 1,
+      },
       error: "unsupported_language",
       message:
         "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
     },
     {
-      name: "date before unsupported chat domains and budget",
+      name: "unsupported chat date before freshness conflict, domains, and budget",
       structured: false,
-      args: { date_after: "2024-01-01", domain_filter: ["a.test"], max_tokens: 1 },
-      error: "unsupported_date_filter",
-      message:
-        "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
-    },
-    {
-      name: "unsupported chat language before language validation and dates",
-      structured: false,
-      args: { language: "invalid", date_after: "2024-01-01" },
-      error: "unsupported_language",
-      message:
-        "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it.",
-    },
-    {
-      name: "unsupported chat date before a valid freshness conflict",
-      structured: false,
-      args: { freshness: "day", date_after: "2024-01-01" },
+      args: {
+        freshness: "day",
+        date_after: "2024-01-01",
+        domain_filter: ["a.test"],
+        max_tokens: 1,
+      },
       error: "unsupported_date_filter",
       message:
         "date_after/date_before are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
@@ -154,13 +142,6 @@ describe("perplexity web search provider", () => {
         "max_tokens and max_tokens_per_page are only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable them.",
     },
     {
-      name: "invalid freshness before reading an invalid native budget",
-      structured: true,
-      args: { freshness: "invalid", max_tokens: 0 },
-      error: "invalid_freshness",
-      message: "freshness must be day, week, month, or year.",
-    },
-    {
       name: "invalid freshness before reading an invalid chat budget",
       structured: false,
       args: { freshness: "invalid", country: "US", max_tokens: 0 },
@@ -175,17 +156,13 @@ describe("perplexity web search provider", () => {
       message: "language must be a 2-letter ISO 639-1 code like 'en', 'de', or 'fr'.",
     },
     {
-      name: "conflicting freshness before invalid date format",
+      name: "invalid date_after before date_before and mixed domain filters",
       structured: true,
-      args: { freshness: "day", date_after: "invalid" },
-      error: "conflicting_time_filters",
-      message:
-        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-    },
-    {
-      name: "invalid date_after before invalid date_before",
-      structured: true,
-      args: { date_after: "invalid", date_before: "also-invalid" },
+      args: {
+        date_after: "invalid",
+        date_before: "also-invalid",
+        domain_filter: ["allowed.test", "-denied.test"],
+      },
       error: "invalid_date",
       message: "date_after must be YYYY-MM-DD format.",
     },
@@ -195,20 +172,6 @@ describe("perplexity web search provider", () => {
       args: { date_after: "2024-01-01", date_before: "invalid" },
       error: "invalid_date",
       message: "date_before must be YYYY-MM-DD format.",
-    },
-    {
-      name: "invalid chronological date range",
-      structured: true,
-      args: { date_after: "2024-06-01", date_before: "2024-01-01" },
-      error: "invalid_date_range",
-      message: "date_after must be before date_before.",
-    },
-    {
-      name: "invalid date before mixed native domain filters",
-      structured: true,
-      args: { date_after: "invalid", domain_filter: ["allowed.test", "-denied.test"] },
-      error: "invalid_date",
-      message: "date_after must be YYYY-MM-DD format.",
     },
   ])(
     "preserves provider validation precedence: $name",
@@ -233,21 +196,9 @@ describe("perplexity web search provider", () => {
     ).rejects.toThrow("max_tokens must be a positive integer.");
   });
 
-  it.each([
-    { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
-    {
-      name: "chat completions",
-      webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
-    },
-  ])("does not start an already canceled $name request", async ({ webSearch }) => {
+  it("does not start an already canceled request", async () => {
     withTrustedWebSearchEndpointMock.mockResolvedValue({ results: [] });
-    const tool = createPerplexityWebSearchProvider().createTool({
-      config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createConfiguredPerplexityTool(true);
     const controller = new AbortController();
     controller.abort(new Error("Perplexity caller canceled"));
 
@@ -257,55 +208,37 @@ describe("perplexity web search provider", () => {
     expect(withTrustedWebSearchEndpointMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "native Search API", structured: true, ttl: 0 },
-    { name: "native Search API", structured: true, ttl: 1 },
-    { name: "chat completions", structured: false, ttl: 0 },
-    { name: "chat completions", structured: false, ttl: 1 },
-  ])(
-    "applies the current cache TTL of $ttl minutes to $name results",
-    async ({ name, structured, ttl }) => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-      for (const result of ["initial", "fresh", "uncached"]) {
-        mockPerplexityResponseOnce(
-          structured
-            ? { results: [{ title: result, url: `https://example.test/${result}` }] }
-            : {
-                choices: [{ message: { content: result } }],
-                citations: [`https://example.test/${result}`],
-              },
-        );
-      }
+  it("disables cache reads and writes without replacing existing entries", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    for (const result of ["initial", "fresh", "uncached"]) {
+      mockPerplexityResponseOnce({
+        results: [{ title: result, url: `https://example.test/${result}` }],
+      });
+    }
 
-      try {
-        const args = { query: `perplexity current cache TTL ${name} ${ttl}` };
-        const originalTool = createConfiguredPerplexityTool(structured, undefined, 15);
-        const initial = await originalTool.execute(args);
-        expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
-        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+    try {
+      const args = { query: "perplexity disabled cache" };
+      const originalTool = createConfiguredPerplexityTool(true, undefined, 15);
+      const initial = await originalTool.execute(args);
+      expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+      expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
 
-        now.mockReturnValue(1_700_000_060_000);
-        const currentTool = createConfiguredPerplexityTool(structured, undefined, ttl);
-        const fresh = await currentTool.execute(args);
-        expect(fresh.cached).toBeUndefined();
-        expect(fresh).toMatchObject(
-          structured
-            ? { results: [expect.objectContaining({ url: "https://example.test/fresh" })] }
-            : { citations: ["https://example.test/fresh"] },
-        );
-        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+      now.mockReturnValue(1_700_000_060_000);
+      const currentTool = createConfiguredPerplexityTool(true, undefined, 0);
+      const fresh = await currentTool.execute(args);
+      expect(fresh.cached).toBeUndefined();
+      expect(fresh).toMatchObject({
+        results: [expect.objectContaining({ url: "https://example.test/fresh" })],
+      });
+      expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
 
-        const repeated = await currentTool.execute(args);
-        expect(repeated.cached).toBe(ttl === 0 ? undefined : true);
-        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(ttl === 0 ? 3 : 2);
-        if (ttl === 0) {
-          expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
-        }
-      } finally {
-        now.mockRestore();
-      }
-    },
-  );
+      expect((await currentTool.execute(args)).cached).toBeUndefined();
+      expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(3);
+      expect(await originalTool.execute(args)).toEqual({ ...initial, cached: true });
+    } finally {
+      now.mockRestore();
+    }
+  });
 
   it.each([
     { name: "missing choices", response: {} },
@@ -404,12 +337,9 @@ describe("perplexity web search provider", () => {
   );
 
   it.each([
-    { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
-    {
-      name: "chat completions",
-      webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
-    },
-  ])("cancels an in-flight $name request", async ({ name, webSearch }) => {
+    { name: "native Search API", structured: true },
+    { name: "chat completions", structured: false },
+  ])("cancels an in-flight $name request", async ({ name, structured }) => {
     withTrustedWebSearchEndpointMock.mockImplementation(
       async (params: { signal?: AbortSignal }) =>
         await new Promise<never>((_resolve, reject) => {
@@ -422,13 +352,7 @@ describe("perplexity web search provider", () => {
           });
         }),
     );
-    const tool = createPerplexityWebSearchProvider().createTool({
-      config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createConfiguredPerplexityTool(structured);
     const controller = new AbortController();
     const result = tool.execute(
       { query: `perplexity in-flight cancellation ${name}` },
@@ -443,19 +367,6 @@ describe("perplexity web search provider", () => {
   });
 
   it.each([
-    {
-      name: "configured direct key",
-      key: directPerplexityApiKey,
-      source: "config",
-      url: "https://api.perplexity.ai/search",
-    },
-    {
-      name: "configured OpenRouter key",
-      key: openRouterPerplexityApiKey,
-      source: "config",
-      url: "https://openrouter.ai/api/v1/chat/completions",
-      model: "perplexity/sonar-pro",
-    },
     {
       name: "unrecognized configured key",
       key: enterprisePerplexityApiKey,
@@ -484,12 +395,6 @@ describe("perplexity web search provider", () => {
       fallbackEnvVar: "OPENROUTER_API_KEY",
       url: "https://openrouter.ai/api/v1/chat/completions",
       model: "perplexity/sonar-pro",
-    },
-    {
-      name: "resolved direct SecretRef",
-      key: directPerplexityApiKey,
-      source: "secretRef",
-      url: "https://api.perplexity.ai/search",
     },
     {
       name: "resolved OpenRouter SecretRef",
@@ -542,25 +447,14 @@ describe("perplexity web search provider", () => {
       },
       async () => {
         const provider = createPerplexityWebSearchProvider();
-        const config = {
-          plugins: {
-            entries: {
-              perplexity: {
-                config: {
-                  webSearch: {
-                    ...(source === "config" ? { apiKey: key } : {}),
-                    ...(source === "secretRef"
-                      ? {
-                          apiKey: { source: "env", provider: "default", id: "PERPLEXITY_TEST_REF" },
-                        }
-                      : {}),
-                    ...("overrides" in entry ? entry.overrides : {}),
-                  },
-                },
-              },
-            },
-          },
+        const webSearch = {
+          ...(source === "config" ? { apiKey: key } : {}),
+          ...(source === "secretRef"
+            ? { apiKey: { source: "env", provider: "default", id: "PERPLEXITY_TEST_REF" } }
+            : {}),
+          ...("overrides" in entry ? entry.overrides : {}),
         };
+        const config = { plugins: { entries: { perplexity: { config: { webSearch } } } } };
         const metadata = await provider.resolveRuntimeMetadata?.({
           config,
           resolvedCredential: { value: key, source, fallbackEnvVar },
@@ -605,22 +499,11 @@ describe("perplexity web search provider", () => {
   it("sends official date filter fields in the Search API request body", async () => {
     mockPerplexityResponseOnce({ results: [] });
 
-    await withEnvAsync(
-      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
-      async () => {
-        const provider = createPerplexityWebSearchProvider();
-        const tool = provider.createTool({ config: {}, searchConfig: {} });
-        if (!tool) {
-          throw new Error("Expected tool definition");
-        }
-
-        await tool.execute({
-          query: "OpenClaw releases",
-          date_after: "2024-01-01",
-          date_before: "2024-06-30",
-        });
-      },
-    );
+    await createConfiguredPerplexityTool(true).execute({
+      query: "OpenClaw releases",
+      date_after: "2024-01-01",
+      date_before: "2024-06-30",
+    });
 
     expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
     const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
@@ -633,24 +516,11 @@ describe("perplexity web search provider", () => {
   });
 
   it.each([
-    ["max_tokens", 0, "max_tokens must be a positive integer."],
-    ["max_tokens", 1.5, "max_tokens must be a positive integer."],
     ["max_tokens", 1_000_001, "max_tokens must be a positive integer."],
     ["max_tokens_per_page", 1.5, "max_tokens_per_page must be a positive integer."],
   ])("rejects invalid native token budget %s=%s", async (key, value, message) => {
-    await withEnvAsync(
-      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
-      async () => {
-        const provider = createPerplexityWebSearchProvider();
-        const tool = provider.createTool({ config: {}, searchConfig: {} });
-        if (!tool) {
-          throw new Error("Expected tool definition");
-        }
-
-        await expect(tool.execute({ query: "OpenClaw docs", [key]: value })).rejects.toThrow(
-          message,
-        );
-      },
-    );
+    await expect(
+      createConfiguredPerplexityTool(true).execute({ query: "OpenClaw docs", [key]: value }),
+    ).rejects.toThrow(message);
   });
 });

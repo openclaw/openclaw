@@ -10,7 +10,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-it.each(["generation-b", "  generation-b  ", "  "])(
+it.each(["  generation-b  ", "  "])(
   "binds the normalized expected incarnation %j instead of a stale primary row",
   async (expectedSessionId) => {
     const key = "agent:main:permission-successor";

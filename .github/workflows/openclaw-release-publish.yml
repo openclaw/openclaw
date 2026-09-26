@@ -368,7 +368,7 @@ jobs:
           if [[ "${android_pin_version}" == "${release_version%%-*}" ]]; then
             android_pin_matches=true
           elif [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PUBLISH_DOCKER_ONLY}" != "true" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]; then
-            android_release_note="- Android APK: skipped — apps/android/version.json is ${android_pin_version}, release train is ${release_version%%-*}; run the shared mobile cutter (scripts/mobile-release-version.ts --prepare) before the next tag."
+            android_release_note="- Android APK: skipped — apps/android/version.json is ${android_pin_version}, release train is ${release_version%%-*}; run pnpm android:version:pin -- --from-gateway before the next tag."
             echo "${android_release_note}" >> "$GITHUB_STEP_SUMMARY"
           fi
           {
@@ -1209,7 +1209,7 @@ jobs:
         if: ${{ failure() }}
         run: |
           echo "::warning::Android approval or dispatch failed; inspect the native publication job. Core publication remains independent."
-          echo "- Android APK: approval or dispatch failed; inspect Android Release runs before retrying." >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Android APK: approval or dispatch failed; inspect Android APK Artifact Publish runs before retrying." >> "${GITHUB_STEP_SUMMARY}"
 
   publish:
     name: Publish plugins, then OpenClaw
@@ -1799,7 +1799,7 @@ jobs:
           plugin_npm_run_id="${CHILD_PLUGIN_NPM_RUN_ID}"
           verify_release_tag_target
           # A failed child can still have active publishers; join them before parent cleanup.
-          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" true; then
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" false true; then
             echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
             cleanup_clawhub_children || true
             exit 1
@@ -1848,9 +1848,9 @@ jobs:
             "${evidence_args[@]}")"
           echo "openclaw_npm_run_id=${openclaw_npm_run_id}" >> "$GITHUB_OUTPUT"
           echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
-          # Pass the child environment gate before waiting for ClawHub receipts;
+          # Start the npm publisher before waiting for ClawHub receipts;
           # the remote publisher can advance without a cross-step watcher.
-          if ! wait_for_run openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" publish_openclaw_npm true npm-release; then
+          if ! wait_for_run openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" publish_openclaw_npm false; then
             gh run cancel --repo "$GITHUB_REPOSITORY" "${openclaw_npm_run_id}" >/dev/null 2>&1 || true
             exit 1
           fi

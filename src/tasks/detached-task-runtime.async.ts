@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
+  DetachedRunningTaskCreateParams,
   DetachedTaskAssignmentTransition,
   DetachedTaskCompleteParams,
   DetachedTaskFailParams,
@@ -9,8 +10,28 @@ import type {
 import { DetachedTaskAssignmentUnsupportedError } from "./detached-task-runtime-contract.js";
 import { DetachedTaskLegacyRuntimeError } from "./detached-task-runtime-errors.js";
 import { captureDetachedTaskRuntimeOwner } from "./detached-task-runtime-state.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
+import { createRunningTaskRunCoreAsync } from "./task-executor-create.async.js";
 import { transitionTaskRecordsByRunAsync } from "./task-registry-transition.async.js";
 import type { TaskRecord, TaskRunTransition } from "./task-registry.types.js";
+
+export async function createRunningTaskRunAsync(
+  params: DetachedRunningTaskCreateParams,
+  assertCurrent?: () => void,
+): Promise<TaskRecord | null> {
+  const owner = captureDetachedTaskRuntimeOwner();
+  const assertOwner = () => {
+    owner.assertCurrent();
+    assertCurrent?.();
+  };
+  assertOwner();
+  // The shipped V1 adapter owns its synchronous creation contract, including refusal.
+  return owner.runtime
+    ? owner.runtime.createRunningTaskRun(
+        projectTaskContentForPersistence(isIncognitoTask(params), params),
+      )
+    : await createRunningTaskRunCoreAsync(params, assertOwner);
+}
 
 async function mutateDetachedTask(
   transition: TaskRunTransition,

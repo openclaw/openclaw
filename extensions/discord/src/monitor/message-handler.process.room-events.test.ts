@@ -26,81 +26,49 @@ import {
 registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage session routing and room events", () => {
-  it("suppresses Discord reactions for room events when ack scope does not force all messages", async () => {
-    vi.useFakeTimers();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.({});
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1_000);
+  it.each([
+    { ackReactionScope: "group-all", expectedReactions: [] },
+    { ackReactionScope: "all", expectedReactions: ["👀"] },
+  ] as const)(
+    "honors room-event ack scope $ackReactionScope",
+    async ({ ackReactionScope, expectedReactions }) => {
+      vi.useFakeTimers();
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReasoningStream?.({});
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1_000);
+        });
+        return createNoQueuedDispatchResult();
       });
-      return createNoQueuedDispatchResult();
-    });
-    const ctx = await createBaseContext({
-      shouldRequireMention: false,
-      effectiveWasMentioned: false,
-      inboundEventKind: "room_event",
-      ackReactionScope: "group-all",
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          ackReactionScope: "group-all",
-          statusReactions: {
-            enabled: true,
-            timing: { debounceMs: 0 },
+      const ctx = await createBaseContext({
+        shouldRequireMention: false,
+        effectiveWasMentioned: false,
+        inboundEventKind: "room_event",
+        ackReactionScope,
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope,
+            statusReactions: {
+              enabled: true,
+              timing: { debounceMs: 0 },
+            },
           },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      route: BASE_CHANNEL_ROUTE,
-    });
-
-    const runPromise = runProcessDiscordMessage(ctx);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.runAllTimersAsync();
-    await runPromise;
-
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(getReactionEmojis()).toEqual([]);
-    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
-  });
-
-  it("sends Discord ack reactions for room events when ack scope is all", async () => {
-    vi.useFakeTimers();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.({});
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1_000);
+        route: BASE_CHANNEL_ROUTE,
       });
-      return createNoQueuedDispatchResult();
-    });
-    const ctx = await createBaseContext({
-      shouldRequireMention: false,
-      effectiveWasMentioned: false,
-      inboundEventKind: "room_event",
-      ackReactionScope: "all",
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          ackReactionScope: "all",
-          statusReactions: {
-            enabled: true,
-            timing: { debounceMs: 0 },
-          },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-      route: BASE_CHANNEL_ROUTE,
-    });
 
-    const runPromise = runProcessDiscordMessage(ctx);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.runAllTimersAsync();
-    await runPromise;
+      const runPromise = runProcessDiscordMessage(ctx);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.runAllTimersAsync();
+      await runPromise;
 
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(getReactionEmojis()).toEqual(["👀"]);
-    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
-  });
+      expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(getReactionEmojis()).toEqual(expectedReactions);
+      expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+    },
+  );
 
   it("records Discord room events in history while source replies are tool-only", async () => {
     const guildHistories = new Map();

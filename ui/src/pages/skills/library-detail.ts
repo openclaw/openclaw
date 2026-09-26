@@ -25,6 +25,21 @@ export function renderLibraryIdentity(
   </details>`;
 }
 
+export function renderLibraryDialogHeader(title: string, onClose: () => void, busy = false) {
+  return html`<div class="exec-approval-header">
+    <strong class="exec-approval-title">${title}</strong
+    ><button
+      type="button"
+      class="btn btn--icon btn--ghost"
+      aria-label=${t("common.close")}
+      ?disabled=${busy}
+      @click=${onClose}
+    >
+      ${icons.x}
+    </button>
+  </div>`;
+}
+
 /** Session access grants a read of one pin, never the library editor or revision history. */
 export function renderLibraryPinRead(props: {
   read: SkillsLibraryReadResult;
@@ -41,17 +56,7 @@ export function renderLibraryPinRead(props: {
     @modal-cancel=${props.onClose}
   >
     <div class="exec-approval-card skill-reader-dialog">
-      <div class="exec-approval-header">
-        <strong class="exec-approval-title">${read.entry.slug}</strong
-        ><button
-          type="button"
-          class="btn btn--icon btn--ghost"
-          aria-label=${t("common.close")}
-          @click=${props.onClose}
-        >
-          ${icons.x}
-        </button>
-      </div>
+      ${renderLibraryDialogHeader(read.entry.slug, props.onClose)}
       <div
         class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"

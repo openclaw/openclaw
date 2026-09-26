@@ -31,6 +31,7 @@ import {
 import {
   clearMattermostSlashCommandValidationCacheForAccount,
   createSlashCommandHttpHandler,
+  sendSlashCommandResponse,
 } from "./slash-http.js";
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
@@ -220,24 +221,15 @@ export function activateSlashCommands(params: {
  * Deactivate slash commands for a specific account (on shutdown/disconnect).
  */
 export function deactivateSlashCommands(accountId?: string) {
-  if (accountId) {
-    const state = accountStates.get(accountId);
-    if (state) {
-      state.commandTokens.clear();
-      state.registeredCommands = [];
-      state.handler = null;
-      clearMattermostSlashCommandValidationCacheForAccount(accountId);
-      accountStates.delete(accountId);
+  for (const [stateAccountId, state] of accountStates) {
+    if (accountId && stateAccountId !== accountId) {
+      continue;
     }
-  } else {
-    // Deactivate all accounts (full shutdown)
-    for (const [stateAccountId, state] of accountStates) {
-      state.commandTokens.clear();
-      state.registeredCommands = [];
-      state.handler = null;
-      clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
-    }
-    accountStates.clear();
+    state.commandTokens.clear();
+    state.registeredCommands = [];
+    state.handler = null;
+    clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
+    accountStates.delete(stateAccountId);
   }
 }
 
@@ -294,14 +286,10 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     onRequestAuthenticated: () => void,
   ) => {
     if (accountStates.size === 0) {
-      res.statusCode = 503;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          response_type: "ephemeral",
-          text: "Slash commands are not yet initialized. Please try again in a moment.",
-        }),
-      );
+      sendSlashCommandResponse(res, 503, {
+        response_type: "ephemeral",
+        text: "Slash commands are not yet initialized. Please try again in a moment.",
+      });
       return;
     }
 
@@ -313,14 +301,10 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     if (accountStates.size === 1) {
       const state = accountStates.values().next().value;
       if (!state?.handler) {
-        res.statusCode = 503;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(
-          JSON.stringify({
-            response_type: "ephemeral",
-            text: "Slash commands are not yet initialized. Please try again in a moment.",
-          }),
-        );
+        sendSlashCommandResponse(res, 503, {
+          response_type: "ephemeral",
+          text: "Slash commands are not yet initialized. Please try again in a moment.",
+        });
         return;
       }
       await state.handler(req, res, undefined, onRequestAuthenticated);
@@ -376,15 +360,10 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     }
 
     if (match.kind === "none") {
-      // No matching account — reject
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          response_type: "ephemeral",
-          text: "Unauthorized: invalid command token.",
-        }),
-      );
+      sendSlashCommandResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
       return;
     }
 
@@ -396,14 +375,10 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         match.source === "token"
           ? "Conflict: command token is not unique across accounts."
           : "Conflict: slash command is not unique across accounts.";
-      res.statusCode = 409;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          response_type: "ephemeral",
-          text: conflictText,
-        }),
-      );
+      sendSlashCommandResponse(res, 409, {
+        response_type: "ephemeral",
+        text: conflictText,
+      });
       return;
     }
 

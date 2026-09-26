@@ -55,6 +55,25 @@ function expectInstallRecordsWrittenWithLease(records: unknown, config: unknown)
   );
 }
 
+function configureAlphaInstall(source: "path" | "npm" = "path") {
+  const installRecords = {
+    alpha:
+      source === "path"
+        ? { source, sourcePath: alphaInstallPath, installPath: alphaInstallPath }
+        : { source, spec: "alpha@1.0.0", installPath: alphaInstallPath },
+  };
+  const baseConfig: OpenClawConfig = {
+    plugins: { entries: { alpha: { enabled: true } }, installs: installRecords },
+  };
+  pluginCliConfigMock.mockReturnValue(baseConfig);
+  setInstalledPluginIndexInstallRecords(installRecords);
+  buildPluginSnapshotReportMock.mockReturnValue({
+    plugins: [{ id: "alpha", name: "alpha" }],
+    diagnostics: [],
+  });
+  return { baseConfig, installRecords };
+}
+
 describe("plugins cli uninstall", () => {
   beforeEach(async () => {
     resetPluginsCliTestState();
@@ -177,27 +196,7 @@ describe("plugins cli uninstall", () => {
   ])(
     "uninstalls with --force and $keepFilesFlag without prompting (inherited lease=$inheritedLease)",
     async ({ keepFilesFlag, inheritedLease }) => {
-      const baseConfig = {
-        plugins: {
-          entries: {
-            alpha: { enabled: true },
-          },
-          installs: {
-            alpha: {
-              source: "path",
-              sourcePath: alphaInstallPath,
-              installPath: alphaInstallPath,
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      pluginCliConfigMock.mockReturnValue(baseConfig);
-      setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "alpha", name: "alpha" }],
-        diagnostics: [],
-      });
+      configureAlphaInstall();
 
       const uninstall = () =>
         runPluginsCommand(["plugins", "uninstall", "alpha", "--force", keepFilesFlag]);
@@ -210,6 +209,9 @@ describe("plugins cli uninstall", () => {
         await withPluginLifecycleLease({ path: databasePath }, async (lease) => {
           await uninstall();
           lease.assertOwned();
+          expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
+            expect.objectContaining({ filePath: databasePath }),
+          );
           expect(readInstallRecords()).toEqual({});
           expect(pluginCliConfigMock().plugins?.entries?.alpha).toEqual({ enabled: false });
           expect(
@@ -403,26 +405,7 @@ describe("plugins cli uninstall", () => {
   it.each(["closed", "declined", "accepted after config edit"])(
     "handles confirmation that is %s without stale mutations",
     async (confirmation) => {
-      const baseConfig = {
-        plugins: {
-          entries: {
-            alpha: { enabled: true },
-          },
-          installs: {
-            alpha: {
-              source: "path",
-              sourcePath: alphaInstallPath,
-              installPath: alphaInstallPath,
-            },
-          },
-        },
-      } as OpenClawConfig;
-      pluginCliConfigMock.mockReturnValue(baseConfig);
-      setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "alpha", name: "alpha" }],
-        diagnostics: [],
-      });
+      const { baseConfig } = configureAlphaInstall();
 
       if (confirmation === "closed") {
         promptYesNoMock.mockRejectedValueOnce(new PromptInputClosedError());
@@ -461,33 +444,13 @@ describe("plugins cli uninstall", () => {
   );
 
   it("restores install records when the config write rejects during uninstall", async () => {
-    const installRecords = {
-      alpha: {
-        source: "path",
-        sourcePath: alphaInstallPath,
-        installPath: alphaInstallPath,
-      },
-    } as const;
-    const baseConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-        installs: installRecords,
-      },
-    } as OpenClawConfig;
+    const { installRecords } = configureAlphaInstall();
     const previousPersistedIndex = createTestInstalledPluginIndex({
       policyHash: "previous-policy",
       installRecords,
     });
 
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
     readPersistedInstalledPluginIndexMock.mockResolvedValue(previousPersistedIndex);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [{ id: "alpha", name: "alpha" }],
-      diagnostics: [],
-    });
 
     replaceConfigFileMock.mockRejectedValueOnce(new Error("config changed"));
 
@@ -512,28 +475,7 @@ describe("plugins cli uninstall", () => {
   });
 
   it("disables and retains tracking before file removal, then commits and refreshes", async () => {
-    const installRecords = {
-      alpha: {
-        source: "npm",
-        spec: "alpha@1.0.0",
-        installPath: alphaInstallPath,
-      },
-    } as const;
-    const baseConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-        installs: installRecords,
-      },
-    } as OpenClawConfig;
-
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [{ id: "alpha", name: "alpha" }],
-      diagnostics: [],
-    });
+    const { installRecords } = configureAlphaInstall("npm");
 
     const actual =
       await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
@@ -565,28 +507,7 @@ describe("plugins cli uninstall", () => {
   });
 
   it("keeps the install tracked and disabled when directory removal fails", async () => {
-    const installPath = alphaInstallPath;
-    const installRecords = {
-      alpha: {
-        source: "npm",
-        spec: "alpha@1.0.0",
-        installPath,
-      },
-    } as const;
-    const baseConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-        installs: installRecords,
-      },
-    } as OpenClawConfig;
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [{ id: "alpha", name: "alpha" }],
-      diagnostics: [],
-    });
+    const { installRecords } = configureAlphaInstall("npm");
 
     applyPluginUninstallDirectoryRemovalMock.mockResolvedValue({
       directoryRemoved: false,

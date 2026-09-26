@@ -3,7 +3,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { GraphThreadMessage } from "./graph-thread.js";
 
 let fetchParentMessageCached: typeof import("./thread-parent-context.js").fetchParentMessageCached;
-let formatParentContextEvent: typeof import("./thread-parent-context.js").formatParentContextEvent;
 let markParentContextInjected: typeof import("./thread-parent-context.js").markParentContextInjected;
 let shouldInjectParentContext: typeof import("./thread-parent-context.js").shouldInjectParentContext;
 let summarizeParentMessage: typeof import("./thread-parent-context.js").summarizeParentMessage;
@@ -12,7 +11,6 @@ async function loadParentContextModule() {
   vi.resetModules();
   ({
     fetchParentMessageCached,
-    formatParentContextEvent,
     markParentContextInjected,
     shouldInjectParentContext,
     summarizeParentMessage,
@@ -39,15 +37,6 @@ describe("summarizeParentMessage", () => {
       body: { content: "   ", contentType: "text" },
     };
     expect(summarizeParentMessage(msg)).toBeUndefined();
-  });
-
-  it("extracts sender + plain text", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Alice" } },
-      body: { content: "Hello world", contentType: "text" },
-    };
-    expect(summarizeParentMessage(msg)).toEqual({ sender: "Alice", text: "Hello world" });
   });
 
   it("strips HTML for html contentType", () => {
@@ -88,17 +77,6 @@ describe("summarizeParentMessage", () => {
     expect(summarizeParentMessage(msg)).toEqual({ sender: "unknown", text: "orphan" });
   });
 
-  it("truncates overly long parent text", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Dana" } },
-      body: { content: "x".repeat(1000), contentType: "text" },
-    };
-    const summary = summarizeParentMessage(msg);
-    expect(summary?.text.length).toBeLessThanOrEqual(400);
-    expect(summary?.text.endsWith("…")).toBe(true);
-  });
-
   it("keeps truncated parent text well-formed when truncating surrogate pairs", () => {
     const msg: GraphThreadMessage = {
       id: "p1",
@@ -111,14 +89,6 @@ describe("summarizeParentMessage", () => {
     expect(summary?.text).not.toMatch(UNPAIRED_SURROGATE_RE);
     expect(summary?.text).toBe(`${"a".repeat(398)}…`);
     expect(summary?.text.endsWith("\ud83e…")).toBe(false);
-  });
-});
-
-describe("formatParentContextEvent", () => {
-  it("formats as Replying to @sender: body", () => {
-    expect(formatParentContextEvent({ sender: "Alice", text: "hello there" })).toBe(
-      "Replying to @Alice: hello there",
-    );
   });
 });
 

@@ -4,10 +4,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   GitHubPublicationRequesterUnavailableError,
   resolveGitHubPublicationFailure,
@@ -39,6 +37,14 @@ import { seedAttachedPlacementEnvironment } from "./worker-environments/placemen
 
 const mocks = githubPublicationTestMocks();
 
+function createLocalCoordinator(
+  database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+) {
+  return createTestGitHubPublicationCoordinator({
+    placements: createWorkerSessionPlacementStore({ database }),
+  });
+}
+
 describe("Gateway GitHub publication boundaries", () => {
   installGitHubPublicationTestHarness();
 
@@ -49,7 +55,7 @@ describe("Gateway GitHub publication boundaries", () => {
       const placements = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase(),
       });
-      const requested = placements.startDispatch(REQUEST);
+      const requested = await placements.startDispatch(REQUEST);
       placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
@@ -91,36 +97,21 @@ describe("Gateway GitHub publication boundaries", () => {
     },
   );
 
-  it.each([
-    ["URL rewrite", "url.https://attacker.invalid/.insteadof https://github.com/"],
-    ["HTTP proxy", "http.proxy https://attacker.invalid/"],
-    ["push expansion", "push.followtags true"],
-    ["worktree redirect", "core.worktree /tmp/other-checkout"],
-    ["alternate refs command", "core.alternaterefscommand ./steal-profile"],
-    ["askpass command", "core.askpass ./steal-profile"],
-    ["fsmonitor command", "core.fsmonitor ./steal-profile"],
-    ["credential helper", "credential.helper ./steal-profile"],
-    ["remote upload-pack", "remote.origin.uploadpack ./steal-profile"],
-    ["upload-pack hook", "uploadpack.packobjectshook ./steal-profile"],
-  ])("rejects repository-local %s before snapshot or transport", async (label, configLine) => {
+  it("rejects repository-local transport configuration before snapshot or transport", async () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       if (argv.includes("--includes") && argv.includes("--get-regexp")) {
-        return commandResult(`${configLine}\n`);
+        return commandResult("credential.helper ./steal-profile\n");
       }
       return await fallback(argv, options);
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
         sessionKey: SESSION_KEY,
         agentId: "main",
-        idempotencyKey: `unsafe-${label}`,
+        idempotencyKey: "unsafe-local-config",
       }),
     ).rejects.toThrow("unsupported Git transport configuration");
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
@@ -140,11 +131,7 @@ describe("Gateway GitHub publication boundaries", () => {
       }
       return await fallback(argv, options);
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -188,11 +175,7 @@ describe("Gateway GitHub publication boundaries", () => {
         worktree: { id: "worktree-1", branch: "main", repoRoot: "/repo" },
       },
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -217,11 +200,7 @@ describe("Gateway GitHub publication boundaries", () => {
       ownerKind: "session",
       ownerId,
     }));
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -241,11 +220,7 @@ describe("Gateway GitHub publication boundaries", () => {
       }
       return await fallback(argv, options);
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -267,7 +242,7 @@ describe("Gateway GitHub publication boundaries", () => {
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       if (!raced && argv.includes("add")) {
         raced = true;
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           sessionId: SESSION_ID,
           sessionKey: SESSION_KEY,
           agentId: "main",
@@ -275,7 +250,7 @@ describe("Gateway GitHub publication boundaries", () => {
           runId: "run-during-snapshot",
           owner: { kind: "local" },
         });
-        placements.releaseTurn(claim);
+        await placements.releaseTurn(claim);
       }
       return await fallback(argv, options);
     });
@@ -296,9 +271,9 @@ describe("Gateway GitHub publication boundaries", () => {
   it("requeues a publication when execution loses live session authority", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
-    let competingClaim: ReturnType<typeof placements.claimTurn> | undefined;
+    let competingClaim: Awaited<ReturnType<typeof placements.claimTurn>> | undefined;
     mocks.resolveRepository.mockImplementationOnce(async () => {
-      competingClaim = placements.claimTurn({
+      competingClaim = await placements.claimTurn({
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
         agentId: "main",
@@ -326,7 +301,7 @@ describe("Gateway GitHub publication boundaries", () => {
       false,
     );
     expect(competingClaim).toBeDefined();
-    placements.releaseTurn(competingClaim!);
+    await placements.releaseTurn(competingClaim!);
 
     await coordinator.resumeSessionRequests();
 
@@ -463,11 +438,7 @@ describe("Gateway GitHub publication boundaries", () => {
       }
       return await fallback(argv, options);
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -493,11 +464,7 @@ describe("Gateway GitHub publication boundaries", () => {
       }
       return await fallback(argv, options);
     });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -512,11 +479,7 @@ describe("Gateway GitHub publication boundaries", () => {
   });
 
   it("creates an attributed marker commit when all changes were already committed", async () => {
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
+    const coordinator = createLocalCoordinator();
 
     await expect(
       coordinator.requestForSession({
@@ -538,9 +501,7 @@ describe("Gateway GitHub publication boundaries", () => {
 
   it("keeps an incomplete Git transaction retryable until index recovery completes", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
+    const coordinator = createLocalCoordinator(database);
     mocks.updateIndex.mockImplementationOnce(async () => {
       const { GitHubPublicationRecoveryPendingError } = await vi.importActual<
         typeof import("./github-publication-git-index.js")
@@ -568,9 +529,7 @@ describe("Gateway GitHub publication boundaries", () => {
 
   it("continues settling other receipts when one workspace still needs Git recovery", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
+    const coordinator = createLocalCoordinator(database);
     coordinator.read("create-schema");
     seedLocalPublication(database, { requestId: "blocked", status: "publishing" });
     seedLocalPublication(database, { requestId: "following", status: "requested" });
@@ -677,9 +636,7 @@ describe("Gateway GitHub publication boundaries", () => {
 
   it("terminalizes local recovery when the managed worktree fingerprint changed", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const first = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
+    const first = createLocalCoordinator(database);
     first.read("create-schema");
     const requestId = "publication-stale-worktree";
     seedLocalPublication(database, {
@@ -687,11 +644,9 @@ describe("Gateway GitHub publication boundaries", () => {
       status: "requested",
       repositoryFingerprint: "replaced-fingerprint",
     });
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const resumed = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database: reopened }),
-    });
+    const resumed = createLocalCoordinator(reopened);
 
     await resumed.resumeSessionRequests();
 
@@ -709,9 +664,7 @@ describe("Gateway GitHub publication boundaries", () => {
 
   it("validates the live session owner before recovery can touch Git state", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const coordinator = createTestGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
+    const coordinator = createLocalCoordinator(database);
     coordinator.read("create-schema");
     const requestId = "publication-stale-session-owner";
     seedLocalPublication(database, { requestId, status: "requested" });
@@ -807,12 +760,12 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-deferred-request",
       ownerEpoch: 2,
     });
     const claim = claimRunId
-      ? placements.claimTurn({
+      ? await placements.claimTurn({
           sessionId: active.sessionId,
           sessionKey: active.sessionKey,
           agentId: active.agentId,
@@ -859,7 +812,7 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-accepted-deferred",
       ownerEpoch: 2,
     });
@@ -869,7 +822,7 @@ describe("Gateway GitHub publication boundaries", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "accepted-deferred-session",
     });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -901,11 +854,11 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-1",
       ownerEpoch: 2,
     });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -920,7 +873,7 @@ describe("Gateway GitHub publication boundaries", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "publish-orphan",
     });
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
 
     coordinator.deferOrphanedRequests();
 
@@ -944,11 +897,11 @@ describe("Gateway GitHub publication boundaries", () => {
       sessionId: REQUEST.sessionId,
       ownerEpoch: 2,
     });
-    const active = seedActivePlacement(placements, {
+    const active = await seedActivePlacement(placements, {
       environmentId: "environment-snapshot-failure",
       ownerEpoch: 2,
     });
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,

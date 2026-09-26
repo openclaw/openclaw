@@ -59,10 +59,19 @@ Runtime selections resolve in the requesting agent's scope before becoming owner
 
 ## Compute workers
 
-Code-mode execution and compaction planning use the reusable `WorkerTaskPool`.
+Code-mode execution, compaction planning, and file-tool planning use the reusable `WorkerTaskPool`.
 Their pools share a CPU admission limit of `max(1, availableParallelism() - 1)`
 within the calling isolate, reserving a CPU where possible for the Gateway. Ordered
 database and model-generation workers keep their existing independent limits.
+
+File-tool workers perform pure edit matching, Unicode normalization, and diff
+computation. One prepared patch supplies both display and unified-patch receipts,
+including previews. The file-tool caller keeps the mutation queue, filesystem
+access, persisted-byte verification, and authority checks; it revalidates authority
+and cancellation after planning before changing files. Write receipts retain their
+existing size and edit-distance limits.
+The shared runtime-process registry resolves the planning worker in both the
+installed package and the sealed portable-worker bundle.
 
 Admission includes queued, preparing, and running tasks. Each pool defaults to
 128 pending tasks and 256 MiB of producer-reported retained input; compute pools
