@@ -46,7 +46,7 @@ import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import { writeCronJobScratch } from "./scratch-store.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "./store.js";
+import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
 
 installHeartbeatRunnerTestRuntime();
 beforeAll(async () => {
@@ -308,7 +308,7 @@ describe("native heartbeat busy poll settlement", () => {
           const nextTick = skipped!.runAtMs! + EVERY_MS;
           for (const job of [
             cron.getJob(monitor.id),
-            loadCronJobsStoreSync(storePath).jobs.find((entry) => entry.id === monitor.id),
+            (await loadCronJobsStore(storePath)).jobs.find((entry) => entry.id === monitor.id),
           ]) {
             expect(job?.state).toMatchObject({
               lastRunStatus: "skipped",

@@ -53,8 +53,8 @@ import {
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
 import {
-  formatCronSessionDiagnosticFields,
-  resolveCronSessionDiagnosticContext,
+  logWithSessionDiagnosticContext,
+  retireSessionDiagnosticLogs,
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
@@ -784,26 +784,24 @@ function logSessionAttention(
       : classification.eventType === "session.stalled"
         ? "stalled session"
         : "long-running session";
-  const activityFields = formatSessionActivityLogFields(activity);
-  const sessionFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({
-      sessionKey: params.sessionKey,
-      activeSessionId: params.sessionId,
-    }),
-  );
-  const detailFields = [activityFields, sessionFields].filter(Boolean).join(" ");
-  const message = `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-    params.sessionKey ?? "unknown"
-  } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-    queueDepth
-  } reason=${classification.reason} classification=${classification.classification}${
-    classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-  }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
-  if (classification.eventType === "session.long_running" && queueDepth <= 0) {
-    diag.debug(message);
-  } else {
-    diag.warn(message);
-  }
+  void logWithSessionDiagnosticContext({
+    level:
+      classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
+    sessionKey: params.sessionKey,
+    activeSessionId: params.sessionId,
+    format: (sessionFields) => {
+      const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
+        .filter(Boolean)
+        .join(" ");
+      return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+        params.sessionKey ?? "unknown"
+      } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+        queueDepth
+      } reason=${classification.reason} classification=${classification.classification}${
+        classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
+      }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
+    },
+  });
   const baseEvent = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1022,6 +1020,7 @@ export function startDiagnosticHeartbeat(
 }
 
 export function stopDiagnosticHeartbeat() {
+  retireSessionDiagnosticLogs();
   stopDiagnosticGcObserver();
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);
