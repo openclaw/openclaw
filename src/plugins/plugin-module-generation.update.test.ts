@@ -33,7 +33,8 @@ it.each(["package", "standalone", "native"])(
     fs.mkdirSync(modules);
     const previousSdk = path.join(staging, "previous", "@fixture", "sdk");
     expect(fs.lstatSync(previousSdk).isSymbolicLink()).toBe(true);
-    expect(fs.existsSync(previousSdk)).toBe(false);
+    // POSIX keeps the relative link; Windows junctions retain their absolute target.
+    expect(fs.existsSync(previousSdk)).toBe(process.platform === "win32");
 
     const plugin = host(root, standalone).load("index.mjs") as { read(): string };
     expect(plugin.read()).toBe("current asset");
