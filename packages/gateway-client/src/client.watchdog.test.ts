@@ -2,7 +2,7 @@
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import type { EventFrame } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { GatewayClient } from "./client.js";
 import {
   GatewayProtocolClient,
@@ -201,6 +201,10 @@ function completeSyntheticGatewayProtocolHandshake(
 describe("GatewayClient", () => {
   let wss: WebSocketServer | null = null;
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
+
+  beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
 
   afterEach(async () => {
     // Timer spies must restore their fake functions before the clock uninstalls them.

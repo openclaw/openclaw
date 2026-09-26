@@ -1,5 +1,5 @@
 import type { EventFrame } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { GatewayProtocolClient, type GatewayProtocolSocketHandlers } from "./protocol-client.js";
 
 type SyntheticConnection = {
@@ -49,8 +49,12 @@ function sendEvent(connection: SyntheticConnection, seq: number): void {
 }
 
 describe("GatewayProtocolClient event sequences", () => {
+  beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   test("establishes a fresh baseline after an automatic reconnect", async () => {

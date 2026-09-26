@@ -444,6 +444,7 @@ async function expectRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
       loadOrCreateDeviceIdentityMock,
     );
@@ -476,9 +477,9 @@ describe("GatewayBrowserClient", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   });
 
   it.each([
@@ -2193,7 +2194,7 @@ describe("GatewayBrowserClient", () => {
       message: "profile verification unavailable",
       details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
       retryAfterMs: 90_000,
-      delayMs: 90_000,
+      delayMs: 99_000,
       closeCode: 4008,
       closeReason: "connect failed",
       willRetry: true,
@@ -2212,6 +2213,7 @@ describe("GatewayBrowserClient", () => {
     "respects retry timing and terminal policy for $name",
     async ({ message, details, retryAfterMs, delayMs, closeCode, closeReason, willRetry }) => {
       useNodeFakeTimers();
+      vi.mocked(Math.random).mockReturnValue(0.5);
       const onClose = vi.fn();
       const client = new GatewayBrowserClient({
         url: "ws://127.0.0.1:18789",

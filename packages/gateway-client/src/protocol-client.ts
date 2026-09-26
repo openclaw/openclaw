@@ -560,7 +560,19 @@ export class GatewayProtocolClient<TPlan> {
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
     // Wire Retry-After is a floor: repeated short hints must still advance
     // normal backoff, while adapter-owned startup overrides stay independent.
-    const delayMs = overrideMs ?? Math.max(retry.delayMs, minimumMs);
+    let delayMs = overrideMs;
+    if (delayMs === undefined) {
+      const base = Math.max(retry.delayMs, minimumMs);
+      const ceiling = Math.max(
+        this.opts.reconnect.maxMs,
+        Math.min(Number.MAX_VALUE, minimumMs * 1.2),
+      );
+      // Shift the interval before sampling: clamping a draw would synchronize
+      // clients at the cap or a shared server floor.
+      const lower = Math.max(minimumMs, Math.min(base, ceiling / 1.2));
+      const upper = Math.min(base * 1.2, ceiling);
+      delayMs = Math.ceil(lower + Math.random() * (upper - lower));
+    }
     void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
