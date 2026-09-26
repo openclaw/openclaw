@@ -7,12 +7,32 @@ import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/c
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
-import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
+import {
+  makeSnapshot,
+  restoreRedactedValues,
+  type TestSnapshot,
+} from "./redact-snapshot.test-helpers.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
-function makeJson5Snapshot<TConfig extends Record<string, unknown>>(config: TConfig) {
-  return makeSnapshot(config, JSON5.stringify(config, { space: 2, quote: '"' }));
+function expectNestedPairValue(
+  source: Record<string, Record<string, Record<string, unknown>>>,
+  section: string,
+  field: string,
+  expected: readonly [unknown, unknown],
+): void {
+  const nested = expectDefined(source.nested, "nested snapshot value");
+  const sectionValue = expectDefined(nested[section], `nested ${section} value`);
+  const values = expectDefined(sectionValue[field], `nested ${section}.${field} value`);
+  expect(values).toEqual(expected);
+}
+
+function expectNestedLevelPairValue(
+  source: Record<string, Record<string, Record<string, unknown>>>,
+  field: string,
+  expected: readonly [unknown, unknown],
+): void {
+  expectNestedPairValue(source, "level", field, expected);
 }
 
 function expectGatewayAuthFieldValue(
@@ -121,16 +141,38 @@ describe("redactConfigSnapshot", () => {
     expect(openai.baseUrl).toBe("https://api.openai.com");
   });
 
+  it("preserves non-sensitive fields", () => {
+    const snapshot = makeSnapshot({
+      ui: { seamColor: "#0088cc" },
+      gateway: { port: 18789 },
+      models: { providers: { openai: { baseUrl: "https://api.openai.com" } } },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.config).toEqual(snapshot.config);
+  });
+
   it("removes embedded credentials from URL-valued endpoint fields", () => {
-    const snapshot = makeJson5Snapshot({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://alice:secret@example.test/v1",
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://alice:secret@example.test/v1",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://alice:secret@example.test/v1",
+            },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot);
     const cfg = result.config as typeof snapshot.config;
@@ -189,15 +231,27 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts sensitive auth material from MCP SSE URLs", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      mcp: {
-        servers: {
-          remote: {
-            url: "https://user:pass@example.com/mcp?token=secret123&safe=value",
+    const raw = `{
+  mcp: {
+    servers: {
+      remote: {
+        url: "https://user:pass@example.com/mcp?token=secret123&safe=value",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        mcp: {
+          servers: {
+            remote: {
+              url: "https://user:pass@example.com/mcp?token=secret123&safe=value",
+            },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -214,24 +268,45 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts media request auth and proxy transport secrets from config snapshots", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      tools: {
-        media: {
-          audio: {
-            request: {
-              auth: {
-                mode: "authorization-bearer",
-                token: "media-audio-secret-token",
-              },
-              proxy: {
-                mode: "explicit-proxy",
-                url: "http://alice:secret@proxy.example.internal:8080",
+    const raw = `{
+  tools: {
+    media: {
+      audio: {
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "media-audio-secret-token",
+          },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        tools: {
+          media: {
+            audio: {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "media-audio-secret-token",
+                },
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
               },
             },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -250,22 +325,41 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts model provider request auth secrets from config snapshots", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [],
-            request: {
-              auth: {
-                mode: "authorization-bearer",
-                token: "provider-secret-token",
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "provider-secret-token",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "provider-secret-token",
+                },
               },
             },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -279,23 +373,43 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts model provider local service env values from config snapshots", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      models: {
-        providers: {
-          local: {
-            baseUrl: "http://127.0.0.1:18000/v1",
-            models: [],
-            localService: {
-              command: "/usr/local/bin/server",
-              env: {
-                HF_HOME: "local-service-secret-home",
-                MAX_TOKENS: "local-service-secret-limit",
+    const raw = `{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://127.0.0.1:18000/v1",
+        models: [],
+        localService: {
+          command: "/usr/local/bin/server",
+          env: {
+            HF_HOME: "local-service-secret-home",
+            MAX_TOKENS: "local-service-secret-limit",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:18000/v1",
+              models: [],
+              localService: {
+                command: "/usr/local/bin/server",
+                env: {
+                  HF_HOME: "local-service-secret-home",
+                  MAX_TOKENS: "local-service-secret-limit",
+                },
               },
             },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -313,21 +427,39 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts install policy env values from config snapshots", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      security: {
-        installPolicy: {
-          enabled: true,
-          exec: {
-            source: "exec",
-            command: "/usr/local/bin/openclaw-install-policy",
-            env: {
-              POLICY_TOKEN: "operator-policy-secret-token",
-              AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+    const raw = `{
+  security: {
+    installPolicy: {
+      enabled: true,
+      exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-install-policy",
+        env: {
+          POLICY_TOKEN: "operator-policy-secret-token",
+          AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        security: {
+          installPolicy: {
+            enabled: true,
+            exec: {
+              source: "exec",
+              command: "/usr/local/bin/openclaw-install-policy",
+              env: {
+                POLICY_TOKEN: "operator-policy-secret-token",
+                AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+              },
             },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -345,22 +477,41 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts model provider request proxy URLs from config snapshots", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [],
-            request: {
-              proxy: {
-                mode: "explicit-proxy",
-                url: "http://alice:secret@proxy.example.internal:8080",
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
               },
             },
           },
         },
       },
-    });
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -461,6 +612,21 @@ describe("redactConfigSnapshot", () => {
     expect(nickserv.password).toBe(REDACTED_SENTINEL);
   });
 
+  it("preserves hash unchanged", () => {
+    const snapshot = makeSnapshot({ gateway: { auth: { token: "secret-token-value-here" } } });
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.hash).toBe("abc123");
+  });
+
+  it("redacts secrets in raw field via text-based redaction", () => {
+    const config = { token: "abcdef1234567890ghij" };
+    const raw = '{ "token": "abcdef1234567890ghij" }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).not.toContain("abcdef1234567890ghij");
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+  });
+
   it("keeps raw text when runtime materialization adds undefined safe-bin fields", () => {
     const sourceConfig = {
       tools: {
@@ -479,6 +645,26 @@ describe("redactConfigSnapshot", () => {
 
     expect(runtimeConfig.tools?.exec).toHaveProperty("safeBinProfiles", undefined);
     expect(redactConfigSnapshot(snapshot).raw).toBe(raw);
+  });
+
+  it("drops raw text when overlap fallback triggers", () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        auth: { password: "local" }, // pragma: allowlist secret
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config));
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    expect(result.raw).toBeNull();
+    const cfg = result.config as {
+      gateway?: { mode?: string; auth?: { password?: string } };
+    };
+    expect(cfg.gateway?.mode).toBe("local");
+    expect(cfg.gateway?.auth?.password).toBe(REDACTED_SENTINEL);
+    const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
+    expect(restored.gateway.mode).toBe("local");
+    expect(restored.gateway.auth.password).toBe("local");
   });
 
   it("preserves SecretRef structural fields while redacting SecretRef id", () => {
@@ -587,6 +773,26 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).toContain('"lastTouchedVersion":"resolved-only-value migration-only-value"');
   });
 
+  it("handles null raw gracefully", () => {
+    const snapshot: ConfigFileSnapshot = {
+      path: "/test",
+      exists: false,
+      raw: null,
+      parsed: null,
+      sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
+      resolved: {} as ConfigFileSnapshot["resolved"],
+      valid: false,
+      runtimeConfig: {} as ConfigFileSnapshot["runtimeConfig"],
+      config: {} as ConfigFileSnapshot["config"],
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.raw).toBeNull();
+    expect(result.parsed).toBeNull();
+  });
+
   it("withholds resolved config for invalid snapshots", () => {
     const snapshot: ConfigFileSnapshot = {
       path: "/test",
@@ -614,6 +820,30 @@ describe("redactConfigSnapshot", () => {
     expect(result.runtimeConfig).toBe(result.config);
   });
 
+  it("handles deeply nested tokens in accounts", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        slack: {
+          accounts: {
+            workspace1: { botToken: "fake-workspace1-token-abcdefghij" },
+            workspace2: { appToken: "fake-workspace2-token-abcdefghij" },
+          },
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<
+      string,
+      Record<string, Record<string, Record<string, string>>>
+    >;
+    const slack = expectDefined(channels.slack, "Slack channel config");
+    const accounts = expectDefined(slack.accounts, "Slack accounts");
+    const workspace1 = expectDefined(accounts.workspace1, "workspace1 account");
+    const workspace2 = expectDefined(accounts.workspace2, "workspace2 account");
+    expect(workspace1.botToken).toBe(REDACTED_SENTINEL);
+    expect(workspace2.appToken).toBe(REDACTED_SENTINEL);
+  });
+
   it("redacts env vars that look like secrets", () => {
     const snapshot = makeSnapshot({
       env: {
@@ -632,9 +862,60 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
-  it("does not redact string tokens fields", () => {
-    const config = { memory: { tokens: "should-not-be-redacted" } };
-    expect(redactConfigSnapshot(makeSnapshot(config)).config).toEqual(config);
+  it.each([
+    {
+      name: "does not redact numeric tokens field",
+      snapshot: makeSnapshot({ memory: { tokens: 8192 } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.memory as Record<string, unknown>).tokens).toBe(8192);
+      },
+    },
+    {
+      name: "does not redact softThresholdTokens",
+      snapshot: makeSnapshot({ compaction: { softThresholdTokens: 50000 } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.compaction as Record<string, unknown>).softThresholdTokens).toBe(50000);
+      },
+    },
+    {
+      name: "does not redact string tokens field",
+      snapshot: makeSnapshot({ memory: { tokens: "should-not-be-redacted" } }),
+      assert: (config: Record<string, unknown>) => {
+        expect((config.memory as Record<string, unknown>).tokens).toBe("should-not-be-redacted");
+      },
+    },
+    {
+      name: "still redacts singular token field",
+      snapshot: makeSnapshot({
+        channels: { slack: { token: "secret-slack-token-value-here" } },
+      }),
+      assert: (config: Record<string, unknown>) => {
+        const channels = config.channels as Record<string, Record<string, string>>;
+        expect(expectDefined(channels.slack, "channels.slack test invariant").token).toBe(
+          REDACTED_SENTINEL,
+        );
+      },
+    },
+  ] as const)("respects token-name redaction boundaries: $name", ({ snapshot, assert }) => {
+    const result = redactConfigSnapshot(snapshot);
+    assert(result.config as Record<string, unknown>);
+  });
+
+  it("uses uiHints to determine sensitivity", () => {
+    const hints: ConfigUiHints = {
+      "custom.mySecret": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      custom: { mySecret: "this-is-a-custom-secret-value" },
+    });
+    const result = redactConfigSnapshot(snapshot, hints);
+    const config = result.config as typeof snapshot.config;
+    const custom = config.custom as Record<string, string>;
+    const resolved = result.resolved as Record<string, Record<string, string>>;
+    expect(custom.mySecret).toBe(REDACTED_SENTINEL);
+    expect(expectDefined(resolved.custom, "resolved.custom test invariant").mySecret).toBe(
+      REDACTED_SENTINEL,
+    );
   });
 
   it("keeps regex fallback for extension keys not covered by uiHints", () => {
@@ -672,102 +953,261 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
+  it("honors sensitive:false for extension keys even with regex fallback", () => {
+    const hints: ConfigUiHints = {
+      "plugins.entries.voice-call.config": { label: "Voice Call Config" },
+      "plugins.entries.voice-call.config.apiToken": { sensitive: false },
+    };
+    const snapshot = makeSnapshot({
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              apiToken: "not-secret-on-purpose",
+            },
+          },
+        },
+      },
+    });
+
+    const redacted = redactConfigSnapshot(snapshot, hints);
+    const config = redacted.config as typeof snapshot.config;
+    expect(config.plugins.entries["voice-call"].config.apiToken).toBe("not-secret-on-purpose");
+  });
+
   it("round-trips nested and array sensitivity cases", () => {
-    const secret = "this-is-a-custom-secret-value";
-    const nested = {
-      custom1: { anykey: { mySecret: secret } },
-      custom2: [{ mySecret: secret }],
+    const customSecretValue = "this-is-a-custom-secret-value";
+    const buildNestedValuesSnapshot = () =>
+      makeSnapshot({
+        custom1: { anykey: { mySecret: customSecretValue } },
+        custom2: [{ mySecret: customSecretValue }],
+      });
+    const assertNestedValuesRoundTrip = ({
+      redacted,
+      restored,
+    }: {
+      redacted: Record<string, unknown>;
+      restored: Record<string, unknown>;
+    }) => {
+      const cfg = redacted as Record<string, Record<string, unknown>>;
+      const cfgCustom2 = cfg.custom2 as unknown as unknown[];
+      expect(cfgCustom2.length).toBeGreaterThan(0);
+      expect(
+        (expectDefined(cfg.custom1, "cfg.custom1 test invariant").anykey as Record<string, unknown>)
+          .mySecret,
+      ).toBe(REDACTED_SENTINEL);
+      expect((cfgCustom2[0] as Record<string, unknown>).mySecret).toBe(REDACTED_SENTINEL);
+
+      const out = restored as Record<string, Record<string, unknown>>;
+      const outCustom2 = out.custom2 as unknown as unknown[];
+      expect(outCustom2.length).toBeGreaterThan(0);
+      expect(
+        (expectDefined(out.custom1, "out.custom1 test invariant").anykey as Record<string, unknown>)
+          .mySecret,
+      ).toBe(customSecretValue);
+      expect((outCustom2[0] as Record<string, unknown>).mySecret).toBe(customSecretValue);
     };
-    const nestedRedacted = {
-      custom1: { anykey: { mySecret: REDACTED_SENTINEL } },
-      custom2: [{ mySecret: REDACTED_SENTINEL }],
-    };
-    const harmlessArrays = {
-      harmless: ["this-is-a-custom-harmless-value", "this-is-a-custom-secret-looking-value"],
-      custom: ["this-is-a-custom-harmless-value", secret],
-    };
-    const numericTokens = { nested: { level: { token: [42, 815] } } };
-    const numericCustom = { nested: { level: { custom: [42, 815] } } };
+
     const cases: Array<{
       name: string;
-      config: Record<string, unknown>;
+      snapshot: TestSnapshot<Record<string, unknown>>;
       hints?: ConfigUiHints;
-      expected: Record<string, unknown>;
+      assert: (params: {
+        redacted: Record<string, unknown>;
+        restored: Record<string, unknown>;
+      }) => void;
     }> = [
-      { name: "nested values (schema)", config: nested, expected: nestedRedacted },
+      {
+        name: "nested values (schema)",
+        snapshot: buildNestedValuesSnapshot(),
+        assert: assertNestedValuesRoundTrip,
+      },
       {
         name: "nested values (uiHints)",
         hints: {
           "custom1.*.mySecret": { sensitive: true },
           "custom2[].mySecret": { sensitive: true },
         },
-        config: nested,
-        expected: nestedRedacted,
+        snapshot: buildNestedValuesSnapshot(),
+        assert: assertNestedValuesRoundTrip,
       },
       {
         name: "directly sensitive records and arrays",
-        config: { custom: { token: secret, mySecret: secret }, token: [secret, secret] },
-        expected: {
-          custom: { token: REDACTED_SENTINEL, mySecret: REDACTED_SENTINEL },
-          token: [REDACTED_SENTINEL, REDACTED_SENTINEL],
+        snapshot: makeSnapshot({
+          custom: {
+            token: "this-is-a-custom-secret-value",
+            mySecret: "this-is-a-custom-secret-value",
+          },
+          token: ["this-is-a-custom-secret-value", "this-is-a-custom-secret-value"],
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted;
+          const custom = cfg.custom as Record<string, unknown>;
+          expect(custom.token).toBe(REDACTED_SENTINEL);
+          expect(custom.mySecret).toBe(REDACTED_SENTINEL);
+          expect((cfg.token as unknown[])[0]).toBe(REDACTED_SENTINEL);
+          expect((cfg.token as unknown[])[1]).toBe(REDACTED_SENTINEL);
+
+          const out = restored;
+          const restoredCustom = out.custom as Record<string, unknown>;
+          expect(restoredCustom.token).toBe("this-is-a-custom-secret-value");
+          expect(restoredCustom.mySecret).toBe("this-is-a-custom-secret-value");
+          expect((out.token as unknown[])[0]).toBe("this-is-a-custom-secret-value");
+          expect((out.token as unknown[])[1]).toBe("this-is-a-custom-secret-value");
         },
       },
       {
         name: "directly sensitive records and arrays (uiHints)",
-        hints: { "custom.*": { sensitive: true }, "customArray[]": { sensitive: true } },
-        config: { custom: { anykey: secret, mySecret: secret }, customArray: [secret, secret] },
-        expected: {
-          custom: { anykey: REDACTED_SENTINEL, mySecret: REDACTED_SENTINEL },
-          customArray: [REDACTED_SENTINEL, REDACTED_SENTINEL],
+        hints: {
+          "custom.*": { sensitive: true },
+          "customArray[]": { sensitive: true },
+        },
+        snapshot: makeSnapshot({
+          custom: {
+            anykey: "this-is-a-custom-secret-value",
+            mySecret: "this-is-a-custom-secret-value",
+          },
+          customArray: ["this-is-a-custom-secret-value", "this-is-a-custom-secret-value"],
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted;
+          const custom = cfg.custom as Record<string, unknown>;
+          expect(custom.anykey).toBe(REDACTED_SENTINEL);
+          expect(custom.mySecret).toBe(REDACTED_SENTINEL);
+          expect((cfg.customArray as unknown[])[0]).toBe(REDACTED_SENTINEL);
+          expect((cfg.customArray as unknown[])[1]).toBe(REDACTED_SENTINEL);
+
+          const out = restored;
+          const restoredCustom = out.custom as Record<string, unknown>;
+          expect(restoredCustom.anykey).toBe("this-is-a-custom-secret-value");
+          expect(restoredCustom.mySecret).toBe("this-is-a-custom-secret-value");
+          expect((out.customArray as unknown[])[0]).toBe("this-is-a-custom-secret-value");
+          expect((out.customArray as unknown[])[1]).toBe("this-is-a-custom-secret-value");
         },
       },
       {
         name: "non-sensitive arrays remain unchanged",
-        hints: { "custom[]": { sensitive: false } },
-        config: harmlessArrays,
-        expected: harmlessArrays,
+        hints: {
+          "custom[]": { sensitive: false },
+        },
+        snapshot: makeSnapshot({
+          harmless: ["this-is-a-custom-harmless-value", "this-is-a-custom-secret-looking-value"],
+          custom: ["this-is-a-custom-harmless-value", "this-is-a-custom-secret-value"],
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted;
+          expect((cfg.harmless as unknown[])[0]).toBe("this-is-a-custom-harmless-value");
+          expect((cfg.harmless as unknown[])[1]).toBe("this-is-a-custom-secret-looking-value");
+          expect((cfg.custom as unknown[])[0]).toBe("this-is-a-custom-harmless-value");
+          expect((cfg.custom as unknown[])[1]).toBe("this-is-a-custom-secret-value");
+
+          const out = restored;
+          expect((out.harmless as unknown[])[0]).toBe("this-is-a-custom-harmless-value");
+          expect((out.harmless as unknown[])[1]).toBe("this-is-a-custom-secret-looking-value");
+          expect((out.custom as unknown[])[0]).toBe("this-is-a-custom-harmless-value");
+          expect((out.custom as unknown[])[1]).toBe("this-is-a-custom-secret-value");
+        },
       },
       {
         name: "deep schema-sensitive arrays and upstream-sensitive paths",
-        config: {
-          nested: {
-            level: { token: [secret, secret], harmless: ["value", "value"] },
-            password: { harmless: ["value", "value"] },
-          },
-        },
-        expected: {
+        snapshot: makeSnapshot({
           nested: {
             level: {
-              token: [REDACTED_SENTINEL, REDACTED_SENTINEL],
+              token: ["this-is-a-custom-secret-value", "this-is-a-custom-secret-value"],
               harmless: ["value", "value"],
             },
-            password: { harmless: [REDACTED_SENTINEL, REDACTED_SENTINEL] },
+            password: {
+              harmless: ["value", "value"],
+            },
           },
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(cfg, "token", [REDACTED_SENTINEL, REDACTED_SENTINEL]);
+          expectNestedLevelPairValue(cfg, "harmless", ["value", "value"]);
+          expectNestedPairValue(cfg, "password", "harmless", [
+            REDACTED_SENTINEL,
+            REDACTED_SENTINEL,
+          ]);
+
+          const out = restored as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(out, "token", [
+            "this-is-a-custom-secret-value",
+            "this-is-a-custom-secret-value",
+          ]);
+          expectNestedLevelPairValue(out, "harmless", ["value", "value"]);
+          expectNestedPairValue(out, "password", "harmless", ["value", "value"]);
         },
       },
       {
         name: "deep non-string arrays on schema-sensitive paths remain unchanged",
-        config: numericTokens,
-        expected: numericTokens,
+        snapshot: makeSnapshot({
+          nested: {
+            level: {
+              token: [42, 815],
+            },
+          },
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(cfg, "token", [42, 815]);
+
+          const out = restored as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(out, "token", [42, 815]);
+        },
       },
       {
         name: "deep arrays respect uiHints sensitivity",
-        hints: { "nested.level.custom[]": { sensitive: true } },
-        config: { nested: { level: { custom: [secret, secret] } } },
-        expected: { nested: { level: { custom: [REDACTED_SENTINEL, REDACTED_SENTINEL] } } },
+        hints: {
+          "nested.level.custom[]": { sensitive: true },
+        },
+        snapshot: makeSnapshot({
+          nested: {
+            level: {
+              custom: ["this-is-a-custom-secret-value", "this-is-a-custom-secret-value"],
+            },
+          },
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(cfg, "custom", [REDACTED_SENTINEL, REDACTED_SENTINEL]);
+
+          const out = restored as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(out, "custom", [
+            "this-is-a-custom-secret-value",
+            "this-is-a-custom-secret-value",
+          ]);
+        },
       },
       {
         name: "deep non-string arrays respect uiHints sensitivity",
-        hints: { "nested.level.custom[]": { sensitive: true } },
-        config: numericCustom,
-        expected: numericCustom,
+        hints: {
+          "nested.level.custom[]": { sensitive: true },
+        },
+        snapshot: makeSnapshot({
+          nested: {
+            level: {
+              custom: [42, 815],
+            },
+          },
+        }),
+        assert: ({ redacted, restored }) => {
+          const cfg = redacted as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(cfg, "custom", [42, 815]);
+
+          const out = restored as Record<string, Record<string, Record<string, unknown>>>;
+          expectNestedLevelPairValue(out, "custom", [42, 815]);
+        },
       },
     ];
 
-    for (const { name, config, hints, expected } of cases) {
-      const redacted = redactConfigSnapshot(makeSnapshot(config), hints);
-      expect(redacted.config, name).toEqual(expected);
-      expect(restoreRedactedValues(redacted.config, config, hints), name).toEqual(config);
+    for (const { snapshot, hints, assert } of cases) {
+      const redacted = redactConfigSnapshot(snapshot, hints);
+      const restored = restoreRedactedValues(redacted.config, snapshot.config, hints);
+      assert({
+        redacted: redacted.config as Record<string, unknown>,
+        restored: restored as Record<string, unknown>,
+      });
     }
   });
 
@@ -925,24 +1365,72 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
-  it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
-    const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeJson5Snapshot({
-      browser: {
-        cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
-        profiles: {
-          remote: {
-            cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
-          },
-          prod: {
-            cdpUrl: "https://alice:secret@chrome.prod.example.com",
-          },
-          local: {
-            cdpUrl: "ws://localhost:9222",
-          },
+  it("uses wildcard hints for array items", () => {
+    const hints: ConfigUiHints = {
+      "channels.slack.accounts[].botToken": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      channels: {
+        slack: {
+          accounts: [
+            { botToken: "first-account-token-value-here" },
+            { botToken: "second-account-token-value-here" },
+          ],
         },
       },
     });
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<
+      string,
+      Record<string, Array<Record<string, string>>>
+    >;
+    const accounts = expectDefined(
+      expectDefined(channels.slack, "Slack channel config").accounts,
+      "Slack accounts",
+    );
+    expect(accounts.map((account) => account.botToken)).toEqual([
+      REDACTED_SENTINEL,
+      REDACTED_SENTINEL,
+    ]);
+  });
+
+  it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const raw = `{
+  browser: {
+    cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+    profiles: {
+      remote: {
+        cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+      },
+      prod: {
+        cdpUrl: "https://alice:secret@chrome.prod.example.com",
+      },
+      local: {
+        cdpUrl: "ws://localhost:9222",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        browser: {
+          cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+          profiles: {
+            remote: {
+              cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+            },
+            prod: {
+              cdpUrl: "https://alice:secret@chrome.prod.example.com",
+            },
+            local: {
+              cdpUrl: "ws://localhost:9222",
+            },
+          },
+        },
+      },
+      raw,
+    );
 
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
@@ -969,3 +1457,4 @@ describe("redactConfigSnapshot", () => {
     expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
