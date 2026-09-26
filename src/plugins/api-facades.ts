@@ -119,6 +119,6 @@ export function instrumentPluginInstanceApi(
       },
     }),
   );
-  pluginInstanceState.values.set(instrumented, instance);
+  pluginInstanceState.values.setHost(instrumented, instance);
   return instrumented;
 }
