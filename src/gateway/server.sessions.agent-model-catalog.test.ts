@@ -111,8 +111,14 @@ const cases: ModelSelectionCase[] = [
     model: "openai/gpt-5.4",
     expectedModel: "openai/gpt-5.4",
     denied: true,
-    error:
-      'Model openai/gpt-5.4 requires the "codex" agent harness, but no enabled plugin provides it. Enable the `codex` plugin with `openclaw plugins enable codex`; if it is not installed, run `openclaw plugins install @openclaw/codex`. Remove any restrictive `plugins.allow` or `plugins.deny` entry for `codex`, restart the Gateway, and try again. The model change was not applied.',
+    error: [
+      'Model openai/gpt-5.4 requires the "codex" agent harness, but no enabled plugin provides it.',
+      "If `plugins.allow` is configured, add `codex` to that list.",
+      "If `plugins.deny` includes `codex`, remove only `codex` from that list.",
+      "Install `@openclaw/codex` with `openclaw plugins install @openclaw/codex` if needed.",
+      "Then enable it with `openclaw plugins enable codex`.",
+      "Restart the Gateway and try again. The model change was not applied.",
+    ].join(" "),
   },
   {
     label: "preserves the session when the selected model requires an unavailable harness",

@@ -640,7 +640,13 @@ function* projectSessionPatchSteps(
       ) {
         const harnessSetupHint =
           harnessSelection.runtime === "codex"
-            ? 'Enable the `codex` plugin with `openclaw plugins enable codex`; if it is not installed, run `openclaw plugins install @openclaw/codex`. Remove any restrictive `plugins.allow` or `plugins.deny` entry for `codex`, restart the Gateway, and try again.'
+            ? [
+                "If `plugins.allow` is configured, add `codex` to that list.",
+                "If `plugins.deny` includes `codex`, remove only `codex` from that list.",
+                "Install `@openclaw/codex` with `openclaw plugins install @openclaw/codex` if needed.",
+                "Then enable it with `openclaw plugins enable codex`.",
+                "Restart the Gateway and try again.",
+              ].join(" ")
             : `Install and enable a plugin that provides the "${harnessSelection.runtime}" harness, then restart the Gateway and try again.`;
         return invalid(
           `Model ${selection.provider}/${selection.model} requires the "${harnessSelection.runtime}" agent harness, but no enabled plugin provides it. ${harnessSetupHint} The model change was not applied.`,
