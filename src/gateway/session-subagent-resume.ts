@@ -110,7 +110,9 @@ export function assertParentSubagentResumeCurrent(params: {
   sessionId: string;
 }): SubagentRunRecord {
   const { resume } = params;
-  const entry = requirePausedChild(params.cfg, resume.caller, resume.childSessionKey);
+  const entry = resume.caller
+    ? requirePausedChild(params.cfg, resume.caller, resume.childSessionKey)
+    : requireCallbackPausedChild(resume);
   if (
     params.sessionKey !== resume.childSessionKey ||
     params.sessionId !== resume.childSessionId ||
@@ -177,4 +179,29 @@ export async function prepareParentSubagentResume(params: {
     assertParentSubagentResumeSuccessorCurrent(params.resume, params.runId);
     return params.resume.taskRunId;
   };
+}
+
+/** A queue-owned capability may continue only the captured native child generation. */
+function requireCallbackPausedChild(resume: TrustedSubagentResume): SubagentRunRecord {
+  if (!resume.assertCallbackCurrent) {
+    throw new Error("Task resume requires host-owned authority.");
+  }
+  resume.assertCallbackCurrent();
+  const entry = getLatestLiveSubagentRunByChildSessionKey(resume.childSessionKey);
+  if (
+    !entry ||
+    entry.pauseReason !== "sessions_yield" ||
+    typeof entry.execution.endedAt !== "number" ||
+    entry.collect ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    entry.terminalOwner ||
+    entry.suppressAnnounceReason ||
+    entry.cleanupCompletedAt !== undefined ||
+    entry.execution.suppressSessionEffects ||
+    entry.expectsCompletionMessage === false
+  ) {
+    throw new Error("Callback requires the original paused native child.");
+  }
+  return entry;
 }

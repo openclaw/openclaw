@@ -165,7 +165,7 @@ function resolveQueuedSessionDeliveryContext(
       ...(entry.route.threadId ? { threadId: entry.route.threadId } : {}),
     };
   }
-  return entry.deliveryContext;
+  return entry.kind === "nativeChildFollowup" ? undefined : entry.deliveryContext;
 }
 
 export async function deliverQueuedSessionDelivery(params: {
@@ -176,6 +176,10 @@ export async function deliverQueuedSessionDelivery(params: {
 }) {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
+  if (queuedEntry.kind === "nativeChildFollowup") {
+    const { deliverNativeChildCallback } = await import("./session-plugin-callback-delivery.js");
+    return deliverNativeChildCallback({ ...params, entry: queuedEntry });
+  }
   const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
     queuedEntry.sessionKey,
     {

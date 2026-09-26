@@ -13,6 +13,8 @@ import {
   isMcpOAuthWorkerCommand,
   executeMcpOAuthWorkerCommand,
 } from "../agents/mcp-oauth-store.worker.js";
+import { isPluginAsyncCallbackCommand } from "../agents/plugin-async-callback.worker-contract.js";
+import { executePluginAsyncCallbackCommand } from "../agents/plugin-async-callback.worker.js";
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
@@ -625,6 +627,9 @@ export function executeSharedStateCommand(
       ({ db }) => publishPluginSourceAdmissionInDatabase(db, command.input),
       writeOptions,
     );
+  }
+  if (isPluginAsyncCallbackCommand(command)) {
+    return executePluginAsyncCallbackCommand(command, writeOptions);
   }
   if (command.type === "subagents.persistChanges") {
     const { writeId, values, deleteRunIds } = command.input;

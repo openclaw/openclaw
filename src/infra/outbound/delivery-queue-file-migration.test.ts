@@ -105,7 +105,7 @@ describe("legacy file queue migration to recovery", () => {
     expect.soft(send.mock.calls.map(([text]) => text)).toEqual(["below"]);
     expect(
       deliverSession.mock.calls.map(([entry]) =>
-        entry.kind === "agentTurn" ? entry.message : entry.text,
+        entry.kind === "systemEvent" ? entry.text : entry.message,
       ),
     ).toEqual(["below"]);
   });

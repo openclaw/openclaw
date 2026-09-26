@@ -2,6 +2,7 @@ import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-pr
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type { McpOAuthWriteOperations } from "../agents/mcp-oauth-store.types.js";
+import type { PluginAsyncCallbackWorkerOperations } from "../agents/plugin-async-callback.worker-contract.js";
 import type {
   SandboxRegistryInsert,
   SandboxRegistryWrite,
@@ -107,6 +108,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
+  PluginAsyncCallbackWorkerOperations &
   WorktreeRegistryReadOperations &
   SessionStateWorkerOperations &
   McpOAuthReadOperations &

@@ -3,7 +3,9 @@ import type { TrustedAgentToolCaller } from "./server-methods/types.js";
 
 /** Host-only admission facts; never accepted from model arguments or Gateway wire params. */
 export type TrustedSubagentResume = Readonly<{
-  caller: TrustedAgentToolCaller;
+  caller?: TrustedAgentToolCaller;
+  /** Host durable callback admission, never supplied by plugin or RPC parameters. */
+  assertCallbackCurrent?: () => void;
   childSessionKey: string;
   childSessionId: string;
   previousRunId: string;

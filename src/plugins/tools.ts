@@ -273,6 +273,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 
 type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
+  runId?: string;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
@@ -598,6 +599,7 @@ function resolvePluginToolsFromRegistry(
         entry,
         registry: owner.registry,
         context: params.context,
+        runId: params.runId,
         assertInvocationCurrent: params.assertInvocationCurrent,
         ownerContinuation: params.ownerContinuation,
       });

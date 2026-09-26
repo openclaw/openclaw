@@ -96,6 +96,11 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     },
     on() {},
     ...flatApi,
+    asyncToolCallbacks: flatApi.asyncToolCallbacks ?? {
+      complete: async () => {
+        throw new Error("Async callback completion unavailable in test API");
+      },
+    },
   } satisfies OpenClawPluginApiWithoutFacades;
   // Facades derive nested `agent`, `lifecycle`, `runContext`, and `session`
   // views from the flat API; explicit overrides below let tests replace only

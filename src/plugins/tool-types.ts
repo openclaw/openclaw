@@ -18,6 +18,16 @@ export type OpenClawPluginToolDelivery = {
   send: (params: { text?: string; mediaUrl?: string }) => Promise<void>;
 };
 
+/** One-use host-bound completion handle. It does not reveal a destination. */
+export type OpenClawPluginAsyncToolCallback = {
+  /** Opaque secret: persist privately in the plugin, never in tool output or model context. */
+  token: string;
+  expiresAt: number;
+  complete: (
+    resultText: string,
+  ) => Promise<"accepted" | "duplicate" | "expired" | "cancelled" | "unknown">;
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 type OpenClawPluginToolContextBase = {
   config?: OpenClawConfig;
@@ -82,7 +92,11 @@ type OpenClawPluginToolContextBase = {
 
 /** Version 1 is the source-compatible direct-turn context; version 2 requires final-effect authority. */
 export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version extends 2
-  ? OpenClawPluginToolContextBase & { assertInvocationCurrent: () => void }
+  ? OpenClawPluginToolContextBase & {
+      assertInvocationCurrent: () => void;
+      /** Issue only inside this registered tool's execute call on a live native child. */
+      issueAsyncCallback?: (options: { ttlMs: number }) => Promise<OpenClawPluginAsyncToolCallback>;
+    }
   : OpenClawPluginToolContextBase;
 
 /** A version 2 descriptor explicitly opts into owner-authorized continuations. */

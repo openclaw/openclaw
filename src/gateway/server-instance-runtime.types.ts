@@ -11,6 +11,8 @@ import type {
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
+  /** Host-only exact child continuation, not part of any wire or plugin API. */
+  subagentResume?: import("./in-process-subagent-resume.js").TrustedSubagentResume;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;

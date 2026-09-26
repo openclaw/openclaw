@@ -15,6 +15,7 @@ type BuildPluginApiParams = {
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;
+  asyncToolCallbacks?: OpenClawPluginApi["asyncToolCallbacks"];
   logger: PluginLogger;
   resolvePath: (input: string) => string;
   handlers?: Partial<Pick<OpenClawPluginApi, keyof typeof noops>>;
@@ -148,6 +149,11 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     config: params.config,
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
+    asyncToolCallbacks: params.asyncToolCallbacks ?? {
+      complete: async () => {
+        throw new Error("Async tool callback completion requires an active plugin runtime");
+      },
+    },
     logger: params.logger,
     ...registrations,
     registerNodeCliFeature: (registrar, opts) =>

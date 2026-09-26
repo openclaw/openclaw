@@ -156,6 +156,42 @@ describe("plugin tool declaration membership", () => {
 });
 
 describe("versioned plugin tool authority", () => {
+  it("offers callbacks only during the registered V2 tool execute, not from a factory or main run", async () => {
+    let issue: OpenClawPluginToolContext<2>["issueAsyncCallback"] | undefined;
+    const { entry, registry } = register({
+      contextVersion: 2,
+      create: (ctx) => {
+        issue = ctx.issueAsyncCallback;
+        return {
+          name: "probe",
+          label: "Probe",
+          description: "Probe callback authority",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            await ctx.issueAsyncCallback!({ ttlMs: 60_000 });
+            return { content: [{ type: "text" as const, text: "pending" }], details: {} };
+          },
+        };
+      },
+    });
+    const ctx = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: { agentId: "main", sessionKey: "agent:main:main", sessionId: "session" },
+      runId: "run-main",
+      assertInvocationCurrent: () => {},
+    });
+    const registered = entry.factory(ctx);
+    expect(registered && !Array.isArray(registered)).toBe(true);
+    await expect(issue!({ ttlMs: 60_000 })).rejects.toThrow("registered tool execution");
+    const tool = bindPluginToolCallbacks(
+      entry,
+      registry,
+      registered as Exclude<typeof registered, null | undefined | unknown[]>,
+      ctx.assertInvocationCurrent,
+    );
+    await expect(tool.execute("call-1", {})).rejects.toThrow("admitted native child");
+  });
   it("requires a final-effect assertion in the versioned context type", () => {
     expectTypeOf<OpenClawPluginToolContext<2>["assertInvocationCurrent"]>().toEqualTypeOf<
       () => void

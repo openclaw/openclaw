@@ -13,10 +13,11 @@ import type {
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
 import "./agent-turn/agent-job.js";
-import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import { bindInProcessSubagentResume } from "./in-process-subagent-resume.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   APPROVALS_SCOPE,
@@ -176,6 +177,7 @@ export function createGatewayInstanceRuntime(
         ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
         : undefined;
       const needsDedicatedPrincipal = Boolean(
+        dispatchOptions.subagentResume ||
         dispatchOptions.allowModelOverride === true ||
         dispatchOptions.allowSyntheticModelOverride === true ||
         dispatchOptions.allowSyntheticCronRunContinuation === true ||
@@ -188,18 +190,25 @@ export function createGatewayInstanceRuntime(
       );
       const agentTurns = needsDedicatedPrincipal
         ? createAgentTurnFacade({
-            client: createSyntheticPluginRuntimeClient({
-              operatorRoleActor: { kind: "system" },
-              allowModelOverride:
-                dispatchOptions.allowModelOverride === true ||
-                dispatchOptions.allowSyntheticModelOverride === true,
-              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
-              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
-              runtimeContextFragments: dispatchOptions.runtimeContextFragments,
-              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
-              delegatedToolPolicyHandoffId,
-              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
-            }),
+            client: (() => {
+              const client = createSyntheticPluginRuntimeClient({
+                operatorRoleActor: { kind: "system" },
+                allowModelOverride:
+                  dispatchOptions.allowModelOverride === true ||
+                  dispatchOptions.allowSyntheticModelOverride === true,
+                cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+                internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+                runtimeContextFragments: dispatchOptions.runtimeContextFragments,
+                internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+                delegatedToolPolicyHandoffId,
+                scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
+              });
+              client.internal = bindInProcessSubagentResume(
+                client.internal ?? {},
+                dispatchOptions.subagentResume,
+              );
+              return client;
+            })(),
           })
         : recoveryAgentTurns;
       try {

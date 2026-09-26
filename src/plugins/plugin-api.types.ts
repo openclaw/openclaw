@@ -199,6 +199,13 @@ export type OpenClawPluginApi = {
    * automation/integration unless you need native registry integration.
    */
   runtime: PluginRuntime;
+  /** Restart-durable completion, bound to this live plugin instance. Token stays private to the plugin. */
+  asyncToolCallbacks: {
+    complete: (params: {
+      token: string;
+      resultText: string;
+    }) => Promise<"accepted" | "duplicate" | "expired" | "cancelled" | "unknown">;
+  };
   logger: PluginLogger;
   /**
    * Grouped facade over the existing flat session-related plugin API.
