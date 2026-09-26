@@ -76,3 +76,16 @@ In JSON mode, terminal log-fetch errors use the same redacted failure reason for
 - [Gateway CLI](/cli/gateway)
 - [CLI reference](/cli)
 - [Gateway logging](/gateway/logging)
+
+## Filter the displayed severity
+
+Use `openclaw logs --level warn` to display structured warning, error, and fatal
+records. The option also works with `--follow`, `--plain`, and `--json` and accepts
+`trace`, `debug`, `info`, `warn`, `error`, or `fatal`.
+
+Filtering applies to the already fetched, byte-bounded tail. `--limit` still
+bounds source lines, not the number of matching records; increase the existing
+limits when you need a larger recent window. This is not historical log search.
+Records without a recognized level are omitted only when `--level` is supplied.
+Source metadata, reset/truncation notices, errors, and cursor advancement are not
+filtered. Omitting the option preserves the existing output.
