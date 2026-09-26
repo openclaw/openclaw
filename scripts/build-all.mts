@@ -121,6 +121,12 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
+      // The unified group bundles every bundled plugin as its own config. Left to
+      // tsdown's default, all of them run at once and rolldown's native memory
+      // (which --max-old-space-size does not cap) peaks near 9.5GB. Serial admission
+      // holds the step near 4GB for ~15s more wall-clock.
+      "--concurrency",
+      "1",
     ),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
   },

@@ -650,6 +650,8 @@ describe("resolveBuildAllSteps", () => {
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
+      "--concurrency",
+      "1",
     ]);
     expect(unified.env).toMatchObject({ OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" });
     expect(unified.cache).toBeUndefined();
