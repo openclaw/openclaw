@@ -568,30 +568,6 @@ export function configureSqliteWalMaintenance(
     if (request.checkpoint) {
       checkpointOwner.adopt(request.checkpoint);
     }
-    if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-      let splitBrain: SqliteWalSplitBrainEvent | undefined;
-      try {
-        splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-      } catch (error) {
-        splitBrainDetectionEnabled = false;
-        if (!splitBrainDetectionWarningLogged) {
-          splitBrainDetectionWarningLogged = true;
-          log.warn("SQLite WAL split-brain detection disabled", {
-            databaseLabel: options.databaseLabel,
-            databasePath: tripwireDatabasePath,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      if (splitBrain) {
-        invalidated = true;
-        if (timer) {
-          clearInterval(timer);
-          timer = null;
-        }
-        terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
-      }
-    }
     let reclaimedPages = 0;
     runMaintenance(() => {
       const reclaimed = reclaimSqliteWalFreePages(db, runCheckpoint, {
@@ -653,6 +629,31 @@ export function configureSqliteWalMaintenance(
         setInterval(() => {
           if (!timer || invalidated) {
             return;
+          }
+          // Inspect the published handle before identity admission or synchronous cleanup.
+          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+            let splitBrain: SqliteWalSplitBrainEvent | undefined;
+            try {
+              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+            } catch (error) {
+              splitBrainDetectionEnabled = false;
+              if (!splitBrainDetectionWarningLogged) {
+                splitBrainDetectionWarningLogged = true;
+                log.warn("SQLite WAL split-brain detection disabled", {
+                  databaseLabel: options.databaseLabel,
+                  databasePath: tripwireDatabasePath,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            if (splitBrain) {
+              invalidated = true;
+              if (timer) {
+                clearInterval(timer);
+                timer = null;
+              }
+              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+            }
           }
           maintainPeriodically();
         }, timerIntervalMs) as IntervalHandle,

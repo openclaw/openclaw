@@ -38,8 +38,10 @@ Published agent and shared-state database timers dispatch periodic WAL checkpoin
 and bounded page reclamation through those same writers. The existing timer keeps
 its cadence and page budget, releases writer custody between units, and installs
 the worker's checkpoint health only while its original database owner is current.
-Native checkpoint work, file-size diagnostics, and Linux split-brain inspection
-run in the worker. Host admission and physical-identity checks remain on the host.
+Native checkpoint work and file-size diagnostics run in the worker. Linux
+sidecar containment retains its synchronous scan at timer entry, before identity
+admission can refuse dispatch or close can clean up the original handle. Host
+admission and physical-identity checks remain on the host.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.
 
