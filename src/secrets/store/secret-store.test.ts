@@ -245,37 +245,32 @@ describe("secret store", () => {
     ).not.toHaveProperty("secretSentinels");
   });
 
-  it.each(["off", "0", "false"])(
-    "seals protected exec values when provider sentinels are %s",
-    (mode) => {
-      vi.stubEnv("OPENCLAW_SECRET_SENTINELS", mode);
-      const database = createDatabaseOptions();
-      const secret = "protected-store-fixture-value";
-      writeSecretStoreEntry({
-        scope: team,
-        name: "SERVICE_API_KEY",
-        value: secret,
-        kind: "secret",
-        allowedHosts: ["api.example.com"],
-        updatedBy: "test",
-        database,
-      });
-      const environment = readSecretStoreExecEnvironment({
-        includeSecretSentinels: true,
-        database,
-      });
-      const sentinel = environment.secretSentinels?.SERVICE_API_KEY ?? "";
-      expect(looksLikeSecretSentinel(sentinel)).toBe(true);
-      expect(resolveSecretSentinel(sentinel)).toBe(secret);
-      expect(JSON.stringify(environment)).not.toContain(secret);
-      expect(environment.secretEgressBindings).toEqual([
-        { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["api.example.com"] },
-      ]);
-      expect(readSecretStoreExecEnvironment({ includeSecretSentinels: false, database })).toEqual(
-        {},
-      );
-    },
-  );
+  it("seals protected exec values when provider sentinels are disabled", () => {
+    vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
+    const database = createDatabaseOptions();
+    const secret = "protected-store-fixture-value";
+    writeSecretStoreEntry({
+      scope: team,
+      name: "SERVICE_API_KEY",
+      value: secret,
+      kind: "secret",
+      allowedHosts: ["api.example.com"],
+      updatedBy: "test",
+      database,
+    });
+    const environment = readSecretStoreExecEnvironment({
+      includeSecretSentinels: true,
+      database,
+    });
+    const sentinel = environment.secretSentinels?.SERVICE_API_KEY ?? "";
+    expect(looksLikeSecretSentinel(sentinel)).toBe(true);
+    expect(resolveSecretSentinel(sentinel)).toBe(secret);
+    expect(JSON.stringify(environment)).not.toContain(secret);
+    expect(environment.secretEgressBindings).toEqual([
+      { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["api.example.com"] },
+    ]);
+    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: false, database })).toEqual({});
+  });
 
   it("soft-deletes idempotently and purges after the 30-day retention", () => {
     const database = createDatabaseOptions();

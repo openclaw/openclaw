@@ -37,14 +37,7 @@ function readOptionalOnePasswordString(
   record: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  const value = record[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`1Password config ${key} must be a non-empty string`);
-  }
-  return value.trim();
+  return record[key] === undefined ? undefined : requiredString(record, key);
 }
 
 function readPolicy(value: unknown, label: string, fallback: OnePasswordPolicy): OnePasswordPolicy {

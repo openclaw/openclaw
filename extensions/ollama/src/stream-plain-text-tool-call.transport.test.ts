@@ -4,7 +4,7 @@
 // parsing, real createPlainTextToolCallCompatWrapper, real Markdown protection.
 // Nothing is mocked; only the network endpoint is local. The hand-built delta suites
 // in packages/tool-call-repair replicate the delta shape this transport emits
-// (per-record text_delta with contentIndex and no cumulative partial); the raw-stream
+// (append-only text_delta with contentIndex and no cumulative partial); the raw-stream
 // assertions here pin that shape so those suites cannot silently drift from it.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -97,7 +97,6 @@ type CollectedRun = {
   deltaText: string;
   doneText: string;
   errors: unknown[];
-  eventTypes: Map<string, number>;
   partialCarryingDeltas: number;
   toolCallNames: string[];
 };
@@ -123,13 +122,11 @@ async function runThroughTransport(
     deltaText: "",
     doneText: "",
     errors: [],
-    eventTypes: new Map(),
     partialCarryingDeltas: 0,
     toolCallNames: [],
   };
   for await (const event of stream as AsyncIterable<Record<string, unknown>>) {
     const type = typeof event.type === "string" ? event.type : "unknown";
-    run.eventTypes.set(type, (run.eventTypes.get(type) ?? 0) + 1);
     if (type === "text_delta") {
       run.deltaText += typeof event.delta === "string" ? event.delta : "";
       if ("partial" in event && event.partial !== undefined) {
@@ -191,9 +188,7 @@ describe("plain-text tool-call compat wrapper over the real Ollama NDJSON transp
     expect(run.doneText).toBe(payload.text);
     expect(run.deltaText).toBe(payload.text);
     expect(run.toolCallNames).toEqual([]);
-    // Raw transport delta shape backing the packages/tool-call-repair bounded suites:
-    // one text_delta per NDJSON record, with no cumulative `partial` snapshot attached.
-    expect(run.eventTypes.get("text_delta")).toBe(payload.chunks.length);
+    // Queued records may coalesce; deltas still replay without cumulative snapshots.
     expect(run.partialCarryingDeltas).toBe(0);
   });
 });

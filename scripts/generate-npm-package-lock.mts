@@ -1650,7 +1650,6 @@ export {
   collectPnpmLockViolations,
   disableDependencyShrinkwrapOverrideConflictSources,
   exactOverrideRulesFromOverrides,
-  exactVersionFromOverrideSpec,
   mergeOverrides,
   normalizeOverrides,
   applyPackageExtensionPeerMetadata,

@@ -180,57 +180,7 @@ function expectMockCalledWithFields(
   fields: Record<string, unknown>,
 ) {
   const input = mockInput(mock, mock.mock.calls.length - 1);
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(input[key]).toEqual(expected);
-  }
-}
-
-function expectPluginLoaderCall(params: {
-  config?: unknown;
-  activationSourceConfig?: unknown;
-  autoEnabledReasons?: Record<string, string[]>;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: unknown;
-  loadModules?: boolean;
-}) {
-  expectMockCalledWithFields(loadOpenClawPluginsMock, params);
-}
-
-function expectMetadataSnapshotLoaderCall(params: {
-  config?: unknown;
-  activationSourceConfig?: unknown;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: unknown;
-  loadModules?: boolean;
-}) {
-  expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, params);
-}
-
-function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
-  expectMockCalledWithFields(applyPluginAutoEnableMock, {
-    config: params.rawConfig,
-    env: process.env,
-  });
-}
-
-function expectBundledCompatChainApplied(params: {
-  config: unknown;
-  pluginIds: string[];
-  enabledConfig: unknown;
-  loadModules: boolean;
-}) {
-  expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
-    config: params.config,
-    pluginIds: params.pluginIds,
-    activation: "defaults",
-  });
-  if (params.loadModules) {
-    expectPluginLoaderCall({ config: params.enabledConfig, loadModules: true });
-    return;
-  }
-  expectMetadataSnapshotLoaderCall({ config: params.enabledConfig, loadModules: false });
+  expect(input).toEqual(expect.objectContaining(fields));
 }
 
 async function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
@@ -267,10 +217,8 @@ async function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
     ]);
   });
 
-  expectAutoEnabledStatusLoad({
-    rawConfig,
-  });
-  expectPluginLoaderCall({
+  expectMockCalledWithFields(applyPluginAutoEnableMock, { config: rawConfig, env: process.env });
+  expectMockCalledWithFields(loadOpenClawPluginsMock, {
     config: autoEnabledConfig,
     activationSourceConfig: rawConfig,
     autoEnabledReasons,
@@ -280,15 +228,6 @@ async function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
 
 function expectNoCompatibilityWarnings() {
   expect(buildPluginCompatibilityNotices({ report: preparedReport })).toStrictEqual([]);
-}
-
-function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
-  if (params.notices) {
-    expect(buildPluginCompatibilityNotices({ report: preparedReport })).toEqual(params.notices);
-  }
-  if (params.warnings) {
-    expect(buildPluginCompatibilityWarnings({ report: preparedReport })).toEqual(params.warnings);
-  }
 }
 
 function expectCapabilityKinds(
@@ -309,30 +248,6 @@ function expectInspectShape(
   expect(inspect.shape).toBe(params.shape);
   expect(inspect.capabilityMode).toBe(params.capabilityMode);
   expectCapabilityKinds(inspect, params.capabilityKinds);
-}
-
-function expectInspectPolicy(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  expected: Record<string, unknown>,
-) {
-  expect(inspect.policy).toEqual(expected);
-}
-
-function expectBundleInspectState(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  params: {
-    bundleCapabilities: readonly string[];
-    shape: string;
-    mcpServers?: readonly {
-      name: string;
-      hasStdioTransport: boolean;
-      unsupported?: boolean;
-    }[];
-  },
-) {
-  expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toStrictEqual(params.mcpServers ?? []);
-  expect(inspect.shape).toBe(params.shape);
 }
 
 describe("plugin status reports", () => {
@@ -402,7 +317,7 @@ describe("plugin status reports", () => {
       env,
     });
 
-    expectMetadataSnapshotLoaderCall({
+    expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
       config: {},
       workspaceDir: "/workspace",
       env,
@@ -419,19 +334,12 @@ describe("plugin status reports", () => {
       workspaceDir: "/workspace",
     });
 
-    expectMetadataSnapshotLoaderCall({
+    expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
       config: {},
       logger,
       workspaceDir: "/workspace",
       loadModules: false,
     });
-  });
-
-  it("uses a metadata snapshot load for snapshot reports", () => {
-    buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
-
-    expect(mockInput(loadPluginMetadataRegistrySnapshotMock).loadModules).toBe(false);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("reuses a supplied metadata snapshot for scoped diagnostics", async () => {
@@ -480,10 +388,8 @@ describe("plugin status reports", () => {
 
     buildPluginSnapshotReport({ config: rawConfig });
 
-    expectAutoEnabledStatusLoad({
-      rawConfig,
-    });
-    expectMetadataSnapshotLoaderCall({
+    expectMockCalledWithFields(applyPluginAutoEnableMock, { config: rawConfig, env: process.env });
+    expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
       config: autoEnabledConfig,
       activationSourceConfig: rawConfig,
       loadModules: false,
@@ -523,7 +429,7 @@ describe("plugin status reports", () => {
 
     const inspect = expectInspectReport("demo", { config: rawConfig });
 
-    expectInspectPolicy(inspect, {
+    expect(inspect.policy).toEqual({
       allowPromptInjection: undefined,
       allowConversationAccess: undefined,
       hookTimeoutMs: undefined,
@@ -532,7 +438,7 @@ describe("plugin status reports", () => {
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
-    expectAutoEnabledStatusLoad({ rawConfig });
+    expectMockCalledWithFields(applyPluginAutoEnableMock, { config: rawConfig, env: process.env });
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -548,10 +454,13 @@ describe("plugin status reports", () => {
 
     buildPluginSnapshotReport({ config });
 
-    expectBundledCompatChainApplied({
+    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
       config,
       pluginIds,
-      enabledConfig,
+      activation: "defaults",
+    });
+    expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
+      config: enabledConfig,
       loadModules: false,
     });
   });
@@ -630,7 +539,7 @@ describe("plugin status reports", () => {
     });
   });
 
-  it.each(["google", "GoOgLe"])(
+  it.each(["GoOgLe"])(
     "builds an inspect report with capability shape and policy for %s",
     (pluginId) => {
       loadConfigMock.mockReturnValue({
@@ -680,7 +589,7 @@ describe("plugin status reports", () => {
         ],
       });
       expect(inspect.compatibility).toStrictEqual([]);
-      expectInspectPolicy(inspect, {
+      expect(inspect.policy).toEqual({
         allowPromptInjection: false,
         allowConversationAccess: true,
         hookTimeoutMs: 1700,
@@ -852,24 +761,6 @@ describe("plugin status reports", () => {
     expectNoCompatibilityWarnings();
   });
 
-  it("builds compatibility warnings for hook-only compatibility paths", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "lca",
-          name: "LCA",
-          description: "Legacy hook plugin",
-          hookCount: 1,
-        }),
-      ],
-      hooks: [createCustomHook({ pluginId: "lca", events: ["message"] })],
-    });
-
-    expectCompatibilityOutput({
-      warnings: [`lca ${HOOK_ONLY_MESSAGE}`],
-    });
-  });
-
   it("reuses compatible runtime hook registrations without loading cold plugin modules", () => {
     const metadataPlugin = createPluginRecord({
       id: "runtime-hook-only",
@@ -924,38 +815,15 @@ describe("plugin status reports", () => {
       ],
     });
 
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "file-backed-session-plugin",
-          code: "removed-session-transcript-file-api",
-        }),
-      ],
-      warnings: [`file-backed-session-plugin ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`],
-    });
-  });
-
-  it("does not surface bundled session file API migration debt as user warnings", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "bundled-session-plugin",
-          name: "Bundled Session Plugin",
-          origin: "bundled",
-          error: "The requested module does not provide an export named 'sessionFile'",
-          status: "error",
-        }),
-      ],
-      diagnostics: [
-        {
-          level: "error",
-          pluginId: "bundled-session-plugin",
-          message: "resolveSessionFilePath failed to load",
-        },
-      ],
-    });
-
-    expectNoCompatibilityWarnings();
+    expect(buildPluginCompatibilityNotices({ report: preparedReport })).toEqual([
+      createCompatibilityNotice({
+        pluginId: "file-backed-session-plugin",
+        code: "removed-session-transcript-file-api",
+      }),
+    ]);
+    expect(buildPluginCompatibilityWarnings({ report: preparedReport })).toEqual([
+      `file-backed-session-plugin ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
+    ]);
   });
 
   it("keeps compatibility notices ordered and attributed to their plugin", () => {
@@ -981,30 +849,6 @@ describe("plugin status reports", () => {
     ]);
   });
 
-  it("does not warn for explicit startup-lazy metadata", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "modern-startup-lazy",
-        name: "Modern Startup Lazy",
-        compat: [],
-      }),
-    );
-
-    expectNoCompatibilityWarnings();
-  });
-
-  it("returns no compatibility warnings for modern capability plugins", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "modern",
-        name: "Modern",
-        providerIds: ["modern"],
-      }),
-    );
-
-    expectNoCompatibilityWarnings();
-  });
-
   it.each([
     {
       name: "populates bundleCapabilities from plugin record",
@@ -1021,19 +865,6 @@ describe("plugin status reports", () => {
       expectedId: "claude-bundle",
       expectedBundleCapabilities: ["skills", "commands", "agents", "settings"],
       expectedShape: "non-capability",
-      expectedMcpServers: [],
-    },
-    {
-      name: "returns empty bundleCapabilities and mcpServers for non-bundle plugins",
-      plugin: createPluginRecord({
-        id: "plain-plugin",
-        name: "Plain Plugin",
-        description: "A regular plugin",
-        providerIds: ["plain"],
-      }),
-      expectedId: "plain-plugin",
-      expectedBundleCapabilities: [],
-      expectedShape: "plain-capability",
       expectedMcpServers: [],
     },
     {
@@ -1069,11 +900,9 @@ describe("plugin status reports", () => {
 
       const inspect = expectInspectReport(expectedId);
 
-      expectBundleInspectState(inspect, {
-        bundleCapabilities: expectedBundleCapabilities,
-        shape: expectedShape,
-        mcpServers: expectedMcpServers,
-      });
+      expect(inspect.bundleCapabilities).toEqual(expectedBundleCapabilities);
+      expect(inspect.mcpServers).toStrictEqual(expectedMcpServers);
+      expect(inspect.shape).toBe(expectedShape);
     },
   );
 

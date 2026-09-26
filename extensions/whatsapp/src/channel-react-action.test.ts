@@ -94,6 +94,28 @@ describe("whatsapp react action messageId resolution", () => {
     channels: { whatsapp: { actions: { reactions: true }, allowFrom: ["*"] } },
   } as OpenClawConfig;
 
+  function expectReactionForwarded(params: {
+    chatJid?: string;
+    messageId?: string;
+    emoji?: string;
+    participant?: string;
+  }) {
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "ctx-msg-42",
+        emoji: "👍",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+        ...params,
+      },
+      baseCfg,
+    );
+  }
+
   beforeEach(() => {
     hoisted.handleWhatsAppAction.mockClear();
     hoisted.resolveAuthorizedWhatsAppOutboundTarget.mockClear();
@@ -438,55 +460,6 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("uses explicit messageId when provided", async () => {
-    await handleWhatsAppMessageAction({
-      action: "react",
-      params: { messageId: "explicit-id", emoji: "👍", to: "+1555" },
-      cfg: baseCfg,
-      accountId: "default",
-    });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "explicit-id",
-        emoji: "👍",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
-  });
-
-  it("falls back to toolContext.currentMessageId when messageId omitted", async () => {
-    await handleWhatsAppMessageAction({
-      action: "react",
-      params: { emoji: "❤️", to: "+1555" },
-      cfg: baseCfg,
-      accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
-    });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "ctx-msg-42",
-        emoji: "❤️",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
-  });
-
   it("falls back to toolContext current chat for same-chat reactions", async () => {
     await handleWhatsAppMessageAction({
       action: "react",
@@ -499,19 +472,9 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "ctx-msg-42",
-        emoji: "❤️",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      emoji: "❤️",
+    });
   });
 
   it("converts numeric toolContext messageId to string", async () => {
@@ -526,19 +489,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: 12345,
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "12345",
-        emoji: "🎉",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      messageId: "12345",
+      emoji: "🎉",
+    });
   });
 
   it("throws ToolInputError when messageId missing and no toolContext", async () => {
@@ -547,22 +501,6 @@ describe("whatsapp react action messageId resolution", () => {
       params: { emoji: "👍", to: "+1555" },
       cfg: baseCfg,
       accountId: "default",
-    }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).name).toBe("ToolInputError");
-  });
-
-  it("skips context fallback when targeting a different chat", async () => {
-    const err = await handleWhatsAppMessageAction({
-      action: "react",
-      params: { emoji: "👍", to: "+9999" },
-      cfg: baseCfg,
-      accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("ToolInputError");
@@ -581,19 +519,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "12345@g.us",
-        messageId: "ctx-msg-42",
-        emoji: "👍",
-        remove: undefined,
-        participant: "123@lid",
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      participant: "123@lid",
+    });
   });
 
   it("keeps direct-chat reactions without an inferred participant", async () => {
@@ -609,19 +538,7 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "+1555",
-        messageId: "ctx-msg-42",
-        emoji: "👍",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({});
   });
 
   it("prefers explicit participant over inferred current-message participant", async () => {
@@ -641,19 +558,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "12345@g.us",
-        messageId: "ctx-msg-42",
-        emoji: "👍",
-        remove: undefined,
-        participant: "555@s.whatsapp.net",
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      participant: "555@s.whatsapp.net",
+    });
   });
 
   it("does not reuse the current-chat participant for cross-chat reactions", async () => {
@@ -687,19 +595,10 @@ describe("whatsapp react action messageId resolution", () => {
         currentMessageId: "ctx-msg-42",
       },
     });
-    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      {
-        action: "react",
-        chatJid: "12345@g.us",
-        messageId: "older-msg-7",
-        emoji: "👍",
-        remove: undefined,
-        participant: undefined,
-        accountId: "default",
-        fromMe: undefined,
-      },
-      baseCfg,
-    );
+    expectReactionForwarded({
+      chatJid: "12345@g.us",
+      messageId: "older-msg-7",
+    });
   });
 
   it("skips context fallback when source is another provider", async () => {

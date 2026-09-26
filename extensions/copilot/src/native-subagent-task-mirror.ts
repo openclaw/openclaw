@@ -20,7 +20,10 @@ type CopilotNativeSubagentEvent = Extract<
 type TaskLifecycleRuntime = Required<
   Pick<
     AgentHarnessTaskRuntime,
-    "createRunningTaskRunAsync" | "finalizeTaskRunByRunIdAsync" | "prepareTaskRunRead"
+    | "assertTaskAssignmentSupported"
+    | "createRunningTaskRunAsync"
+    | "finalizeTaskRunByRunIdAsync"
+    | "prepareTaskRunRead"
   >
 >;
 
@@ -38,7 +41,6 @@ export function createCopilotNativeSubagentTaskMirror(params: {
     scope: params.scope,
     runIdPrefix: COPILOT_NATIVE_SUBAGENT_RUN_ID_PREFIX,
   });
-  runtime.assertTaskAssignmentSupported();
   const createRunningTaskRunAsync = runtime.createRunningTaskRunAsync?.bind(runtime);
   const finalizeTaskRunByRunIdAsync = runtime.finalizeTaskRunByRunIdAsync?.bind(runtime);
   const prepareTaskRunRead = runtime.prepareTaskRunRead?.bind(runtime);
@@ -50,7 +52,12 @@ export function createCopilotNativeSubagentTaskMirror(params: {
       agentId: params.agentId,
       now: params.now,
     },
-    { createRunningTaskRunAsync, finalizeTaskRunByRunIdAsync, prepareTaskRunRead },
+    {
+      assertTaskAssignmentSupported: runtime.assertTaskAssignmentSupported.bind(runtime),
+      createRunningTaskRunAsync,
+      finalizeTaskRunByRunIdAsync,
+      prepareTaskRunRead,
+    },
   );
 }
 
@@ -129,6 +136,7 @@ class CopilotNativeSubagentTaskMirror {
     if (existingRunId) {
       return;
     }
+    this.runtime.assertTaskAssignmentSupported();
     const eventAt = this.now();
     const label = event.data.agentDisplayName.trim() || event.data.agentName.trim();
     const task = event.data.agentDescription.trim() || `Subagent ${label}`;

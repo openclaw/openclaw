@@ -387,20 +387,6 @@ export function createAgentHarnessTaskRuntime(
       assertRunId(runId);
       assertRuntimeCurrent();
       const adapter = runtimeOwner.runtime;
-      const findTaskRun = adapter?.findTaskRun?.bind(adapter);
-      if (findTaskRun) {
-        return () => {
-          assertRuntimeCurrent();
-          const task = findTaskRun({
-            runId,
-            runtime,
-            sessionKey: requesterSessionKey,
-            createdAtOrAfter: 0,
-          });
-          assertRuntimeCurrent();
-          return task && task.runId === runId && matchesScope(task) ? [task] : [];
-        };
-      }
       const read = await prepareTaskRegistryRead();
       assertRuntimeCurrent();
       if (!read) {
@@ -410,7 +396,7 @@ export function createAgentHarnessTaskRuntime(
         assertRuntimeCurrent();
         const tasks = read.getTasksByRunId(runId).filter(matchesScope);
         if (adapter && tasks.length === 0) {
-          throw new Error("Custom task runtime must provide findTaskRun to confirm task absence");
+          throw new Error("Custom task runtime has no prepared core projection for this run");
         }
         return tasks;
       };

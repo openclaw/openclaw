@@ -21,6 +21,56 @@ import { renderAgentFiles } from "./panels-files.ts";
 import { renderAgentChannels } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
+function config(configForm: ReturnType<typeof createProps>["config"]["configForm"]) {
+  return {
+    configForm,
+    configSnapshot: null,
+    configLoading: false,
+    configSaving: false,
+    configFormDirty: false,
+    lastError: null,
+  };
+}
+
+function renderView(overrides: Partial<ReturnType<typeof createProps>>, container: HTMLElement) {
+  render(renderAgents(createProps(overrides)), container);
+}
+
+function renderFiles(
+  overrides: Partial<Parameters<typeof renderAgentFiles>[0]>,
+  container: HTMLElement,
+) {
+  const content = "# User Profile\n\nHello world";
+  render(
+    renderAgentFiles({
+      agentId: "alpha",
+      canWrite: true,
+      agentFilesList: {
+        agentId: "alpha",
+        workspace: "/tmp/workspace",
+        files: [
+          {
+            name: "USER.md",
+            path: "/tmp/workspace/USER.md",
+            missing: false,
+            size: 128,
+            updatedAtMs: 1_700_000_000_000,
+          },
+        ],
+      },
+      agentFilesLoading: false,
+      agentFilesError: null,
+      agentFileActive: "USER.md",
+      agentFileContents: { "USER.md": content },
+      agentFileDrafts: { "USER.md": content },
+      agentFileSaving: false,
+      ...inertAgentFileControls,
+      ...overrides,
+    }),
+    container,
+  );
+}
+
 function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
     id,
@@ -58,7 +108,7 @@ describe("renderAgents", () => {
   it("opens global Agent defaults before the per-agent tabs", () => {
     const container = document.createElement("div");
     const onOpenAgentDefaults = vi.fn();
-    render(renderAgents(createProps({ onOpenAgentDefaults })), container);
+    renderView({ onOpenAgentDefaults }, container);
 
     const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
     const tabs = container.querySelector(".agents-hub-tabs");
@@ -73,7 +123,7 @@ describe("renderAgents", () => {
   it("renders the active agent tab and selects a different panel", () => {
     const container = document.createElement("div");
     const onSelectPanel = vi.fn();
-    render(renderAgents(createProps({ activePanel: "files", onSelectPanel })), container);
+    renderView({ activePanel: "files", onSelectPanel }, container);
 
     expect(container.querySelector("#agents-tab-files")?.hasAttribute("active")).toBe(true);
     expectAgentTab(container, "Tools").dispatchEvent(
@@ -84,14 +134,12 @@ describe("renderAgents", () => {
 
   it("prefills the identity editor from the fetched agent identity", () => {
     const container = document.createElement("div");
-    render(
-      renderAgents(
-        createProps({
-          agentIdentityById: {
-            beta: { agentId: "beta", name: "Fetched Beta", avatar: "", emoji: "🦊" },
-          },
-        }),
-      ),
+    renderView(
+      {
+        agentIdentityById: {
+          beta: { agentId: "beta", name: "Fetched Beta", avatar: "", emoji: "🦊" },
+        },
+      },
       container,
     );
 
@@ -112,24 +160,22 @@ describe("renderAgents", () => {
     const nextWakeAtMs = Date.now() + 60_000;
     const scopedNextWakeAtMs = nextWakeAtMs + 3_600_000;
     const container = document.createElement("div");
-    render(
-      renderAgents(
-        createProps({
-          activePanel: "cron",
-          selectedAgentId: "alpha",
-          cron: {
-            cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
-            cronJobs: [job],
-            cronJobsTotal: 1,
-            cronJobsHasMore: false,
-            cronJobsLoadingMore: false,
-            cronScopedTotal: 1,
-            cronScopedNextWakeAtMs: scopedNextWakeAtMs,
-            cronLoading: false,
-            cronError: null,
-          },
-        }),
-      ),
+    renderView(
+      {
+        activePanel: "cron",
+        selectedAgentId: "alpha",
+        cron: {
+          cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
+          cronJobs: [job],
+          cronJobsTotal: 1,
+          cronJobsHasMore: false,
+          cronJobsLoadingMore: false,
+          cronScopedTotal: 1,
+          cronScopedNextWakeAtMs: scopedNextWakeAtMs,
+          cronLoading: false,
+          cronError: null,
+        },
+      },
       container,
     );
 
@@ -185,29 +231,27 @@ describe("renderAgents", () => {
     };
     const container = document.createElement("div");
     const renderCurrentPage = (): void => {
-      render(
-        renderAgents(
-          createProps({
-            activePanel: "cron",
-            selectedAgentId: "alpha",
-            cron: {
-              cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-              cronJobs: cronState.cronJobs,
-              cronJobsTotal: cronState.cronJobsTotal,
-              cronJobsHasMore: cronState.cronJobsHasMore,
-              cronJobsLoadingMore: cronState.cronJobsLoadingMore,
-              cronScopedTotal: 51,
-              cronScopedNextWakeAtMs: null,
-              cronLoading: cronState.cronLoading,
-              cronError: cronState.cronError,
-            },
-            onCronLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-              renderCurrentPage();
-              void nextPage.then(renderCurrentPage);
-            },
-          }),
-        ),
+      renderView(
+        {
+          activePanel: "cron",
+          selectedAgentId: "alpha",
+          cron: {
+            cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
+            cronJobs: cronState.cronJobs,
+            cronJobsTotal: cronState.cronJobsTotal,
+            cronJobsHasMore: cronState.cronJobsHasMore,
+            cronJobsLoadingMore: cronState.cronJobsLoadingMore,
+            cronScopedTotal: 51,
+            cronScopedNextWakeAtMs: null,
+            cronLoading: cronState.cronLoading,
+            cronError: cronState.cronError,
+          },
+          onCronLoadMore: () => {
+            const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
+            renderCurrentPage();
+            void nextPage.then(renderCurrentPage);
+          },
+        },
         container,
       );
     };
@@ -234,7 +278,7 @@ describe("renderAgents", () => {
 
   it("renders Memory after Automations and scopes the panel to the selected agent", () => {
     const container = document.createElement("div");
-    render(renderAgents(createProps({ activePanel: "memory" })), container);
+    renderView({ activePanel: "memory" }, container);
 
     const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
       directText(tab),
@@ -261,20 +305,11 @@ describe("renderAgents", () => {
       },
     };
 
-    render(
-      renderAgents(
-        createProps({
-          selectedAgentId: "alpha",
-          config: {
-            configForm,
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
-          },
-        }),
-      ),
+    renderView(
+      {
+        selectedAgentId: "alpha",
+        config: config(configForm),
+      },
       container,
     );
 
@@ -285,20 +320,11 @@ describe("renderAgents", () => {
         ?.getAttribute("data-value"),
     ).toBe("openai/gpt-5.4");
 
-    render(
-      renderAgents(
-        createProps({
-          selectedAgentId: "beta",
-          config: {
-            configForm,
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
-          },
-        }),
-      ),
+    renderView(
+      {
+        selectedAgentId: "beta",
+        config: config(configForm),
+      },
       container,
     );
 
@@ -334,44 +360,35 @@ describe("renderAgents", () => {
       },
     };
 
-    render(
-      renderAgents(
-        createProps({
-          selectedAgentId: "alpha",
-          config: {
-            configForm,
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
-          },
-          modelCatalog: {
-            hasSnapshot: true,
-            retired: false,
-            models: [
-              {
-                id: "claude-opus-4-8",
-                alias: "opus",
-                name: "Opus 4.8",
-                provider: "anthropic",
-              },
-              {
-                id: "claude-sonnet-5",
-                alias: "sonnet",
-                name: "Sonnet 5",
-                provider: "anthropic",
-              },
-              {
-                id: "moonshotai/kimi-k2.5",
-                alias: "Kimi K2.5 (NVIDIA)",
-                name: "Kimi K2.5",
-                provider: "nvidia",
-              },
-            ],
-          },
-        }),
-      ),
+    renderView(
+      {
+        selectedAgentId: "alpha",
+        config: config(configForm),
+        modelCatalog: {
+          hasSnapshot: true,
+          retired: false,
+          models: [
+            {
+              id: "claude-opus-4-8",
+              alias: "opus",
+              name: "Opus 4.8",
+              provider: "anthropic",
+            },
+            {
+              id: "claude-sonnet-5",
+              alias: "sonnet",
+              name: "Sonnet 5",
+              provider: "anthropic",
+            },
+            {
+              id: "moonshotai/kimi-k2.5",
+              alias: "Kimi K2.5 (NVIDIA)",
+              name: "Kimi K2.5",
+              provider: "nvidia",
+            },
+          ],
+        },
+      },
       container,
     );
 
@@ -396,34 +413,23 @@ describe("renderAgents", () => {
     );
   });
 
-  it.each([
-    { name: "a string primary", model: "openai/gpt-5.4" },
-    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
-  ])("does not display inherited fallback chips for $name", ({ model }) => {
+  it("does not display inherited fallback chips for an authored primary", () => {
+    const model = { primary: "openai/gpt-5.4" };
     const container = document.createElement("div");
     const fallback = "anthropic/claude-sonnet-4-6";
 
-    render(
-      renderAgents(
-        createProps({
-          selectedAgentId: "beta",
-          config: {
-            configForm: {
-              agents: {
-                defaults: {
-                  model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
-                },
-                entries: { alpha: {}, beta: { model } },
-              },
+    renderView(
+      {
+        selectedAgentId: "beta",
+        config: config({
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
             },
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
+            entries: { alpha: {}, beta: { model } },
           },
         }),
-      ),
+      },
       container,
     );
 
@@ -448,20 +454,11 @@ describe("renderAgents", () => {
       },
     };
 
-    render(
-      renderAgents(
-        createProps({
-          selectedAgentId: "beta",
-          config: {
-            configForm,
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
-          },
-        }),
-      ),
+    renderView(
+      {
+        selectedAgentId: "beta",
+        config: config(configForm),
+      },
       container,
     );
 
@@ -471,20 +468,11 @@ describe("renderAgents", () => {
       betaSelect?.querySelector('[role="option"][data-value="openai/gpt-5.4"]'),
     ).not.toBeNull();
 
-    render(
-      renderAgents(
-        createProps({
-          selectedAgentId: "alpha",
-          config: {
-            configForm,
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
-          },
-        }),
-      ),
+    renderView(
+      {
+        selectedAgentId: "alpha",
+        config: config(configForm),
+      },
       container,
     );
 
@@ -499,21 +487,19 @@ describe("renderAgents", () => {
   it("renders the resolved per-agent thinking default in the overview", async () => {
     const container = document.createElement("div");
 
-    render(
-      renderAgents(
-        createProps({
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [
-              { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
-              { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
-            ],
-          },
-          selectedAgentId: "beta",
-        }),
-      ),
+    renderView(
+      {
+        agentsList: {
+          defaultId: "alpha",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
+            { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
+          ],
+        },
+        selectedAgentId: "beta",
+      },
       container,
     );
 
@@ -527,22 +513,20 @@ describe("renderAgents", () => {
 
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
-    render(
-      renderAgents(
-        createProps({
-          agentSkills: {
-            agentSkillsReport: {
-              workspaceDir: "/tmp/workspace",
-              managedSkillsDir: "/tmp/skills",
-              skills: [createSkill()],
-            },
-            agentSkillsLoading: false,
-            agentSkillsError: null,
-            agentSkillsAgentId: "alpha",
-            skillsFilter: "",
+    renderView(
+      {
+        agentSkills: {
+          agentSkillsReport: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [createSkill()],
           },
-        }),
-      ),
+          agentSkillsLoading: false,
+          agentSkillsError: null,
+          agentSkillsAgentId: "alpha",
+          skillsFilter: "",
+        },
+      },
       container,
     );
     await Promise.resolve();
@@ -551,22 +535,20 @@ describe("renderAgents", () => {
 
     expect(skillsTab.textContent?.trim()).toBe("Skills");
 
-    render(
-      renderAgents(
-        createProps({
-          agentSkills: {
-            agentSkillsReport: {
-              workspaceDir: "/tmp/workspace",
-              managedSkillsDir: "/tmp/skills",
-              skills: [createSkill()],
-            },
-            agentSkillsLoading: false,
-            agentSkillsError: null,
-            agentSkillsAgentId: "beta",
-            skillsFilter: "",
+    renderView(
+      {
+        agentSkills: {
+          agentSkillsReport: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [createSkill()],
           },
-        }),
-      ),
+          agentSkillsLoading: false,
+          agentSkillsError: null,
+          agentSkillsAgentId: "beta",
+          skillsFilter: "",
+        },
+      },
       container,
     );
     await Promise.resolve();
@@ -583,18 +565,16 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
 
     try {
-      render(
-        renderAgents(
-          createProps({
-            activePanel: "channels",
-            channels: {
-              channelsSnapshot: null,
-              channelsLoading: false,
-              channelsError: null,
-              channelsLastSuccess: null,
-            },
-          }),
-        ),
+      renderView(
+        {
+          activePanel: "channels",
+          channels: {
+            channelsSnapshot: null,
+            channelsLoading: false,
+            channelsError: null,
+            channelsLastSuccess: null,
+          },
+        },
         container,
       );
       await Promise.resolve();
@@ -697,10 +677,8 @@ describe("renderAgentFiles", () => {
     const container = document.createElement("div");
     const onSelectFile = vi.fn();
 
-    render(
-      renderAgentFiles({
-        agentId: "alpha",
-        canWrite: true,
+    renderFiles(
+      {
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -718,14 +696,11 @@ describe("renderAgentFiles", () => {
           ],
         },
         agentFilesLoading: true,
-        agentFilesError: null,
         agentFileActive: "AGENTS.md",
         agentFileContents: { "AGENTS.md": "# Instructions" },
         agentFileDrafts: { "AGENTS.md": "# Instructions" },
-        agentFileSaving: false,
-        ...inertAgentFileControls,
         onSelectFile,
-      }),
+      },
       container,
     );
 
@@ -741,10 +716,8 @@ describe("renderAgentFiles", () => {
     const container = document.createElement("div");
     const onSelectFile = vi.fn();
 
-    render(
-      renderAgentFiles({
-        agentId: "alpha",
-        canWrite: true,
+    renderFiles(
+      {
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -764,15 +737,11 @@ describe("renderAgentFiles", () => {
             },
           ],
         },
-        agentFilesLoading: false,
-        agentFilesError: null,
         agentFileActive: "AGENTS.md",
         agentFileContents: { "AGENTS.md": "" },
         agentFileDrafts: { "AGENTS.md": "" },
-        agentFileSaving: false,
-        ...inertAgentFileControls,
         onSelectFile,
-      }),
+      },
       container,
     );
 
@@ -890,34 +859,14 @@ describe("renderAgentFiles", () => {
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");
 
-    render(
-      renderAgentFiles({
-        agentId: "alpha",
-        canWrite: true,
-        agentFilesList: {
-          agentId: "alpha",
-          workspace: "/tmp/workspace",
-          files: [
-            {
-              name: "USER.md",
-              path: "/tmp/workspace/USER.md",
-              missing: false,
-              size: 128,
-              updatedAtMs: 1_700_000_000_000,
-            },
-          ],
-        },
-        agentFilesLoading: false,
-        agentFilesError: null,
-        agentFileActive: "USER.md",
+    renderFiles(
+      {
         agentFileContents: {
           "USER.md":
             "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
         },
         agentFileDrafts: {},
-        agentFileSaving: false,
-        ...inertAgentFileControls,
-      }),
+      },
       container,
     );
 
@@ -939,37 +888,7 @@ describe("renderAgentFiles", () => {
   it("renders preview header controls as icon-only buttons with accessible labels", () => {
     const container = document.createElement("div");
 
-    render(
-      renderAgentFiles({
-        agentId: "alpha",
-        canWrite: true,
-        agentFilesList: {
-          agentId: "alpha",
-          workspace: "/tmp/workspace",
-          files: [
-            {
-              name: "USER.md",
-              path: "/tmp/workspace/USER.md",
-              missing: false,
-              size: 128,
-              updatedAtMs: 1_700_000_000_000,
-            },
-          ],
-        },
-        agentFilesLoading: false,
-        agentFilesError: null,
-        agentFileActive: "USER.md",
-        agentFileContents: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
-        agentFileDrafts: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
-        agentFileSaving: false,
-        ...inertAgentFileControls,
-      }),
-      container,
-    );
+    renderFiles({}, container);
 
     const actions = Array.from(
       container.querySelectorAll<HTMLButtonElement>(".md-preview-dialog__actions button"),
@@ -987,37 +906,7 @@ describe("renderAgentFiles", () => {
   it("resets the expanded preview button state when the dialog closes", () => {
     const container = document.createElement("div");
 
-    render(
-      renderAgentFiles({
-        agentId: "alpha",
-        canWrite: true,
-        agentFilesList: {
-          agentId: "alpha",
-          workspace: "/tmp/workspace",
-          files: [
-            {
-              name: "USER.md",
-              path: "/tmp/workspace/USER.md",
-              missing: false,
-              size: 128,
-              updatedAtMs: 1_700_000_000_000,
-            },
-          ],
-        },
-        agentFilesLoading: false,
-        agentFilesError: null,
-        agentFileActive: "USER.md",
-        agentFileContents: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
-        agentFileDrafts: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
-        agentFileSaving: false,
-        ...inertAgentFileControls,
-      }),
-      container,
-    );
+    renderFiles({}, container);
 
     const dialog = container.querySelector("openclaw-modal-dialog");
     const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");

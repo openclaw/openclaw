@@ -10,11 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { stringEnum } from "../schema/typebox.js";
-/**
- * Shared session-tool data shapes and classification helpers.
- *
- * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
- */
 import {
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,

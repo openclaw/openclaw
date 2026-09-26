@@ -123,8 +123,8 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
-  it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({});
+  it("fails search after bounded query embedding retries are exhausted for an explicit provider", async () => {
+    const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -151,6 +151,38 @@ describe("memory index", () => {
 
     await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
     expect(queryCalls).toBe(3);
+  });
+
+  it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
+    const cfg = createCfg({});
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: EmbeddingProvider;
+      }
+    ).provider = {
+      id: "mock",
+      model: "mock-embed",
+      embed: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(3);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {

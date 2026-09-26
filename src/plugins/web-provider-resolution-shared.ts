@@ -53,17 +53,9 @@ function loadInstalledWebProviderManifestRecords(params: {
 }
 
 /** Returns only plugin ids for manifest-declared web provider candidates. */
-export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
-  contract: WebProviderContract;
-  configKey: WebProviderConfigKey;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  sandboxed?: boolean;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] | undefined {
+export function resolveManifestDeclaredWebProviderCandidatePluginIds(
+  params: Parameters<typeof resolveManifestDeclaredWebProviderCandidates>[0],
+): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
 

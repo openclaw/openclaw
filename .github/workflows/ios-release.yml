@@ -139,6 +139,7 @@ jobs:
           node .github/actions/ios-signing-keychain/keychain.mjs probe
 
       - name: Prepare and upload iOS release
+        id: release
         env:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
@@ -155,7 +156,7 @@ jobs:
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
 
       - name: Retain release plan and notes
-        if: always()
+        if: always() && steps.release.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}

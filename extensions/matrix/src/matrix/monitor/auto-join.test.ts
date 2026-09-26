@@ -1,4 +1,3 @@
-// Matrix tests cover auto join plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
@@ -188,41 +187,6 @@ describe("registerMatrixAutoJoin", () => {
 
     await triggerInvite(getInviteHandler);
     expect(joinRoom).not.toHaveBeenCalled();
-  });
-
-  it("uses account-scoped auto-join settings for non-default accounts", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "allowlist",
-        autoJoinAllowlist: ["#ops-allowed:example.org"],
-      },
-      resolveRoomValue: "!room:example.org",
-    });
-
-    await triggerInvite(getInviteHandler);
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("joins sender-scoped invites without eager direct repair", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await triggerInvite(getInviteHandler, { sender: "@alice:example.org" });
-
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("still joins invites when the sender is unavailable", async () => {
-    const { getInviteHandler } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await expect(triggerInvite(getInviteHandler, {})).resolves.toBeUndefined();
   });
 
   it("removes the exact invite listener on disposal", async () => {

@@ -1,5 +1,4 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
-// Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   findStructuredAuthParamRanges,

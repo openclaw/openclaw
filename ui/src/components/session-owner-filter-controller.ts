@@ -68,7 +68,8 @@ export class SessionOwnerFilterController implements ReactiveController {
       );
     }
     this.host.requestUpdate();
-    void this.refresh();
+    this.host.sessionData.resetSessionList();
+    void this.host.sessionData.refreshSidebarSessions();
   }
 
   private restore(): void {
@@ -105,11 +106,6 @@ export class SessionOwnerFilterController implements ReactiveController {
         }
       });
     }
-  }
-
-  private refresh(): Promise<void> {
-    this.host.sessionData.resetSessionList();
-    return this.host.sessionData.refreshSidebarSessions();
   }
 
   private currentFilter() {

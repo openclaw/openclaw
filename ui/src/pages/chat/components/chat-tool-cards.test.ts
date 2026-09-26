@@ -512,44 +512,37 @@ describe("tool-cards", () => {
     }
   });
 
-  it.each(
-    [
-      {
-        name: "edit",
-        args: { path: "src/edit.ts", oldText: "old edit", newText: "new edit" },
-        copiedText: "new edit",
+  it.each([
+    {
+      name: "edit",
+      args: { path: "src/edit.ts", oldText: "old edit", newText: "new edit" },
+      copiedText: "new edit",
+      failed: false,
+      feedback: "Copied!",
+    },
+    {
+      name: "write",
+      args: { path: "src/write.ts", content: "new file\n" },
+      copiedText: "new file",
+      failed: false,
+      feedback: "Copied!",
+    },
+    ...[false, true].map((failed) => ({
+      name: "apply_patch",
+      args: {
+        changes: [
+          {
+            path: "src/patch.ts",
+            kind: { type: "update" },
+            diff: "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
+          },
+        ],
       },
-      {
-        name: "write",
-        args: { path: "src/write.ts", content: "new file\n" },
-        copiedText: "new file",
-      },
-      {
-        name: "apply_patch",
-        args: {
-          changes: [
-            {
-              path: "src/patch.ts",
-              kind: { type: "update" },
-              diff: "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
-            },
-          ],
-        },
-        copiedText: "new patch",
-      },
-    ].flatMap((tool) =>
-      [
-        { failed: false, feedback: "Copied!" },
-        { failed: true, feedback: "Copy failed" },
-      ].map((outcome) => ({
-        name: tool.name,
-        args: tool.args,
-        copiedText: tool.copiedText,
-        failed: outcome.failed,
-        feedback: outcome.feedback,
-      })),
-    ),
-  )("shows $feedback after copying a completed $name diff", async (tool) => {
+      copiedText: "new patch",
+      failed,
+      feedback: failed ? "Copy failed" : "Copied!",
+    })),
+  ])("shows $feedback after copying a completed $name diff", async (tool) => {
     const writeText = tool.failed
       ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
       : vi.fn().mockResolvedValue(undefined);

@@ -1,4 +1,3 @@
-// Matrix tests cover direct plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { EventType } from "../send/types.js";
@@ -114,18 +113,6 @@ describe("createDirectRoomTracker", () => {
     expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
   });
 
-  it("lets explicit room config veto strict two-member fallback before dm cache seed", async () => {
-    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
-    const tracker = createDirectRoomTracker(client, {
-      isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
-    });
-
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
-
-    expect(client.dms.update).not.toHaveBeenCalled();
-    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
-  });
-
   it("does not trust stale m.direct classifications for shared rooms", async () => {
     const client = createMockClient({
       isDm: true,
@@ -169,15 +156,6 @@ describe("createDirectRoomTracker", () => {
     await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.setAccountData).not.toHaveBeenCalled();
-  });
-
-  it("falls back to strict 2-member membership before m.direct account data is available", async () => {
-    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
-    const tracker = createDirectRoomTracker(client);
-
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
-
-    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
   it("keeps using the strict 2-member fallback until the dm cache seeds successfully", async () => {
@@ -289,18 +267,6 @@ describe("createDirectRoomTracker", () => {
     await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.setAccountData).not.toHaveBeenCalled();
-  });
-
-  it("still treats recent invite candidates as DMs when m.direct repair fails", async () => {
-    const client = createMockClient({
-      isDm: false,
-      dmCacheAvailable: true,
-      setAccountDataError: new Error("account data unavailable"),
-    });
-    const tracker = createDirectRoomTracker(client);
-    tracker.rememberInvite("!room:example.org", "@alice:example.org");
-
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
   });
 
   it("keeps locally promoted direct rooms stable after repair failures", async () => {

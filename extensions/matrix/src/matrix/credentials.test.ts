@@ -24,6 +24,12 @@ import {
 
 type MatrixCredentials = NonNullable<ReturnType<typeof loadMatrixCredentials>>;
 
+const auth = {
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "secret-token",
+};
+
 function expectMatrixCredentials(
   credentials: ReturnType<typeof loadMatrixCredentials>,
 ): MatrixCredentials {
@@ -52,16 +58,7 @@ describe("matrix credentials storage", () => {
   });
 
   it("roundtrips account-scoped credentials through shared plugin-state SQLite", async () => {
-    await saveMatrixCredentials(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "secret-token",
-        deviceId: "DEVICE123",
-      },
-      {},
-      "ops",
-    );
+    await saveMatrixCredentials({ ...auth, deviceId: "DEVICE123" }, {}, "ops");
 
     expect(loadMatrixCredentials({}, "ops")).toMatchObject({
       homeserver: "https://matrix.example.org",
@@ -165,15 +162,7 @@ describe("matrix credentials storage", () => {
   it("touch updates lastUsedAt while preserving createdAt", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
-    await saveMatrixCredentials(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "secret-token",
-      },
-      {},
-      "default",
-    );
+    await saveMatrixCredentials(auth, {}, "default");
     const initial = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
 
     vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
@@ -185,51 +174,27 @@ describe("matrix credentials storage", () => {
   });
 
   it("omits an explicitly undefined device id from persisted credentials", async () => {
-    const credentials = {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "secret-token",
-      deviceId: undefined,
-    };
-
-    await saveMatrixCredentials(credentials, {}, "default");
-    await expect(saveBackfilledMatrixDeviceId(credentials, {}, "ops")).resolves.toBe("saved");
+    const withoutDevice = { ...auth, deviceId: undefined };
+    await saveMatrixCredentials(withoutDevice, {}, "default");
+    await expect(saveBackfilledMatrixDeviceId(withoutDevice, {}, "ops")).resolves.toBe("saved");
 
     expect(openMatrixCredentialsStore({}).lookup("account:default")).not.toHaveProperty("deviceId");
     expect(openMatrixCredentialsStore({}).lookup("account:ops")).not.toHaveProperty("deviceId");
   });
 
   it("backfills a matching device id but preserves newer auth lineage", async () => {
-    await saveMatrixCredentials(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "tok-new",
-      },
-      {},
-      "default",
-    );
+    await saveMatrixCredentials({ ...auth, accessToken: "tok-new" }, {}, "default");
 
     await expect(
       saveBackfilledMatrixDeviceId(
-        {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-new",
-          deviceId: "DEVICE123",
-        },
+        { ...auth, accessToken: "tok-new", deviceId: "DEVICE123" },
         {},
         "default",
       ),
     ).resolves.toBe("saved");
     await expect(
       saveBackfilledMatrixDeviceId(
-        {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-old",
-          deviceId: "STALE",
-        },
+        { ...auth, accessToken: "tok-old", deviceId: "STALE" },
         {},
         "default",
       ),
@@ -317,13 +282,8 @@ describe("matrix credentials storage", () => {
   });
 
   it("clears only the requested canonical account", async () => {
-    const credentials = {
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "token",
-    };
-    await saveMatrixCredentials(credentials, {}, "default");
-    await saveMatrixCredentials(credentials, {}, "ops");
+    await saveMatrixCredentials(auth, {}, "default");
+    await saveMatrixCredentials(auth, {}, "ops");
 
     clearMatrixCredentials({}, "ops");
 
@@ -339,15 +299,7 @@ describe("matrix credentials storage", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
 
-    await saveMatrixCredentials(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "token",
-      },
-      env,
-      "default",
-    );
+    await saveMatrixCredentials(auth, env, "default");
 
     expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
   });

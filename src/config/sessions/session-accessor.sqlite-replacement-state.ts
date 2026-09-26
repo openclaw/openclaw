@@ -1,5 +1,6 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
+import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import {
   projectSessionSharingEntry,
   type SessionEntryReplacementPublication,
@@ -21,6 +22,7 @@ import type {
   SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import { cloneSessionEntry } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionEntry } from "./types.js";
 
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
@@ -56,6 +58,13 @@ export function commitSessionEntryReplacementsInDatabase(
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
 ): SessionEntryReplacementCommitted {
+  if (input.labelClaim) {
+    assertSessionCreationLabelAvailable(
+      database,
+      input.labelClaim.sessionKey,
+      input.labelClaim.label,
+    );
+  }
   if (
     input.includeLabelOwners !== undefined &&
     JSON.stringify(
@@ -79,6 +88,14 @@ export function commitSessionEntryReplacementsInDatabase(
     }
   }
   beforeReplacements();
+  if (input.preparedTranscript) {
+    const { sessionKey, sessionId, events } = input.preparedTranscript;
+    appendTranscriptEventsInTransaction(
+      database,
+      { agentId: database.agentId, path: database.path, sessionKey, sessionId },
+      events,
+    );
+  }
   const previous = new Map<string, SessionEntry>();
   const current = new Map<string, SessionEntry>();
   const membershipInvalidatedKeys: string[] = [];

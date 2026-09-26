@@ -268,7 +268,9 @@ retired only after the tracked task is durably terminal or no longer exists.
 Creation and completion use asynchronous task persistence and share the attempt's
 event queue. Cleanup detaches listeners, drains accepted events, and awaits task
 settlement before disconnecting the SDK session, including deferred compaction
-cleanup.
+cleanup. Custom task adapters must support exact-assignment transitions before a
+native task is admitted. This check runs on the native start event, so ordinary
+turns without native subagents remain available to legacy adapters.
 
 ## Side questions (`/btw`)
 

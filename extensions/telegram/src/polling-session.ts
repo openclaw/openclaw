@@ -17,10 +17,7 @@ import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
-import {
-  resolveTelegramIngressSpoolDir,
-  resolveTelegramUpdateId,
-} from "./telegram-ingress-spool.js";
+import { resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
 import {
   createTelegramIngressWorker,
   type TelegramIngressWorkerFactory,
@@ -102,7 +99,7 @@ type TelegramPollingSessionOpts = {
     timeoutSeconds?: number;
     proxy?: string;
     network?: TelegramNetworkConfig;
-    spoolDir?: string;
+    stateDir?: string;
     createWorker?: TelegramIngressWorkerFactory;
     drainIntervalMs?: number;
     spooledUpdateHandlerTimeoutMs?: number;
@@ -331,8 +328,6 @@ export class TelegramPollingSession {
     // A pre-probed or cached bot may already be initialized; admission and replay
     // must share grammY's actual capability snapshot instead of a second source.
     const botInfo = bot.botInfo;
-    const spoolDir =
-      ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
     const ingressAbortSignal = cycleAbortController
       ? this.opts.abortSignal
@@ -340,7 +335,7 @@ export class TelegramPollingSession {
         : cycleAbortController.signal
       : this.opts.abortSignal;
     const ingressMonitor = createTelegramTransportIngressMonitor({
-      spoolDir,
+      stateDir: ingress.stateDir,
       bot,
       accountId: this.opts.accountId,
       botInfo,
@@ -358,7 +353,6 @@ export class TelegramPollingSession {
       token: this.opts.token,
       accountId: this.opts.accountId,
       initialUpdateId: this.opts.getCommittedUpdateId(),
-      spoolDir,
       apiRoot: ingress.apiRoot,
       timeoutSeconds: ingress.timeoutSeconds,
       network: ingress.network,
@@ -373,7 +367,9 @@ export class TelegramPollingSession {
     };
     // Readiness contract: test/e2e/qa-lab telegram-bot-token-runtime waits for
     // this marker on the injected runtime log; do not demote it to verbose.
-    this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
+    this.opts.log(
+      `[telegram][diag] isolated polling ingress started account=${this.opts.accountId}`,
+    );
     const pollState: {
       startedAt: number | null;
       offset: number | null;

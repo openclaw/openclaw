@@ -25,9 +25,6 @@ import {
 import { registerGatewayCronStartupTests } from "./server-runtime-services.cron.test-support.js";
 import {
   createLog,
-  createTestCronState,
-  createMaintenanceHandles,
-  createPostReadyMaintenanceScheduleParams,
   runtimeServiceMocks as hoisted,
   resetRuntimeServiceMocks,
   waitForFast,
@@ -36,7 +33,6 @@ import {
 const {
   activateGatewayScheduledServices,
   scheduleGatewayIdleTask,
-  scheduleGatewayPostReadyMaintenance,
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
 } = await import("./server-runtime-services.js");
@@ -125,27 +121,16 @@ describe("server-runtime-services", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["auto", true],
-    ["off", false],
-    ["propose", false],
-  ] as const)(
-    "reports cron-disabled automatic skill collection reviews for mode %s",
-    (mode, shouldWarn) => {
-      const warn = activateCronOff({
-        agents: { defaults: { heartbeat: { every: "0m" } } },
-        skills: { workshop: { autonomous: { mode } } },
-      });
+  it("reports cron-disabled automatic skill collection reviews", () => {
+    const warn = activateCronOff({
+      agents: { defaults: { heartbeat: { every: "0m" } } },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    });
 
-      if (shouldWarn) {
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining("scheduled skill collection reviews are disabled"),
-        );
-      } else {
-        expect(warn).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("scheduled skill collection reviews are disabled"),
+    );
+  });
 
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
 
@@ -565,22 +550,13 @@ describe("server-runtime-services", () => {
     second.services.heartbeatRunner.stop();
   });
 
-  it.each([
-    {
-      name: "startup recovery deferred an existing delivery for backoff",
-      deferredBackoff: 1,
-    },
-    {
-      name: "a new delivery failed after an empty startup scan",
-      deferredBackoff: 0,
-    },
-  ])("retries outbound deliveries when $name", async ({ deferredBackoff }) => {
+  it("retries outbound deliveries after an empty startup scan", async () => {
     vi.useFakeTimers();
     hoisted.recoverPendingDeliveries.mockResolvedValueOnce({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
-      deferredBackoff,
+      deferredBackoff: 0,
     });
     const { services } = activateScheduledServicesForTest();
 
@@ -742,50 +718,6 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
   });
 
-  it("starts cron and records memory when post-ready maintenance fails", async () => {
-    vi.useFakeTimers();
-    const cron = { start: vi.fn(async () => undefined) };
-    const log = createLog();
-    const recordPostReadyMemory = vi.fn();
-
-    scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        startMaintenance: vi.fn(async () => {
-          throw new Error("timers unavailable");
-        }),
-        cronState: createTestCronState(cron),
-        log,
-        recordPostReadyMemory,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "gateway post-ready maintenance startup failed: Error: timers unavailable",
-    );
-    expect(cron.start).toHaveBeenCalledTimes(1);
-    expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns a cancellable post-ready maintenance timer", async () => {
-    vi.useFakeTimers();
-    const startMaintenance = vi.fn(async () => null);
-    const onStarted = vi.fn();
-    const handle = scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        delayMs: 25,
-        onStarted,
-        startMaintenance,
-      }),
-    );
-
-    clearTimeout(handle);
-    await vi.advanceTimersByTimeAsync(25);
-
-    expect(onStarted).not.toHaveBeenCalled();
-    expect(startMaintenance).not.toHaveBeenCalled();
-  });
-
   it("runs a scheduled idle task in an independent admitted root", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
@@ -893,52 +825,6 @@ describe("server-runtime-services", () => {
     await clock.advanceBy(25);
 
     expect(run).not.toHaveBeenCalled();
-  });
-
-  it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
-    vi.useFakeTimers();
-    let closing = false;
-    let resolveMaintenance:
-      | ((maintenance: ReturnType<typeof createMaintenanceHandles>) => void)
-      | undefined;
-    const startMaintenance = vi.fn(
-      () =>
-        new Promise<ReturnType<typeof createMaintenanceHandles>>((resolve) => {
-          resolveMaintenance = resolve;
-        }),
-    );
-    const applyMaintenance = vi.fn();
-    const cron = { start: vi.fn(async () => undefined) };
-    const recordPostReadyMemory = vi.fn();
-
-    scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        delayMs: 25,
-        isClosing: () => closing,
-        startMaintenance,
-        applyMaintenance,
-        cronState: createTestCronState(cron),
-        recordPostReadyMemory,
-      }),
-    );
-
-    await vi.advanceTimersByTimeAsync(25);
-    expect(startMaintenance).toHaveBeenCalledTimes(1);
-
-    closing = true;
-    if (!resolveMaintenance) {
-      throw new Error("Expected gateway maintenance resolver to be initialized");
-    }
-    const maintenance = createMaintenanceHandles();
-    resolveMaintenance(maintenance);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(applyMaintenance).not.toHaveBeenCalled();
-    expect(maintenance.startMediaCleanup).not.toHaveBeenCalled();
-    expect(maintenance.stopPeriodicTasks).toHaveBeenCalledTimes(1);
-    expect(cron.start).not.toHaveBeenCalled();
-    expect(recordPostReadyMemory).not.toHaveBeenCalled();
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {

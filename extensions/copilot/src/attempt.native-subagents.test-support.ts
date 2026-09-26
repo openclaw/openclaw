@@ -24,6 +24,45 @@ export function registerCopilotNativeSubagentCleanupTests({
   requireSession: (sdk: FakeSdk) => FakeSession;
 }) {
   it.each([false, true])(
+    "keeps legacy adapter turns usable and refuses unsupported native admission (child: %s)",
+    async (child) => {
+      const failure = new agentHarnessTaskRuntime.AgentHarnessTaskAssignmentUnsupportedError();
+      const runtime = makeFailingNativeTaskRuntime(failure);
+      runtime.assertTaskAssignmentSupported = () => {
+        throw failure;
+      };
+      const create = vi.spyOn(runtime, "createRunningTaskRunAsync");
+      vi.spyOn(agentHarnessTaskRuntime, "createAgentHarnessTaskRuntime").mockReturnValue(runtime);
+      const sdk = makeFakeSdk((session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          if (child) {
+            session.emit("subagent.started", {
+              agentDescription: "inspect",
+              agentDisplayName: "Worker",
+              agentName: "worker",
+              toolCallId: "call-1",
+            });
+          }
+          return makeAssistantMessageEvent("done");
+        });
+      });
+      const pool = makeFakePool(sdk);
+      const result = await runCopilotAttempt(
+        makeParams({ agentHarnessTaskRuntimeScope: {} as AgentHarnessTaskRuntimeScope }),
+        { pool },
+      );
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(
+        child ? failure : null,
+      );
+      expect(create).not.toHaveBeenCalled();
+      expect(requireSession(sdk).sendAndWait).toHaveBeenCalledOnce();
+      expect(requireSession(sdk).disconnect).toHaveBeenCalledOnce();
+      expect(pool.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
     "waits for native task cancellation before disconnecting (deferred: %s)",
     async (deferred) => {
       const finalizationStarted = createDeferred<void>();

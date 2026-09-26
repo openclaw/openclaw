@@ -1,3 +1,7 @@
+import {
+  getInternalDiagnosticEventSequence,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import type { CoreModelRequestOwnerGeneration } from "../infra/diagnostic-model-request-provenance.js";
 
 type DiagnosticRecoveryMarker = {
@@ -37,6 +41,39 @@ type DiagnosticRecoveryActivity = {
   >;
   recoveredOwnerStartEventCutoffs: Map<string, number>;
 };
+
+const pendingCutoffCleanup = new Set<DiagnosticRecoveryActivity>();
+let cutoffCleanupScheduled = false;
+
+function drainRecoveryCutoffCleanup(): void {
+  cutoffCleanupScheduled = true;
+  const activities = [...pendingCutoffCleanup];
+  pendingCutoffCleanup.clear();
+  const throughSequence = getInternalDiagnosticEventSequence();
+  void waitForDiagnosticEventsDrained().then(() => {
+    for (const activity of activities) {
+      for (const [ownerRef, cutoff] of activity.recoveredOwnerStartEventCutoffs) {
+        if (cutoff <= throughSequence) {
+          activity.recoveredOwnerStartEventCutoffs.delete(ownerRef);
+        }
+      }
+    }
+    cutoffCleanupScheduled = false;
+    if (pendingCutoffCleanup.size > 0) {
+      drainRecoveryCutoffCleanup();
+    }
+  });
+}
+
+export function queueRecoveryCutoffCleanup(activity: DiagnosticRecoveryActivity): void {
+  if (activity.recoveredOwnerStartEventCutoffs.size === 0) {
+    return;
+  }
+  pendingCutoffCleanup.add(activity);
+  if (!cutoffCleanupScheduled) {
+    drainRecoveryCutoffCleanup();
+  }
+}
 
 export function ownerRefsForRecovery(params: {
   sessionId?: string;
@@ -194,6 +231,8 @@ export function rememberRecoveredOwnerStartEventCutoffs(
       ),
     );
   }
+  // After this queue prefix drains, no future start can carry one of its sequences.
+  queueRecoveryCutoffCleanup(activity);
 }
 
 export function shouldIgnoreRecoveredOwnerStartEvent(

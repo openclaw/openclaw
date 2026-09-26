@@ -280,8 +280,10 @@ describe("CopilotNativeSubagentTaskMirror", () => {
   it.each([
     { terminal: "subagent.completed", failureMode: "throw" },
     { terminal: "subagent.completed", failureMode: "empty" },
+    { terminal: "subagent.completed", failureMode: "read" },
     { terminal: "subagent.failed", failureMode: "throw" },
     { terminal: "subagent.failed", failureMode: "empty" },
+    { terminal: "subagent.failed", failureMode: "read" },
   ] as const)(
     "retries the original $terminal result after $failureMode",
     async ({ terminal, failureMode }) => {
@@ -297,6 +299,10 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       await mirror.handleEvent(makeEvent("subagent.started", data, "child-retry"));
       if (failureMode === "throw") {
         runtime.finalizeTaskRunByRunIdAsync.mockRejectedValueOnce(new Error("store unavailable"));
+      } else if (failureMode === "read") {
+        runtime.prepareTaskRunRead.mockResolvedValueOnce(() => {
+          throw new Error("store unavailable");
+        });
       } else {
         runtime.finalizeTaskRunByRunIdAsync.mockResolvedValueOnce([]);
       }
@@ -312,7 +318,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       );
       await expect(
         mirror.handleEvent(terminal === "subagent.completed" ? completed : failed),
-      ).rejects.toThrow(failureMode === "throw" ? "store unavailable" : "did not persist");
+      ).rejects.toThrow(failureMode === "empty" ? "did not persist" : "store unavailable");
       expect([...runtime.records.values()][0]?.status).toBe("running");
       now = 200;
       await mirror.handleEvent(terminal === "subagent.completed" ? failed : completed);
@@ -331,7 +337,9 @@ describe("CopilotNativeSubagentTaskMirror", () => {
       ]);
       await mirror.handleEvent(completed);
       await mirror.finalizeActiveRuns();
-      expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledTimes(2);
+      expect(runtime.finalizeTaskRunByRunIdAsync).toHaveBeenCalledTimes(
+        failureMode === "read" ? 1 : 2,
+      );
     },
   );
 

@@ -1,4 +1,3 @@
-// Matrix tests cover create client plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,6 +51,28 @@ describe("createMatrixClient", () => {
     tokenHash: "token-hash",
   };
 
+  const auth = {
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    accessToken: "tok",
+  };
+  const clientOptions = {
+    userId: auth.userId,
+    password: undefined,
+    deviceId: undefined,
+    encryption: undefined,
+    localTimeoutMs: undefined,
+    initialSyncLimit: undefined,
+    syncStore: undefined,
+    recoveryKeyPath: undefined,
+    idbSnapshotPath: undefined,
+    cryptoDatabasePrefix: undefined,
+    autoBootstrapCrypto: undefined,
+    ssrfPolicy: undefined,
+    dispatcherPolicy: undefined,
+    stateRuntime: stateRuntimeMock,
+  };
+
   beforeAll(async () => {
     ({ createMatrixClient } = await import("./create-client.js"));
   });
@@ -71,9 +92,7 @@ describe("createMatrixClient", () => {
 
   it("persists storage metadata by default", async () => {
     await createMatrixClient({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
+      ...auth,
     });
 
     expect(writeStorageMetaMock).toHaveBeenCalledWith({
@@ -85,20 +104,11 @@ describe("createMatrixClient", () => {
     });
     expect(resolveMatrixStoragePathsMock).toHaveBeenCalledTimes(1);
     expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      userId: "@bot:example.org",
-      password: undefined,
-      deviceId: undefined,
-      encryption: undefined,
-      localTimeoutMs: undefined,
-      initialSyncLimit: undefined,
+      ...clientOptions,
       syncStore: preparedSyncStore,
       recoveryKeyPath: storagePaths.recoveryKeyPath,
       idbSnapshotPath: storagePaths.idbSnapshotPath,
       cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
-      autoBootstrapCrypto: undefined,
-      ssrfPolicy: undefined,
-      dispatcherPolicy: undefined,
-      stateRuntime: stateRuntimeMock,
     });
   });
 
@@ -123,111 +133,42 @@ describe("createMatrixClient", () => {
 
   it("derives ssrfPolicy from allowPrivateNetwork when no explicit policy is provided", async () => {
     await createMatrixClient({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
+      ...auth,
       persistStorage: false,
       allowPrivateNetwork: true,
     });
 
     expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      userId: "@bot:example.org",
-      password: undefined,
-      deviceId: undefined,
-      encryption: undefined,
-      localTimeoutMs: undefined,
-      initialSyncLimit: undefined,
-      syncStore: undefined,
-      recoveryKeyPath: undefined,
-      idbSnapshotPath: undefined,
-      cryptoDatabasePrefix: undefined,
-      autoBootstrapCrypto: undefined,
+      ...clientOptions,
       ssrfPolicy: { allowPrivateNetwork: true },
-      dispatcherPolicy: undefined,
-      stateRuntime: stateRuntimeMock,
     });
   });
 
   it("prefers explicit ssrfPolicy over allowPrivateNetwork", async () => {
     const explicitPolicy = { allowPrivateNetwork: true, customField: "test" };
     await createMatrixClient({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
+      ...auth,
       persistStorage: false,
       allowPrivateNetwork: false,
       ssrfPolicy: explicitPolicy as never,
     });
 
     expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      userId: "@bot:example.org",
-      password: undefined,
-      deviceId: undefined,
-      encryption: undefined,
-      localTimeoutMs: undefined,
-      initialSyncLimit: undefined,
-      syncStore: undefined,
-      recoveryKeyPath: undefined,
-      idbSnapshotPath: undefined,
-      cryptoDatabasePrefix: undefined,
-      autoBootstrapCrypto: undefined,
+      ...clientOptions,
       ssrfPolicy: explicitPolicy,
-      dispatcherPolicy: undefined,
-      stateRuntime: stateRuntimeMock,
-    });
-  });
-
-  it("leaves ssrfPolicy undefined when allowPrivateNetwork is falsy and no explicit policy", async () => {
-    await createMatrixClient({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
-      persistStorage: false,
-    });
-
-    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      userId: "@bot:example.org",
-      password: undefined,
-      deviceId: undefined,
-      encryption: undefined,
-      localTimeoutMs: undefined,
-      initialSyncLimit: undefined,
-      syncStore: undefined,
-      recoveryKeyPath: undefined,
-      idbSnapshotPath: undefined,
-      cryptoDatabasePrefix: undefined,
-      autoBootstrapCrypto: undefined,
-      ssrfPolicy: undefined,
-      dispatcherPolicy: undefined,
-      stateRuntime: stateRuntimeMock,
     });
   });
 
   it("skips persistent storage wiring when persistence is disabled", async () => {
     await createMatrixClient({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
+      ...auth,
       persistStorage: false,
     });
 
     expect(resolveMatrixStoragePathsMock).not.toHaveBeenCalled();
     expect(writeStorageMetaMock).not.toHaveBeenCalled();
     expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      userId: "@bot:example.org",
-      password: undefined,
-      deviceId: undefined,
-      encryption: undefined,
-      localTimeoutMs: undefined,
-      initialSyncLimit: undefined,
-      syncStore: undefined,
-      recoveryKeyPath: undefined,
-      idbSnapshotPath: undefined,
-      cryptoDatabasePrefix: undefined,
-      autoBootstrapCrypto: undefined,
-      ssrfPolicy: undefined,
-      dispatcherPolicy: undefined,
-      stateRuntime: stateRuntimeMock,
+      ...clientOptions,
     });
   });
 });

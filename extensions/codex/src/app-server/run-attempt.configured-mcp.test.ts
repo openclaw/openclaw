@@ -28,11 +28,10 @@ const { configureFakeMcp, mcpMocks, setupConfiguredMcpTestHooks } =
 setupConfiguredMcpTestHooks();
 
 describe("runCodexAppServerAttempt configured MCP ownership", () => {
-  it.each(
-    ["cancellation", "authority closure"].flatMap((reason) =>
-      [false, true].map((rejectCleanup) => ({ reason, rejectCleanup })),
-    ),
-  )(
+  it.each([
+    { reason: "cancellation", rejectCleanup: true },
+    { reason: "authority closure", rejectCleanup: false },
+  ])(
     "disposes acquired MCP handles on history $reason (cleanup rejects=$rejectCleanup)",
     async ({ reason, rejectCleanup }) => {
       const sessionFile = path.join(tempDir, "session-context-read-cancel.jsonl");
@@ -350,7 +349,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   });
 
   it.each([
-    { mode: undefined, source: "operator", delegate: false },
     { mode: "approve", source: "operator", delegate: false },
     { mode: "auto", source: "operator", delegate: true },
     { mode: "prompt", source: "operator", delegate: true },

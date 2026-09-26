@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectDiscordSetupAccount,
-  resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 
@@ -42,8 +41,6 @@ describe("discord setup account state", () => {
         },
       },
     };
-
-    expect(resolveDefaultDiscordSetupAccountId(cfg)).toBe("work");
 
     const resolved = resolveDiscordSetupAccountConfig({
       cfg,

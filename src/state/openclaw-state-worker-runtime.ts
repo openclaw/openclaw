@@ -21,7 +21,10 @@ import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
-import { retireMissingWorktreeInWorker } from "../agents/worktrees/registry-retirement.worker.js";
+import {
+  retireMissingWorktreeInWorker,
+  deferWorktreeCleanupInWorker,
+} from "../agents/worktrees/registry-retirement.worker.js";
 import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
@@ -36,6 +39,7 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
+  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
 import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
@@ -107,6 +111,7 @@ import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/se
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   isSkillUploadCommand,
   executeSkillUploadCommand,
@@ -153,7 +158,19 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
-export { prepareCronStateWorkerCommand as prepareSharedStateCommand } from "../cron/store/dispatch.worker.js";
+const loadPluginIndexWriter = createLazyRuntimeModule(
+  () => import("../plugins/installed-plugin-index-store-write.js"),
+);
+let pluginIndexWriter: Awaited<ReturnType<typeof loadPluginIndexWriter>> | undefined;
+
+export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "plugins.metadata.sourceAdmission.publish" && !pluginIndexWriter) {
+    return loadPluginIndexWriter().then((loaded) => {
+      pluginIndexWriter = loaded;
+    });
+  }
+  return prepareCronStateWorkerCommand(type);
+}
 
 export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
@@ -599,6 +616,16 @@ export function executeSharedStateCommand(
       throw error;
     }
   }
+  if (command.type === "plugins.metadata.sourceAdmission.publish") {
+    if (!pluginIndexWriter) {
+      throw new Error("Plugin source admission writer is not prepared");
+    }
+    const { publishPluginSourceAdmissionInDatabase } = pluginIndexWriter;
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => publishPluginSourceAdmissionInDatabase(db, command.input),
+      writeOptions,
+    );
+  }
   if (command.type === "subagents.persistChanges") {
     const { writeId, values, deleteRunIds } = command.input;
     let committed = false;
@@ -630,6 +657,9 @@ export function executeSharedStateCommand(
   }
   if (command.type === "worktrees.retireMissing") {
     return retireMissingWorktreeInWorker(command.input, writeOptions);
+  }
+  if (command.type === "worktrees.deferCleanup") {
+    return deferWorktreeCleanupInWorker(command.input, writeOptions);
   }
   if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
     return executeWorktreeRunLeaseCommand(command, writeOptions);

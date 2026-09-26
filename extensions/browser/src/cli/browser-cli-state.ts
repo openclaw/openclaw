@@ -1,7 +1,3 @@
-/**
- * Browser CLI state commands for cookies, storage, viewport, emulation, and
- * HTTP context settings.
- */
 import type { Command } from "commander";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
@@ -34,7 +30,6 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
   return parsed;
 }
 
-/** Registers Browser state/configuration commands. */
 export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

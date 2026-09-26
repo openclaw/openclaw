@@ -129,6 +129,12 @@ enablement and sizing.
 
 ## Sidebar navigation
 
+The chat header links to an accessible parent session even when it is outside the current session list, including Incognito parents.
+
+The agent switcher and workspace header preview their menu when you move the
+pointer over them and pause. Click the header to keep the menu open. Returning
+from Settings leaves menus closed under a stationary pointer.
+
 Drag page destinations, including plugin-provided pages, to reorder them together.
 The order is saved in your sidebar preferences and survives reloads. A temporarily
 unavailable plugin keeps its saved position for when it returns. **Home** stays
@@ -260,7 +266,7 @@ The menu groups routine actions first: **Pin/Unpin**, **Rename**, **Mark as unre
 - **Copy** offers a session link, conversation text as Markdown, and the session ID. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` download Markdown through your browser and take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
 - The chat header's **Session sharing** control manages authenticated teammate visibility and membership. For a saved, non-incognito session, its creator or a Gateway admin can also enable world-readable, read-only public access.
-- **Open in** offers a new browser tab or window. Desktop chat also offers **Split right** and **Split below**. Eligible local workspaces expose native editor destinations, and the chat header includes **Continue in terminal** in this submenu.
+- **Open in** offers a new browser tab or window. Desktop chat also offers **Split right** and **Split below**. When the same conversation is open in multiple splits, each pane restores its transcript after a page reload and catches up independently when another pane is further ahead. After an upgrade, older cached transcripts are refreshed from the Gateway before incremental updates resume. Eligible local workspaces expose native editor destinations, and the chat header includes **Continue in terminal** in this submenu.
 
 ### Share a session publicly
 

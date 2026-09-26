@@ -1,6 +1,3 @@
-/**
- * Browser CLI navigation and viewport commands.
- */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -13,7 +10,6 @@ import {
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 
-/** Registers Browser navigate and resize commands. */
 export function registerBrowserNavigationCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

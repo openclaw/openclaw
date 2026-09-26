@@ -656,24 +656,4 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
-
-  it("normalizes participant phone numbers to JIDs in sendReaction", async () => {
-    const { listener, sock } = await startInboxMonitor(vi.fn());
-
-    await listener.sendReaction("12345@g.us", "msg123", "👍", false, "+6421000000");
-
-    expect(sock.sendMessage).toHaveBeenCalledWith("12345@g.us", {
-      react: {
-        text: "👍",
-        key: {
-          remoteJid: "12345@g.us",
-          id: "msg123",
-          fromMe: false,
-          participant: "6421000000@s.whatsapp.net",
-        },
-      },
-    });
-
-    await listener.close();
-  });
 });

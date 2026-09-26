@@ -1,12 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
-const DEFAULT_DISCORD_ACCENT_COLOR = "#5865F2";
-
-type ResolveDiscordAccentColorParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-};
-
 export function normalizeDiscordAccentColor(raw?: string | null): string | null {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
@@ -17,8 +8,4 @@ export function normalizeDiscordAccentColor(raw?: string | null): string | null 
     return null;
   }
   return normalized.toUpperCase();
-}
-
-export function resolveDiscordAccentColor(_params: ResolveDiscordAccentColorParams): string {
-  return DEFAULT_DISCORD_ACCENT_COLOR;
 }

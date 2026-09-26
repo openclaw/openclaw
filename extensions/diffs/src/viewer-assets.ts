@@ -1,14 +1,10 @@
-// Diffs plugin module implements viewer assets behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 export const VIEWER_ASSET_PREFIX = "/plugins/diffs/assets/";
-const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
 export const VIEWER_RUNTIME_PATH = `${VIEWER_ASSET_PREFIX}viewer-runtime.js`;
 export const LANGUAGE_PACK_VIEWER_ASSET_PREFIX = "/plugins/diffs-language-pack/assets/";
-const LANGUAGE_PACK_VIEWER_LOADER_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer.js`;
-const LANGUAGE_PACK_VIEWER_RUNTIME_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer-runtime.js`;
 const VIEWER_RUNTIME_RELATIVE_IMPORT_PATH = "./viewer-runtime.js";
 // Unified builds hoist this module to the dist root while plugin assets stay under dist/extensions.
 // Keep those candidates last so package and source layouts retain their first-hit paths.
@@ -34,84 +30,53 @@ type RuntimeAssetCache = {
   loaderBody: string;
 };
 
-let runtimeAssetCache: RuntimeAssetCache | null = null;
-let languagePackRuntimeAssetCache: RuntimeAssetCache | null = null;
-
 function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-export async function getServedViewerAsset(pathname: string): Promise<ServedViewerAsset | null> {
-  if (pathname !== VIEWER_LOADER_PATH && pathname !== VIEWER_RUNTIME_PATH) {
-    return null;
-  }
+export const getServedViewerAsset = createViewerAssetHandler(
+  VIEWER_ASSET_PREFIX,
+  VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS,
+);
+export const getServedLanguagePackViewerAsset = createViewerAssetHandler(
+  LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
+  LANGUAGE_PACK_RUNTIME_CANDIDATE_RELATIVE_PATHS,
+  true,
+);
 
-  const assets = await loadViewerAssets();
-  if (pathname === VIEWER_LOADER_PATH) {
-    return {
-      body: assets.loaderBody,
-      contentType: "text/javascript; charset=utf-8",
-    };
-  }
+function createViewerAssetHandler(
+  prefix: string,
+  relativePaths: readonly string[],
+  optional = false,
+): (pathname: string) => Promise<ServedViewerAsset | null> {
+  const loaderPath = `${prefix}viewer.js`;
+  const runtimePath = `${prefix}viewer-runtime.js`;
+  let cache: RuntimeAssetCache | null = null;
 
-  if (pathname === VIEWER_RUNTIME_PATH) {
-    return {
-      body: assets.runtimeBody,
-      contentType: "text/javascript; charset=utf-8",
-    };
-  }
-
-  return null;
-}
-
-export async function getServedLanguagePackViewerAsset(
-  pathname: string,
-): Promise<ServedViewerAsset | null> {
-  if (
-    pathname !== LANGUAGE_PACK_VIEWER_LOADER_PATH &&
-    pathname !== LANGUAGE_PACK_VIEWER_RUNTIME_PATH
-  ) {
-    return null;
-  }
-
-  let assets: RuntimeAssetCache;
-  try {
-    const runtimeUrl = await resolveRuntimeFileUrl(LANGUAGE_PACK_RUNTIME_CANDIDATE_RELATIVE_PATHS);
-    assets = await loadRuntimeAssets({
-      runtimeUrl,
-      cache: languagePackRuntimeAssetCache,
-      updateCache: (cache) => {
-        languagePackRuntimeAssetCache = cache;
-      },
-    });
-  } catch (error) {
-    if (isMissingFileError(error)) {
+  return async (pathname) => {
+    if (pathname !== loaderPath && pathname !== runtimePath) {
       return null;
     }
-    throw error;
-  }
-  if (pathname === LANGUAGE_PACK_VIEWER_LOADER_PATH) {
-    return {
-      body: assets.loaderBody,
-      contentType: "text/javascript; charset=utf-8",
-    };
-  }
-
-  return {
-    body: assets.runtimeBody,
-    contentType: "text/javascript; charset=utf-8",
+    try {
+      const runtimeUrl = await resolveRuntimeFileUrl(relativePaths);
+      const assets = await loadRuntimeAssets({
+        runtimeUrl,
+        cache,
+        updateCache: (updated) => {
+          cache = updated;
+        },
+      });
+      return {
+        body: pathname === loaderPath ? assets.loaderBody : assets.runtimeBody,
+        contentType: "text/javascript; charset=utf-8",
+      };
+    } catch (error) {
+      if (optional && isMissingFileError(error)) {
+        return null;
+      }
+      throw error;
+    }
   };
-}
-
-async function loadViewerAssets(): Promise<RuntimeAssetCache> {
-  const runtimeUrl = await resolveRuntimeFileUrl(VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS);
-  return loadRuntimeAssets({
-    runtimeUrl,
-    cache: runtimeAssetCache,
-    updateCache: (cache) => {
-      runtimeAssetCache = cache;
-    },
-  });
 }
 
 async function loadRuntimeAssets(params: {

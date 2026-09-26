@@ -536,6 +536,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               void this.setSessionMember(row, identityId, member),
           }
         : null;
+    const parentSession = this.observedParentSessionRow();
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -555,7 +556,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
-      parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
+      parentSession: resolveChatPaneParentSession(row, parentSession ? [parentSession] : []),
       branch,
       branches: this.state ? displayedChatSessionBranches(this.state) : [],
       branchSwitchDisabledReason,

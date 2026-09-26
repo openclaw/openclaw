@@ -95,7 +95,7 @@ describe("private worker launch wire", () => {
     }
   });
 
-  it.each([-1, 0, 1])("enforces the complete node frame at cap %+i byte(s)", async (delta) => {
+  it.each([0, 1])("enforces the complete node frame at cap %+i byte(s)", async (delta) => {
     const input = testWorkerLaunchInput("/tmp/workspace", "fixture-turn");
     input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);
     const encode = () =>

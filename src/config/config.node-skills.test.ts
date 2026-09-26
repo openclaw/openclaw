@@ -12,10 +12,10 @@ describe("node skills config", () => {
     }
   });
 
-  it.each([true, false])("accepts enabled=%s on both sides", (enabled) => {
+  it("accepts explicitly disabled skills on both sides", () => {
     const result = validateConfigObject({
-      gateway: { nodes: { allowSkills: enabled } },
-      nodeHost: { skills: { enabled } },
+      gateway: { nodes: { allowSkills: false } },
+      nodeHost: { skills: { enabled: false } },
     });
 
     expect(result.ok).toBe(true);

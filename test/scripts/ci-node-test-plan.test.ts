@@ -2554,6 +2554,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(commandRuntimeGroup.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
     expect(commandRuntimeGroup.fallbackMaxWorkers).toBe(2);
     expect(commandRuntimeGroup.includePatterns?.toSorted()).toEqual([
+      "src/commands/doctor-agent-database-order.process.test.ts",
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -4242,6 +4243,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
     const doctorRuntimeTargets = [
+      "src/commands/doctor-agent-database-order.process.test.ts",
       "src/commands/doctor-config-flow.legacy-composition.test.ts",
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.refusal.process.test.ts",

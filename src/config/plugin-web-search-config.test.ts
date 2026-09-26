@@ -7,37 +7,17 @@ describe("resolvePluginWebSearchConfig", () => {
     expect(
       resolvePluginWebSearchConfig(
         {
-          plugins: {
-            entries: {
-              brave: {
-                config: {
-                  webSearch: {
-                    apiKey: "brave-key",
-                  },
-                },
-              },
-            },
-          },
+          plugins: { entries: { brave: { config: { webSearch: { apiKey: "brave-key" } } } } },
         },
         "brave",
       ),
-    ).toEqual({
-      apiKey: "brave-key",
-    });
+    ).toEqual({ apiKey: "brave-key" });
   });
 
   it("ignores non-record plugin config values", () => {
     expect(
       resolvePluginWebSearchConfig(
-        {
-          plugins: {
-            entries: {
-              brave: {
-                config: "nope",
-              },
-            },
-          },
-        },
+        { plugins: { entries: { brave: { config: "nope" } } } },
         "brave",
       ),
     ).toBeUndefined();

@@ -6,14 +6,6 @@ const { callGatewayToolMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
 }));
 
-vi.mock("../agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
-  return {
-    ...actual,
-    resolveSessionAgentId: actual.resolveSessionAgentId,
-  };
-});
-
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
@@ -104,8 +96,8 @@ describe("cron tool flat-params", () => {
     await tool.execute("call-flat-cron-add", {
       action: "add",
       name: "hourly report",
-      cron: "0 * * * *",
-      tz: "UTC",
+      cron: "0 18 * * *",
+      tz: "Asia/Shanghai",
       staggerMs: 5000,
       message: "send report",
     });
@@ -117,8 +109,8 @@ describe("cron tool flat-params", () => {
     expect(method).toBe("cron.add");
     expect(params.schedule).toEqual({
       kind: "cron",
-      expr: "0 * * * *",
-      tz: "UTC",
+      expr: "0 18 * * *",
+      tz: "Asia/Shanghai",
       staggerMs: 5000,
     });
     expect(params.payload).toEqual({
@@ -225,28 +217,6 @@ describe("cron tool flat-params", () => {
       }),
     ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("passes local cron wall-clock expression and timezone through add", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-local-cron-add", {
-      action: "add",
-      name: "shanghai reminder",
-      cron: "0 18 * * *",
-      tz: "Asia/Shanghai",
-      message: "send reminder",
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
-      schedule?: unknown;
-    }>();
-    expect(method).toBe("cron.add");
-    expect(params.schedule).toEqual({
-      kind: "cron",
-      expr: "0 18 * * *",
-      tz: "Asia/Shanghai",
-    });
   });
 
   it("leaves out-of-range flat atMs for gateway validation", async () => {
@@ -408,6 +378,7 @@ describe("cron tool flat-params", () => {
 
     const [method, _gatewayOpts, params] = firstGatewayToolCall<{
       name?: string;
+      description?: string;
       schedule?: unknown;
       sessionTarget?: string;
       payload?: unknown;
@@ -415,6 +386,7 @@ describe("cron tool flat-params", () => {
     }>();
     expect(method).toBe("cron.add");
     expect(params.name).toBe("Holiday Check-in");
+    expect(params.description).toBe("Casual check-in");
     expect(params.schedule).toBeDefined();
     expect(params.sessionTarget).toBe("isolated");
     expect(params.payload).toBeDefined();
@@ -502,28 +474,5 @@ describe("cron tool flat-params", () => {
     // accepting one of the two conflicting values.
     expect(params).toHaveProperty("schedule ");
     expect(params).toHaveProperty("enabled ");
-  });
-
-  it("preserves normal keys without any whitespace", async () => {
-    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
-
-    await tool.execute("call-clean-keys", {
-      action: "add",
-      job: {
-        name: "Clean keys",
-        schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
-        payload: { kind: "agentTurn", message: "test" },
-        enabled: true,
-        description: "All keys should be preserved as-is",
-      },
-    });
-
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<Record<string, unknown>>();
-    expect(method).toBe("cron.add");
-    expect(params.name).toBe("Clean keys");
-    expect(params.schedule).toBeDefined();
-    expect(params.payload).toBeDefined();
-    expect(params.enabled).toBe(true);
-    expect(params.description).toBe("All keys should be preserved as-is");
   });
 });
