@@ -251,7 +251,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         }`}
         aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
+        title=${params.disabledReason?.trim() || nothing}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();

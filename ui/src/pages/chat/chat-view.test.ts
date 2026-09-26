@@ -6222,7 +6222,7 @@ describe("chat model controls", () => {
     ["agent", "Selecting a model updates this agent's default."],
     ["global", "Selecting a model updates the global default."],
   ] as const)(
-    "keeps the $target write target accessible without rendering a status row",
+    "keeps the %s write target accessible without a hover tooltip or status row",
     (target, scopeDescription) => {
       const { state } = createOpenAiHeaderState();
       state.sessionsResult = {
@@ -6237,7 +6237,7 @@ describe("chat model controls", () => {
 
       expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
       const trigger = getChatModelSelect(container);
-      expect(trigger.title).toBe(scopeDescription);
+      expect(trigger.hasAttribute("title")).toBe(false);
       expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
       expect(container.querySelector("[data-chat-model-selection-scope]")).toBeNull();
       const modelOption = Array.from(
@@ -6650,7 +6650,7 @@ describe("chat model controls", () => {
           trigger.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
         ).toBe(expected);
         expect(trigger.getAttribute("aria-label")).toBe(`Chat model: ${expected}`);
-        expect(trigger.title).toBe(expected);
+        expect(trigger.hasAttribute("title")).toBe(false);
         expect(trigger.dataset.chatModelLocked).toBe("true");
         expect(
           container.querySelector(".chat-controls__locked-model-badge")?.textContent?.trim(),
