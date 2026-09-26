@@ -261,14 +261,14 @@ describe("channelsResolveCommand", () => {
     "preserves $kind resolution order and projects only public result fields",
     async ({ kind, expected }) => {
       const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>(
-        async ({ inputs, kind }) =>
+        async ({ inputs, kind: targetKind }) =>
           inputs
             .toReversed()
             .filter((input) => input !== "missing")
             .map((input, index) => ({
               input,
               resolved: true,
-              id: `${kind}-${index}`,
+              id: `${targetKind}-${index}`,
               providerDetail: "not part of command output",
             })),
       );

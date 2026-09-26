@@ -42,8 +42,8 @@ export function* providerModelEntries(providers: unknown) {
     if (!provider || !Array.isArray(provider.models)) {
       continue;
     }
-    for (const [modelIndex, value] of provider.models.entries()) {
-      const model = getRecord(value);
+    for (const [modelIndex, modelValue] of provider.models.entries()) {
+      const model = getRecord(modelValue);
       if (model) {
         yield { providerId, provider, modelIndex, model };
       }

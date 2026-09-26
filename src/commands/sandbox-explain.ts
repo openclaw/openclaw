@@ -80,7 +80,7 @@ function inferProviderFromSessionKey(params: {
   if (!parsed) {
     return undefined;
   }
-  const [channel] = parsed.rest.trim().split(":").filter(Boolean);
+  const channel = parsed.rest.trim().split(":").find(Boolean);
   const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
   if (!channel || channel === configuredMainKey) {
     return undefined;
