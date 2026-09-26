@@ -29,7 +29,7 @@ export function areAgentRunModelsEqual(
 }
 
 /** Admission waits cannot hide an independently running or queued producer. */
-export function mergeProjectedAgentRunStates(
+function mergeProjectedAgentRunStates(
   previous: ProjectedAgentRunState | undefined,
   next: ProjectedAgentRunState | undefined,
 ): ProjectedAgentRunState | undefined {
