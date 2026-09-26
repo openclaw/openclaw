@@ -58,14 +58,15 @@ export type TelegramDebounceEntry = {
 
 interface TelegramInboundBuffers {
   cancelPending: (target: TelegramPendingInboundTarget) => void;
-  inboundDebouncer: ReturnType<typeof createInboundDebouncer<TelegramDebounceEntry>>;
+  inboundDebouncer: {
+    enqueue: (entry: TelegramDebounceEntry) => Promise<void>;
+    shouldBuffer: (entry: TelegramDebounceEntry) => boolean;
+    flushKey: (key: string) => Promise<void>;
+    cancelKey: (key: string) => boolean;
+    drain: () => Promise<void>;
+  };
   resolveTelegramDebounceLane: (msg: Message) => TelegramDebounceLane;
 }
-
-const spooledReplayParticipants = (entries: readonly TelegramDebounceEntry[]) =>
-  entries.flatMap((entry) =>
-    entry.spooledReplayParticipant ? [entry.spooledReplayParticipant] : [],
-  );
 
 export function createTelegramInboundBuffers({
   params: { cfg, accountId, bot, runtime, opts },
@@ -156,7 +157,12 @@ export function createTelegramInboundBuffers({
             50_000)),
     onFlush: (entries) => {
       const completion = (async () => {
-        const participants = spooledReplayParticipants(entries);
+        const participants = entries
+          .map((entry) => entry.spooledReplayParticipant)
+          .filter(
+            (participant): participant is TelegramSpooledReplayDeferredParticipant =>
+              participant !== undefined,
+          );
         const last = entries.at(-1);
         if (!last) {
           return;
@@ -251,7 +257,12 @@ export function createTelegramInboundBuffers({
       return { admission: completion, completion };
     },
     onError: (error, items) => {
-      const participants = spooledReplayParticipants(items);
+      const participants = items
+        .map((item) => item.spooledReplayParticipant)
+        .filter(
+          (participant): participant is TelegramSpooledReplayDeferredParticipant =>
+            participant !== undefined,
+        );
       settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
       runtime.error?.(danger(`telegram debounce flush failed: ${String(error)}`));
       if (participants.length > 0) {
@@ -275,7 +286,15 @@ export function createTelegramInboundBuffers({
       releaseDispatchDedupeClaims(
         mergeDispatchDedupeClaims(...items.map((item) => item.dispatchDedupeClaims)),
       );
-      settleSpooledReplayParticipants(spooledReplayParticipants(items), { kind: "skipped" });
+      settleSpooledReplayParticipants(
+        items
+          .map((item) => item.spooledReplayParticipant)
+          .filter(
+            (participant): participant is TelegramSpooledReplayDeferredParticipant =>
+              participant !== undefined,
+          ),
+        { kind: "skipped" },
+      );
     },
   });
 

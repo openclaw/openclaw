@@ -16,6 +16,7 @@ import {
   resolveEffectiveAgentRuntime,
   resolveFastModeState,
   resolveStoredModelOverride,
+  type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -163,7 +164,12 @@ function resolveTelegramFastCommandState(params: {
       provider: modelContext.provider ?? defaultModel.provider,
       model: modelContext.model ?? defaultModel.model,
       agentId: params.agentId,
-      sessionEntry: entry,
+      sessionEntry:
+        entry?.fastMode !== undefined
+          ? {
+              fastMode: entry.fastMode,
+            }
+          : undefined,
     });
   } catch {
     return fallback();
@@ -235,25 +241,31 @@ export async function executeTelegramBuiltinCommand(
   const commandDefinition = findCommandByNativeName(params.commandName, "telegram", {
     includeBundledChannelFallback: false,
   });
-  if (!commandDefinition) {
-    return "fall-through";
-  }
-  const commandArgs = parseCommandArgs(commandDefinition, params.rawText);
-  const prompt = buildCommandTextFromArgs(commandDefinition, commandArgs);
+  const commandArgs = commandDefinition
+    ? parseCommandArgs(commandDefinition, params.rawText)
+    : params.rawText
+      ? ({ raw: params.rawText } satisfies CommandArgs)
+      : undefined;
+  const prompt = commandDefinition
+    ? buildCommandTextFromArgs(commandDefinition, commandArgs)
+    : params.rawText
+      ? `/${params.commandName} ${params.rawText}`
+      : `/${params.commandName}`;
   if (
-    commandDefinition.key !== "login" &&
-    !canResolveCommandArgMenu({ command: commandDefinition, args: commandArgs })
+    commandDefinition?.key !== "login" &&
+    (!commandDefinition ||
+      !canResolveCommandArgMenu({ command: commandDefinition, args: commandArgs }))
   ) {
     return "fall-through";
   }
-  if (commandDefinition.key === "login" && params.shouldSkip?.()) {
+  if (commandDefinition?.key === "login" && params.shouldSkip?.()) {
     return "handled";
   }
   const dispatch = await prepareTelegramCommandDispatch({ ...params, requireAuth: true });
   if (!dispatch) {
     return "handled";
   }
-  if (commandDefinition.key === "login") {
+  if (commandDefinition?.key === "login") {
     const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
     const currentProvider =
       resolveTelegramCommandMenuModelContext({
@@ -274,14 +286,15 @@ export async function executeTelegramBuiltinCommand(
   }
 
   const menuNeedsModelContext =
-    commandDefinition.argsMenu &&
+    commandDefinition?.argsMenu &&
     !(commandArgs?.raw && !commandArgs.values) &&
     commandDefinition.args?.some(
       (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
     );
-  const sessionKeyForMenu = menuNeedsModelContext ? dispatch.targetSessionKey : "";
+  const sessionKeyForMenu =
+    commandDefinition && menuNeedsModelContext ? dispatch.targetSessionKey : "";
   const fastCommandState =
-    commandDefinition.key === "fast" && menuNeedsModelContext
+    commandDefinition?.key === "fast" && menuNeedsModelContext
       ? resolveTelegramFastCommandState({
           cfg: dispatch.runtimeCfg,
           agentId: dispatch.route.agentId,
@@ -289,24 +302,25 @@ export async function executeTelegramBuiltinCommand(
         })
       : undefined;
   const fastMenuModelContext =
-    commandDefinition.key === "fast" && menuNeedsModelContext
+    commandDefinition?.key === "fast" && menuNeedsModelContext
       ? resolveTelegramFastCommandModelContext({
           cfg: dispatch.runtimeCfg,
           agentId: dispatch.route.agentId,
           sessionKey: sessionKeyForMenu,
         })
       : undefined;
-  const menuModelContext = menuNeedsModelContext
-    ? (fastMenuModelContext ??
-      resolveTelegramCommandMenuModelContext({
-        cfg: dispatch.runtimeCfg,
-        agentId: dispatch.route.agentId,
-        sessionKey: sessionKeyForMenu,
-      }))
-    : {};
+  const menuModelContext =
+    commandDefinition && menuNeedsModelContext
+      ? (fastMenuModelContext ??
+        resolveTelegramCommandMenuModelContext({
+          cfg: dispatch.runtimeCfg,
+          agentId: dispatch.route.agentId,
+          sessionKey: sessionKeyForMenu,
+        }))
+      : {};
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
-    commandDefinition.key === "think" && menuNeedsModelContext
+    commandDefinition?.key === "think" && menuNeedsModelContext
       ? await loadPreparedModelCatalog({
           config: dispatch.runtimeCfg,
           agentId: dispatch.route.agentId,
@@ -314,15 +328,17 @@ export async function executeTelegramBuiltinCommand(
           readOnly: true,
         })
       : undefined;
-  const menu = resolveCommandArgMenu({
-    command: commandDefinition,
-    args: commandArgs,
-    cfg: dispatch.runtimeCfg,
-    session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
-    ...menuModelContext,
-    catalog: menuModelCatalog,
-  });
-  if (menu) {
+  const menu = commandDefinition
+    ? resolveCommandArgMenu({
+        command: commandDefinition,
+        args: commandArgs,
+        cfg: dispatch.runtimeCfg,
+        session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
+        ...menuModelContext,
+        catalog: menuModelCatalog,
+      })
+    : null;
+  if (menu && commandDefinition) {
     // The tracker consumes the update; a menu with no choices must leave it for the pipeline.
     if (params.shouldSkip?.()) {
       return "handled";
@@ -341,14 +357,14 @@ export async function executeTelegramBuiltinCommand(
           : undefined,
       currentFastModeStatus:
         commandDefinition.key === "fast"
-          ? formatFastModeCurrentStatus(
-              fastCommandState ??
+          ? formatFastModeCurrentStatus({
+              ...(fastCommandState ??
                 resolveTelegramFastCommandState({
                   cfg: dispatch.runtimeCfg,
                   agentId: dispatch.route.agentId,
                   sessionKey: sessionKeyForMenu,
-                }),
-            )
+                })),
+            })
           : undefined,
     });
     const rows: Array<Array<{ text: string; callback_data: string }>> = [];

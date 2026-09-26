@@ -235,18 +235,15 @@ async function resolveTelegramCommandAuth(params: {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
-  const rejectNotAuthorized = async () => {
+  const sendAuthMessage = async (text: string) => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () =>
-        bot.api.sendMessage(
-          chatId,
-          "You are not authorized to use this command.",
-          threadParams ?? {},
-        ),
+      fn: () => bot.api.sendMessage(chatId, text, threadParams ?? {}),
     });
     return null;
   };
+  const rejectNotAuthorized = async () =>
+    await sendAuthMessage("You are not authorized to use this command.");
 
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,

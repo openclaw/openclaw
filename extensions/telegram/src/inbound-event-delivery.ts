@@ -22,7 +22,11 @@ function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean
   if (hasTelegramTopicTarget(expectedTarget)) {
     return false;
   }
-  return expectedTarget === stripTelegramTopicTarget(actualTarget);
+  const expectedBase = stripTelegramTopicTarget(expectedTarget);
+  const actualBase = stripTelegramTopicTarget(actualTarget);
+  return (
+    expectedBase === actualBase && (expectedTarget === expectedBase || actualTarget === actualBase)
+  );
 }
 
 export const telegramInboundEventDelivery = createInboundEventDeliveryCorrelation({

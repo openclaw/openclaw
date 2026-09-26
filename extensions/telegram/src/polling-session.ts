@@ -14,6 +14,7 @@ import {
   resolveTelegramRestartDelayMs,
 } from "./polling-session-restart-policy.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
+import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
 import { resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
@@ -34,6 +35,10 @@ const TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS = 5_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+// Status-only backlog note threshold (unrelated to adoption timeout).
+const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
+  TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
+);
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
@@ -137,7 +142,11 @@ export class TelegramPollingSession {
           continue;
         }
 
-        if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
+        const cleanupState = await this.#ensureWebhookCleanup(bot);
+        if (cleanupState === "retry") {
+          continue;
+        }
+        if (cleanupState === "exit") {
           return;
         }
 
@@ -257,6 +266,7 @@ export class TelegramPollingSession {
         ...(this.opts.abortSignal ? { fetchAbortSignal: this.opts.abortSignal } : {}),
         ...(this.opts.abortSignal ? { accountAbortSignal: this.opts.abortSignal } : {}),
         mediaAbortSignal: cycleAbortSignal,
+        minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         updateOffset,
         telegramTransport,
       });
@@ -269,7 +279,7 @@ export class TelegramPollingSession {
     }
   }
 
-  async #ensureWebhookCleanup(bot: TelegramBot): Promise<"ready" | "exit"> {
+  async #ensureWebhookCleanup(bot: TelegramBot): Promise<"ready" | "retry" | "exit"> {
     if (this.#webhookCleared) {
       return "ready";
     }
@@ -288,10 +298,11 @@ export class TelegramPollingSession {
         );
         return "ready";
       }
-      if (this.opts.abortSignal?.aborted) {
-        return "exit";
-      }
-      throw err;
+      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+        err,
+        "Telegram webhook cleanup failed",
+      );
+      return shouldRetry ? "retry" : "exit";
     }
   }
 

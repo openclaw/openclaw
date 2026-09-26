@@ -27,7 +27,6 @@ import type {
   LaneName,
   LaneTextDeliverer,
 } from "./lane-delivery-text-deliverer.js";
-import type { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
 
 export type DispatchTelegramMessageParams = {
   context: TelegramMessageContext;
@@ -131,7 +130,14 @@ type TelegramBufferedFinalSettlement = {
 
 type TelegramProgressCompositor = ReturnType<typeof createChannelProgressDraftCompositor>;
 
-type TelegramReasoningStepState = ReturnType<typeof createTelegramReasoningStepState>;
+export type TelegramReasoningStepState = {
+  noteReasoningHint: () => void;
+  noteReasoningDelivered: () => void;
+  shouldBufferFinalAnswer: () => boolean;
+  bufferFinalAnswer: (value: ReplyPayload) => void;
+  takeBufferedFinalAnswer: () => ReplyPayload | undefined;
+  resetForNextStep: () => void;
+};
 
 export type TelegramDraftStateSlice = {
   answerLane: DraftLaneState;

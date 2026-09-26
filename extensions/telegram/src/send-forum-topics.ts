@@ -47,33 +47,44 @@ export async function editForumTopicTelegram(
     throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
   }
 
-  return withTelegramApiContext(opts, async (context) => {
-    const { api } = context;
-    const {
-      chatId,
-      messageId: messageThreadId,
-      request,
-    } = await prepareTelegramOutbound({
-      to: chatIdInput,
+  return withTelegramApiContext(
+    opts,
+    async (
       context,
-      opts,
-      messageIdInput: messageThreadIdInput,
-      request: { kind: "standard" },
-    });
-    const payload = {
-      ...(trimmedName ? { name: trimmedName } : {}),
-      ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
-    };
-    await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
-    logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
-    return {
-      ok: true as const,
-      chatId,
-      messageThreadId,
-      ...(trimmedName ? { name: trimmedName } : {}),
-      ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
-    };
-  });
+    ): Promise<{
+      ok: true;
+      chatId: string;
+      messageThreadId: number;
+      name?: string;
+      iconCustomEmojiId?: string;
+    }> => {
+      const { api } = context;
+      const {
+        chatId,
+        messageId: messageThreadId,
+        request,
+      } = await prepareTelegramOutbound({
+        to: chatIdInput,
+        context,
+        opts,
+        messageIdInput: messageThreadIdInput,
+        request: { kind: "standard" },
+      });
+      const payload = {
+        ...(trimmedName ? { name: trimmedName } : {}),
+        ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
+      };
+      await request(() => api.editForumTopic(chatId, messageThreadId, payload), "editForumTopic");
+      logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
+      return {
+        ok: true,
+        chatId,
+        messageThreadId,
+        ...(trimmedName ? { name: trimmedName } : {}),
+        ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
+      };
+    },
+  );
 }
 
 export async function renameForumTopicTelegram(

@@ -32,6 +32,8 @@ export type TelegramBotOptions = {
   accountAbortSignal?: AbortSignal;
   /** Signal to abort inbound media resolution without cancelling adopted-turn Bot API calls. */
   mediaAbortSignal?: AbortSignal;
+  /** Minimum grammY client timeout when timeoutSeconds is configured on long-polling bots. */
+  minimumClientTimeoutSeconds?: number;
   updateOffset?: {
     lastUpdateId?: number | null;
     persistenceFloorUpdateId?: number | null;

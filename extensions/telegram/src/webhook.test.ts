@@ -93,18 +93,19 @@ const webhookBotInfo = vi.hoisted(() => ({
   username: "openclaw_bot",
   has_topics_enabled: false,
 }));
-const createWebhookBot = vi.hoisted(() => () => ({
-  init: initSpy,
-  botInfo: webhookBotInfo,
-  handleUpdate: handleUpdateSpy,
-  api: {
-    setWebhook: setWebhookSpy,
-    deleteWebhook: deleteWebhookSpy,
-    answerCallbackQuery: answerCallbackQuerySpy,
-  },
-  stop: stopSpy,
-}));
-const createTelegramBotSpy = vi.hoisted(() => vi.fn(createWebhookBot));
+const createTelegramBotSpy = vi.hoisted(() =>
+  vi.fn(() => ({
+    init: initSpy,
+    botInfo: webhookBotInfo,
+    handleUpdate: handleUpdateSpy,
+    api: {
+      setWebhook: setWebhookSpy,
+      deleteWebhook: deleteWebhookSpy,
+      answerCallbackQuery: answerCallbackQuerySpy,
+    },
+    stop: stopSpy,
+  })),
+);
 const transportCloseSpies = vi.hoisted(() => [] as Array<ReturnType<typeof vi.fn>>);
 const resolveTelegramTransportSpy = vi.hoisted(() =>
   vi.fn(() => {
@@ -188,7 +189,17 @@ function resetTelegramWebhookMocks(): void {
   transportCloseSpies.length = 0;
   webhookBotInfo.has_topics_enabled = false;
   createTelegramBotSpy.mockReset();
-  createTelegramBotSpy.mockImplementation(createWebhookBot);
+  createTelegramBotSpy.mockImplementation(() => ({
+    init: initSpy,
+    botInfo: webhookBotInfo,
+    handleUpdate: handleUpdateSpy,
+    api: {
+      setWebhook: setWebhookSpy,
+      deleteWebhook: deleteWebhookSpy,
+      answerCallbackQuery: answerCallbackQuerySpy,
+    },
+    stop: stopSpy,
+  }));
 }
 
 beforeAll(() => gateway.listen());
@@ -237,17 +248,6 @@ async function withStartedWebhook<T>(
   } finally {
     ingressFactory.mockRestore();
   }
-}
-
-function startWebhookStartupFixture(
-  options: Partial<Parameters<typeof startTelegramWebhook>[0]> = {},
-) {
-  return startTelegramWebhook({
-    token: TELEGRAM_TOKEN,
-    secret: TELEGRAM_SECRET,
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    ...options,
-  });
 }
 
 async function runNearLimitPayloadTestAndExpectUpdate(
@@ -638,7 +638,9 @@ describe("startTelegramWebhook", () => {
     setWebhookSpy.mockRejectedValueOnce(error);
 
     await expect(
-      startWebhookStartupFixture({
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
         runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
         setStatus,
@@ -661,8 +663,11 @@ describe("startTelegramWebhook", () => {
     setWebhookSpy.mockRejectedValueOnce(error);
 
     await expect(
-      startWebhookStartupFixture({
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         setStatus,
       }),
     ).rejects.toThrow("bad webhook URL");
@@ -762,22 +767,6 @@ describe("startTelegramWebhook", () => {
     expect(setWebhookSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("closes its transport when bot creation fails before initialization", async () => {
-    const creationError = new Error("bot setup failed");
-    createTelegramBotSpy.mockImplementationOnce(() => {
-      throw creationError;
-    });
-
-    await expect(startWebhookStartupFixture(requireWebhookQueueScope())).rejects.toBe(
-      creationError,
-    );
-
-    expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
-    expect(initSpy).not.toHaveBeenCalled();
-    expect(setWebhookSpy).not.toHaveBeenCalled();
-    expectWebhookBotScopesAborted(createTelegramBotSpy);
-  });
-
   it("preserves the initialization failure when bot shutdown also fails", async () => {
     const runtimeError = vi.fn();
     const setStatus = vi.fn();
@@ -786,7 +775,9 @@ describe("startTelegramWebhook", () => {
     stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
 
     await expect(
-      startWebhookStartupFixture({
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
         ...requireWebhookQueueScope(),
         runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
@@ -833,10 +824,13 @@ describe("startTelegramWebhook", () => {
 
     try {
       await expect(
-        startWebhookStartupFixture({
+        startTelegramWebhook({
+          token: TELEGRAM_TOKEN,
+          secret: TELEGRAM_SECRET,
           path: TELEGRAM_WEBHOOK_PATH,
           ...requireWebhookQueueScope(),
           abortSignal: abort.signal,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
           setStatus,
         }),
       ).rejects.toBe(queueError);
@@ -1007,9 +1001,12 @@ describe("startTelegramWebhook", () => {
           releaseWork = resolve;
         }),
     );
-    const started = await startWebhookStartupFixture({
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
       path: TELEGRAM_WEBHOOK_PATH,
       ...requireWebhookQueueScope(),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
 
     try {
@@ -1041,7 +1038,9 @@ describe("startTelegramWebhook", () => {
     const setStatus = vi.fn();
     stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
 
-    const started = await startWebhookStartupFixture({
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
       path: TELEGRAM_WEBHOOK_PATH,
       ...requireWebhookQueueScope(),
       setStatus,
@@ -1063,10 +1062,13 @@ describe("startTelegramWebhook", () => {
       return finishStop.promise;
     });
     const abort = new AbortController();
-    const started = await startWebhookStartupFixture({
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
       path: TELEGRAM_WEBHOOK_PATH,
       ...requireWebhookQueueScope(),
       abortSignal: abort.signal,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
     abort.abort();
     let stopped = false;

@@ -280,7 +280,6 @@ export async function startTelegramWebhook(opts: {
   let shutdownPromise: Promise<void> | undefined;
   let unregisterRoute: (() => void) | undefined;
   let unregisterTarget: (() => void) | undefined;
-  let ownedBot: Awaited<ReturnType<typeof createTelegramBot>> | undefined = undefined;
   let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
   const shutdownAbortController = new AbortController();
   const telegramAccountConfig = opts.config
@@ -289,6 +288,11 @@ export async function startTelegramWebhook(opts: {
   const telegramTransport = resolveTelegramTransport(opts.fetch, {
     network: telegramAccountConfig?.network,
   });
+  let closeTransportPromise: Promise<void> | undefined;
+  const closeTransportOnce = (): Promise<void> => {
+    closeTransportPromise ??= telegramTransport.close();
+    return closeTransportPromise;
+  };
   const botAbortController = new AbortController();
   const accountAbortSignal = opts.abortSignal
     ? AbortSignal.any([opts.abortSignal, shutdownAbortController.signal])
@@ -296,6 +300,19 @@ export async function startTelegramWebhook(opts: {
   const botFetchAbortSignal = opts.abortSignal
     ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
     : botAbortController.signal;
+  const bot = await createTelegramBot({
+    token: opts.token,
+    runtime,
+    buildContext: opts.buildContext,
+    dispatchReplyFromConfig: opts.dispatchReplyFromConfig,
+    proxyFetch: opts.fetch,
+    fetchAbortSignal: botFetchAbortSignal,
+    accountAbortSignal,
+    config: opts.config,
+    accountId: opts.accountId,
+    ownerAgentId: opts.ownerAgentId,
+    telegramTransport,
+  });
   const runShutdownPhase = async (
     label: string,
     run: () => void | Promise<void>,
@@ -323,10 +340,10 @@ export async function startTelegramWebhook(opts: {
         unregisterRoute?.();
         unregisterTarget?.();
       });
-      await runShutdownPhase("bot stop", () => ownedBot?.stop());
+      await runShutdownPhase("bot stop", () => bot.stop());
       // The webhook owns this transport because it resolved and injected it into
       // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
-      await runShutdownPhase("transport close", () => telegramTransport.close());
+      await runShutdownPhase("transport close", closeTransportOnce);
       await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
       await runShutdownPhase("ingress settlement", () => ingressMonitor?.waitForDeferredClaims());
       await runShutdownPhase("status update", () => status.noteStop());
@@ -350,22 +367,6 @@ export async function startTelegramWebhook(opts: {
       throw err;
     }
   };
-  const bot = await runStartupPhase(() =>
-    createTelegramBot({
-      token: opts.token,
-      runtime,
-      buildContext: opts.buildContext,
-      dispatchReplyFromConfig: opts.dispatchReplyFromConfig,
-      proxyFetch: opts.fetch,
-      fetchAbortSignal: botFetchAbortSignal,
-      accountAbortSignal,
-      config: opts.config,
-      accountId: opts.accountId,
-      ownerAgentId: opts.ownerAgentId,
-      telegramTransport,
-    }),
-  );
-  ownedBot = bot;
   await runStartupPhase(() =>
     initializeTelegramWebhookBot({
       bot,
@@ -500,6 +501,7 @@ export async function startTelegramWebhook(opts: {
     });
   });
 
+  let webhookAdvertised = false;
   if (opts.abortSignal?.aborted) {
     void shutdown();
   } else if (opts.abortSignal) {
@@ -535,13 +537,14 @@ export async function startTelegramWebhook(opts: {
     if (shutDown) {
       return;
     }
+    webhookAdvertised = true;
     status.noteReady();
     runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
   };
   const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
     let attempt = firstAttempt;
     while (true) {
-      if (shutDown || opts.abortSignal?.aborted) {
+      if (shutDown || opts.abortSignal?.aborted || webhookAdvertised) {
         return;
       }
       const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
@@ -553,7 +556,7 @@ export async function startTelegramWebhook(opts: {
       } catch {
         return;
       }
-      if (shutDown || opts.abortSignal?.aborted) {
+      if (shutDown || opts.abortSignal?.aborted || webhookAdvertised) {
         return;
       }
       try {

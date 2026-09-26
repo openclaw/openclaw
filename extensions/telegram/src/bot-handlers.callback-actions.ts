@@ -15,19 +15,37 @@ type TelegramCallbackReplyParams = Omit<
   NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
   "direct_messages_topic_id" | "message_thread_id"
 >;
-type TelegramCallbackEditParams = Parameters<
-  RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]
->[3];
 
-export type TelegramCallbackMessageActions = ReturnType<
-  typeof createTelegramCallbackMessageActions
->;
+export interface TelegramCallbackMessageActions {
+  editCallbackMessage: (
+    text: string,
+    editParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>[3],
+  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>;
+  clearCallbackButtons: () => ReturnType<
+    RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]
+  >;
+  editCallbackButtons: (
+    buttons: TelegramCallbackButton[][],
+  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]>;
+  editCallbackMessageWithButtons: (
+    text: string,
+    buttons: TelegramCallbackButton[][],
+    extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
+  ) => Promise<void>;
+  deleteCallbackMessage: () => ReturnType<
+    RegisterTelegramHandlerParams["bot"]["api"]["deleteMessage"]
+  >;
+  replyToCallbackChat: (
+    text: string,
+    replyParams?: TelegramCallbackReplyParams,
+  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>;
+}
 
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
   threadSpec: TelegramThreadSpec;
-}) {
+}): TelegramCallbackMessageActions {
   const { bot, callbackMessage, threadSpec } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
@@ -36,7 +54,10 @@ export function createTelegramCallbackMessageActions(params: {
   const withCallbackBusinessParams = <T extends object>(value: T) =>
     callbackBusinessParams ? { ...callbackBusinessParams, ...value } : value;
 
-  const editCallbackMessage = async (text: string, editParams?: TelegramCallbackEditParams) => {
+  const editCallbackMessage = async (
+    text: string,
+    editParams?: Parameters<typeof bot.api.editMessageText>[3],
+  ) => {
     return await bot.api.editMessageText(
       callbackMessage.chat.id,
       callbackMessage.message_id,
