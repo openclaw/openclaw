@@ -46,7 +46,7 @@ preparation is removed from its triggering group's workload. The emitted
 and private-QA builds retain their existing compute allowance. Storage groups
 balance file cost and the 16-file ceiling together. Measured heavy singleton files
 and Gateway agent-chat groups have dedicated rows.
-Hosted PRs may emit up to 210 compact rows and 256 total Node rows,
+Hosted PRs may emit up to 224 compact rows and 256 total Node rows,
 with a 200-row concurrency cap. Other backends retain their existing caps. The
 optional PR hosted admission budget is 300 jobs; main retains 45. These are
 per-run bounds, not a reservation of the organization’s shared hosted pool.

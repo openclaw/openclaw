@@ -83,7 +83,7 @@ it("keeps measured hosted PR rows bounded while preserving their complete file o
   };
   const owners = createNodeTestShards(prOptions);
   const jobs = createNodeTestShardBundles(prOptions);
-  expect(jobs.length).toBeLessThanOrEqual(210);
+  expect(jobs.length).toBeLessThanOrEqual(224);
   expect(jobs.every((job) => job.planConcurrency === 1)).toBe(true);
   expect(Math.max(...jobs.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(525);
   expect(

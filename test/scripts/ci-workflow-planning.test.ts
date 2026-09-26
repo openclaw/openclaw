@@ -2956,22 +2956,28 @@ describe("ci workflow guards", () => {
       },
     );
 
-    it("runs security after preflight failures and skips a cancelled workflow", () => {
-      const job = readCiWorkflow().jobs["security-fast"];
-      expect(job.needs).toEqual(["preflight"]);
-      const context = {
-        eventName: "push" as const,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend: "hybrid" as const,
-        failed: true,
-      };
-      expect(evaluateWorkflowExpression(job.if, context)).toBe(true);
-      expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
-      );
-      expect(evaluateWorkflowExpression(job.if, { ...context, cancelled: true })).toBe(false);
-    });
+    it.each([
+      ["push", "blacksmith-4vcpu-ubuntu-2404"],
+      ["pull_request", "ubuntu-24.04"],
+    ] as const)(
+      "runs security after %s preflight failures and skips a cancelled workflow",
+      (eventName, runner) => {
+        const job = readCiWorkflow().jobs["security-fast"];
+        expect(job.needs).toEqual(["preflight"]);
+        const context = {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: "hybrid" as const,
+          failed: true,
+          preflightResult: "failure",
+          preflightOutputs: {},
+        };
+        expect(evaluateWorkflowExpression(job.if, context)).toBe(true);
+        expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(runner);
+        expect(evaluateWorkflowExpression(job.if, { ...context, cancelled: true })).toBe(false);
+      },
+    );
   });
 
   it.each<{

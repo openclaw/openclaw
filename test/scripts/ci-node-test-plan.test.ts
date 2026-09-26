@@ -4524,17 +4524,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect({ anchor, unsplit, split }).toEqual(original);
   });
 
-  it("keeps precise tooling selection through hosted overflow refusal", () => {
-    const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    const selected = tooling.flatMap((shard) => shard.includePatterns ?? []).slice(0, 96);
-    expect(selected).toHaveLength(96);
-    vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
-    // Every selected file is now indivisible above the admission cap. Overflow
-    // must retain these 96 files without adding unrelated dist owners or the full suite.
-    expect(() => createSelectedNodeTestShardBundles(selected, { runnerBackend: "github" })).toThrow(
-      "exceeds 90 jobs (96 planned)",
-    );
-  });
+  it.each([
+    { runnerBackend: "github", files: 96, cap: 90 },
+    { runnerBackend: "github-pr", files: 225, cap: 224 },
+  ] as const)(
+    "keeps precise tooling selection through $runnerBackend overflow refusal",
+    ({ runnerBackend, files, cap }) => {
+      const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
+      const selected = tooling
+        .flatMap((shard) => shard.includePatterns ?? [])
+        .filter((file) => !isCiProofTestFile(file))
+        .slice(0, files);
+      expect(selected).toHaveLength(files);
+      vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
+      // Every selected file is indivisible above the admission cap. Overflow
+      // must retain that selection without adding dist owners or the full suite.
+      expect(() => createSelectedNodeTestShardBundles(selected, { runnerBackend })).toThrow(
+        `exceeds ${cap} jobs (${files} planned)`,
+      );
+    },
+  );
 
   it("keeps the private runtime prerequisite on precise tooling readers", () => {
     const shards = createSelectedNodeTestShardBundles([PRIVATE_QA_TOOLING_TEST]);

@@ -3836,7 +3836,7 @@ setImmediate(() => {
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("keeps PR preflight and aggregation hosted and preserves other hybrid control routing", () => {
+  it("keeps PR control jobs hosted and preserves other hybrid routing", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -3848,7 +3848,7 @@ setImmediate(() => {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          eventName === "pull_request" && jobName !== "security-fast"
+          eventName === "pull_request"
             ? "ubuntu-24.04"
             : jobName === "preflight"
               ? "blacksmith-16vcpu-ubuntu-2404"
@@ -4113,7 +4113,6 @@ setImmediate(() => {
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
-      "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",

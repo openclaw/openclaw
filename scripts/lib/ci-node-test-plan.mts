@@ -463,7 +463,7 @@ const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
 // Legacy hosted profiles can run on Blacksmith through trusted-fork routing.
 // The explicit hosted-only PR profile does not consume that registration budget.
 const COMPACT_NODE_TEST_JOB_CAP = 90;
-const COMPACT_HOSTED_PR_NODE_TEST_JOB_CAP = 210;
+const COMPACT_HOSTED_PR_NODE_TEST_JOB_CAP = 224;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 16;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;

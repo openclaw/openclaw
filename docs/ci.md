@@ -19,12 +19,12 @@ job. Open the page that matches your task.
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-The PR failure monitor, preflight, static checks, artifact build, Windows tests,
+The PR failure monitor, preflight, security and static checks, artifact build, Windows tests,
 Control UI E2E, and final aggregate gate use free GitHub-hosted runners. PR hybrid core lint runs five independent stripes, with
 six separate extension stripes. Extension package compilation uses twelve PR stripes
 with the complete plugin inventory and one negative canary. Windows retains its one-worker hosted budget on
 `windows-2025`. Hosted PR Node planning uses separate measured group costs,
-serial processes, and smaller file groups. Its limits are 210 compact rows and
+serial processes, and smaller file groups. Its limits are 224 compact rows and
 256 total Node rows, with up to 200 active rows. Main and release routing retain
 their existing policies and caps.
 
@@ -73,7 +73,7 @@ Build, QA and test orchestration restore the same [protected Node compile cache]
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
-Changed-extension PR jobs use [measured fallback rates and a 300-second packing budget](/ci/capacity#runner-registration-budget) within the 210-row hosted PR compact, 256-row hosted PR total, and 70-row push caps. Other backends retain 90 compact and 130 PR rows.
+Changed-extension PR jobs use [measured fallback rates and a 300-second packing budget](/ci/capacity#runner-registration-budget) within the 224-row hosted PR compact, 256-row hosted PR total, and 70-row push caps. Other backends retain 90 compact and 130 PR rows.
 
 Compact planning reserves the actual appended plugin rows before applying those
 Node matrix caps, allowing existing hosted tooling compaction to use the
