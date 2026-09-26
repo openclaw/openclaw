@@ -62,7 +62,7 @@ function atCopyMutation(mutate: () => void) {
   });
 }
 
-it.each([".MODULES.YAML", ".moduleſ.yaml"])(
+it.for([".MODULES.YAML", ".moduleſ.yaml"])(
   "discovers external stores through the filesystem metadata alias %s",
   async (alias, context) => {
     let store = "";
