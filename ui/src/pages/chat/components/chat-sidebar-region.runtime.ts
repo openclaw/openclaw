@@ -78,6 +78,7 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) panelIdPrefix = "";
+  @property({ attribute: false }) conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
@@ -349,12 +350,13 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         }));
       }
       const type = panelType(this.panelDefinitions, panel.slot);
+      const tab = panel.slot === "conversation" ? (this.conversationTab ?? type) : type;
       return [
         {
           id: panel.id,
           domId: `${this.panelIdPrefix}-tab-${encodeURIComponent(panel.id)}`,
           contentId,
-          label: type.label,
+          label: tab.label,
           labelTooltip:
             panel.slot === "dashboard"
               ? t(
@@ -365,12 +367,12 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                     : "chat.sidePanel.expandPanel",
                   { panel: type.label },
                 )
-              : type.label,
+              : tab.label,
           onActivate:
             panel.slot === "dashboard"
               ? () => this.callbacks?.togglePanelExpanded(panel.id)
               : undefined,
-          icon: type.icon,
+          icon: tab.icon,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
         },
       ];
