@@ -92,6 +92,89 @@ const inputSchema = installedPackageSchema.extend({
 });
 type Input = z.infer<typeof inputSchema>;
 export const keys = ["fresh", "2026.9.3", "2026.9.4"] as const;
+// Aggregate serial fixture phases; command, readiness, and native inspection limits stay intact.
+const installedCellBodyTimeoutMs = {
+  fresh: 360_000,
+  "2026.9.3": 900_000,
+  // Includes an unmeasured 180-second peer/discovery/cold-native reserve.
+  "2026.9.4": 900_000,
+} satisfies Record<(typeof keys)[number], number>;
+export function createInstalledProgressRecorder(params: {
+  input: Input;
+  key: (typeof keys)[number];
+  rootDir: string;
+  proofPath: string;
+  commands: CommandRecord[];
+  observations: Record<string, unknown>;
+}) {
+  const { input, key, rootDir, proofPath, commands, observations } = params;
+  const progressStarted = performance.now();
+  let progressFailure: Error | undefined;
+  return async (phase: string, error?: Error) => {
+    progressFailure = error ?? progressFailure;
+    // Persist settled commands and the original error before native cleanup can be interrupted.
+    await fs.writeFile(path.join(rootDir, "commands.json"), JSON.stringify(commands, null, 2));
+    await fs.writeFile(
+      proofPath,
+      JSON.stringify(
+        {
+          result: progressFailure ? "failed" : "in-progress",
+          head: input.toolingSha,
+          candidate: input.candidate,
+          published: input.published,
+          cell: key,
+          cells: [
+            {
+              key,
+              phase,
+              commands,
+              observations,
+              failure: progressFailure && describeFailure(progressFailure),
+            },
+          ],
+          cleanupComplete: false,
+          elapsedMs: performance.now() - progressStarted,
+          recordedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+    );
+    // Only fixed labels reach stdout; command arguments and diagnostics stay in the proof.
+    let outputPhase = "fixture";
+    if (phase.startsWith("command:")) {
+      outputPhase = "command-result";
+    } else if (phase.startsWith("disabled-discovery:")) {
+      outputPhase = "disabled-discovery";
+    } else if (phase.endsWith(":waiting")) {
+      outputPhase = "readiness-wait";
+    } else if (phase.endsWith(":ready")) {
+      outputPhase = "readiness-ready";
+    } else if (phase === "selected-status-verified") {
+      outputPhase = "selected-status-verified";
+    } else if (phase.startsWith("authority:")) {
+      outputPhase = "authority-checkpoint";
+    } else if (phase.endsWith(":hash-verified")) {
+      outputPhase = "install-hash-verified";
+    } else if (phase.endsWith("cleanup:command-result")) {
+      outputPhase = "cleanup-command-result";
+    } else if (phase === "before-native-cleanup") {
+      outputPhase = "native-cleanup";
+    }
+    process.stdout.write(
+      `[schtasks-installed] ${JSON.stringify({
+        cell: key,
+        phase: outputPhase,
+        elapsedMs: Math.round(performance.now() - progressStarted),
+        outcome: progressFailure ? "failed" : "in-progress",
+      })}\n`,
+    );
+  };
+}
+
+export function resolveInstalledCellBodyTimeoutMs(cell: string | undefined) {
+  return installedCellBodyTimeoutMs[z.enum(keys).parse(cell)];
+}
 const preparedCellSchema = z.object({
   cell: z.enum(keys),
   inputSha256: z.string(),

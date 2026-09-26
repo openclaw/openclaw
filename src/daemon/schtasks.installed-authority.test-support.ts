@@ -41,8 +41,9 @@ export async function inspectInstalledTaskAuthority(params: {
   task: InstalledTask;
   foreignInstallRoot: string;
   canBindLoopbackPort: (port: number) => Promise<boolean>;
+  recordProgress: (phase: string, error?: Error) => Promise<void>;
 }) {
-  const { task, foreignInstallRoot, canBindLoopbackPort } = params;
+  const { task, foreignInstallRoot, canBindLoopbackPort, recordProgress } = params;
   assert.notEqual(packageRoot(task.installRoot), packageRoot(foreignInstallRoot));
   const originalXml = await readTaskXml(task.taskName);
   assert.ok(originalXml);
@@ -90,7 +91,8 @@ export async function inspectInstalledTaskAuthority(params: {
   ];
   const fileHashes = () => Promise.all(filePaths.map(async (file) => [file, await hashFile(file)]));
   const filesBefore = await fileHashes();
-  const snapshot = async () => {
+  await recordProgress("authority:definitions-captured");
+  const snapshot = async (phase: string) => {
     const principal = readTaskPrincipal(task.taskName);
     const runtime = await readScheduledTaskRuntime(task.env, { requireLoaded: true });
     assert.equal(runtime.status, "stopped");
@@ -103,6 +105,7 @@ export async function inspectInstalledTaskAuthority(params: {
     assert.deepEqual(await fileHashes(), filesBefore);
     const xml = await readTaskXml(task.taskName);
     assert.ok(xml);
+    await recordProgress(`authority:snapshot:${phase}`);
     return {
       xml,
       enabled: principal.enabled,
@@ -113,7 +116,7 @@ export async function inspectInstalledTaskAuthority(params: {
       fileHashes: filesBefore,
     };
   };
-  const registerDisabled = async (scriptPath: string) => {
+  const registerDisabled = async (scriptPath: string, phase: string) => {
     const escaped = scriptPath
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
@@ -130,7 +133,8 @@ export async function inspectInstalledTaskAuthority(params: {
       (await execSchtasks(["/Create", "/F", "/TN", task.taskName, "/XML", definitionPath])).code,
       0,
     );
-    const observed = await snapshot();
+    await recordProgress(`authority:registered:${phase}`);
+    const observed = await snapshot(phase);
     assert.equal(observed.enabled, false);
     assert.equal(observed.taskState, 1);
     return observed;
@@ -138,8 +142,8 @@ export async function inspectInstalledTaskAuthority(params: {
   const observations: Record<string, unknown> = {};
   let failure: Error | undefined;
   await withGatewayServiceOperationLock(task.env, async (assertCurrent) => {
-    const inspect = (expectedService: Admission = { serviceEnv: task.env }) =>
-      maybeStopManagedServiceBeforeMutableUpdate({
+    const inspect = async (expectedService: Admission = { serviceEnv: task.env }) => {
+      const admitted = await maybeStopManagedServiceBeforeMutableUpdate({
         root: packageRoot(task.installRoot),
         expectedService,
         phase: "inspect",
@@ -149,6 +153,9 @@ export async function inspectInstalledTaskAuthority(params: {
         jsonMode: true,
         assertCurrent,
       });
+      await recordProgress("authority:admission-inspected");
+      return admitted;
+    };
     const controlOptions = (before: Admission) => {
       const guard = createWindowsTaskAutoStartGuard({
         root: packageRoot(task.installRoot),
@@ -159,8 +166,12 @@ export async function inspectInstalledTaskAuthority(params: {
         beforeMutation: guard,
       };
     };
-    const observeRefusal = async (operation: () => Promise<unknown>, message: string) => {
-      const prior = await snapshot();
+    const observeRefusal = async (
+      operation: () => Promise<unknown>,
+      message: string,
+      phase: string,
+    ) => {
+      const prior = await snapshot(`${phase}:before`);
       assert.equal(prior.enabled, false);
       let refusal: { name: string; message: string } | undefined;
       await assert.rejects(operation, (error: unknown) => {
@@ -169,13 +180,14 @@ export async function inspectInstalledTaskAuthority(params: {
         refusal = { name: error.name, message: error.message };
         return true;
       });
-      const after = await snapshot();
+      await recordProgress(`authority:refusal:${phase}`);
+      const after = await snapshot(`${phase}:after`);
       assert.deepEqual(after, prior);
       assert.ok(refusal);
       return { before: prior, refusal, after };
     };
     try {
-      const disabled = await registerDisabled(scripts.owned);
+      const disabled = await registerDisabled(scripts.owned, "owned");
       const admitted = await inspect();
       assert.equal(admitted.inspected, true);
       assert.equal(admitted.runtimeInspected, true);
@@ -185,7 +197,8 @@ export async function inspectInstalledTaskAuthority(params: {
         await resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(admitted)),
         true,
       );
-      const enabled = await snapshot();
+      await recordProgress("authority:enabled");
+      const enabled = await snapshot("enabled");
       assert.equal(enabled.enabled, true);
       assert.equal(enabled.taskState, 3);
       assert.equal(enabled.lastRunTime, disabled.lastRunTime);
@@ -198,10 +211,11 @@ export async function inspectInstalledTaskAuthority(params: {
         await suspendScheduledTaskAutoStartForUpdate(task.env, controlOptions(admitted)),
         true,
       );
-      assert.deepEqual(await snapshot(), disabled);
+      await recordProgress("authority:disabled");
+      assert.deepEqual(await snapshot("disabled"), disabled);
       observations.allowed = { admission: admitted.serviceUpdateVerdict, disabled, enabled };
 
-      await registerDisabled(scripts.foreign);
+      await registerDisabled(scripts.foreign, "foreign");
       const foreign = await inspect();
       assert.equal(foreign.serviceUpdateVerdict?.kind, "foreign");
       assert.equal(foreign.serviceMutationAllowed, false);
@@ -210,22 +224,24 @@ export async function inspectInstalledTaskAuthority(params: {
         ...(await observeRefusal(
           () => resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(foreign)),
           "Windows task ownership could not be verified; inspect its autostart state manually.",
+          "foreign",
         )),
       };
 
-      await registerDisabled(scripts.owned);
+      await registerDisabled(scripts.owned, "retained");
       const retained = await inspect();
       assert.equal(retained.serviceUpdateVerdict?.kind, "owned");
       assert.ok(
         retained.serviceUpdateVerdict?.kind === "owned" &&
           retained.serviceUpdateVerdict.refreshDefinition,
       );
-      await registerDisabled(scripts.reassigned);
+      await registerDisabled(scripts.reassigned, "reassigned");
       // Same-root refresh is legitimate after update; do not manufacture a restrictive verdict.
       await createWindowsTaskAutoStartGuard({
         root: packageRoot(task.installRoot),
         before: retained,
       })();
+      await recordProgress("authority:retained-guard-verified");
       observations.retainedDefinitionChanged = {
         admission: retained.serviceUpdateVerdict,
         boundary: "maintenance retained admission; no native enable requested",
@@ -234,6 +250,7 @@ export async function inspectInstalledTaskAuthority(params: {
         ...(await observeRefusal(
           () => inspect(retained),
           "Gateway service definition changed after database admission; retry against its current configuration.",
+          "retained-definition",
         )),
       };
     } catch (error) {
@@ -245,10 +262,11 @@ export async function inspectInstalledTaskAuthority(params: {
         (await execSchtasks(["/Create", "/F", "/TN", task.taskName, "/XML", restorePath])).code,
         0,
       );
+      await recordProgress("authority:definition-restored");
       assert.equal(await readTaskXml(task.taskName), originalXml);
       assert.deepEqual(await fs.readFile(task.configPath), originalConfig);
       assert.equal(await hashFile(task.scriptPath), originalScriptHash);
-      await snapshot();
+      await snapshot("restored");
     } catch (error) {
       failure = new AggregateError(
         failure ? [failure, error] : [error],

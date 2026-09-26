@@ -1,7 +1,14 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { parse } from "yaml";
+import { z } from "zod";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
-import { boundedEnv } from "./schtasks.installed-package.test-support.js";
+import {
+  boundedEnv,
+  resolveInstalledCellBodyTimeoutMs,
+  keys,
+} from "./schtasks.installed-package.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -42,3 +49,42 @@ it.each(["PSMODULEANALYSISCACHEPATH", "PSModuleAnalysisCachePath"])(
     expect(resolveEnvironmentValue(result, "PSMODULEANALYSISCACHEPATH", "win32")).toBe(moduleCache);
   },
 );
+
+it("reserves cleanup and runner time within the installed native workflow", async () => {
+  const { createE2EVitestConfig } = await import("../../test/vitest/vitest.e2e.config.ts");
+  const cleanupMs = z.number().int().positive().parse(createE2EVitestConfig().test?.hookTimeout);
+  const workflow = z
+    .object({
+      jobs: z.object({
+        "native-schtasks-package": z.object({
+          "timeout-minutes": z.number().int().positive(),
+          steps: z.array(
+            z.object({
+              env: z.record(z.string(), z.unknown()).optional(),
+              "timeout-minutes": z.number().int().positive().optional(),
+            }),
+          ),
+        }),
+      }),
+    })
+    .parse(parse(readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8")));
+  const job = workflow.jobs["native-schtasks-package"];
+  let totalStepMs = 0;
+  for (const cell of keys) {
+    const steps = job.steps.filter(
+      (step) =>
+        typeof step.env?.CI_WINDOWS_SCHTASKS_INSTALLED_INPUT === "string" &&
+        step.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL === cell,
+    );
+    expect(steps, cell).toHaveLength(1);
+    const stepMinutes = z.number().int().positive().parse(steps[0]?.["timeout-minutes"]);
+    const stepMs = stepMinutes * 60_000;
+    expect(stepMs, cell).toBeGreaterThanOrEqual(
+      resolveInstalledCellBodyTimeoutMs(cell) + cleanupMs + 60_000,
+    );
+    totalStepMs += stepMs;
+  }
+  expect(job["timeout-minutes"]).toBe(75);
+  // Setup, package preparation, evidence retention, and retirement need room outside the cells.
+  expect(totalStepMs).toBeLessThan(job["timeout-minutes"] * 60_000);
+});
