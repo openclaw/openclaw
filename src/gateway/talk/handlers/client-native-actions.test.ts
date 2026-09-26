@@ -345,10 +345,21 @@ describe("native Talk action ownership through public plugin registration", () =
       } finally {
         providerStream.push({ type: "done", reason: "stop", message: answer });
         providerStream.end();
-        await modelRun;
-        await Promise.all(publications);
-        unsubscribe();
-        rowProjection.dispose();
+        try {
+          await modelRun;
+        } finally {
+          try {
+            const results = await Promise.allSettled(publications);
+            for (const result of results) {
+              if (result.status === "rejected") {
+                throw result.reason;
+              }
+            }
+          } finally {
+            unsubscribe();
+            rowProjection.dispose();
+          }
+        }
       }
     });
   });
