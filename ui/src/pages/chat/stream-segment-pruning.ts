@@ -99,11 +99,23 @@ export function reconcilePersistedAssistantStream(state: ToolStreamReconciliatio
       identity?.role === "assistant" &&
       identity.id &&
       !identity.isImported &&
-      identity.runId === runId &&
-      !readAssistantStreamSegmentIdentity(message)
+      identity.runId === runId
     );
   });
-  const tail = resolveCumulativeAssistantTail(messages, stream, runId);
+  // With no item replay, the durable mirror is the only causal owner of its
+  // prefix. Any surviving same-run item makes equal cumulative text ambiguous.
+  const hasLiveCommentary = (state.chatStreamSegments ?? []).some(
+    (segment) =>
+      normalizeOptionalString(segment.itemId) !== undefined &&
+      (!segment.runId || segment.runId === runId),
+  );
+  const tail = resolveCumulativeAssistantTail(
+    messages,
+    stream,
+    runId,
+    messages.length,
+    hasLiveCommentary ? undefined : new Set(),
+  );
   const prefix = stream.slice(0, stream.length - (tail?.length ?? 0));
   if (!prefix) {
     return;

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
+import type { ChatState } from "./chat-state-contract.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
 import { reconcilePersistedAssistantStream } from "./stream-segment-pruning.ts";
 import {
@@ -31,6 +35,66 @@ function preamble(host: ReturnType<typeof createHost>, itemId: string, text: str
 
 describe("keyed commentary after an unphased live stream", () => {
   afterEach(() => vi.useRealTimers());
+  it("keeps persisted commentary once when its cumulative delta arrives late", () => {
+    const text = "The saved commentary should appear once.";
+    const host: ChatState = {
+      chatAttachments: [],
+      chatHistoryPagination: { hasMore: false },
+      chatLoading: false,
+      chatMessage: "",
+      chatQueue: [],
+      chatRunId: "run-1",
+      chatMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          __openclaw: { id: "saved-commentary", seq: 1, runId: "run-1" },
+          openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+        },
+      ],
+      chatSending: false,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatStreamStartedAt: null,
+      chatThinkingLevel: null,
+      chatVerboseLevel: null,
+      client: null,
+      connected: true,
+      connectionEpoch: 0,
+      hello: null,
+      lastError: null,
+      sessionKey: "main",
+    };
+
+    handleChatGatewayEvent(host, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 2,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+
+    const rendered = buildChatItems({
+      paneId: "late-commentary-delta",
+      sessionKey: host.sessionKey,
+      runId: host.chatRunId,
+      messages: host.chatMessages ?? [],
+      toolMessages: [],
+      streamSegments: host.chatStreamSegments ?? [],
+      stream: host.chatStream,
+      streamStartedAt: host.chatStreamStartedAt,
+      showToolCalls: true,
+    }).flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.map(({ message }) => extractText(message))
+        : item.kind === "stream"
+          ? [item.text.trim()]
+          : [],
+    );
+
+    expect(rendered.filter((entry) => entry === text)).toHaveLength(1);
+  });
+
   it("renders tool-boundary commentary once across item and chat stream", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });
