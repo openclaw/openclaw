@@ -149,6 +149,7 @@ function renderCatalogIcon(
   );
   return renderArtTile(plugin.local.pluginId ?? plugin.id, plugin.catalog.name, {
     iconUrl: iconUrl ?? undefined,
+    whiteBackground: plugin.catalog.official && Boolean(iconUrl),
     loading: Boolean(
       (plugin.local.pluginId && props.pluginIconLoading?.(plugin.local.pluginId)) ||
       (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)),

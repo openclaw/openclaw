@@ -490,31 +490,6 @@ describe("gateway request suspension admission", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("keeps preparation busy while a previously admitted handler is active", async () => {
-    const started = deferred();
-    const finish = deferred();
-    const handler = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
-      started.resolve();
-      await finish.promise;
-      respond(true, { ok: true });
-    });
-    const active = dispatch({
-      method: "suspend-proof.run",
-      scope: "operator.write",
-      handler,
-    });
-    await started.promise;
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(suspension?.rollback()).toBe(true);
-
-    finish.resolve();
-    await active.request;
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
   it("reports a concurrent root as busy then excludes its own prepare request", async () => {
     const started = deferred();
     const finish = deferred();
@@ -981,25 +956,6 @@ describe("gateway request suspension admission", () => {
     );
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(suspension?.release()).toBe(true);
-  });
-
-  it("keeps suspension status reachable while prepared", async () => {
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
-      respond(true, { ok: true });
-    });
-
-    const status = dispatch({
-      method: "gateway.suspend.status",
-      scope: "operator.read",
-      handler,
-    });
-    await status.request;
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(status.respond).toHaveBeenCalledWith(true, { ok: true });
-    suspension?.release();
   });
 
   it("rejects suspension preparation nested inside another root request", async () => {

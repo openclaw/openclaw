@@ -351,8 +351,12 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
-Each worker retains one plugin registration context, shared by agents with the
-same configuration, environment, plugin inventory, and loader workspace. Agent
+Each worker retains the current plugin registration context for each loader
+workspace, shared by agents with matching configuration, environment, and plugin
+inventory. Alternating unchanged workspaces reuse their captured source; replacing
+one workspace does not evict another. Node retains native ESM module graphs until
+worker retirement even after their capture files are removed, so actual source or
+configuration revisions can still retain module memory during that lifetime. Agent
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
 acquired by that context. Replacement releases them after admitted work settles.

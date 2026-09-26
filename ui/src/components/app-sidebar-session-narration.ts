@@ -34,9 +34,10 @@ const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 const SIDEBAR_NARRATION_BUFFER_CHARS = 16_384;
 
 type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
+type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
 
 type NarrationSubscription = {
-  source: SessionCapability;
+  source: NarrationSource;
   subscription: SessionMessageSubscription;
 };
 
@@ -57,7 +58,7 @@ export type SidebarNarrationSyncInput = {
   enabled: boolean;
   connected: boolean;
   connectionIdentity: object | null;
-  source: SessionCapability | null;
+  source: NarrationSource | null;
   rows: readonly SidebarRecentSession[];
   openSessionKey: string;
   agentId: string;
@@ -112,7 +113,14 @@ function eventAgentMatches(targetAgentId: string, payloadAgentId: unknown): bool
 
 /** Owns the bounded session subscriptions and per-row activity throttles. */
 export class SidebarSessionNarrationController {
-  private source: SessionCapability | null = null;
+  private source: NarrationSource | null = null;
+  private input: SidebarNarrationSyncInput | null = null;
+  private visibilityDocument: Document | null = null;
+  private readonly handleVisibilityChange = () => {
+    if (this.input) {
+      this.sync(this.input);
+    }
+  };
   private connectionIdentity: object | null = null;
   private connected = false;
   private enabled = false;
@@ -141,6 +149,11 @@ export class SidebarSessionNarrationController {
   ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
+    if (!this.input) {
+      this.visibilityDocument = globalThis.document ?? null;
+      this.visibilityDocument?.addEventListener("visibilitychange", this.handleVisibilityChange);
+    }
+    this.input = input;
     const connectionChanged = this.connectionIdentity !== input.connectionIdentity;
     const sourceChanged = this.source !== input.source;
     const disconnected = !input.connected || !input.connectionIdentity || !input.source;
@@ -151,10 +164,10 @@ export class SidebarSessionNarrationController {
     this.source = input.source;
     this.connectionIdentity = input.connectionIdentity;
     this.connected = input.connected;
-    this.enabled = input.enabled;
+    this.enabled = input.enabled && this.visibilityDocument?.visibilityState !== "hidden";
     this.agentId = normalizeAgentId(input.agentId);
 
-    if (disconnected || !input.enabled) {
+    if (disconnected || !this.enabled) {
       this.desiredKeys = new Set();
       this.resetSubscriptions();
       this.clearAllLines();
@@ -220,6 +233,9 @@ export class SidebarSessionNarrationController {
   }
 
   disconnect(): void {
+    this.visibilityDocument?.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.visibilityDocument = null;
+    this.input = null;
     this.desiredKeys = new Set();
     this.resetSubscriptions();
     this.clearAllLines();

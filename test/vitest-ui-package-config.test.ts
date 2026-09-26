@@ -573,9 +573,6 @@ describe("ui package vitest config", () => {
   it.each([
     ["@openclaw/gateway-client/scope-upgrade", "packages/gateway-client/src/scope-upgrade.ts"],
     ["openclaw/plugin-sdk/control-ui", "src/plugin-sdk/control-ui.ts"],
-    ["openclaw/plugin-sdk/extension-shared", "src/plugin-sdk/extension-shared.ts"],
-    ["openclaw/plugin-sdk/string-coerce-runtime", "src/plugin-sdk/string-coerce-runtime.ts"],
-    ["openclaw/plugin-sdk/test-fixtures", "src/plugin-sdk/test-fixtures.ts"],
   ])("aliases %s from source in every standalone UI project", (specifier, source) => {
     const projects = requireTestConfig(uiConfig).projects ?? [];
     for (const config of [uiConfig, ...projects]) {

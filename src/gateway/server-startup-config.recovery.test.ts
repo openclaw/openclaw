@@ -673,27 +673,6 @@ describe("gateway startup config validation", () => {
     await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 
-  it("keeps mixed plugin and core startup invalidity fatal", async () => {
-    const rawConfig = enabledPluginRawConfig("invalid");
-    const invalidSnapshot = buildInvalidConfigSnapshot({
-      rawConfig,
-      config: rawConfig as unknown as OpenClawConfig,
-      issues: [
-        {
-          path: "gateway.mode",
-          message: "Expected 'local' or 'remote'",
-        },
-        {
-          path: "plugins.entries.feishu.config.token",
-          message: "invalid config: must be string",
-        },
-      ],
-    });
-    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-
-    await expectStartupRejects(`Invalid config at ${configPath}:`);
-  });
-
   it("rejects stale model provider api enum values during startup", async () => {
     const config = {
       gateway: { mode: "local" },

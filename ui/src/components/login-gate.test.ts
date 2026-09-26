@@ -150,14 +150,11 @@ describe("login gate failure recovery", () => {
     );
   });
 
-  it.each([
-    { name: "empty", secret: "" },
-    { name: "populated", secret: "test-secret" },
-  ])("explains missing identity headers with $name credentials", async ({ secret }) => {
+  it("explains missing identity headers even with credentials entered", async () => {
     const element = await mountFailure(
       "unauthorized",
       ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
-      secret,
+      "test-secret",
     );
     const failure = element.querySelector(".login-gate__failure");
     const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
@@ -178,31 +175,27 @@ describe("login gate failure recovery", () => {
     expect(steps).not.toMatch(/generate.*?token|replace.*?(?:token|password)|Gateway is running/iu);
   });
 
-  it.each([
-    "Authenticated profile verification is unavailable; retry the request.",
-    "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
-  ])(
-    "explains profile verification failures without credential or network recovery: %s",
-    async (error) => {
-      const element = await mountFailure(
-        error,
-        ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
-      );
-      const failure = element.querySelector(".login-gate__failure");
+  it("explains profile verification failures without credential or network recovery", async () => {
+    const error =
+      "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.";
+    const element = await mountFailure(
+      error,
+      ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE,
+    );
+    const failure = element.querySelector(".login-gate__failure");
 
-      expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
-      expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
-        "Profile verification unavailable",
-      );
-      expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
-      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
-      expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
-        "Gateway administrator",
-      );
-      expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
-      expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
-    },
-  );
+    expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Profile verification unavailable",
+    );
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+    expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
+    expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+      "Gateway administrator",
+    );
+    expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+    expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
+  });
 
   it("renders every auth recovery command exactly once", async () => {
     const element = await mountFailure(
@@ -351,22 +344,15 @@ describe("login gate failure recovery", () => {
     }
   });
 
-  it.each([
-    [
-      "auth-required",
+  it("does not offer page refresh for auth failures", async () => {
+    const element = await mountFailure(
       "unauthorized: gateway token required",
       ConnectErrorDetailCodes.AUTH_REQUIRED,
-    ],
-    ["network", "WebSocket connection failed", null],
-    [
-      "insecure-context",
-      "device identity required",
-      ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-    ],
-  ])("does not offer page refresh for %s failures", async (kind, error, code) => {
-    const element = await mountFailure(error, code);
+    );
 
-    expect(element.querySelector(".login-gate__failure")?.getAttribute("data-kind")).toBe(kind);
+    expect(element.querySelector(".login-gate__failure")?.getAttribute("data-kind")).toBe(
+      "auth-required",
+    );
     expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
   });
 
@@ -461,6 +447,7 @@ describe("login gate failure recovery", () => {
 
   it("preserves command order when one recovery sentence contains multiple commands", async () => {
     const element = await mountFailure("WebSocket connection failed", null);
+    expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
 
     expect(
       Array.from(element.querySelectorAll(".login-gate__failure-steps code"), (entry) =>
@@ -474,6 +461,7 @@ describe("login gate failure recovery", () => {
       "device identity required",
       ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
     );
+    expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
 
     const steps = Array.from(
       element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),

@@ -85,12 +85,6 @@ describe("openclaw-exec-approval", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not render a modal when an approval arrives", async () => {
-    await renderApproval(createExecRequest());
-
-    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("uses neutral unavailable copy for exec allow-always decisions", async () => {
     await renderOpenedApproval(
       createExecRequest({

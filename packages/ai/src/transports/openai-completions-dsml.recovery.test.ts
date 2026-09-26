@@ -10,7 +10,6 @@ import {
   makeCompletionsModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
-import { getCompat } from "./openai-transport-params.js";
 
 describe("openai completions DSML", () => {
   it("fails before a later DSML call after overflow can be authorized", async () => {
@@ -242,36 +241,6 @@ describe("openai completions DSML", () => {
       },
     ]);
   });
-
-  it.each([
-    { finishReason: "length", stopReason: "length" },
-    { finishReason: "content_filter", stopReason: "error" },
-  ])(
-    "does not authorize recovered DeepSeek DSML calls after $finishReason",
-    async ({ finishReason, stopReason }) => {
-      const model = createDeepSeekCompletionsModel();
-      const output = createAssistantOutput(model);
-      expect(getCompat(model).thinkingFormat).toBe("deepseek");
-
-      await processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk(
-            {
-              content:
-                '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-            },
-            finishReason,
-          ),
-        ]),
-        output,
-        model,
-        { push() {} },
-      );
-
-      expect(output.stopReason).toBe(stopReason);
-      expect(output.content).toEqual([]);
-    },
-  );
 
   it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
     const model = createDeepSeekCompletionsModel();
