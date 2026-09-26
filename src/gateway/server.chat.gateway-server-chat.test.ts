@@ -7,6 +7,8 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -449,7 +451,7 @@ describe("gateway server chat", () => {
 
         const followupRunId = `idem-live-webchat-late-followup-${name}`;
         const terminalFrames: unknown[] = [];
-        const deltaFrames: unknown[] = [];
+        const deltaFrames: Extract<ChatEvent, { state: "delta" }>[] = [];
         const recordFollowup = (raw: RawData) => {
           const frame = JSON.parse(rawDataToString(raw));
           if (
@@ -555,7 +557,14 @@ describe("gateway server chat", () => {
           originatingChannel: "webchat",
           payloads,
         });
-        const completed = await queuedFinal;
+        let completed: Awaited<typeof queuedFinal>;
+        try {
+          completed = await queuedFinal;
+          await rpcReq(ws, "health", {});
+        } finally {
+          ws.off("message", recordFollowup);
+          options?.turnAdoptionLifecycle?.onSettled?.();
+        }
         expect(completed.payload?.state).toBe(state);
         if (name === "timeout") {
           expect(completed.payload).toMatchObject({ errorKind: "timeout", stopReason: "timeout" });
@@ -579,15 +588,16 @@ describe("gateway server chat", () => {
             ],
           });
         }
-        await rpcReq(ws, "health", {});
         expect(terminalFrames).toHaveLength(1);
         if (completion.kind === "failed" || completion.kind === "aborted") {
-          expect(deltaFrames.at(-1)).toMatchObject({
-            message: {
-              content: expect.arrayContaining([
-                { type: "text", text: "late answer arrived over the live WebSocket tail" },
-              ]),
-            },
+          const liveMessage = deltaFrames.reduce<unknown>(
+            (previous, event) => mergeChatStreamMessage(previous, event),
+            undefined,
+          );
+          expect(liveMessage).toMatchObject({
+            content: expect.arrayContaining([
+              { type: "text", text: "late answer arrived over the live WebSocket tail" },
+            ]),
           });
         }
         if (completion.kind === "aborted") {
@@ -597,8 +607,6 @@ describe("gateway server chat", () => {
             ]),
           });
         }
-        ws.off("message", recordFollowup);
-        options?.turnAdoptionLifecycle?.onSettled?.();
       });
     },
   );

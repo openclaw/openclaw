@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -378,7 +379,11 @@ it(
           expect.soft(completed.status, scenario).toBe("error");
           expect.soft(messageText(assistant), scenario).toBe(prefix);
           const deltas = runEvents.filter((event) => event.state === "delta");
-          expect.soft(messageText(deltas.at(-1)?.message), scenario).toBe(prefix);
+          const liveMessage = deltas.reduce<unknown>(
+            (previous, event) => mergeChatStreamMessage(previous, event),
+            undefined,
+          );
+          expect.soft(messageText(liveMessage), scenario).toBe(prefix);
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
           } else {

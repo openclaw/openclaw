@@ -528,10 +528,18 @@ describe("Gateway concurrent HTTP streams", () => {
               expect(lifecycle.filter((event) => event.data.phase === "start")).toHaveLength(1);
               expect(lifecycle.filter((event) => event.data.phase === "end")).toHaveLength(1);
               const assistant = own.filter((event) => event.stream === "assistant");
-              expect(assistant.at(-1)?.data.text).toBe(item.marker);
+              expect(assistant[0]?.data.text).toBeTypeOf("string");
+              let assistantText = "";
               for (const event of assistant) {
-                expect(item.marker.startsWith(String(event.data.text))).toBe(true);
+                if (typeof event.data.text === "string") {
+                  assistantText = event.data.text;
+                } else {
+                  expect(event.data.delta).toBeTypeOf("string");
+                  assistantText += String(event.data.delta);
+                }
+                expect(item.marker.startsWith(assistantText)).toBe(true);
               }
+              expect(assistantText).toBe(item.marker);
             });
           }
         } catch (error) {
