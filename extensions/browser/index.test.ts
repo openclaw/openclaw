@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRecord, createPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
@@ -217,8 +218,21 @@ describe("browser plugin", () => {
 
   it("keeps browser tool registration synchronous while loading runtime on execute", async () => {
     const { api, registerTool } = createApi();
+    const record = createPluginRecord({ id: "browser", contracts: { tools: ["browser"] } });
+    const registry = createPluginRegistry({
+      runtime: api.runtime,
+      logger: api.logger,
+      activateGlobalSideEffects: false,
+    });
+    registerTool.mockImplementation((tool, options) =>
+      registry.registerTool(record, tool, options),
+    );
     registerBrowserPlugin(api);
 
+    expect(record.toolNames).toEqual(["browser"]);
+    expect(registry.registry.tools).toEqual([
+      expect.objectContaining({ names: ["browser"], optional: false }),
+    ]);
     const factory = mockCallArg(registerTool);
     if (typeof factory !== "function") {
       throw new Error("expected browser plugin to register a tool factory");
