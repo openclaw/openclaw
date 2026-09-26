@@ -371,6 +371,9 @@ This controls app activation; it does not change macOS accessibility semantics.
 
 The `steipete/gpui-bgtest` branch patches `gpui-component` and `gpui-base` to
 the local `~/Projects/oss/gpui-kit` checkout for accessibility validation.
+The component patch exposes press actions for enabled popup-menu submenus,
+including Appearance, so background automation can navigate them with element
+clicks. Disabled submenu rows remain noninteractive.
 It also patches `accesskit_macos` to `~/Projects/oss/accesskit/platforms/macos`
 to expose each inactive window's internally focused element. The matching
 `accesskit` and `accesskit_consumer` paths keep the adapter's workspace dependencies
@@ -381,6 +384,11 @@ The Wry patch at `~/Projects/oss/wry` prevents hidden or unfocused child
 webviews from activating the application during construction.
 These absolute Cargo paths are local proof wiring and must be replaced with
 released dependencies before shipping the app.
+
+Keep the target window partly visible during background proof. On macOS, GPUI
+stops drawing fully covered windows, which also leaves their accessibility tree
+stale. Moving only the target window into unused desktop space through AXPosition
+restores rendering without focusing or raising it.
 
 Sidebar proof uses the durable directory
 `/Users/steipete/Projects/openclaw-campaign-backup/gpui-proof`, with launchers and
