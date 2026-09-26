@@ -606,7 +606,7 @@ async function handleChatSendWithOptions(
     respond(true, ackPayload, undefined, { runId: clientRunId });
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
-    startChatDispatch({
+    void startChatDispatch({
       admissionStartedAt,
       admission: admitted.value,
       attachments: preparedAttachments.value,
