@@ -371,7 +371,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(suite, page, "mobile-new-session-effort-open.png", {
         surface: page.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
-        content: [page.locator('[data-chat-thinking-slider="true"]')],
+        content: [fastMode],
       });
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 1280, height: 900 });
