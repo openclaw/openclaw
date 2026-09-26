@@ -61,8 +61,8 @@ describe("subagent registry query regressions", () => {
     expect(index.inputs).toBeDefined();
     expect(index.inputs.runs).toBe(runs);
     expect(index.inputs.runs.get(ungrouped.runId)).toBe(ungrouped);
-    expect(index.inputs.inMemoryRuns).toHaveLength(2);
-    expect(index.inputs.inMemoryRuns[0]).toBe(winner);
+    expect([...index.inputs.inMemoryRuns]).toHaveLength(2);
+    expect([...index.inputs.inMemoryRuns][0]).toBe(winner);
     const candidates = index.runsByChildSessionKey.get(winner.childSessionKey);
     expect(candidates).toHaveLength(2);
     expect(candidates?.[0]).toBe(runs.get(winner.runId));
@@ -72,6 +72,55 @@ describe("subagent registry query regressions", () => {
     const replay = buildSubagentRunReadIndexFromRuns({ ...index.inputs, now: 200 });
     expect(replay.getDisplaySubagentRun(winner.childSessionKey)).toBe(winner);
     expect(replay.getDisplaySubagentRun(ungrouped.childSessionKey)).toBe(ungrouped);
+  });
+
+  it("patches moved memberships and reveals retained generations when a live owner retires", () => {
+    const older = makeRun({
+      runId: "older",
+      childSessionKey: "child",
+      requesterSessionKey: "parent",
+      generation: 1,
+    });
+    const latest = makeRun({
+      ...older,
+      runId: "latest",
+      generation: 2,
+      collect: true,
+      groupId: "group",
+      swarmRequesterSessionKey: "parent",
+    });
+    const runs = toRunMap([structuredClone(older), structuredClone(latest)]);
+    let index = buildSubagentRunReadIndexFromRuns({ runs, inMemoryRuns: [older, latest] });
+    latest.childSessionKey = "moved";
+    latest.controllerSessionKey = "controller";
+    latest.requesterSessionKey = "requester";
+    latest.swarmRequesterSessionKey = "swarm";
+    index = index.patch(toRunMap([structuredClone(latest)]), toRunMap([latest]));
+    expect(index.getDisplaySubagentRun("child")).toBe(older);
+    expect(index.getDisplaySubagentRun("moved")).toBe(latest);
+    expect(index.runsByControllerSessionKey.get("parent")?.map((run) => run.runId)).toEqual([
+      "older",
+    ]);
+    expect(index.runsByControllerSessionKey.get("controller")?.map((run) => run.runId)).toEqual([
+      "latest",
+    ]);
+    expect(index.swarmRunsByRequesterSessionKey.has("parent")).toBe(false);
+    expect(index.swarmRunsByRequesterSessionKey.get("swarm")?.map((run) => run.runId)).toEqual([
+      "latest",
+    ]);
+    expect(index.listDescendantRunsForRequester("parent").map((run) => run.runId)).toEqual([
+      "older",
+    ]);
+    expect(index.listDescendantRunsForRequester("requester").map((run) => run.runId)).toEqual([
+      "latest",
+    ]);
+    index = index.patch(new Map(), new Map([[latest.runId, undefined]]));
+    expect(index.getDisplaySubagentRun("moved")).toBe(runs.get("latest"));
+    index = index.patch(new Map([[latest.runId, undefined]]), new Map());
+    expect(index.getDisplaySubagentRun("moved")).toBeNull();
+    expect(index.runsByControllerSessionKey.has("controller")).toBe(false);
+    expect(index.swarmRunsByRequesterSessionKey.has("swarm")).toBe(false);
+    expect(index.listDescendantRunsForRequester("requester")).toEqual([]);
   });
 
   it("preserves captured display classification while descendant queries see released owners", () => {
