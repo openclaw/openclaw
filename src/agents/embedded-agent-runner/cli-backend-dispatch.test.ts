@@ -26,6 +26,10 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntimeForSessionKey = vi.hoisted(() => vi.fn());
+const hookRunnerMock = vi.hoisted(() => ({
+  hasHooks: vi.fn(() => false),
+  runBeforeModelResolve: vi.fn(async () => undefined),
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../model-auth.js", () => ({
@@ -45,6 +49,9 @@ vi.mock("../cli-runner.runtime.js", () => ({
 vi.mock("../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
+}));
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookRunnerMock,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
   noteToolEvent: vi.fn(),
@@ -104,6 +111,10 @@ beforeEach(() => {
   retireSessionMcpRuntime.mockReset();
   retireSessionMcpRuntimeForSessionKey.mockReset();
   resolveCliRuntimeExecutionProvider.mockReset();
+  hookRunnerMock.hasHooks.mockReset();
+  hookRunnerMock.runBeforeModelResolve.mockReset();
+  hookRunnerMock.hasHooks.mockReturnValue(false);
+  hookRunnerMock.runBeforeModelResolve.mockResolvedValue(undefined);
   ensureAuthProfileStore.mockReturnValue({ profiles: {} });
   resolveAuthProfileOrder.mockReturnValue([]);
   resolveModelAuthMode.mockReturnValue("oauth");
@@ -745,4 +756,43 @@ describe("detached CLI transcript ownership", () => {
       }
     },
   );
+});
+
+describe("runEmbeddedAgentViaCliBackend before_model_resolve hook", () => {
+  const callRunCliAgentArgs = () =>
+    (runCliAgent.mock.calls[0]?.[0] ?? {}) as { model?: unknown; provider?: unknown };
+
+  it("leaves the dispatched model untouched when the hook returns nothing", async () => {
+    hookRunnerMock.hasHooks.mockReturnValue(true);
+    hookRunnerMock.runBeforeModelResolve.mockResolvedValue(undefined);
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
+
+    expect(callRunCliAgentArgs().model).toBe("claude-opus-4-8");
+    expect(hookRunnerMock.runBeforeModelResolve).toHaveBeenCalledOnce();
+  });
+
+  it("applies a same-family model override before runCliAgent", async () => {
+    hookRunnerMock.hasHooks.mockReturnValue(true);
+    hookRunnerMock.runBeforeModelResolve.mockResolvedValue({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-sonnet-4-5",
+    });
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
+
+    expect(callRunCliAgentArgs().model).toBe("claude-sonnet-4-5");
+  });
+
+  it("drops a cross-family provider override and keeps the dispatch backend", async () => {
+    hookRunnerMock.hasHooks.mockReturnValue(true);
+    hookRunnerMock.runBeforeModelResolve.mockResolvedValue({
+      providerOverride: "openai-codex",
+      modelOverride: "o3-mini",
+    });
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
+
+    expect(callRunCliAgentArgs().model).toBe("claude-opus-4-8");
+  });
 });
