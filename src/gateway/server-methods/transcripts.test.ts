@@ -7,6 +7,12 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -26,6 +32,7 @@ import * as transcriptProviders from "../../transcripts/provider-registry.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -57,13 +64,16 @@ function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
       : {}),
   };
 }
-function roles(others: "none" | "view"): OpenClawConfig {
+function roles(
+  others: "none" | "view",
+  scopes: OperatorScope[] = ["operator.read"],
+): OpenClawConfig {
   return {
     gateway: {
       roles: {
         default: "limited",
         definitions: {
-          limited: { sessions: { others }, agents: ["main"], scopes: ["operator.read"] },
+          limited: { sessions: { others }, agents: ["main"], scopes },
         },
       },
     },
@@ -171,9 +181,12 @@ describe("transcript Gateway read authorization and errors", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const source = { providerId: "fixture-voice", channelId: "room" };
       const cfg = { transcripts: { autoStart: [source] } };
-      const provider = vi
-        .spyOn(transcriptProviders, "getTranscriptSourceProvider")
-        .mockReturnValue({
+      const previousRegistry = captureActivePluginRegistrySnapshot();
+      const registry = createEmptyPluginRegistry();
+      registry.transcriptSourceProviders.push({
+        pluginId: "transcript-test-fixture",
+        source: import.meta.url,
+        provider: {
           id: source.providerId,
           name: "Fixture voice",
           sourceKinds: ["live-audio"],
@@ -183,7 +196,9 @@ describe("transcript Gateway read authorization and errors", () => {
             authorize: async () => ({ ok: true, value: undefined }),
           },
           start: async ({ session }) => ({ ok: true, session }),
-        });
+        },
+      });
+      setActivePluginRegistry(registry);
       try {
         const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
         await startTranscripts({
@@ -203,7 +218,7 @@ describe("transcript Gateway read authorization and errors", () => {
           "configuredSource",
         );
       } finally {
-        provider.mockRestore();
+        restoreActivePluginRegistrySnapshot(previousRegistry);
         await clearTranscriptCapturesForTest();
       }
     });
@@ -261,7 +276,7 @@ describe("transcript Gateway read authorization and errors", () => {
           await request(
             "transcripts.list",
             {},
-            roles("none"),
+            roles("none", ["operator.admin"]),
             client(profile.id, ["operator.admin"]),
           )
         )[0],
@@ -613,7 +628,10 @@ describe("meeting transcript RPC", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "manual-transcript",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Listing transcripts must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const [ok, payload] = await invoke("transcripts.list", {});

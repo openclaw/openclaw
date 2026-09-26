@@ -8,7 +8,11 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import {
@@ -23,12 +27,17 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetSecretRedactionRegistryForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
@@ -158,19 +167,20 @@ lines.once("line", line => {
         kill(signal);
       });
     });
-    vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
-      function (this: NodeWorkerLaunchStore, params) {
-        expect(adapter?.pid).toBe(params.worker.pid);
-        return this.finish({
-          launchId: params.launchId,
-          planHash: params.planHash,
-          supervisor: params.supervisor,
-          worker: null,
-          state: "completed",
-          resultJson: '{"status":"completed"}',
-        });
-      },
-    );
+    vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
+      this: NodeWorkerLaunchStore,
+      params,
+    ) {
+      expect(adapter?.pid).toBe(params.worker.pid);
+      return await this.finish({
+        launchId: params.launchId,
+        planHash: params.planHash,
+        supervisor: params.supervisor,
+        worker: null,
+        state: "completed",
+        resultJson: '{"status":"completed"}',
+      });
+    });
 
     try {
       expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
@@ -185,7 +195,10 @@ lines.once("line", line => {
       expect(adapter?.stdin?.destroyed).toBe(true);
       expect(opened).not.toHaveBeenCalled();
       expect(fs.existsSync(path.join(workspaceDir, "fast-terminal-marker"))).toBe(false);
-      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
+      expect(
+        (await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(input.launchId))
+          ?.state,
+      ).toBe("completed");
       await supervisor.close();
       expect(signalled).not.toHaveBeenCalled();
     } finally {
@@ -223,13 +236,14 @@ lines.once("line", line => {
       let closing: Promise<void> | undefined;
       let childExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
       const captureAdapter = observeNodeWorkerAdapters((adapter) => {
-        const exited = adapter.wait();
+        // Let the supervisor subscribe before wait can claim stdout for discarding.
+        const wait = adapter.wait;
         const openStartGate = adapter.openStartGate!;
         const kill = adapter.kill;
         // Reach the closed real pipe before its exit can settle the launch journal.
         vi.spyOn(adapter, "openStartGate").mockImplementation(async () => {
           await openStartGate();
-          childExit = await exited;
+          childExit = await wait();
           if (operation === "cancel") {
             controller.abort(new Error("cancel during startup"));
           } else if (operation === "close") {
@@ -237,7 +251,7 @@ lines.once("line", line => {
           }
         });
         vi.spyOn(adapter, "wait").mockImplementation(async () => {
-          const exit = await exited;
+          const exit = await wait();
           await observationReleased.promise;
           return exit;
         });
@@ -254,7 +268,9 @@ lines.once("line", line => {
         expect(fs.existsSync(exitedPath)).toBe(true);
         expect(childExit).toEqual({ code: 23, signal: null });
         expect(terminal).toMatchObject({ state, errorText });
-        expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)).toMatchObject({
+        expect(
+          await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(input.launchId),
+        ).toMatchObject({
           state,
           errorText,
         });
@@ -280,16 +296,18 @@ lines.once("line", line => {
         "markRunning",
       )?.value as NodeWorkerLaunchStore["markRunning"];
       let stopping: Promise<unknown> | undefined;
-      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
-        function (this: NodeWorkerLaunchStore, params) {
-          const receipt = Reflect.apply(originalMarkRunning, this, [params]);
-          stopping =
-            operation === "cancel"
-              ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
-              : supervisor.close();
-          return receipt;
-        },
-      );
+      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
+        this: NodeWorkerLaunchStore,
+        params,
+        authority,
+      ) {
+        const receipt = await originalMarkRunning.call(this, params, authority);
+        stopping =
+          operation === "cancel"
+            ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
+            : supervisor.close();
+        return receipt;
+      });
 
       await supervisor.launch(input, TEST_WORKER_ENDPOINT);
       await stopping;

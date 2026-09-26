@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,6 +114,60 @@ afterEach(() => {
 });
 
 describe("update candidate Doctor lint", () => {
+  it("preserves the supervisor refusal after a warning and successful readiness envelope", async () => {
+    const reason =
+      "Doctor lint settlement refused: cleanup-uncertain; disposal-requested,kill-issued-by-abort,termination=signal.";
+    const spawnNormally = mocks.spawn.getMockImplementation();
+    assert(spawnNormally);
+    mocks.spawn.mockImplementation((command, args: string[], options) => {
+      if (!args.includes("--lint")) {
+        return spawnNormally(command, args, options);
+      }
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      queueMicrotask(() => {
+        child.stderr.write("[warning] Earlier inspection warning.\n");
+        child.stdout.write(`${JSON.stringify(lintReport)}\n`);
+        child.stderr.write(`[openclaw] Reason: ${reason}\n`);
+        child.emit("close", 2);
+      });
+      return child;
+    });
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env });
+    expect(result).toMatchObject({ status: "error", phase: "lint", reason: "doctor-failed" });
+    const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint");
+    assert(step);
+    expect(step).toMatchObject({
+      exitCode: 2,
+      failureFacts: [{ check: "lint", code: "doctor-failed", message: reason }],
+    });
+    expect(step.advisory).toBeUndefined();
+    const run = createUpdateRun({ trigger: "cli" }, { env });
+    for (const row of result.steps.flatMap(updateRunStepsFromResultStep)) {
+      recordUpdateRunStep(run.runId, row, { env });
+    }
+    const recorded = finishUpdateRun(
+      run.runId,
+      { status: "failed", reason: "doctor-failed" },
+      { env },
+    );
+    const failure = { ...result, mode: "npm" as const, root, runId: run.runId };
+    const reportPath = await writeUpdateRunReportArtifact({
+      result: failure,
+      report: renderUpdateRunReport(recorded),
+      env,
+    });
+    for (const output of [
+      JSON.stringify(failure),
+      JSON.stringify(recorded.steps),
+      renderSteps([step]),
+      await fs.readFile(reportPath, "utf8"),
+    ]) {
+      expect(output).toContain(reason);
+    }
+  });
+
   it.each(["PLAINTEXT_FOUND", "REF_SHADOWED", "LEGACY_RESIDUE"] as const)(
     "retains candidate-reported %s as a warning in the receipt and report",
     async (code) => {

@@ -15,6 +15,7 @@ import {
   normalizeAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   readDeliveredQueuedChatSendForRun,
@@ -70,9 +71,20 @@ export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
-// This holds ordinary admission, not offline queuing or stop/approval controls.
 export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+): string | null {
+  if (isExpiredIncognitoSession(host, sessionKey)) {
+    return t("chat.incognitoExpiredTitle");
+  }
+  return chatSendPendingReason(host, sessionKey, initialTurnPending);
+}
+
+// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Renderers show loading only for these transient holds, never terminal expiry.
+export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
   sessionKey: string,
   initialTurnPending = false,
@@ -254,7 +266,10 @@ export function retireDeliveredQueuedUserTurn(
     // Delivery proof must never become a fresh-send retry because local bytes
     // were unavailable. Keep the same run identity and its no-replay barrier.
     updateQueuedMessage(host, stored.id, (item) =>
-      failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
+      failOutboxPayload(
+        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        reason,
+      ),
     );
     return "retained";
   });

@@ -766,9 +766,9 @@ describe("prepared model runtime scoped refresh", () => {
   });
 
   it("recomposes configured models and retires native rows on a compatible reload", async () => {
-    const { resolveAgentEffectiveModelPrimary } =
+    const { resolveNativeModelPrimary } =
       await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
-    mocks.resolveAgentEffectiveModelPrimary.mockImplementation(resolveAgentEffectiveModelPrimary);
+    mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
     const nativeStarted = createDeferredCore();
     const releaseNative = createDeferredCore();
     let holdNative = false;
@@ -801,17 +801,29 @@ describe("prepared model runtime scoped refresh", () => {
               nativeStarted.resolve();
               await releaseNative.promise;
             }
-            return [
-              {
-                provider: "demo",
-                id:
-                  currentConfig.agents?.defaults?.model === "demo/old-configured"
-                    ? "native-old"
-                    : "native-new",
-                name: "Native",
-                nativeRuntime: "fixture-native",
-              },
-            ];
+            return {
+              entries: [
+                {
+                  provider: "demo",
+                  id:
+                    currentConfig.agents?.defaults?.model === "demo/old-configured"
+                      ? "native-old"
+                      : "native-new",
+                  name: "Native",
+                  nativeRuntime: "fixture-native",
+                },
+              ],
+              outcomes: [
+                {
+                  provider: "demo",
+                  status:
+                    currentConfig.agents?.defaults?.model === "demo/old-configured"
+                      ? "auth-rejected"
+                      : "ready",
+                  rejectionScope: "catalog",
+                },
+              ],
+            };
           },
         },
       });
@@ -848,6 +860,11 @@ describe("prepared model runtime scoped refresh", () => {
     });
     const initial = await owner.loadFullModelCatalog!();
     expect(initial.entries).toContainEqual(expect.objectContaining(native));
+    expect(initial.providerOutcomes).toContainEqual({
+      provider: "demo",
+      status: "auth-rejected",
+      rejectionScope: "catalog",
+    });
     const initialDiscoveryRequests = mocks.runPreparedModelCatalogWorker.mock.calls.length;
     const nextConfig: OpenClawConfig = {
       ...config,
@@ -871,6 +888,7 @@ describe("prepared model runtime scoped refresh", () => {
     })!;
     const next = nextOwner.readFullModelCatalog!()!;
     expect(next.authoritative).toBe(false);
+    expect(next.providerOutcomes?.some(({ status }) => status === "auth-rejected")).not.toBe(true);
     expect(next.entries.some((entry) => entry.nativeRuntime)).toBe(false);
     expect(next.entries).toContainEqual(expect.objectContaining(learned));
     expect(next.entries).toContainEqual(

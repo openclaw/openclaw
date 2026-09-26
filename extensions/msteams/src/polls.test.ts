@@ -14,7 +14,7 @@ import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
-  type MSTeamsPoll,
+  type MSTeamsPollStore,
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -26,6 +26,20 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+type Poll = Parameters<MSTeamsPollStore["createPoll"]>[0];
+
+function poll(overrides: Partial<Poll>): Poll {
+  return {
+    id: "poll-1",
+    question: "Pick one",
+    options: ["A", "B"],
+    maxSelections: 1,
+    createdAt: new Date().toISOString(),
+    votes: {},
+    ...overrides,
+  };
+}
 
 describe("msteams polls", () => {
   beforeEach(() => {
@@ -62,14 +76,7 @@ describe("msteams polls", () => {
   it("stores and records poll votes", async () => {
     const home = tempDirs.make("openclaw-msteams-polls-");
     const store = createMSTeamsPollStoreState({ homedir: () => home });
-    await store.createPoll({
-      id: "poll-2",
-      question: "Pick one",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
+    await store.createPoll(poll({ id: "poll-2" }));
     await store.recordVote({
       pollId: "poll-2",
       voterId: "user-1",
@@ -85,14 +92,7 @@ describe("msteams polls", () => {
   it("deduplicates selections before enforcing maxSelections", async () => {
     const home = tempDirs.make("openclaw-msteams-polls-");
     const store = createMSTeamsPollStoreState({ homedir: () => home });
-    await store.createPoll({
-      id: "poll-dedupe",
-      question: "Pick two",
-      options: ["A", "B", "C"],
-      maxSelections: 2,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
+    await store.createPoll(poll({ id: "poll-dedupe", options: ["A", "B", "C"], maxSelections: 2 }));
     await store.recordVote({
       pollId: "poll-dedupe",
       voterId: "user-1",
@@ -136,14 +136,7 @@ describe("state poll store", () => {
     await expect(store.getPoll("poll-legacy")).resolves.toBeNull();
     await fs.promises.access(filePath);
 
-    await store.createPoll({
-      id: "poll-new",
-      question: "New?",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
+    await store.createPoll(poll({ id: "poll-new" }));
     await expect(store.getPoll("poll-new")).resolves.toMatchObject({ id: "poll-new" });
     await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
@@ -153,14 +146,7 @@ describe("state poll store", () => {
     const store = createMSTeamsPollStoreState({ stateDir });
     const longPollId = `poll-${"x".repeat(900)}`;
 
-    await store.createPoll({
-      id: longPollId,
-      question: "Long id?",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
+    await store.createPoll(poll({ id: longPollId }));
 
     await expect(store.getPoll(longPollId)).resolves.toMatchObject({ id: longPollId });
     await expect(
@@ -175,14 +161,7 @@ describe("state poll store", () => {
   it("serializes concurrent votes for the same poll", async () => {
     const stateDir = tempDirs.make("openclaw-msteams-polls-");
     const store = createMSTeamsPollStoreState({ stateDir });
-    await store.createPoll({
-      id: "poll-race",
-      question: "Pick",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
+    await store.createPoll(poll({ id: "poll-race" }));
 
     await Promise.all([
       store.recordVote({ pollId: "poll-race", voterId: "user-a", selections: ["0"] }),
@@ -203,14 +182,7 @@ describe("state poll store", () => {
   ])("accepts only strict decimal poll selections", async ({ selections, expected }) => {
     const stateDir = tempDirs.make("openclaw-msteams-polls-");
     const store = createMSTeamsPollStoreState({ stateDir });
-    await store.createPoll({
-      id: "poll-strict-selections",
-      question: "Pick",
-      options: ["A", "B"],
-      maxSelections: 2,
-      createdAt: new Date().toISOString(),
-      votes: {},
-    });
+    await store.createPoll(poll({ id: "poll-strict-selections", maxSelections: 2 }));
 
     await expect(
       store.recordVote({
@@ -231,14 +203,7 @@ describe("state poll store", () => {
       ]),
     );
 
-    await store.createPoll({
-      id: "poll-large",
-      question: "Pick",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes,
-    });
+    await store.createPoll(poll({ id: "poll-large", votes }));
     await store.recordVote({ pollId: "poll-large", voterId: "user-new", selections: ["1"] });
 
     const stored = await store.getPoll("poll-large");
@@ -265,14 +230,13 @@ describe("state poll store", () => {
     async ({ existing, expired, removed, scans }) => {
       const stateDir = tempDirs.make("openclaw-msteams-polls-");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const metadataStore = createPluginStateKeyedStoreForTests<Omit<MSTeamsPoll, "votes">>(
-        "msteams",
-        {
-          namespace: "polls",
-          maxEntries: 2000,
-          env,
-        },
-      );
+      const metadataStore = createPluginStateKeyedStoreForTests<
+        Omit<Parameters<MSTeamsPollStore["createPoll"]>[0], "votes">
+      >("msteams", {
+        namespace: "polls",
+        maxEntries: 2000,
+        env,
+      });
       const voteBucketStore = createPluginStateKeyedStoreForTests<{
         pollId: string;
         bucket: string;

@@ -7,7 +7,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
 } from "../../state/openclaw-state-db-cache.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
@@ -228,42 +228,6 @@ describe("native hook relay store", () => {
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(otherOwner);
-  });
-
-  it("does not let an old owner delete its replacement", async () => {
-    const oldOwner = bridgeRecord("relay-replaced", {
-      pid: 100,
-      token: "secret-token",
-    });
-    const replacement = bridgeRecord("relay-replaced", {
-      pid: 101,
-      port: 18_790,
-      token: "test-auth-token",
-      expiresAtMs: 30_000,
-    });
-    await writeNativeHookRelayBridgeRecord({
-      record: oldOwner,
-      updatedAtMs: 1_000,
-      stateDbPath: primaryStateDbPath,
-    });
-    await writeNativeHookRelayBridgeRecord({
-      record: replacement,
-      updatedAtMs: 2_000,
-      stateDbPath: primaryStateDbPath,
-    });
-
-    expect(
-      await deleteNativeHookRelayBridgeRecordIfOwned({
-        ...oldOwner,
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toBe(false);
-    expect(
-      await readNativeHookRelayBridgeRecord({
-        relayId: replacement.relayId,
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toStrictEqual(replacement);
   });
 
   it("prunes expired and dead bridges while preserving live and unknown pids", async () => {

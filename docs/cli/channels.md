@@ -176,7 +176,7 @@ openclaw channels add telegram
 openclaw channels add --channel telegram
 ```
 
-Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input; use `openclaw channels add --channel <id> --use-env` or pass the selected plugin's credential flags.
+Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input. Run `openclaw channels add --channel <id> --help` to list the setup flags that channel declares, then pass them for non-interactive setup. `--use-env` appears there only where it is registered: a modern channel declares the matching field in its setup contract, and a plugin still on the legacy shared setup adapter gets it from the compatibility set described above. When the selected channel leaves `--use-env` out, the exit message points at that channel's `--help` instead of at `--use-env`.
 
 The wizard can prompt for:
 

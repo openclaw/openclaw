@@ -8,6 +8,15 @@ export type TalkConfigProjectionResponse = {
   config?: { talk?: Record<string, unknown>; clientHints?: Record<string, unknown> };
 };
 
+export function createTalkConfig(apiKey: unknown): OpenClawConfig {
+  return {
+    talk: {
+      provider: "acme",
+      providers: { acme: { apiKey, voiceId: "stub-default-voice" } },
+    },
+  } as OpenClawConfig;
+}
+
 /** Runs public wire/privacy cases inside the owning handler suite's isolated harness. */
 export function defineRealtimeConfigProjectionTests(
   requestConfig: (

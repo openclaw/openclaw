@@ -144,6 +144,14 @@ commit ledger. Likewise, a gateway process restart terminates a pending
 inference turn with a provider error; only a worker WebSocket reconnect can
 reattach to an active same-process inference stream.
 
+The Gateway persists inference admission before acknowledging it and persists
+completion before publishing a terminal message. Gateway shutdown and session
+lifecycle drains also join accepted provider and storage work, including an
+admission that was still waiting when cancellation began.
+If native storage settlement is unknown, the Gateway preserves that failure and
+does not retry the terminal write or replay the affected inference identity.
+Independent shutdown cleanup still runs before the failure is reported.
+
 See [Gateway protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol) for the
 closed worker RPC surface and [Cloud workers](/gateway/cloud-workers) for the
 architecture and security model.

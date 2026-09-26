@@ -151,17 +151,38 @@ The spawn broker stays available while its Gateway connection is alive, even if
 it receives the stop signal too, so cleanup can still launch commands and observe
 child exits. This does not protect other child runtimes; `KillMode=mixed` remains
 required.
-After upgrading, run `openclaw gateway install --force` for the same profile to
-rewrite and restart the managed unit. Ordinary updates leave existing Linux
-service definitions unchanged. Doctor reports incompatible effective settings.
+Updates and `openclaw doctor --fix` refresh outdated OpenClaw-managed Linux unit
+policy. Maintenance reads the resident shutdown budget from Gateway status.
+Older Gateways without that fact follow the short-budget path: fence admission
+and observe lifecycle drain until idle or the update step deadline. At the
+deadline, outstanding write custody refuses the stop with its owner phase;
+remaining turns can be interrupted with a recorded warning.
 Operator-owned drop-ins must be inspected and updated separately because reinstalling
 the base unit preserves them. See [Linux services](/platforms/linux).
 
+### Maintenance custody observations
+
+Gateway `status` reports its process-owned `shutdownBudget`, with `activeWork`
+counts and a separate `writeCustody` array. Suspension preparation and status
+responses also include optional `writeCustody` entries with `phase` and `count`.
+Current phases identify migration, backup, coordinator writes, session lifecycle
+mutation, and terminal persistence. These are recorded by their operation owners;
+ordinary root requests and cron runs do not imply write custody. Counts can overlap.
+
+The optional field is additive. Older Gateways, including published 2026.9.5,
+can omit it. Missing custody information never refuses maintenance. If the update
+step deadline expires, maintenance stops with a warning that includes the latest
+root-request and cron-run counts, explains the resident's missing distinction,
+and identifies the next Gateway's refreshed stop policy. Only a reported live
+write-custody phase refuses that deadline stop.
+
 ### Systemd stop deadlines
 
-At startup, the Gateway reads its running systemd unit's effective
-`TimeoutStopUSec`, including drop-ins. It logs the source and reconciled stop
-budget at startup and again when shutdown begins. Active-work drain uses at most
+At startup and when accepting shutdown, the Gateway reads its running systemd
+unit's effective `TimeoutStopUSec`, including drop-ins. It logs the source and
+reconciled stop budget at both points, so a repaired unit takes effect without
+restarting first. Inspection and any wait for startup to finish consume the same
+shutdown deadline. Active-work drain uses at most
 315 seconds, with 10 seconds reserved for final chat writes and server cleanup
 and another 5 seconds before systemd's deadline. A unit with the default
 90-second stop timeout therefore gets a 75-second drain and an 85-second Gateway
@@ -169,9 +190,10 @@ shutdown deadline. A shorter supervisor timeout also caps requested restart wait
 The drained work, ordering, and interruption behavior stay the same.
 
 Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
-for final exit bookkeeping. A forced restart handed to a supervisor skips active-work
-drain but retains the 10-second cleanup reserve; it does not start a fresh
-85-second wait. A restart without a supervisor handoff uses the existing shutdown
+for final exit bookkeeping. A forced restart drains admitted work within the same
+budget. When the restart scheduler has already exhausted its deferral budget,
+cleanup retains the 10-second reserve without starting a second drain.
+A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
 launch their own replacement. Cgroup membership alone does not provide a supervisor
@@ -186,10 +208,13 @@ account running the Gateway or its restart owner. This also covers hand-written
 system units with `User=openclaw` and externally managed deployments. Reading
 the system unit's timeout does not require sudo or notification support.
 
-If the unit cannot be inspected, the Gateway warns with the manager, unit, and
-failure reason and uses systemd's 90-second default as a conservative fallback.
-An explicitly unlimited timeout keeps the normal Gateway budget. The startup reading is retained for that
-process; restart the Gateway after changing its unit settings.
+If the unit cannot be inspected at startup, the Gateway warns with the manager,
+unit, and failure reason and uses systemd's 90-second default as a conservative
+fallback. A failed shutdown reread retains the startup budget, with elapsed time
+deducted, instead of assuming a longer timeout. An explicitly unlimited timeout
+keeps the normal Gateway budget. Already-running `v2026.9.5` Gateways retain their
+startup reading until they restart; installing newer files cannot change the
+shutdown budget captured by that older process.
 
 An already-installed old unit benefits from the clamp as soon as the new Gateway
 starts, without a service rewrite. This leaves time for orderly shutdown instead
@@ -211,7 +236,7 @@ TimeoutStopSec=330
 
 Run `sudo systemctl daemon-reload` and verify with
 `systemctl show openclaw-gateway.service -p TimeoutStopUSec`. Restart through your
-service's deployment owner to refresh the Gateway's startup reading. For a user
+service's deployment owner. For a user
 unit, use `systemctl --user edit openclaw-gateway.service` and the corresponding
 `--user` reload/show commands. Retain `KillMode=mixed` as described above; a longer
 timeout does not protect children from `KillMode=control-group`'s initial signal.
@@ -221,6 +246,11 @@ worker cleanup started by shutdown. Each reply must still match its live
 invocation, node connection, pairing generation, and owning lifecycle. This
 lets cleanup finish without waiting for a command timeout. It does not reopen
 admission for new requests.
+
+Operators can also inspect and answer pending questions or resolve approvals
+while the Gateway drains. These requests must belong to still-pending work
+admitted before shutdown; normal authorization checks still apply. New question
+and approval requests remain fenced.
 
 Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
@@ -410,6 +440,13 @@ Copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
 
+Startup reconciles older subagent session rows that still say `running` but have
+no live run, task, admission, or recovery owner. It records a diagnostic transcript
+receipt and marks the row `interrupted` in one transaction. The end timestamp records when
+startup observed the interruption, rather than an inferred execution finish time;
+the original activity timestamps remain intact. A failed receipt write becomes a
+warning and leaves the row eligible for a later repair.
+
 Three complementary mechanisms mark sessions whose turn did not finish:
 
 - **At turn admission:** for an ordinary text turn on an existing main session,
@@ -448,6 +485,11 @@ state before admission, so a rejected send cannot trap the conversation in a
 transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
 
+If recovery fails during preparation before the agent starts, the Gateway restores
+the interrupted state and releases that attempt's delivery claim. The next recovery
+attempt uses a fresh run ID while retaining the original interrupted turn and retry
+budget, so a rejected pending input cannot leave the conversation permanently busy.
+
 ## Automatic resume
 
 A few seconds after startup, the gateway re-dispatches each marked session
@@ -461,6 +503,13 @@ reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
 interruption marker; the recovery owner retains it until work is adopted or
 settled.
+
+Recovery reads the interrupted turn's source before starting another run, even
+when a final reply is already pending. If the transcript cannot be read, the
+saved reply and any admitted completion claim remain available for a later
+attempt. Delegated requests and unverified internal inputs cannot resume
+automatically without surviving authority. Child-completion follow-ups still use their
+existing recovery and delivery ownership checks.
 
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
@@ -614,9 +663,13 @@ For updates, the sentinel carries `stats.runId`, linking the detached updater to
 its durable `update_runs` record. The new Gateway records its observed running
 version, build, and startup facts there. It preserves a terminal outcome already
 written by the updater and waits while a managed handoff is still pending.
-If the existing restart-verification retry window expires, a still-running row
-finishes as failed with `restart-unhealthy`. An already-finalized CLI outcome
-stays intact.
+Before preparing notices or continuations, it reconciles a newer final sentinel
+for that same run and handoff. A pending sentinel keeps its existing bounded
+retry window even when the ledger is already terminal; an unrelated replacement
+remains untouched. If the helper never publishes its final sentinel, expiry
+reports the recorded terminal outcome without changing it. A still-running
+Gateway-owned row finishes as failed with `restart-unhealthy`; CLI-owned runs
+retain their updater's authority and outcome.
 The post-restart notice is rendered from that row using the same report as
 `openclaw update status`. Consuming the sentinel does not remove run history.
 Sentinels left by older releases retain their existing delivery route.
@@ -628,11 +681,19 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling.
 Its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. A bounded state migration runs
-at startup and through Doctor to preserve a validated legacy
-`restart-sentinel.json` left on disk after an update.
-The migration verifies the typed row and removes the source file before normal
-restart handling continues.
+and clears SQLite state without a file fallback. Doctor and restart recovery
+share the bounded importer for `restart-sentinel.json`. Restart recovery imports
+only update notices, after readiness; unrelated legacy repair still requires Doctor.
+
+The `2026.6.1` RPC updater writes its notice after candidate Doctor finishes.
+Its managed updater can publish the final outcome after restart health succeeds.
+Recovery checks that same pending handoff through its existing retry window and
+preserves its delivery route and continuation. A final legacy outcome can replace
+only its own imported pending notification; newer canonical state wins.
+Recorded source generations are not replayed when their files reappear.
+Incomplete notices stay on disk for recovery or explicit Doctor repair.
+The `2026.6.34` and `2026.9.2` updaters write native SQLite state instead.
+For pre-June installations, use the [bridge upgrade procedure](/install/updating#upgrading-very-old-versions).
 
 ## Safety valves and observability
 

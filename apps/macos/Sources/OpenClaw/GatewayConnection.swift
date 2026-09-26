@@ -154,26 +154,16 @@ actor GatewayConnection: Observable {
 
     enum Method: String {
         case agent
-        case status
         case setHeartbeats = "set-heartbeats"
-        case systemEvent = "system-event"
         case health
         case configGet = "config.get"
         case configSet = "config.set"
-        case configPatch = "config.patch"
-        case wizardStart = "wizard.start"
-        case wizardNext = "wizard.next"
-        case wizardCancel = "wizard.cancel"
-        case wizardStatus = "wizard.status"
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case talkSpeak = "talk.speak"
-        case modelsList = "models.list"
         case agentsList = "agents.list"
         case agentIdentityGet = "agent.identity.get"
-        case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
-        case chatSend = "chat.send"
         case skillsStatus = "skills.status"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
@@ -182,7 +172,6 @@ actor GatewayConnection: Observable {
         case devicePairList = "device.pair.list"
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
-        case execApprovalList = "exec.approval.list"
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
@@ -240,9 +229,7 @@ actor GatewayConnection: Observable {
     private(set) var socketGenerationState = GatewaySocketGenerationState()
 
     private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
-    var realtimeTalkSubscribers: [
-        UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]
-    ] = [:]
+    var realtimeTalkSubscribers: [UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]] = [:]
     var lastSnapshot: HelloOk? {
         didSet { self.publishConnectedServerLease() }
     }
@@ -1439,7 +1426,7 @@ extension GatewayConnection {
         for (_, continuation) in self.subscribers {
             continuation.yield(delivery)
         }
-        if let socketGeneration = self.socketGenerationState.activeGeneration {
+        if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
             var terminatedSubscriberIDs: [UUID] = []
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
                 switch continuation.yield(delivery) {
@@ -1532,15 +1519,6 @@ extension GatewayConnection {
             return try Self.mainSessionKey(fromConfigGetData: data)
         } catch {
             return "main"
-        }
-    }
-
-    func status() async -> (ok: Bool, error: String?) {
-        do {
-            _ = try await self.requestRaw(method: .status)
-            return (true, nil)
-        } catch {
-            return (false, error.localizedDescription)
         }
     }
 

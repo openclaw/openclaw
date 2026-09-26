@@ -190,15 +190,7 @@ export async function prepareOutboundMirrorRoute(params: {
   resolvedThreadId?: string;
   outboundRoute: OutboundSessionRoute | null;
 }> {
-  const resolvedThreadId = resolveAndApplyOutboundThreadId(params.actionParams, {
-    cfg: params.cfg,
-    to: params.to,
-    accountId: params.accountId,
-    toolContext: params.toolContext,
-    resolveAutoThreadId: params.resolveAutoThreadId,
-    resolveReplyTransport: params.resolveReplyTransport,
-    replyToIsExplicit: params.replyToIsExplicit,
-  });
+  const resolvedThreadId = resolveAndApplyOutboundThreadId(params.actionParams, params);
   const replyToId = readToolStringParam(params.actionParams, "replyTo");
   // Route resolution is read-only here; the durable session/route write happens
   // in ensureOutboundSessionEntry only after the send succeeds. Persisting

@@ -9,6 +9,8 @@ import type {
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
+type AgentFileVersion = { hash: string } | { missing: true };
+
 export type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -17,8 +19,8 @@ export type AgentFilesState = {
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFileContents: Record<string, string>;
-  agentFileBaseHashes: Record<string, string>;
-  agentFileHashes: Record<string, string>;
+  agentFileBaseVersions: Record<string, AgentFileVersion>;
+  agentFileVersions: Record<string, AgentFileVersion>;
   agentFileConflict: string | null;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
@@ -38,9 +40,16 @@ export type AgentFilesViewState = Pick<
   agentFileActive: string | null;
 };
 
+export function hasAgentFileContent(
+  state: Pick<AgentFilesState, "agentFileContents" | "agentFileDrafts">,
+  name: string,
+): boolean {
+  return Object.hasOwn(state.agentFileContents, name) || Object.hasOwn(state.agentFileDrafts, name);
+}
+
 export type RetainedAgentFileDrafts = {
   drafts: Record<string, string>;
-  hashes: Record<string, string>;
+  versions: Record<string, AgentFileVersion>;
   active: string | null;
   conflict: string | null;
 };
@@ -56,9 +65,9 @@ export function retainAgentFileDrafts(
   }
   return {
     drafts: Object.fromEntries(entries),
-    hashes: Object.fromEntries(
+    versions: Object.fromEntries(
       entries.flatMap(([name]) =>
-        state.agentFileHashes[name] === undefined ? [] : [[name, state.agentFileHashes[name]]],
+        state.agentFileVersions[name] === undefined ? [] : [[name, state.agentFileVersions[name]]],
       ),
     ),
     active: state.agentFileActive,
@@ -66,16 +75,16 @@ export function retainAgentFileDrafts(
   };
 }
 
-function withFileHash(
-  hashes: Record<string, string>,
+function withFileVersion(
+  versions: Record<string, AgentFileVersion>,
   name: string,
-  hash: string | undefined,
-): Record<string, string> {
-  const next = { ...hashes };
-  if (hash === undefined) {
+  version: AgentFileVersion | undefined,
+): Record<string, AgentFileVersion> {
+  const next = { ...versions };
+  if (version === undefined) {
     delete next[name];
   } else {
-    next[name] = hash;
+    next[name] = version;
   }
   return next;
 }
@@ -92,7 +101,7 @@ async function requestAgentFile(
   const busy = saving ? "agentFileSaving" : "agentFilesLoading";
   const client = state.client;
   const agents = state.agents;
-  if (!client || !state.connected || state[busy]) {
+  if (!client || !state.connected || state[busy] || (saving && !hasAgentFileContent(state, name))) {
     return false;
   }
   if (
@@ -119,7 +128,7 @@ async function requestAgentFile(
   const revision = state.agentFileWriteRevisions.get(name);
   const isCurrent = () =>
     isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
-  const expectedHash = state.agentFileHashes[name];
+  const version = state.agentFileVersions[name];
   const resolution = operation.kind === "read" ? operation.resolution : undefined;
   state[busy] = true;
   state.agentFilesError = null;
@@ -130,7 +139,11 @@ async function requestAgentFile(
         agentId,
         name,
         ...(operation.kind === "write"
-          ? { content: operation.content, ...(expectedHash ? { expectedHash } : {}) }
+          ? {
+              content: operation.content,
+              ...(version &&
+                ("hash" in version ? { expectedHash: version.hash } : { expectedMissing: true })),
+            }
           : {}),
       },
     );
@@ -138,9 +151,14 @@ async function requestAgentFile(
       const content = operation.kind === "write" ? operation.content : (res.file.content ?? "");
       const previousBase = state.agentFileContents[name];
       const currentDraft = state.agentFileDrafts[name];
+      const nextVersion: AgentFileVersion | undefined = res.file.missing
+        ? { missing: true }
+        : res.file.hash
+          ? { hash: res.file.hash }
+          : undefined;
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
       // Refresh may advance the workspace base while a dirty draft keeps its ancestry.
-      state.agentFileBaseHashes = withFileHash(state.agentFileBaseHashes, name, res.file.hash);
+      state.agentFileBaseVersions = withFileVersion(state.agentFileBaseVersions, name, nextVersion);
       // Reads rebase clean drafts; writes preserve edits made after submission.
       const rebasesDraft =
         resolution === "draft" ||
@@ -151,7 +169,7 @@ async function requestAgentFile(
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
       if (saving || resolution !== undefined || rebasesDraft) {
-        state.agentFileHashes = withFileHash(state.agentFileHashes, name, res.file.hash);
+        state.agentFileVersions = withFileVersion(state.agentFileVersions, name, nextVersion);
         if (state.agentFileConflict === name) {
           state.agentFileConflict = null;
         }
@@ -206,14 +224,17 @@ export function saveAgentFile(
 }
 
 export function resetAgentFile(state: AgentFilesState, name: string): void {
+  if (!Object.hasOwn(state.agentFileContents, name)) {
+    return;
+  }
   state.agentFileDrafts = {
     ...state.agentFileDrafts,
     [name]: state.agentFileContents[name] ?? "",
   };
-  state.agentFileHashes = withFileHash(
-    state.agentFileHashes,
+  state.agentFileVersions = withFileVersion(
+    state.agentFileVersions,
     name,
-    state.agentFileBaseHashes[name],
+    state.agentFileBaseVersions[name],
   );
   if (state.agentFileConflict === name) {
     state.agentFileConflict = null;

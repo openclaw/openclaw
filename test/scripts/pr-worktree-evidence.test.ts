@@ -117,8 +117,8 @@ pr_gh() {
   fi
 }
 pr_gh_plain() {
-  if [ "$*" = 'api user --include' ]; then
-    printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n'
+  if [ "$*" = 'writer-login' ]; then
+    printf 'fixture-user\\n'
   else
     echo "Unexpected direct GitHub call: $*" >&2; exit 97
   fi

@@ -93,6 +93,7 @@ export abstract class MatrixClientBase {
   protected cryptoInitialized = false;
   protected decryptBridge?: MatrixDecryptBridge<MatrixRawEvent>;
   protected verificationManager?: import("./verification-manager.js").MatrixVerificationManager;
+  // All room-event paths share ordering, including messages, reactions, and polls.
   protected readonly sendQueue = new KeyedAsyncQueue();
   protected readonly recoveryKeyStore: MatrixRecoveryKeyStore;
   protected cryptoBootstrapper?:
@@ -375,20 +376,6 @@ export abstract class MatrixClientBase {
     });
   }
 
-  protected async waitForInitialSyncReady(
-    params: {
-      timeoutMs?: number;
-      abortSignal?: AbortSignal;
-    } = {},
-  ): Promise<void> {
-    await waitForMatrixInitialSyncReady({
-      ...params,
-      emitter: this.emitter,
-      state: this.currentSyncState,
-      error: this.currentSyncError,
-    });
-  }
-
   protected async startSyncSession(opts: {
     bootstrapCrypto: boolean;
     abortSignal?: AbortSignal;
@@ -446,7 +433,10 @@ export abstract class MatrixClientBase {
             : {}),
         }),
       );
-      await this.waitForInitialSyncReady({
+      await waitForMatrixInitialSyncReady({
+        emitter: this.emitter,
+        state: this.currentSyncState,
+        error: this.currentSyncError,
         abortSignal: signal,
         timeoutMs: opts.readyTimeoutMs,
       });

@@ -206,6 +206,59 @@ method, when provided, if the runtime or an embedding adapter retires. This clos
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
 
+## Browser meeting participation
+
+The existing `openclaw/plugin-sdk/meeting-runtime` entry point exposes optional
+participation methods on `MeetingSessionRuntime`. Supply its `participation`
+options with an SQLite plugin keyed store, current capabilities, action
+validation, and a provider executor. Providers observe canonical source identity,
+epoch, revision, and finality through `observeParticipationSource`; never accept
+these fields from model arguments. `inspectParticipationSource` returns a
+snapshot and a live guard for work that crosses asynchronous boundaries.
+
+The participation-specific named exports are `runMeetingParticipationWithBrowser`,
+`MeetingBrowserParticipationAdapter`, `MeetingParticipationRequest`,
+`MeetingParticipationSource`, and `MeetingParticipationAttempt`. Other payload
+and option shapes remain part of the typed runtime and adapter signatures rather
+than separate top-level SDK aliases.
+
+Each session retains at most 1,024 live sources for two minutes from their first
+observation. Capacity admission and eviction use original observation order, not
+snapshot replay or correction time. Repeated snapshots preserve unchanged
+retained references and guards; older replayed sources cannot displace newer
+ones from a full live-source window.
+
+Retained transcript rows carry a separate `provenance` envelope: observer, optional
+observation/session/document identifiers and observation time, observed speaker
+label, and native `self`, `other`, or `unknown` attribution. Speaker labels are not
+participant identities. Missing or malformed attribution remains unknown; a
+provenance record never grants participation authority. Interim, historical, own-echo,
+and otherwise non-actionable rows retain provenance independently of `source`.
+
+This is a retained-snapshot contract, not a revision journal. Unchanged polls keep
+unchanged observation identifiers; intermediate states between polls need not be
+retained. Existing transcript storage carries the envelope in
+`metadata.meetingObservationProvenance` on the utterances it already stores, under
+the existing retention policy. There is no separate observation archive. Removing
+one DOM copy must not finalize a source that still has a live copy.
+
+Browser adapters may implement `MeetingBrowserParticipationAdapter` and dispatch
+through `runMeetingParticipationWithBrowser`. The helper uses the existing tab
+lock, a pinned route, and the session guard. An optional preparation script may
+open controls and await readiness, but must not perform the requested action.
+After preparation the host revalidates authority. The final script checks the
+page session and URL and performs its effect synchronously before its first
+await; later waits may observe the result but must not produce another effect.
+Only a rejected result that proves no requested effect occurred may set
+`correctable: true`. Other meeting platforms need no adapter change and continue
+to report unsupported participation.
+
+Cancellation after browser dispatch is best effort: the effect may occur before
+the host detects source expiry, correction, or session revocation. The runtime
+reports that outcome as `uncertain`; it must not be treated as proof of cancellation
+or permission to retry with a new request ID. Pre-dispatch authority checks and
+the adapter's final page-session and URL checks remain required.
+
 ## Worker provider allocation authority
 
 The Gateway supplies `assertCurrent()` in the options passed to worker providers'

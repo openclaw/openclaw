@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptEventSync,
@@ -10,18 +11,18 @@ import {
   listSessionParticipantsReadOnly,
   loadSessionEntry,
   patchSessionEntryCore,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import {
@@ -70,7 +71,7 @@ const cases = [
   { write: "external selected recreated payload", allowed: false },
   { write: "external selected recreated lifecycle", allowed: false },
   { write: "runtime config replacement", allowed: false },
-  { write: "access revision change", allowed: false },
+  { write: "profile alias change", allowed: false },
 ] as const;
 
 it.each(
@@ -192,8 +193,8 @@ it.each(
         ).toEqual({ ok: true, value: true });
       } else if (write === "runtime config replacement") {
         runtimeConfig = {};
-      } else if (write === "access revision change") {
-        bumpGatewayAccessRevision();
+      } else if (write === "profile alias change") {
+        publishUserProfileAliasChange();
       } else if (write.startsWith("compound")) {
         runOpenClawAgentWriteTransaction((current) => {
           writeSessionEntry(current, writeTarget.sessionKey, {
@@ -401,8 +402,12 @@ it.each(
         }
       }
     } else {
+      expect(outcome.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
       expect(outcome.error).toMatchObject({
-        message: expect.stringContaining("Session changed while preparing its metadata"),
+        message:
+          write === "runtime config replacement" || write === "profile alias change"
+            ? "Chat metadata access changed while preparing its metadata. Retry the request."
+            : "Session changed while preparing its metadata. Retry the request.",
       });
       expect(respond).not.toHaveBeenCalled();
     }

@@ -196,7 +196,7 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
-Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe on first CLI execution finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. Concurrent executions share that probe, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
+Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared probe; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
 
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
@@ -383,15 +383,11 @@ Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per comp
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 
-Related docs:
-
-- [Anthropic](/providers/anthropic)
-- [Token use and costs](/reference/token-use)
-- [Session pruning](/concepts/session-pruning)
-- [Gateway configuration reference](/gateway/configuration-reference)
-
 ## Related
 
 - [Token use and costs](/reference/token-use)
 - [API usage and costs](/reference/api-usage-costs)
 - [Usage tracking](/concepts/usage-tracking)
+- [Anthropic](/providers/anthropic)
+- [Session pruning](/concepts/session-pruning)
+- [Gateway configuration reference](/gateway/configuration-reference)

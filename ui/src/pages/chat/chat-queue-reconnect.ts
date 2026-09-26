@@ -8,12 +8,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import {
-  isVolatileQueuedMessage,
-  updateQueuedMessage,
-  updateVolatileQueuedMessage,
-  type ChatQueueScopedSessionHost,
-} from "./chat-queue.ts";
+import { updateQueuedMessage, type ChatQueueScopedSessionHost } from "./chat-queue.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 
 export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSessionHost) {
@@ -37,8 +32,8 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSess
     ) {
       continue;
     }
-    if (isVolatileQueuedMessage(host, item.id)) {
-      updateVolatileQueuedMessage(host, item.id, (current) => ({
+    if (chatOutboxOwner(host).hasVolatile(host, item.id)) {
+      chatOutboxOwner(host).change(host, item.id, (current) => ({
         ...current,
         sendState: "unconfirmed",
       }));

@@ -1,5 +1,7 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { findMatrixAccountEntry, hasImplicitMatrixAccountConfig } from "../account-selection.js";
 import { resolveMatrixInboundRoute } from "./monitor/route.js";
 
 export function resolveMatrixConversationRouteOwner(params: {
@@ -12,7 +14,16 @@ export function resolveMatrixConversationRouteOwner(params: {
     nativeChannelId?: string;
   };
 }) {
-  const { cfg, accountId, conversation } = params;
+  const { cfg, conversation } = params;
+  const accountId = normalizeAccountId(params.accountId);
+  const accountConfig = findMatrixAccountEntry(cfg, accountId);
+  if (
+    cfg.channels?.matrix?.enabled === false ||
+    accountConfig?.enabled === false ||
+    (!accountConfig && !hasImplicitMatrixAccountConfig(cfg, accountId))
+  ) {
+    return null;
+  }
   const roomId =
     conversation.nativeChannelId?.trim() ||
     (conversation.kind === "direct" ? "" : conversation.peerId.trim());

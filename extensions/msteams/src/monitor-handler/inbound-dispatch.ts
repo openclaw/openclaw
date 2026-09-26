@@ -1,3 +1,4 @@
+import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
@@ -11,7 +12,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
+import { resolveMSTeamsReplyPolicy } from "../policy.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
@@ -97,7 +98,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   });
   let combinedBody = body;
   const isRoomish = !isDirectMessage;
-  const historyKey = isRoomish ? conversationId : undefined;
+  const historyKey = isRoomish ? facts.historyKey : undefined;
   if (isRoomish && historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: conversationHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -130,7 +131,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           groupPolicy,
           allowFrom: effectiveGroupAllowFrom,
           isSenderAllowed: (allowFrom) =>
-            resolveMSTeamsAllowlistMatch({
+            resolveAllowlistMatchSimple({
               allowFrom,
               senderId: quoteSenderId ?? "",
               senderName: quoteSenderName,

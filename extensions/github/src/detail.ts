@@ -6,13 +6,20 @@ import {
   ControlUiGitHubError,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
+  githubApiCredentialCacheScope,
   isRecord,
   optionalNumber,
   readGitHubJsonResponse,
   readOptionalGitHubString,
   requiredString,
+  withOptionalGitHubAuth,
 } from "./github-api.js";
-import { assertPublicGitHubRepository, parseControlUiGitHubPreviewResponse } from "./preview.js";
+import {
+  assertPublicGitHubRepository,
+  isPublicGitHubRepository,
+  parseControlUiGitHubPreviewResponse,
+  type ControlUiGitHubPreviewIdentity,
+} from "./preview.js";
 import { githubTargetUrl, parseGitHubTarget, type GitHubTarget } from "./targets.js";
 import { githubPreviewView, githubChangeMetadata } from "./view-model.js";
 type GitHubComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
@@ -33,19 +40,61 @@ const PATCH_TOTAL_MAX_CHARS = 96 * 1024;
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const PARTIAL_CACHE_MS = 30_000;
 const CACHE_LIMIT = 32;
-const detailCache = new Map<string, { expiresAt: number; promise: Promise<GitHubDocument> }>();
+type CachedDocument = {
+  document: GitHubDocument;
+  repositoryId?: number;
+  repositoryUrls: string[];
+};
+const detailCache = new Map<
+  string,
+  { expiresAt: number; settled: boolean; promise: Promise<CachedDocument> }
+>();
 
 type JsonPage = { value: unknown; hasNextPage: boolean };
+type ReadDetailPage = (url: string) => Promise<JsonPage>;
 
-async function fetchDetailPage(url: string, fetchImpl: typeof fetch): Promise<JsonPage> {
-  // Detail bodies and patches never borrow the Gateway's ambient token. A
-  // visibility check followed by an authenticated fetch can race a transfer or
-  // visibility change; anonymous subresources cannot disclose private content.
-  const response = await fetchGitHubApi(url, fetchImpl);
-  return {
-    hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),
-    value: await readGitHubJsonResponse(response, DETAIL_JSON_MAX_BYTES),
-  };
+class GitHubDetailAccessError extends ControlUiGitHubError {
+  constructor() {
+    super(404, "GitHub repository is not public or has changed");
+  }
+}
+
+function redirectedRepositoryUrl(url: URL, suffix: string): string {
+  const match = /^(\/repos\/[^/]+\/[^/]+|\/repositories\/\d+)(\/.*)?$/u.exec(url.pathname);
+  if (!match || (match[2] ?? "") !== suffix) {
+    throw new GitHubDetailAccessError();
+  }
+  return GITHUB_API_ORIGIN + match[1];
+}
+
+async function readPublicRepository(
+  url: string,
+  fetchImpl: typeof fetch,
+  identity: ControlUiGitHubPreviewIdentity,
+  expectedId?: number,
+): Promise<number> {
+  const repository = await readGitHubJsonResponse(
+    await fetchGitHubApi(
+      url,
+      fetchImpl,
+      identity.token,
+      async (redirect) => {
+        redirectedRepositoryUrl(redirect, "");
+      },
+      identity,
+    ),
+  );
+  const id = isRecord(repository) ? optionalNumber(repository, "id") : undefined;
+  if (
+    !isPublicGitHubRepository(repository) ||
+    id === undefined ||
+    !Number.isSafeInteger(id) ||
+    id <= 0 ||
+    (expectedId !== undefined && id !== expectedId)
+  ) {
+    throw new GitHubDetailAccessError();
+  }
+  return id;
 }
 
 function markdownBody(value: unknown, maxChars: number): { body: string; bodyTruncated: boolean } {
@@ -143,7 +192,7 @@ async function fetchComments(
   url: string,
   kind: CommentKind,
   total: number,
-  fetchImpl: typeof fetch,
+  readPage: ReadDetailPage,
 ): Promise<{
   comments: GitHubComment[];
   commentsTotal: number;
@@ -156,7 +205,7 @@ async function fetchComments(
     // Each collection has an independent quota so discussion cannot crowd out
     // published review threads. Never follow arbitrary Link URLs from GitHub.
     const sort = kind === "review" ? "&sort=created&direction=asc" : "";
-    const page = await fetchDetailPage(url + "?per_page=" + COMMENT_LIMIT + sort, fetchImpl);
+    const page = await readPage(url + "?per_page=" + COMMENT_LIMIT + sort);
     const comments = parseComments(page.value, kind);
     return {
       comments,
@@ -166,7 +215,10 @@ async function fetchComments(
         total > comments.length ||
         (Array.isArray(page.value) && page.value.length > COMMENT_LIMIT),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GitHubDetailAccessError) {
+      throw error;
+    }
     return { comments: [], commentsTotal: total, commentsTruncated: true };
   }
 }
@@ -199,17 +251,18 @@ function parseFiles(value: unknown): GitHubFile[] {
   });
 }
 
-async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promise<GitHubDocument> {
+async function fetchDetail(
+  target: GitHubTarget,
+  readPage: ReadDetailPage,
+): Promise<GitHubDocument> {
   const repoPath = `/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
   const repositoryUrl = GITHUB_API_ORIGIN + repoPath;
-  await assertPublicGitHubRepository(repositoryUrl, fetchImpl);
   const collection =
     target.kind === "commit" ? "commits" : target.kind === "pull" ? "pulls" : "issues";
   const id = target.kind === "commit" ? target.sha : target.number;
   const itemUrl = `${repositoryUrl}/${collection}/${id}`;
-  const itemPage = await fetchDetailPage(
+  const itemPage = await readPage(
     target.kind === "commit" ? `${itemUrl}?per_page=${FILE_LIMIT}` : itemUrl,
-    fetchImpl,
   );
   if (!isRecord(itemPage.value)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
@@ -226,7 +279,7 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
       itemUrl + "/comments",
       "commit",
       requiredCount(commit, "comment_count"),
-      fetchImpl,
+      readPage,
     );
     const files = value.files === undefined ? [] : parseFiles(value.files);
     const filesTruncated =
@@ -267,7 +320,7 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
     repositoryUrl + "/issues/" + target.number + "/comments",
     "discussion",
     requiredCount(value, "comments"),
-    fetchImpl,
+    readPage,
   );
   const review =
     target.kind === "pull"
@@ -275,7 +328,7 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
           itemUrl + "/comments",
           "review",
           requiredCount(value, "review_comments"),
-          fetchImpl,
+          readPage,
         )
       : undefined;
   const comments = discussion.comments
@@ -292,10 +345,13 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
   const filesTotal = target.kind === "pull" ? requiredCount(value, "changed_files") : 0;
   if (filesTotal > 0) {
     try {
-      const page = await fetchDetailPage(`${itemUrl}/files?per_page=${FILE_LIMIT}`, fetchImpl);
+      const page = await readPage(`${itemUrl}/files?per_page=${FILE_LIMIT}`);
       files = parseFiles(page.value);
       filesTruncated = page.hasNextPage || filesTotal > files.length;
-    } catch {
+    } catch (error) {
+      if (error instanceof GitHubDetailAccessError) {
+        throw error;
+      }
       filesTruncated = true;
     }
   }
@@ -303,9 +359,7 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
   const base = isRecord(value.base) ? value.base : {};
   const checks =
     target.kind === "pull"
-      ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", (checkUrl) =>
-          fetchDetailPage(checkUrl, fetchImpl),
-        )
+      ? await fetchPullChecks(repositoryUrl, head.sha, url + "/checks", readPage)
       : undefined;
   const view = githubPreviewView(preview);
   const metadata = githubChangeMetadata(
@@ -342,43 +396,115 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
   };
 }
 
-export function loadGitHubDetail(
+async function loadGitHubDetailWithIdentity(
   target: GitHubTarget,
+  identity?: ControlUiGitHubPreviewIdentity,
   fetchImpl: typeof fetch = fetch,
   refresh = false,
 ): Promise<GitHubDocument> {
   const parsed = parseGitHubTarget(target);
   if (!parsed) {
-    return Promise.reject(new ControlUiGitHubError(400, "Invalid GitHub detail target"));
+    throw new ControlUiGitHubError(400, "Invalid GitHub detail target");
   }
+  await identity?.revalidate();
+  identity?.assertSelected();
   const id = parsed.kind === "commit" ? parsed.sha : parsed.number;
-  const key = `${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}`;
+  const key = `${parsed.kind}:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${id}\0${identity?.cacheScope ?? "anonymous"}\0${githubApiCredentialCacheScope(identity?.token)}`;
+  const assertDelivery = async (result: CachedDocument) => {
+    if (identity?.token) {
+      for (const url of result.repositoryUrls) {
+        await readPublicRepository(url, fetchImpl, identity, result.repositoryId);
+      }
+    }
+    await identity?.revalidate();
+    identity?.assertSelected();
+  };
   const cached = detailCache.get(key);
-  if (!refresh && cached && cached.expiresAt > Date.now()) {
+  if (!refresh && cached && cached.expiresAt > Date.now() && (!identity || cached.settled)) {
     detailCache.delete(key);
     detailCache.set(key, cached);
-    return cached.promise;
+    const result = await cached.promise;
+    await assertDelivery(result);
+    return result.document;
   }
+  detailCache.delete(key);
+  const load = async (): Promise<CachedDocument> => {
+    const repositoryUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`;
+    const repositoryUrls = new Set([repositoryUrl]);
+    const repositoryId = identity?.token
+      ? await readPublicRepository(repositoryUrl, fetchImpl, identity)
+      : undefined;
+    if (!identity?.token) {
+      await assertPublicGitHubRepository(repositoryUrl, fetchImpl, undefined, identity);
+    }
+    const readPage: ReadDetailPage = async (url) => {
+      const suffix = new URL(url).pathname.slice(new URL(repositoryUrl).pathname.length);
+      const response = await fetchGitHubApi(
+        url,
+        fetchImpl,
+        identity?.token,
+        identity?.token
+          ? async (redirect) => {
+              const redirected = redirectedRepositoryUrl(redirect, suffix);
+              await readPublicRepository(redirected, fetchImpl, identity, repositoryId);
+              repositoryUrls.add(redirected);
+            }
+          : undefined,
+        identity,
+      );
+      return {
+        hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),
+        value: await readGitHubJsonResponse(response, DETAIL_JSON_MAX_BYTES),
+      };
+    };
+    const document = await fetchDetail(parsed, readPage);
+    const result = { document, repositoryId, repositoryUrls: [...repositoryUrls] };
+    // Public-only delivery is checked after all awaited content reads, including
+    // optional comments/files; a failed authority check cannot become partial data.
+    await assertDelivery(result);
+    return result;
+  };
   const entry = {
     expiresAt: Date.now() + SUCCESS_CACHE_MS,
-    promise: fetchDetail(parsed, fetchImpl)
-      .then((detail) => {
-        // PR checks and heads change independently of the body. Keep one short
-        // document snapshot, and let explicit refresh bypass it as before.
-        if (parsed.kind === "pull" || detail.partial) {
+    settled: false,
+    promise: load()
+      .then((result) => {
+        entry.settled = true;
+        // PR checks and heads change independently of the body.
+        if (parsed.kind === "pull" || result.document.partial) {
           entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
         }
-        return detail;
+        return result;
       })
       .catch((error: unknown) => {
-        // Repeated opens share in-flight work and short failure caching rather
-        // than spending the anonymous API quota again on every click.
-        entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
+        // Caller-lifetime failures must not poison another reader's cache.
+        if (error instanceof ControlUiGitHubError && error.statusCode !== 409) {
+          entry.settled = true;
+          entry.expiresAt = Date.now() + PARTIAL_CACHE_MS;
+        } else if (detailCache.get(key) === entry) {
+          detailCache.delete(key);
+        }
         throw error;
       }),
   };
-  detailCache.delete(key);
+  // Track the newest request immediately so older completions cannot replace a
+  // refresh. Prepared identities reuse only settled, caller-independent results.
   detailCache.set(key, entry);
   pruneMapToMaxSize(detailCache, CACHE_LIMIT);
-  return entry.promise;
+  const result = await entry.promise;
+  identity?.assertSelected();
+  return result.document;
+}
+
+export function loadGitHubDetail(
+  target: GitHubTarget,
+  identity?: ControlUiGitHubPreviewIdentity,
+  fetchImpl: typeof fetch = fetch,
+  refresh = false,
+): Promise<GitHubDocument> {
+  return identity?.optionalAuth
+    ? withOptionalGitHubAuth(identity.token, (token) =>
+        loadGitHubDetailWithIdentity(target, { ...identity, token }, fetchImpl, refresh),
+      )
+    : loadGitHubDetailWithIdentity(target, identity, fetchImpl, refresh);
 }

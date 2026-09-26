@@ -4,17 +4,80 @@ import { en } from "./en.ts";
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
   custodian: {
-    viewingPlugin: "Viewing {plugin}",
-    pluginHelpQuestion: "Help me understand {setting} for {plugin}.",
+    pluginPlaceholder: "Ask OpenClaw about {plugin}",
+    pluginIntroTitle: "Ask about {plugin}",
+    pluginStarterPurpose: "What does it do?",
+    pluginStarterTools: "What tools does it have?",
+    pluginStarterSetup: "How do I set it up?",
+    pluginPromptPurpose: "What does {plugin} do?",
+    pluginPromptTools: "What tools does {plugin} provide?",
+    pluginPromptSetup: "How do I set up {plugin}?",
+    pluginHelpQuestion: "Explain {setting}",
     pluginHelpFailed: "Could not prepare the setting question. Try Ask OpenClaw again.",
     pluginHelpUnset: "Not set",
     pluginHelpValue: "Current value: {value}",
-    pluginHelpPending: "Your plugin question is saved as a draft and will appear after this step.",
   },
   pluginsPage: {
+    installProgress: {
+      title: "Installation progress",
+      stopped: "Installation stopped",
+      rejected: {
+        title: "Plugin not installed",
+        recovery:
+          "This attempt did not install the plugin. Resolve the reported issue, then select Retry install.",
+      },
+      saved: {
+        title: "Installation saved",
+        recovery:
+          "The installation was saved. Resolve the reported issue before reloading the plugin; do not install it again.",
+      },
+      unknown: {
+        title: "Installation status unknown",
+        recovery:
+          "The Gateway did not confirm the installation outcome. Reconnect and check installed plugins before trying again.",
+      },
+      retry: {
+        title: "Installation failed",
+        recovery: "Resolve the reported issue, then select Retry install to try again.",
+      },
+      details: "Failure details",
+      viewStatus: "View status",
+      failure: "Installation failed",
+      resolve: {
+        started: "Resolving package",
+        completed: "Package resolved",
+        failed: "Package resolution failed",
+      },
+      download: {
+        started: "Downloading plugin",
+        completed: "Plugin downloaded",
+        failed: "Plugin download failed",
+      },
+      extract: {
+        started: "Extracting archive",
+        completed: "Archive extracted",
+        failed: "Archive extraction failed",
+      },
+      files: {
+        started: "Preparing plugin files",
+        completed: "Plugin files prepared",
+        failed: "Plugin file preparation failed",
+      },
+      dependencies: {
+        started: "Installing plugin dependencies",
+        completed: "Plugin dependencies installed",
+        failed: "Dependency installation failed",
+      },
+      runtime: {
+        started: "Applying plugin to Gateway",
+        completed: "Plugin applied to Gateway",
+        failed: "Plugin could not be applied to Gateway",
+      },
+    },
     editor: {
       title: "{name} settings",
       search: "Search settings",
+      navigation: "Settings sections",
       other: "Other",
       noMatches: "No matching settings.",
       empty: "This plugin has no configurable settings.",
@@ -26,8 +89,8 @@ const enPluginManagement = {
     credentials: {
       stored: "••••••••",
       replace: "Enter a new key to replace the stored credential.",
-      reveal: "Show entered key",
-      hide: "Hide entered key",
+      reveal: "Show API key",
+      hide: "Hide API key",
       signup: "Get an API key",
       useReference: "Use a secret reference",
       editReference: "Edit reference",
@@ -63,6 +126,72 @@ const enPluginManagement = {
       stale: "Configuration changed. Reload this reference before editing it.",
       saveFailed:
         "The credential could not be saved. Your draft is still available; try saving again.",
+    },
+    detailCapabilities: "Capabilities",
+    uiCapabilities: {
+      page: { name: "Pages", description: "Adds pages to OpenClaw." },
+      navigation: { name: "Navigation", description: "Adds links to OpenClaw navigation." },
+      panel: { name: "Panels", description: "Adds interface panels." },
+      action: { name: "Actions", description: "Adds buttons or menu actions." },
+      accessory: {
+        name: "Session accessories",
+        description: "Adds information or controls alongside sessions.",
+      },
+      widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
+      replacement: {
+        name: "Interface replacements",
+        description: "Replaces supported parts of the interface.",
+      },
+      "link-reader": {
+        name: "Link previews",
+        description: "Shows previews and details for supported links.",
+      },
+    },
+    capabilityFamilies: {
+      speechProviders: { name: "Text to speech", description: "Turn text into spoken audio." },
+      realtimeTranscriptionProviders: {
+        name: "Live transcription",
+        description: "Transcribe audio as it arrives.",
+      },
+      realtimeVoiceProviders: {
+        name: "Realtime voice",
+        description: "Support live voice conversations.",
+      },
+      mediaUnderstandingProviders: {
+        name: "Media understanding",
+        description: "Analyze supported media inputs.",
+      },
+      imageGenerationProviders: {
+        name: "Image generation",
+        description: "Create images from prompts and supported references.",
+      },
+      videoGenerationProviders: {
+        name: "Video generation",
+        description: "Create video with supported generation models.",
+      },
+      musicGenerationProviders: {
+        name: "Music generation",
+        description: "Create music with supported generation models.",
+      },
+      embeddingProviders: {
+        name: "Embeddings",
+        description: "Represent content for semantic search and retrieval.",
+      },
+      webSearchProviders: { name: "Web search", description: "Find information on the web." },
+      webFetchProviders: { name: "Web fetching", description: "Read content from web pages." },
+      webContentExtractors: {
+        name: "Web content extraction",
+        description: "Extract readable content from web pages.",
+      },
+      documentExtractors: {
+        name: "Document extraction",
+        description: "Extract content from supported documents.",
+      },
+      transcriptSourceProviders: {
+        name: "Transcripts",
+        description: "Capture or import transcripts from supported sources.",
+      },
+      migrationProviders: { name: "Migration", description: "Bring supported data into OpenClaw." },
     },
     breadcrumb: "Breadcrumb",
     settingsDescription: "Configure installed plugins, access, and lifecycle.",
@@ -117,7 +246,8 @@ const enPluginManagement = {
     loadMore: "Load more",
     loadingMore: "Loading more…",
     discoveryOffline: "Connect to browse plugins from ClawHub.",
-    noDiscoveryResults: "No ClawHub plugins match this view.",
+    noDiscoveryResults: "No plugins found",
+    noDiscoveryResultsHint: "Try a different search or choose another filter.",
     searchClawHub: "Search ClawHub plugins",
     searchPlugins: "Search plugins",
     viewsLabel: "Catalog views",
@@ -125,6 +255,7 @@ const enPluginManagement = {
     intentTrending: "Trending",
     intentOfficial: "Official",
     intentBundled: "Bundled",
+    loadingCategories: "Loading plugin categories…",
     categoriesLabel: "Plugin categories",
     categoriesTitle: "Categories",
     allCategories: "All categories",
@@ -150,9 +281,8 @@ const enPluginManagement = {
     detailSettings: "Settings",
     detailEnable: "Enable",
     detailDisable: "Disable",
-    detailReload: "Reload plugin",
     detailTools: "Tools",
-    detailNoToolDescription: "This plugin has not provided a description for this tool.",
+    detailToolInputs: "Inputs",
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
@@ -218,13 +348,7 @@ const enPluginManagement = {
     removeConfirmMessage:
       "This removes the plugin package and all of its entries. Active work using this plugin finishes before removal.",
     cancel: "Cancel",
-    removedSuccess: "Removed {name}.",
     reload: "Reload",
-    reloadNamed: "Reload {name}",
-    reloadHint:
-      "Install and enablement changes apply automatically. Reload changed plugin code or retry a failed apply; enablement stays unchanged. Rebuild compiled plugins first. Compiled bundled code also needs a Gateway restart. Reload itself does not restart the Gateway; other entries in this package reload too.",
-    reloadUnavailable: "Plugin reload is unavailable in the current Gateway runtime.",
-    reloadedSuccess: "Reloaded {name} (Gateway generation {generation}).",
     installSaved: "Installation of {name} was saved. {error}",
     installSavedNotApplied:
       "Installation of {name} was saved, but the Gateway has not applied it. {error} Fix the reported problem, then run openclaw plugins reload {name}.",
@@ -251,50 +375,20 @@ const enPluginManagement = {
     bundlePlugin: "Bundle plugin",
     unavailable: "Unavailable",
     install: "Install",
-    installing: "Installing…",
+    retryInstall: "Retry install",
+    retryInstallNamed: "Retry install of {name}",
+    viewInstallStatusNamed: "View status of {name} installation",
+    installing: "Installing",
     installNamed: "Install {name}",
-    installConfirmTitle: "Install {name}?",
-    installConfirmMessage:
-      "This installs the plugin package and applies it to the running Gateway.",
     connectToChange: "Connect to the gateway to change plugins.",
     adminRequired: "Plugin changes require operator.admin access.",
     changesDisabled: "This gateway does not allow plugin changes.",
     configRefreshFailed: "Could not refresh Control UI configuration: {error}",
-    installedSuccess: "Installed {name}.",
-    enabledSuccess: "Enabled {name}.",
-    disabledSuccess: "Disabled {name}.",
-    installWizard: {
-      title: "Install {name}",
-      progressLabel: "Plugin installation progress",
-      reviewStep: "Review",
-      installStep: "Install",
-      configureStep: "Configure",
-      enableStep: "Enable",
-      capabilities: "Declared capabilities",
-      noDeclaredCapabilities: "No skills or MCP servers declared in the catalog.",
-      runtimeImpact: "Gateway runtime",
-      runtimeDescription: "Installation applies to the running Gateway without restarting it.",
-      installingBody: "Installing the reviewed plugin package…",
-      reconnectingBody: "Reconnecting to the Gateway and checking installed state…",
-      loadingConfiguration: "Loading the plugin configuration schema…",
-      configureBody: "Complete the required settings before this plugin is enabled.",
-      enablingBody: "Enabling the plugin and verifying its final state…",
-      policyWarningTitle: "Review required",
-      continueInstall: "Continue installation",
-      failedTitle: "Installation did not complete",
-      consentCancelled: "Capability review was cancelled.",
-      installedStateMissing: "The installed plugin was not found. Retry to refresh its state.",
-      reconnectTimedOut:
-        "The Gateway did not reconnect after installation. Check the Gateway status, then retry.",
-      destinationChanged:
-        "The Gateway or operator changed during installation. Review the plugin again before continuing.",
-      pluginUnhealthy: "The plugin reported an error after installation.",
-      configSaveFailed: "Plugin configuration could not be saved.",
-      successTitle: "Plugin ready",
-      successBody: "{name} is installed and enabled.",
-      saveAndEnable: "Save and enable",
-      managePlugin: "Manage plugin",
-    },
+    continueInstall: "Continue installation",
+    installAvailabilityChanged:
+      "Plugin availability changed. Refresh the catalog to see its current state.",
+    installDestinationChanged:
+      "The Gateway or operator changed. Install the plugin again to request a fresh review.",
   },
 } satisfies TranslationMap;
 

@@ -53,17 +53,14 @@ type WorkerLocalDispatchBarrier = (params: {
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
   signal?: AbortSignal;
-  startDispatch: () => WorkerDispatchPlacement;
+  startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
 
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
   WorkerPlacementReclaimOptions &
   Pick<
     PlacementRecoveryDeps,
-    | "resolveWorkspace"
-    | "reportWorkspaceResultRecoveryFailure"
-    | "prepareAcceptedWorkspacePublication"
-    | "publishAcceptedWorkspace"
+    "resolveWorkspace" | "prepareAcceptedWorkspacePublication" | "publishAcceptedWorkspace"
   > & {
     environments: WorkerDispatchEnvironmentService &
       Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
@@ -124,13 +121,19 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         executionMode: request.executionMode,
         authorize: assertCurrent,
         signal,
-        startDispatch: () => {
-          placement = placements.startDispatch({
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            executionMode: request.executionMode,
-          });
+        startDispatch: async () => {
+          placement = await placements.startDispatch(
+            {
+              sessionId: request.sessionId,
+              sessionKey: request.sessionKey,
+              agentId: request.agentId,
+              executionMode: request.executionMode,
+              ...(request.expectedPlacement
+                ? { expectedPlacement: request.expectedPlacement }
+                : {}),
+            },
+            { assertCurrent },
+          );
           reportPlacementTransition(onTransition, placement);
           return placement;
         },
@@ -249,7 +252,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
     } catch (error) {
       try {
-        if (placement && startup.retainInterruptedProvisioning(placement, error)) {
+        if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
           throw error;
         }
         const current = placement ? placements.get(request.sessionId) : undefined;

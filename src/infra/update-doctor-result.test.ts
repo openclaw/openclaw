@@ -25,7 +25,22 @@ afterEach(async () => {
 describe("post-install doctor result IPC", () => {
   it.each([
     { status: "ok" as const, configHash: "unchanged" },
+    {
+      status: "error" as const,
+      databaseWrites: {
+        unchanged: false,
+        generations: {
+          "/fixture/agent.sqlite": "captured-generation",
+          "/fixture/missing.sqlite": null,
+        },
+      },
+    },
     { status: "ok" as const, warnings: ["plugin/example: version probe timed out"] },
+    {
+      status: "ok" as const,
+      warnings: ["Doctor maintenance is deferred; run openclaw doctor --fix."],
+      maintenanceRefusal: { kind: "deferred" as const, reason: "coordinator-contention" as const },
+    },
     { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
       status: "error" as const,
@@ -62,6 +77,19 @@ describe("post-install doctor result IPC", () => {
 
     await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual(result);
     await expect(fs.access(resultPath)).rejects.toThrow();
+  });
+
+  it("discards malformed optional database proof without changing Doctor success", async () => {
+    const resultPath = createUpdatePostInstallDoctorResultPath();
+    resultPaths.push(resultPath);
+    await fs.writeFile(
+      resultPath,
+      JSON.stringify({ status: "ok", databaseWrites: { unchanged: "true" } }),
+    );
+    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toMatchObject({
+      status: "ok",
+      databaseWrites: undefined,
+    });
   });
 
   it("bounds warning count and length before writing and after reading", async () => {

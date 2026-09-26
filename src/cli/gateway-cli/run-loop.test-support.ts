@@ -11,6 +11,18 @@ import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 type GatewayStart = Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["start"];
 type ExitRuntime = { log: Mock; error: Mock; exit: Mock<(code: number) => void> };
+
+export function createGatewayLogger() {
+  return {
+    isEnabled: vi.fn(() => false),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
 export type UpdateRespawnFixtures = {
   spawnProcess: Mock<typeof import("node:child_process").spawn>;
   hostedStopPrepare: Mock<typeof import("../../daemon/hosted-stop.js").prepareHostedGatewayStop>;
@@ -121,6 +133,7 @@ export const createActiveWorkSnapshot = (
     queuedTurns: 0,
     terminalPersistence: 0,
     terminalSessions: 0,
+    lifecycleWrites: 0,
     totalActive: 0,
     ...counts,
   };
@@ -128,7 +141,12 @@ export const createActiveWorkSnapshot = (
     (total, [key, count]) => total + (key === "totalActive" ? 0 : count),
     0,
   );
-  return { idle: resolvedCounts.totalActive === 0, counts: resolvedCounts, blockers };
+  return {
+    idle: resolvedCounts.totalActive === 0,
+    counts: resolvedCounts,
+    blockers,
+    writeCustody: [],
+  };
 };
 
 export function expectRestartCloseCall(
@@ -163,36 +181,6 @@ export function createSignaledStart(
   );
   return { start, started };
 }
-
-export const shutdownBudgetCases: {
-  signal: "SIGTERM" | "SIGUSR2";
-  honorsAbort: boolean;
-  supervisor: "systemd" | "external-systemd" | "launchd" | "foreground";
-  waitMs?: number;
-  installedStopMs?: number;
-}[] = [
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "systemd", installedStopMs: 90_000 },
-  {
-    signal: "SIGTERM",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  {
-    signal: "SIGUSR2",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "systemd" },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "foreground" },
-  { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd" },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "launchd" },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "launchd" },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 600_000 },
-];
 
 export const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -581,9 +569,9 @@ export function registerGatewayRestartOwnershipTests({
           await vi.advanceTimersByTimeAsync(5_000);
           expect(close).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(outcome === "completed" ? 1_000 : 5_001);
+          await vi.advanceTimersByTimeAsync(outcome === "completed" ? 1_000 : 80_001);
           await expect(exited).resolves.toBe(outcome === "completed" ? 0 : 1);
-          expect(cleanupDeadline).toBe(10_000);
+          expect(cleanupDeadline).toBe(55_000);
           expect(start).toHaveBeenCalledOnce();
         } finally {
           clock.mockRestore();
@@ -605,6 +593,7 @@ export function registerGatewayRestartOwnershipTests({
       consumeGatewayRestartIntent.mockReturnValueOnce({
         reason: "update.run",
         force: true,
+        waitMs: 300_000,
         successorOwner: managedUpdateSuccessorOwner,
       });
       isForegroundUpdateHandoff.mockReturnValue(true);
@@ -626,6 +615,7 @@ export function registerGatewayRestartOwnershipTests({
         await waitForStart(started);
         const failures: unknown[] = [];
         vi.useFakeTimers();
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
         try {
           captureSignal("SIGUSR2")();
           await vi.advanceTimersByTimeAsync(0);
@@ -703,6 +693,7 @@ export function registerGatewayRestartOwnershipTests({
         } catch (error) {
           failures.push(error);
         } finally {
+          clock.mockRestore();
           vi.useRealTimers();
         }
         if (failures.length > 1) {

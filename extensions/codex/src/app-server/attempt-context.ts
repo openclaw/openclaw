@@ -34,6 +34,7 @@ import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } fr
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { stabilizeJsonValue } from "./thread-fingerprints.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
   buildContextEngineBinding,
@@ -259,23 +260,8 @@ function sha256Text(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function normalizeForStableHash(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
-    );
-  }
-  return value;
-}
-
 function stableJsonHash(value: JsonValue): string {
-  return sha256Text(JSON.stringify(normalizeForStableHash(value)) ?? "null");
+  return sha256Text(JSON.stringify(stabilizeJsonValue(value)) ?? "null");
 }
 
 function buildCodexBootstrapInjectionStats(params: {
@@ -442,8 +428,8 @@ export function buildCodexWatchedSessionsContext(params: {
   });
 }
 
-/** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
-export function renderCodexSkillsCollaborationInstructions(params: {
+/** Renders loaded OpenClaw skill prompts as Codex developer instructions. */
+export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
 }): string | undefined {

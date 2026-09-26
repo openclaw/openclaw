@@ -23,6 +23,7 @@ export function requireSuggestionTarget(params: {
   respond: RespondFn;
 }) {
   const cfg = params.context.getRuntimeConfig();
+  const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? cfg;
   const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
   if (!requestedAgent.ok) {
     params.respond(false, undefined, requestedAgent.error);
@@ -35,8 +36,8 @@ export function requireSuggestionTarget(params: {
   });
   if (
     !target ||
-    (hasOperatorBoundary(params.client, cfg) &&
-      createSessionListEntryFilter({ client: params.client, cfg })?.(
+    (hasOperatorBoundary(params.client, policyConfig) &&
+      createSessionListEntryFilter({ client: params.client, cfg: policyConfig })?.(
         target.storeKey,
         target.entry,
       ) === false)

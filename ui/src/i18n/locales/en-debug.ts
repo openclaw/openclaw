@@ -7,7 +7,6 @@ const enDebug = {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle:
       "Refresh to update status and health snapshots. Heartbeat data updates live.",
-    refreshingSnapshots: "Refreshing Gateway diagnostics.",
     offlineSnapshots: "Connect to the Gateway to refresh diagnostics.",
     status: "Status",
     health: "Health",
@@ -38,6 +37,7 @@ const enDebug = {
       lane: en.debug.lanes.lane,
       sessionLanes: "Session lanes · {count}",
       active: en.debug.lanes.active,
+      activePerSession: "{active} · {limit}/session",
       queued: en.debug.lanes.queued,
       group: "Group",
       blocked: en.debug.lanes.blocked,
@@ -45,6 +45,7 @@ const enDebug = {
     overlay: {
       title: en.debug.overlay.title,
       eyebrow: en.debug.overlay.eyebrow,
+      move: en.debug.overlay.move,
       minimize: en.debug.overlay.minimize,
       expand: en.debug.overlay.expand,
       open: "Open overlay",

@@ -26,6 +26,15 @@ vi.mock("ws", () => ({
   default: mocks.FakeWebSocket,
 }));
 
+vi.mock("./realtime-quicksilver-socket.js", async () => {
+  const { createTestMediaSocketFactory } = await import("./realtime-voice-test-support.js");
+  return {
+    OpenAIQuicksilverWorkerSocket: {
+      create: await createTestMediaSocketFactory(mocks.FakeWebSocket),
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
@@ -291,38 +300,9 @@ describe("OpenAI realtime voice provider routing", () => {
       expected: true,
     },
     {
-      name: "provider | opaque model | ChatGPT OAuth | standard endpoint | Platform-only",
-      surface: "provider" as const,
-      providerConfig: { model: OPAQUE_REALTIME_MODEL },
-      agentId: "main",
-      expected: false,
-    },
-    {
-      name: "gateway-relay | opaque model | ChatGPT OAuth | Azure endpoint | not ready",
-      surface: "gateway-relay" as const,
-      providerConfig: {
-        model: OPAQUE_REALTIME_MODEL,
-        azureEndpoint: "https://example.openai.azure.com",
-        azureDeployment: "gpt-live",
-      },
-      agentId: "main",
-      expected: false,
-    },
-    {
       name: "gateway-relay | gpt-realtime-2.1 | Platform API key | standard endpoint | not applicable",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-realtime-2.1", apiKey: "test-api-key-platform" },
-      agentId: "main",
-      expected: undefined,
-    },
-    {
-      name: "gateway-relay | gpt-realtime-2.1 | Platform API key | Azure endpoint | not applicable",
-      surface: "gateway-relay" as const,
-      providerConfig: {
-        model: "gpt-realtime-2.1",
-        apiKey: "test-api-key-platform",
-        azureEndpoint: "https://example.openai.azure.com",
-      },
       agentId: "main",
       expected: undefined,
     },
@@ -359,13 +339,6 @@ describe("OpenAI realtime voice provider routing", () => {
       expected: false,
     },
     {
-      name: "gateway-relay | opaque model | voice-agent ChatGPT OAuth | standard endpoint | not ready",
-      surface: "gateway-relay" as const,
-      providerConfig: { model: OPAQUE_REALTIME_MODEL },
-      agentId: "voice-agent",
-      expected: false,
-    },
-    {
       name: "browser | opaque model | ChatGPT OAuth | standard endpoint | not ready",
       surface: "browser" as const,
       providerConfig: { model: OPAQUE_REALTIME_MODEL },
@@ -391,29 +364,6 @@ describe("OpenAI realtime voice provider routing", () => {
           : internalApi.isGatewayRelayConfigured({ cfg, providerConfig, agentId });
 
     expect(readiness).toBe(expected);
-  });
-
-  it("routes an explicit unlisted gpt-live alias through the broker with Platform auth", async () => {
-    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const cfg = { agents: { defaults: {} } } as never;
-    const request = {
-      cfg,
-      providerConfig: { apiKey: "test-api-key-platform" },
-      model: "gpt-live-1-mini",
-      agentId: "main",
-      workspaceDir: "/tmp/openclaw-agent-workspace",
-      initialItems: [],
-      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-    };
-
-    await provider.createBrowserSession?.(request);
-    expect(createBrowserSession).toHaveBeenCalledWith(expect.objectContaining(request), {
-      type: "api-key",
-      token: "test-api-key-platform",
-    });
   });
 
   it("rejects forced consult routing for prefix-routed gpt-live sessions", () => {

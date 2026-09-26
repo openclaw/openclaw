@@ -242,7 +242,9 @@ export async function workspaceContainsUntrackedEntries(
   try {
     return await walk(workspaceRoot);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    const filesystemError = error as NodeJS.ErrnoException;
+    // A missing child leaves the remaining workspace entries unexamined.
+    return filesystemError.code !== "ENOENT" || filesystemError.path !== workspaceRoot;
   }
 }
 

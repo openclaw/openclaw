@@ -1,8 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import ts from "typescript";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { typeCheckSources } from "../../../test/helpers/typescript.js";
 import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -110,6 +110,16 @@ describe("automations output contract", () => {
       reply: { ...list, jobs: [legacyCompactJob] },
     },
     { name: "job details", args: { action: "get", jobId: job.id }, reply: job },
+    {
+      // The scheduler reports scheduleErrorCount in state once a job has
+      // schedule-computation errors; the read schema must accept it (#157477).
+      name: "job details with scheduler diagnostics",
+      args: { action: "get", jobId: job.id },
+      reply: {
+        ...job,
+        state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
+      },
+    },
     {
       name: "creation",
       args: { action: "add", job: createJob },
@@ -265,7 +275,7 @@ describe("automations output contract", () => {
     }
   });
 
-  it("composes action results through generated declarations and a typechecked cell", async () => {
+  it("composes action results through generated declarations and JavaScript", async () => {
     onTestFinished(resetCodeModeTestState);
     const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
@@ -292,24 +302,23 @@ describe("automations output contract", () => {
     const composition = `
 async function consume() {
   const listed = await automations({ action: "list" });
-  const names: string[] = listed.jobs.map(job => job.name);
-  const next: number | null = listed.nextOffset;
+  const names = listed.jobs.map(job => job.name);
+  const next = listed.nextOffset;
   const status = await automations({ action: "status" });
-  const enabled: boolean = status.enabled;
-  const jobCount: number | undefined = status.jobs;
+  const enabled = status.enabled;
+  const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
-  const name: string = details.name;
+  const name = details.name;
   const runs = await automations({ action: "runs", jobId: details.id });
-  const summaries: (string | undefined)[] = runs.entries.map(entry => entry.summary);
+  const summaries = runs.entries.map(entry => entry.summary);
   return { names, next, enabled, jobCount, name, summaries };
 }
 `;
     const fileName = "/automations-consumer.ts";
-    const source = ts.createSourceFile(
-      fileName,
+    const source =
       file.content +
-        composition +
-        `
+      composition +
+      `
 async function checkContracts(action: "list" | "runs", input: Parameters<typeof automations>[0]) {
   const listed = await automations({ action: "list" });
   // @ts-expect-error Invented invoice fields are not part of an automation.
@@ -334,26 +343,12 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   // @ts-expect-error Broad inputs retain all possible outputs.
   dynamic.entries.map(entry => entry.summary);
 }
-`,
-      ts.ScriptTarget.ESNext,
-      true,
-    );
-    const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-    const host = ts.createCompilerHost(options);
-    const original = host.getSourceFile.bind(host);
-    host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-    const program = ts.createProgram([fileName], options, host);
-    expect(
-      ts
-        .getPreEmitDiagnostics(program)
-        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-    ).toEqual([]);
+`;
+    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
     const composed = await waitUntilCompleted({
       details: resultDetails(
         await expectDefined(h.tools[0], "Code Mode exec").execute("compose-automations", {
           code: `${composition}\nreturn await consume();`,
-          language: "typescript",
-          typecheck: true,
         }),
       ),
       waitTool: expectDefined(h.tools[1], "Code Mode wait"),

@@ -44,6 +44,27 @@ export type TestCliBackendParams = {
   systemPromptWhen?: "first" | "always" | "never";
 };
 
+export function createCliRepositorySkillFixture(dir: string, taskDir: string, managed: boolean) {
+  const canonicalDir = path.join(dir, "canonical", "packages", "app");
+  const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+  );
+  if (managed) {
+    for (const source of [".agents/skills", "skills"]) {
+      const worktreeSkillDir = path.join(taskDir, source, "task-proof");
+      fs.mkdirSync(worktreeSkillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(worktreeSkillDir, "SKILL.md"),
+        "---\nname: task-proof\ndescription: Worktree copy\n---\n# Changed instructions\n",
+      );
+    }
+  }
+  return { canonicalDir, skillDir };
+}
+
 export function wrappedPluginSystemContext(text: string) {
   return `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
 }

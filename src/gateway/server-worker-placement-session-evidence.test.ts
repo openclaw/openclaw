@@ -37,6 +37,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
@@ -158,13 +159,16 @@ describe("worker placement session evidence", () => {
         sessionId: `session-${kind}`,
         sessionKey: `agent:main:${kind}`,
       }));
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...identities[3]!,
         owner: { kind: "local" },
         claimId: "live-claim",
         runId: "live-run",
       });
-      const requested = identities.map((identity) => placements.startDispatch(identity));
+      const requested: WorkerSessionPlacementRecord[] = [];
+      for (const identity of identities) {
+        requested.push(await placements.startDispatch(identity));
+      }
       for (const identity of identities.slice(0, 2)) {
         await sessionAccessor.upsertSessionEntryCore(identity, {
           sessionId: identity.sessionId,
@@ -262,9 +266,11 @@ describe("worker placement session evidence", () => {
           updatedAt: 1,
         });
       }
-      // Settle fixture maintenance before corruption can revoke a reader's validation receipt.
-      const databasePath = openOpenClawAgentDatabase({ agentId: "main" }).path;
-      await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+      // Join seeded disk maintenance before corrupting a store; retain native incognito state.
+      for (const agentId of ["main", "healthy"]) {
+        const seeded = openOpenClawAgentDatabase({ agentId });
+        await closeOpenClawAgentDatabaseByPathAsync(seeded.path, agentId);
+      }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       expect(
         readSessionIdentityEvidenceInDatabase(database, [broken]).map((row) => row.status),
@@ -275,6 +281,7 @@ describe("worker placement session evidence", () => {
       const requested = [broken, healthy, absent, incognito];
       const resolve = await createWorkerPlacementSessionEvidenceResolver(requested);
 
+      expect(evidenceWarnSpy).not.toHaveBeenCalled();
       expect(await Promise.all(requested.map(resolve))).toEqual([
         "unknown",
         "current",
@@ -389,10 +396,13 @@ describe("worker placement session evidence", () => {
         const read = vi.fn(async () => ({
           result: { status: "unavailable" as const },
           assertCurrent() {},
+          followRegistration() {
+            throw new Error("Unavailable placement registry reads cannot follow registration");
+          },
         }));
         const registry = vi
           .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-          .mockReturnValue({ read });
+          .mockReturnValue({ read, assertCurrent() {} });
         try {
           const requested =
             route === "incognito-only" ? [incognito, missing] : [disk, incognito, missing];
@@ -463,6 +473,7 @@ describe("worker placement session evidence", () => {
       const registry = vi
         .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
         .mockReturnValueOnce({
+          assertCurrent() {},
           read: async () => {
             throw new Error("evidence pipeline exploded");
           },
@@ -525,13 +536,8 @@ describe("worker placement session evidence", () => {
         calibration.exec("CREATE TABLE calibration (value INTEGER)");
         const cachedInsert = calibration.prepare("INSERT INTO calibration VALUES (?)");
         const cachedRead = calibration.prepare("SELECT value FROM calibration");
-        const counters = [
-          vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-          vi.spyOn(native.DatabaseSync.prototype, "exec"),
-          ...(["get", "all", "run", "iterate"] as const).map((method) =>
-            vi.spyOn(native.StatementSync.prototype, method),
-          ),
-        ];
+        const observation = observeMainThreadSql();
+        const counters = observation.calls;
         try {
           try {
             calibration.exec("DELETE FROM calibration");
@@ -544,9 +550,7 @@ describe("worker placement session evidence", () => {
             expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
           } finally {
             calibration.close();
-            for (const counter of counters) {
-              counter.mockClear();
-            }
+            observation.clear();
           }
           const resolve = await createWorkerPlacementSessionEvidenceResolver(placements);
           await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
@@ -557,9 +561,7 @@ describe("worker placement session evidence", () => {
             JSON.stringify(counters.slice(0, 2).map((counter) => counter.mock.calls)),
           ).toEqual([0, 0, 0, 0, 0, 0]);
         } finally {
-          for (const counter of counters) {
-            counter.mockRestore();
-          }
+          observation.restore();
         }
       });
     },

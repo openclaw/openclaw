@@ -48,6 +48,11 @@ const navigationGuardMocks = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => pwState.module),
+  getLoadedPwAiModule: () => null,
+}));
+
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
@@ -78,7 +83,8 @@ vi.mock("../screenshot.js", () => ({
   })),
 }));
 
-vi.mock("../../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
@@ -87,7 +93,6 @@ vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
   })),
-  getPwAiModule: vi.fn(async () => pwState.module),
   handleRouteError: vi.fn(
     (
       _ctx: unknown,

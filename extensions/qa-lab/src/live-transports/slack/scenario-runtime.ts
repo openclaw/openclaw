@@ -221,42 +221,26 @@ export async function runSlackScenario(
     });
     return { details: result.details };
   }
-  if (run.kind === "approval") {
-    const approval = await runSlackApprovalScenario({
+  if (run.kind === "approval" || run.kind === "codex-approval") {
+    const params = {
       channelId: environment.channelId,
       context: environment.context,
       observedMessages: environment.observedMessages,
-      run,
       scenario,
       sutAccountId: environment.sutAccountId,
-    });
-    return {
-      details: `${run.approvalKind} approval resolved ${run.decision} in ${approval.rttMs}ms`,
-      artifacts: { approval: approval.artifact },
-      requestStartedAt: approval.requestStartedAt.toISOString(),
-      responseObservedAt: approval.responseObservedAt.toISOString(),
-      rttMs: approval.rttMs,
-      rttMeasurement: {
-        finalMatchedReplyRttMs: approval.rttMs,
-        requestStartedAt: approval.requestStartedAt.toISOString(),
-        responseObservedAt: approval.responseObservedAt.toISOString(),
-        source: "approval-request-to-resolution" as const,
-      },
     };
-  }
-  if (run.kind === "codex-approval") {
-    const approval = await runSlackCodexApprovalScenario({
-      channelId: environment.channelId,
-      context: environment.context,
-      observedMessages: environment.observedMessages,
-      primaryModel,
-      run,
-      scenario,
-      stopGateway: environment.stopGateway,
-      sutAccountId: environment.sutAccountId,
-    });
+    const approval =
+      run.kind === "approval"
+        ? await runSlackApprovalScenario({ ...params, run })
+        : await runSlackCodexApprovalScenario({
+            ...params,
+            primaryModel,
+            run,
+            stopGateway: environment.stopGateway,
+          });
+    const label = run.kind === "approval" ? run.approvalKind : `Codex ${run.appServerMethod}`;
     return {
-      details: `Codex ${run.appServerMethod} approval resolved ${run.decision} in ${approval.rttMs}ms`,
+      details: `${label} approval resolved ${run.decision} in ${approval.rttMs}ms`,
       artifacts: { approval: approval.artifact },
       requestStartedAt: approval.requestStartedAt.toISOString(),
       responseObservedAt: approval.responseObservedAt.toISOString(),

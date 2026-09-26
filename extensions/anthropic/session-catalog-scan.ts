@@ -74,11 +74,11 @@ export async function readClaudeCatalogMetadata(
   return { scannedBytes, complete: fileOffset >= fileSize };
 }
 
-type CatalogJsonCacheEntry = {
+type CatalogJsonCacheEntry<T> = {
   mtimeMs: number;
   size: number;
   ino?: number;
-  value: unknown;
+  value: T;
 };
 
 type FileSignature = { mtimeMs: number; size: number; ino: number };
@@ -115,10 +115,6 @@ export type ClaudeSessionScanContext = ClaudeProjectsTreeSnapshot & {
   complete: boolean;
   safeFiles: Map<string, Promise<SafeSessionFile>>;
 };
-
-// Parsed index/Desktop JSON stays valid for one path+mtime+size and is LRU-bounded; read failures are
-// never cached, so transient metadata I/O cannot hide a later successful read.
-const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
 
 export function setBoundedCache<K, V>(
   cache: Map<K, V>,
@@ -202,56 +198,62 @@ export function safeSessionFileForScan(
   return pending;
 }
 
-export async function readJsonFile(
-  filePath: string,
-  options: {
-    onIoFailure?: () => void;
-    signature?: { mtimeMs: number; size: number; ino?: number };
-  } = {},
-): Promise<unknown> {
-  const stat =
-    options.signature ??
-    (await fs.stat(filePath).then(
-      (value) => (value.isFile() ? value : undefined),
-      () => {
-        options.onIoFailure?.();
-        return undefined;
-      },
-    ));
-  if (!stat) {
-    catalogJsonCache.delete(filePath);
-    return undefined;
-  }
-  const cached = catalogJsonCache.get(filePath);
-  if (
-    cached &&
-    cached.mtimeMs === stat.mtimeMs &&
-    cached.size === stat.size &&
-    cached.ino === stat.ino
-  ) {
-    setBoundedCache(catalogJsonCache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
-    return cached.value;
-  }
-  let content: string;
-  try {
-    content = await fs.readFile(filePath, "utf8");
-  } catch {
-    options.onIoFailure?.();
-    return undefined;
-  }
-  try {
-    const value = JSON.parse(content) as unknown;
-    setBoundedCache(
-      catalogJsonCache,
-      filePath,
-      { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, value },
-      MAX_CATALOG_JSON_CACHE_ENTRIES,
-    );
-    return value;
-  } catch {
-    return undefined;
-  }
+export function createCatalogJsonReader<T>(project: (value: unknown) => T) {
+  // Each format retains only its projection, valid for the same file identity.
+  const cache = new Map<string, CatalogJsonCacheEntry<T>>();
+  return async (
+    filePath: string,
+    options: {
+      onIoFailure?: () => void;
+      signature?: { mtimeMs: number; size: number; ino?: number };
+    } = {},
+  ): Promise<T | undefined> => {
+    const stat =
+      options.signature ??
+      (await fs.stat(filePath).then(
+        (value) => (value.isFile() ? value : undefined),
+        () => {
+          options.onIoFailure?.();
+          return undefined;
+        },
+      ));
+    if (!stat) {
+      cache.delete(filePath);
+      return undefined;
+    }
+    const cached = cache.get(filePath);
+    if (
+      cached &&
+      cached.mtimeMs === stat.mtimeMs &&
+      cached.size === stat.size &&
+      cached.ino === stat.ino
+    ) {
+      setBoundedCache(cache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
+      return cached.value;
+    }
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, "utf8");
+    } catch {
+      options.onIoFailure?.();
+      return undefined;
+    }
+    try {
+      const value = project(JSON.parse(content));
+      setBoundedCache(
+        cache,
+        filePath,
+        { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, value },
+        MAX_CATALOG_JSON_CACHE_ENTRIES,
+      );
+      return value;
+    } catch {
+      return undefined;
+    }
+  };
 }
+
+export const readJsonFile = createCatalogJsonReader((value) => value);
 
 export async function childDirectories(root: string): Promise<string[]> {
   try {

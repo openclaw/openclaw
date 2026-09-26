@@ -286,6 +286,8 @@ describe("saved update failure resolution", () => {
   ])(
     "does not certify pending plugin migrations %s despite updater completion",
     async (when, marker) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
       const pending = [
         {
           pluginId: "codex",
@@ -308,7 +310,7 @@ describe("saved update failure resolution", () => {
       });
       expect(result).toMatchObject({
         ok: false,
-        summary: expect.stringContaining('Plugin "codex" state migration is pending'),
+        summary: expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished'),
       });
       expect(result.summary).toContain("Let the current update or repair finish.");
     },
@@ -342,6 +344,30 @@ describe("saved update failure resolution", () => {
       expect(result.stopReason).toBe(result.summary);
     },
   );
+
+  it("formats every pending migration with the supplied update environment", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/fixture/state", OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    vi.mocked(readDeferredPluginMigrations).mockReturnValue(
+      ["first", "second"].map((pluginId) => ({
+        pluginId,
+        reason: "State migration is incomplete.",
+        command: "openclaw doctor --fix",
+      })),
+    );
+    const result = await validateTriageUpdateResolution({
+      failure: failure(),
+      installRoot: "/fixture/openclaw",
+      env,
+      signal: new AbortController().signal,
+      validateDoctor,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain('Plugin "first"');
+    expect(result.summary).toContain('Plugin "second"');
+    expect(result.summary.match(/Let the current update or repair finish/g)).toHaveLength(2);
+    expect(readDeferredPluginMigrations).toHaveBeenCalledWith({ env });
+    expect(validateDoctor).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])(
     "keeps mixed plugin installation failures unresolved after Doctor is clean (completed update: %s)",
@@ -399,6 +425,7 @@ describe("saved update failure resolution", () => {
     "runtime-verification-failed",
     "database-schema-preflight",
     "invalid-config",
+    "config-read-failed",
     "finalize:doctor",
     "post-update-plugins",
     "restart-unhealthy",

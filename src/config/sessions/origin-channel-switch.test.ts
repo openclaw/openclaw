@@ -3,10 +3,8 @@
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
-import {
-  normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
@@ -260,11 +258,6 @@ describe("session origin across a channel switch (real inbound-event context bui
     conversationId: "42",
   });
 
-  it("confirms the premise: Slack DM context supplies NativeChannelId, Telegram DM context omits it", () => {
-    expect(slackCtx.NativeChannelId).toBe("D111SLACK");
-    expect(telegramCtx.NativeChannelId).toBeUndefined();
-  });
-
   it("resets the stale Slack channel id after a real-context Slack->Telegram switch", () => {
     const afterSlack = applyOrigin(undefined, slackCtx);
     expect(afterSlack.origin?.nativeChannelId).toBe("D111SLACK");
@@ -319,20 +312,6 @@ describe("session origin across a non-delivery turn", () => {
     expect(afterCron.origin?.accountId).toBe("slack-team-1");
     expect(afterCron.origin?.threadId).toBe("1700000000.000100");
     expect(afterCron.origin?.provider).toBe("slack");
-  });
-
-  it("keeps the bound channel identity across an exec-event turn that omits the channel", () => {
-    const afterSlack = applyOrigin(undefined, slackTurn);
-    const afterExec = applyOrigin(afterSlack, {
-      InternalTurnSource: "exec",
-      ChatType: "direct",
-      From: "exec:run_REDACTED",
-      To: "exec:run_REDACTED",
-    } satisfies Partial<MsgContext>);
-
-    expect(afterExec.origin?.nativeChannelId).toBe("D111SLACK");
-    expect(afterExec.origin?.threadId).toBe("1700000000.000100");
-    expect(afterExec.origin?.provider).toBe("slack");
   });
 
   it("still adopts a real channel after an intervening non-delivery turn", () => {

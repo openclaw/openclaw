@@ -16,6 +16,7 @@ import {
   waitForReliabilityWorkerExit,
   waitForReliabilityWorkerMessage,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
@@ -106,7 +107,7 @@ export async function runVacuumInterruptionProof(params: {
   let stderr = "";
   const child = fork(COMPACTION_WORKER_PATH, workerArgs(params.target), {
     env: params.env,
-    execArgv: ["--import", "tsx"],
+    execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
     serialization: "json",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });

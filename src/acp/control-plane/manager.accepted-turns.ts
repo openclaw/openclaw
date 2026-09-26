@@ -27,7 +27,7 @@ export async function runAcceptedManagerTurn(params: {
     acceptedTurn: AcceptedTurnState,
     isCurrentActor: () => boolean,
   ) => Promise<void>;
-  onQueuedCancellation: () => Promise<void>;
+  onQueuedCancellation: (assertCurrent: () => void) => Promise<void>;
 }): Promise<void> {
   const { input } = params;
   const instance = input.admittedRunContext.operationalRunInstance;
@@ -70,8 +70,16 @@ export async function runAcceptedManagerTurn(params: {
       }
       // The actor still owns its queued callback, which will observe the abort.
       // Finish only this accepted instance; never write idle over its predecessor.
-      turn.revalidateCancel?.();
-      await params.onQueuedCancellation();
+      const assertCancellationCurrent = () => {
+        if (started || params.turns.get(actorKey) !== turns || !turns.has(turn)) {
+          throw new Error("ACP queued cancellation no longer owns its accepted turn", {
+            cause: error,
+          });
+        }
+        turn.revalidateCancel?.();
+      };
+      assertCancellationCurrent();
+      await params.onQueuedCancellation(assertCancellationCurrent);
     }
     completion.resolve();
   } catch (error) {

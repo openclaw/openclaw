@@ -18,7 +18,7 @@ meets a condition.
 model architectures and inference backends. Sharing the interface does not make
 their reasoning ability or probabilities interchangeable.
 
-The role and bundled TypeSafe AI adapter were added after released OpenClaw
+The role and TypeSafe AI adapter were added after released OpenClaw
 `2026.9.5`. These instructions apply to development checkouts containing those
 features and to later releases that include them. See each provider's setup
 page for its host requirements.
@@ -29,10 +29,14 @@ page for its host requirements.
 | `utilityModel`  | Short language tasks such as titles and summaries        | Generated text                          |
 | `decisionModel` | Classification, rubric scoring, and predicate evaluation | Typed answers and probability estimates |
 
-Decision models have a separate **Decision** picker in the Control UI. Selecting
-one makes it available to supported consumers; it does not start background work,
-replace the chat model, or enable an agent tool. Consumers retain control over
-when to evaluate evidence and what to do with the result.
+Decision models have a separate **Decision** picker in the Control UI. Selection
+chooses the provider for explicit evaluation and supported consumers. The core
+`decision_evaluate` tool follows that selection plus ordinary tool policy.
+Selection does not start background work or replace the chat model.
+Automatic experimental consumers additionally require explicit
+[Decision assistance opt-in](/concepts/experimental-features#decision-assistance).
+That Labs entry currently provides the gate foundation only, with no automatic
+consumers connected; explicit `decision_evaluate` remains independent of Labs.
 
 ## Choose a provider and model
 
@@ -41,9 +45,10 @@ Configure the provider plugin before selecting its model:
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
-- [TypeSafe AI](/plugins/typesafe) connects to hosted Jev inference. Enable the
-  bundled plugin and configure its protected credential. Evaluations send the
-  selected evidence to TypeSafe and incur its normal usage charges.
+- [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a local System One
+  server such as Kev. Install and enable the external plugin, then configure a
+  protected hosted credential or an explicit loopback `baseUrl`. Hosted
+  evaluations send the selected evidence to TypeSafe and incur its normal usage charges.
 
 The current plugins declare these model references:
 
@@ -58,8 +63,9 @@ The current plugins declare these model references:
 | `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
+| `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
 
-ONNX support is currently an unpublished candidate. Its plugin page explains
+Both plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
 not which artifacts or credentials are ready on your machine.
 
@@ -102,6 +108,67 @@ each request, so there is no separate rubric-registration step.
 Use descriptive alternatives and observable score anchors. Give Boolean questions
 both descriptions when targeting ONNX. Keep evidence focused on the question;
 ONNX's token budget includes the state, instructions, and rubric.
+
+## Agent evaluation tool
+
+`decision_evaluate` is a core tool. An agent receives it when that agent has an
+effective `decisionModel`, subject to normal tool policy, explicit denies, and
+the active harness's capabilities. An unconfigured agent or one with an empty
+per-agent override does not receive the tool. The tool remains eligible whether
+or not other experimental consumers use Decision models. Provider plugins still
+need their own normal setup.
+
+Call it with explicit shared `state` and a `questions` map:
+
+```json
+{
+  "state": { "message": "Checkout is failing for all customers." },
+  "questions": {
+    "escalate": {
+      "type": "boolean",
+      "instructions": "Does this need incident response?",
+      "criteria": {
+        "true": { "includes": ["Widespread service outages"] },
+        "false": "A routine request can follow normal handling"
+      }
+    },
+    "route": {
+      "type": "choice",
+      "criteria": { "support": "Service failures", "billing": "Payment questions" }
+    },
+    "urgency": {
+      "type": "score",
+      "criteria": ["No disruption", "One workflow blocked", "Widespread outage"]
+    }
+  }
+}
+```
+
+State, instructions, and criterion descriptions accept text, JSON objects or
+arrays, or `null`. Each question sees the same state and cannot see another
+answer in the batch. Use a later call when one question depends on an earlier
+answer. The tool collects no ambient conversation. Its trusted calling-agent
+binding selects the provider and model; input cannot override that identity or
+selection.
+
+Results preserve Boolean probabilities, fractional zero-based scores, original
+distributions and rounding, optional confidence and usage, and provider/model
+provenance. They do not generate explanations or grant permission to act.
+Evidence goes to the selected provider's configured endpoint or local runtime;
+only send data authorized for that destination. Provider plugins own credentials,
+model loading, transport, and wire-specific validation.
+
+Provider capabilities are declared with their model metadata and exposed in
+`models.list.decisionModels`. Unsupported questions and bounds produce actionable,
+bounded guidance. Requests are rejected rather than silently truncated or split.
+Do not substitute shell or HTTP calls when a configured provider is unavailable,
+request credentials in chat, or treat a failure as a negative answer.
+
+Missing credentials, rate limits, overload, and temporary provider errors leave
+the configured tool available and return an unavailable result. Configuration
+changes follow the existing tool/context refresh lifecycle; execution rechecks
+the effective selection and authority. Cancellation propagates to the shared
+Decision runtime and must not start fallback work.
 
 ## Call from a plugin
 
@@ -147,7 +214,7 @@ const outcome = await api.runtime.decisions.evaluate(
     agentId,
     purpose: "support.triage",
     rubricVersion: "1",
-    timeoutMs: 10000,
+    timeoutMs: 30000,
     signal,
   },
 );
@@ -160,8 +227,9 @@ rubric version when its meaning changes. Omit `agentId` only when intentionally
 using global-default selection.
 
 An `ok` outcome contains `outcome.result.answers`, keyed by the submitted question
-IDs, plus the resolved model, optional usage, and provider/rubric/runtime provenance.
-For example, these are illustrative answers, not a promised model response:
+IDs, plus the provider-reported model, optional usage, and provider/rubric/runtime provenance.
+A reported alias such as `kev-latest` does not identify a particular loaded checkpoint.
+Missing usage or confidence stays absent. For example, these are illustrative answers, not a promised model response:
 
 ```json
 {
@@ -207,6 +275,11 @@ label, score, and probability estimates. Rounded vendor probabilities need not
 sum exactly to one, and its reported score need not equal an expectation computed
 from those rounded values.
 
+A low Boolean probability favors false; a value near 0.5 gives similar weight to
+both outcomes. Missing evidence does not guarantee a value near 0.5. Include an
+explicit insufficient-evidence Choice alternative when that outcome matters.
+Choice alternatives compete; use separate Boolean questions for independent labels.
+
 Your consumer chooses an action policy, such as escalating when `probabilityTrue`
 is at least 0.9. Validate that threshold on representative examples. Probabilities
 and optional provider-specific `confidence` values are estimates, not demonstrated
@@ -215,16 +288,17 @@ perform another effect.
 
 ## Limits and unavailable results
 
-For rubrics that fit both current providers, use 2–64 Choice alternatives, 2–10
-Score levels, and explicit true/false descriptions. Provider limits differ:
+For portable rubrics, use at most 32 questions, 2–64 Choice alternatives, 2–10
+meaningful Score anchors, explicit true/false descriptions, and concise evidence.
+Provider limits differ:
 
 | Provider    | Choice alternatives | Score levels | Additional limits                                                                  |
 | ----------- | ------------------- | ------------ | ---------------------------------------------------------------------------------- |
 | ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds requests to one MiB and 256 questions. It admits at most four
-requests per provider and caps each deadline at ten seconds. Provider-specific
+The host bounds requests to one MiB, 20,000 JSON nodes, depth 32, and 256 questions. It admits at most four
+requests per provider and caps each deadline at 30 seconds. Provider-specific
 limits can be tighter. Unsupported input is rejected instead of silently truncated.
 
 An `unavailable` outcome includes a reason such as `disabled`, `not-configured`,
@@ -233,6 +307,20 @@ skip, defer, or use its existing fallback. Caller cancellation, closed consumer
 authority, and contract errors reject; do not turn cancellation into fallback work.
 See the [SDK contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for the complete lifecycle and error behavior.
+
+Consumers should build bounded useful evidence, evaluate it once, and retain their
+normal behavior when the provider returns `unsupported-input`, including context
+overflow. The runtime does not estimate model tokens, truncate evidence, retry,
+or choose another provider/model. Input rejection does not open the provider
+circuit; cancellation and closed authority remain terminal.
+
+The `decisions` logger records DEBUG outcomes, dispatch status, elapsed time,
+question count, supplied JSON byte count, and actual provider usage when available.
+JSON bytes are not model tokens. Purpose/provider/model identifiers are hashed;
+existing ambient trace correlation is preserved. It logs no submitted text,
+rubrics, credentials, or provider error bodies, and does no extra input serialization
+when DEBUG is disabled. Generic input-rejection warnings are rate limited. Logs
+distinguish the provider result from the caller effect, which remains unobserved here.
 
 For ONNX, cold-loading a large model can exceed the deadline on slower machines.
 Keep active models warm when memory permits, or choose a smaller model. See

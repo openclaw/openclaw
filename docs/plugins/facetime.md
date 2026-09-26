@@ -37,6 +37,10 @@ developer-tools access, or macOS privacy permissions automatically.
 Everyone on a call must consent to having their audio processed by the voice
 provider.
 
+Keep calls one-to-one. The configured handle authorizes the call; the integration
+does not authenticate each speaker or check the membership of a group call. Do
+not add other participants to a call with agent tool access.
+
 ## Install the plugin and native companion
 
 Run these commands on the Gateway Mac:
@@ -86,6 +90,10 @@ and add `facetime` to your existing `plugins.allow` list if you use one.
 The example selects OpenAI for realtime speech. Voice credentials are separate
 from your text agent's login. Configure credentials supported by the selected
 realtime provider; a text-agent subscription alone may not provide voice access.
+
+Provider authentication uses the agent selected by `realtime.sessionKey`. For
+OpenAI, that agent's API-key auth profile can supply voice credentials when no
+plugin-specific API key is configured.
 
 For an environment-backed OpenAI API key, merge this additional configuration:
 
@@ -281,6 +289,11 @@ openclaw gateway call facetime.status --json
 Wait until status shows no active or pending call before starting another.
 A hangup acknowledgement means the request was sent, not that the call has
 already ended.
+
+A pending outbound dial reserves the call slot, so incoming calls are not
+automatically answered until it finishes or its cancellation is confirmed. If a
+helper disconnects or reports an uncertain dial outcome, the pending state stays
+visible while OpenClaw reconciles the call.
 
 ## Update the integration
 

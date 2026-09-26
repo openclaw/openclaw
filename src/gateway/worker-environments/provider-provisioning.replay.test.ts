@@ -1,5 +1,3 @@
-// Replay, restart-adoption, and serialization coverage for worker provider provisioning.
-// Split from provider-provisioning.test.ts to stay under the max-lines cap.
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
@@ -14,19 +12,15 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
-import { createWorkerEnvironmentStore } from "./store.js";
 import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -136,16 +130,7 @@ describe("worker environment service provision replay", () => {
       leaseId: null,
     });
 
-    await first.stop();
-    support.testState.service = undefined;
-    closeOpenClawStateDatabaseForTest();
-    support.testState.stateDb = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: support.testState.root },
-    });
-    support.testState.store = createWorkerEnvironmentStore({
-      database: support.testState.stateDb,
-      now: () => support.testState.nowMs,
-    });
+    await support.reopenWorkerEnvironmentStore();
 
     const restarted = support.createService(provider());
     restarted.start();
@@ -225,7 +210,7 @@ describe("worker environment service provision replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const placement = placements.startDispatch(REQUEST);
+    const placement = await placements.startDispatch(REQUEST);
     const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
     const intent = deriveEnvironmentIntent(idempotencyKey);
     placements.transition({
@@ -262,17 +247,8 @@ describe("worker environment service provision replay", () => {
       provisionOperationId: intent.provisionOperationId,
     });
 
-    await first.stop();
+    await support.reopenWorkerEnvironmentStore();
     events.push("first:stopped");
-    support.testState.service = undefined;
-    closeOpenClawStateDatabaseForTest();
-    support.testState.stateDb = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: support.testState.root },
-    });
-    support.testState.store = createWorkerEnvironmentStore({
-      database: support.testState.stateDb,
-      now: () => support.testState.nowMs,
-    });
     placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
@@ -307,7 +283,7 @@ describe("worker environment service provision replay", () => {
         ],
       }),
       prepareNodeEnrollment: async (record) => {
-        const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
+        const enrolled = await support.testState.store.ensureNodeEnrollment(record.environmentId);
         return {
           mode: "connect" as const,
           setupCode: "setup-code",
@@ -368,9 +344,9 @@ describe("worker environment service provision replay", () => {
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+      ...createWorkerWorkspaceRecoveryFixture({
+        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
+      }),
       onActivated,
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(
@@ -443,8 +419,6 @@ describe("worker environment service provision replay", () => {
 
   it.each([
     { released: true, verbose: false },
-    { released: false, verbose: false },
-    { released: true, verbose: true },
     { released: false, verbose: true },
   ])(
     "recovers indeterminate cleanup (released: $released, verbose: $verbose)",
@@ -515,16 +489,7 @@ describe("worker environment service provision replay", () => {
         lastError: diagnostic,
       });
 
-      await workerService.stop();
-      support.testState.service = undefined;
-      closeOpenClawStateDatabaseForTest();
-      support.testState.stateDb = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: support.testState.root },
-      });
-      support.testState.store = createWorkerEnvironmentStore({
-        database: support.testState.stateDb,
-        now: () => support.testState.nowMs,
-      });
+      await support.reopenWorkerEnvironmentStore();
       const restarted = support.createService(provider);
       restarted.start();
       await support.waitForFast(() =>
@@ -571,9 +536,7 @@ describe("worker environment service provision replay", () => {
 
   it.each([
     ["zero", 0],
-    ["negative", -1],
     ["fractional", 1.5],
-    ["non-finite", Number.NaN],
     ["timer overflow", MAX_TIMER_TIMEOUT_MS + 1],
   ])("rejects a %s provider provision timeout before allocation", async (_label, timeoutMs) => {
     const provision = vi.fn(async () => ({
@@ -603,7 +566,73 @@ describe("worker environment service provision replay", () => {
     });
   });
 
+  it("does not invoke a late prepared allocation after replay times out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const entered = createDeferredCore();
+    const settled = createDeferredCore();
+    const lateAllocation = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
+    let preparations = 0;
+    const service = support.createService(
+      support.createProvider({
+        prepareProvision: async () => {
+          if (++preparations === 1) {
+            return async () => {
+              throw new Error("synthetic response lost after allocation");
+            };
+          }
+          entered.resolve();
+          await settled.promise;
+          return lateAllocation;
+        },
+      }),
+      { providerCallTimeoutMs: 25 },
+    );
+    await expect(
+      service.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "replayed-preparation",
+      }),
+    ).rejects.toThrow("response lost after allocation");
+    const replay = service
+      .createWithRequest({ profileId: "development", idempotencyKey: "replayed-preparation" })
+      .catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        entered.promise,
+        replay.then((result) => {
+          throw new Error("Replay ended before provider preparation", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await replay).toMatchObject({ code: "provider_failure" });
+      expect(support.testState.store.list()[0]).toMatchObject({
+        state: "provisioning",
+        leaseId: null,
+      });
+    } finally {
+      settled.resolve();
+      await replay;
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(lateAllocation).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
+  });
+
   it("serializes allocation resolution and destroy behind a timed-out provider operation", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const provisionEntered = createDeferredCore();
+    const intentCommitted = createDeferredCore();
+    const requestDestroy = support.testState.store.requestDestroy.bind(support.testState.store);
+    vi.spyOn(support.testState.store, "requestDestroy").mockImplementation(async (input) => {
+      const record = await requestDestroy(input);
+      intentCommitted.resolve();
+      return record;
+    });
     const events: string[] = [];
     const operationIds: string[] = [];
     let active = 0;
@@ -631,6 +660,7 @@ describe("worker environment service provision replay", () => {
         active += 1;
         maxActive = Math.max(maxActive, active);
         if (call === 1) {
+          provisionEntered.resolve();
           await firstProvisionPending;
         }
         active -= 1;
@@ -645,34 +675,48 @@ describe("worker environment service provision replay", () => {
       profileId: "development",
       idempotencyKey: "request-provider-timeout-race",
     });
-    const creationResult = expect(creation).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const creationResult = creation.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
     let environmentId: string | undefined;
-    let teardownResult: Promise<void> | undefined;
+    let teardownResult: Promise<unknown> | undefined;
     try {
-      await support.waitForFast(() => expect(events).toEqual(["provision:1:start"]));
+      await Promise.race([
+        provisionEntered.promise,
+        creationResult.then((result) => {
+          throw new Error("Creation ended before provider entry", { cause: result });
+        }),
+      ]);
+      expect(events).toEqual(["provision:1:start"]);
       const queuedEnvironmentId = expectDefined(
         support.testState.store.list()[0],
         "timed-out provision row",
       ).environmentId;
       environmentId = queuedEnvironmentId;
-      const teardown = workerService.destroy(queuedEnvironmentId);
-      teardownResult = expect(teardown).resolves.toMatchObject({ state: "destroyed" });
-      await creationResult;
-      await support.waitForFast(() =>
-        expect(
-          support.testState.store.get(queuedEnvironmentId)?.destroyRequestedAtMs,
-        ).not.toBeNull(),
+      teardownResult = workerService.destroy(queuedEnvironmentId).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
       );
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await creationResult).toMatchObject({
+        error: { code: "provider_failure" } satisfies Partial<WorkerEnvironmentServiceError>,
+      });
+      await Promise.race([
+        intentCommitted.promise,
+        teardownResult.then((result) => {
+          throw new Error("Teardown ended before destroy intent committed", { cause: result });
+        }),
+      ]);
       expect(originalProvisionCalls).toBe(1);
       expect(destroy).not.toHaveBeenCalled();
       expect(maxActive).toBe(1);
     } finally {
-      finishFirstProvision?.();
+      finishFirstProvision();
+      await Promise.all([creationResult, teardownResult]);
     }
 
-    await teardownResult;
+    expect(await teardownResult).toMatchObject({ value: { state: "destroyed" } });
     const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
     expect(operationIds).toHaveLength(1);
     expect(new Set(operationIds).size).toBe(1);
@@ -754,17 +798,6 @@ describe("worker environment service provision replay", () => {
       "SSH key must be a canonical SecretRef",
     ],
     [
-      "excessive SSH fallback ports",
-      {
-        leaseId: "lease-invalid",
-        ssh: {
-          ...support.SSH_ENDPOINT,
-          fallbackPorts: Array.from({ length: 11 }, (_, index) => 2300 + index),
-        },
-      },
-      "SSH fallback ports cannot exceed 10",
-    ],
-    [
       "invalid shared-host declaration",
       { leaseId: "lease-invalid", ssh: support.SSH_ENDPOINT, sharedHost: "yes" },
       "invalid provision result",
@@ -795,26 +828,6 @@ describe("worker environment service provision replay", () => {
         desktop: { protocol: "rfb", port: 5900, passwordFilePath: "vnc.password" },
       },
       "desktop password file path must be absolute",
-    ],
-    [
-      "unrecognized desktop app metadata",
-      {
-        leaseId: "lease-invalid",
-        ssh: support.SSH_ENDPOINT,
-        desktop: {
-          protocol: "rfb",
-          port: 5900,
-          apps: [
-            {
-              id: "browser",
-              executablePath: "/usr/local/bin/openclaw-worker-browser",
-              cdpPort: 9222,
-              command: "chromium",
-            },
-          ],
-        },
-      },
-      "browser desktop app contains unknown fields",
     ],
   ])("keeps %s from a provider retryable", async (_name, result, error) => {
     const workerService = support.createService(

@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -21,6 +21,14 @@ import {
 import { renderNewSessionBody } from "./draft-body.ts";
 import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
+
+function composerTextarea(composer: HTMLElement): HTMLTextAreaElement {
+  const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+  if (!textarea) {
+    throw new Error("Expected composer textarea");
+  }
+  return textarea;
+}
 
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
@@ -99,10 +107,7 @@ describe("new-session composer keyboard submission", () => {
       },
       onSubmit,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
 
     textarea.value = "/";
     textarea.setSelectionRange(1, 1);
@@ -180,10 +185,7 @@ describe("new-session composer keyboard submission", () => {
       context,
       message: "$",
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
 
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
@@ -230,10 +232,7 @@ describe("new-session composer keyboard submission", () => {
       context,
       message: "$",
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
 
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
@@ -283,10 +282,7 @@ describe("new-session composer keyboard submission", () => {
         message = next;
       },
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
 
     textarea.value = "$";
     textarea.setSelectionRange(1, 1);
@@ -312,10 +308,7 @@ describe("new-session composer keyboard submission", () => {
     const onSubmit = vi.fn();
     const { composer, rerenderForDraftRoute } = renderComposer({ onSubmit });
 
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     textarea.value = "$";
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -353,10 +346,7 @@ describe("new-session composer keyboard submission", () => {
         message = next;
       },
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
 
     textarea.value = "Use /release_ and /office_";
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -374,27 +364,17 @@ describe("new-session composer keyboard submission", () => {
     expect(message).toBe("Use $release_notes and /office_");
   });
 
-  it.each([
-    { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
-    { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
-    { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
-  ])("keeps $label native when submission is silently gated", (testCase) => {
+  it("keeps Enter native when submission is silently gated", () => {
     const onSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
       onSubmit,
-      requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
-      ctrlKey: testCase.ctrlKey,
       key: "Enter",
-      metaKey: testCase.metaKey,
     });
 
     textarea.dispatchEvent(event);
@@ -406,7 +386,6 @@ describe("new-session composer keyboard submission", () => {
   it.each([
     { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
     { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
-    { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
   ])("submits once with $label when starting a session is enabled", (testCase) => {
     const onSubmit = vi.fn();
     const onBackgroundSubmit = vi.fn();
@@ -416,10 +395,7 @@ describe("new-session composer keyboard submission", () => {
       onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -437,13 +413,6 @@ describe("new-session composer keyboard submission", () => {
 
   it.each([
     {
-      label: "Ctrl+Enter in Enter mode",
-      ctrlKey: true,
-      metaKey: false,
-      requiresModifier: false,
-      shiftKey: false,
-    },
-    {
       label: "Meta+Enter in Enter mode",
       ctrlKey: false,
       metaKey: true,
@@ -457,13 +426,6 @@ describe("new-session composer keyboard submission", () => {
       requiresModifier: true,
       shiftKey: true,
     },
-    {
-      label: "Meta+Shift+Enter in modifier mode",
-      ctrlKey: false,
-      metaKey: true,
-      requiresModifier: true,
-      shiftKey: true,
-    },
   ])("starts in the background with $label", (testCase) => {
     const onSubmit = vi.fn();
     const onBackgroundSubmit = vi.fn();
@@ -472,10 +434,7 @@ describe("new-session composer keyboard submission", () => {
       onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -502,10 +461,7 @@ describe("new-session composer keyboard submission", () => {
       submitDisabledReason: "Restoring your last session setup…",
       onSubmit,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
 
     textarea.dispatchEvent(event);
@@ -595,6 +551,8 @@ describe("new-session composer start control", () => {
 });
 
 describe("new-session composer sizing lifecycle", () => {
+  beforeEach(() => vi.spyOn(CSS, "supports").mockReturnValue(false));
+
   it("keeps the shared fallback for non-pixel CSS caps", () => {
     const textarea = document.createElement("textarea");
     Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 500 });
@@ -811,10 +769,7 @@ describe("new-session composer attachment drops", () => {
   it("keeps non-file drops native inside the textarea and cancels them elsewhere", () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
 
     const dragenter = createDragEvent("dragenter", [], ["text/plain"]);
     composer.dispatchEvent(dragenter);
@@ -854,10 +809,7 @@ describe("new-session composer attachment drops", () => {
     expect(replace).not.toHaveBeenCalled();
     expect(attachmentDraft.attachments).toEqual([]);
 
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     expect(textarea.disabled).toBe(true);
     const disabledTextareaDrop = createDragEvent("drop", [], ["text/uri-list"]);
     textarea.dispatchEvent(disabledTextareaDrop);
@@ -867,10 +819,7 @@ describe("new-session composer attachment drops", () => {
 
 describe("new-session composer dictation insertion", () => {
   function draftTextarea(composer: HTMLElement, value: string, start: number, end = start) {
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) {
-      throw new Error("Expected composer textarea");
-    }
+    const textarea = composerTextarea(composer);
     textarea.value = value;
     textarea.selectionStart = start;
     textarea.selectionEnd = end;

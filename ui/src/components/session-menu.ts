@@ -70,25 +70,13 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
   @state() private compactView: CompactSessionMenuView = "root";
+  get worktreePath(): string | null {
+    return this.work?.worktreePath ?? null;
+  }
+
   private readonly managementActions = new SessionMenuActions(
     this,
-    () => ({
-      session: this.session,
-      selectionCount: this.selectionCount,
-      compact: this.compact,
-      navigationAllowed: this.navigationAllowed,
-      copyMarkdownAllowed: this.copyMarkdownAllowed,
-      splitAllowed: this.splitAllowed,
-      disabled: this.disabled,
-      actionDisabledReasons: this.actionDisabledReasons,
-      forkDisabled: this.forkDisabled,
-      forkFromLastCompleted: this.forkFromLastCompleted,
-      archiveAllowed: this.archiveAllowed,
-      deleteAllowed: this.deleteAllowed,
-      groups: this.groups,
-      currentOwner: this.currentOwner,
-      worktreePath: this.work?.worktreePath ?? null,
-    }),
+    () => this,
     (action) => this.onAction(action),
     () => this.onClose(),
   );

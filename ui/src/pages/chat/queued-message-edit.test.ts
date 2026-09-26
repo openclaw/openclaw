@@ -14,14 +14,9 @@ import {
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
-import {
-  admitQueuedMessageForSession,
-  removeQueuedMessageWithoutReleasing,
-  subscribeChatOutboxProjection,
-  syncVisibleChatQueueProjection,
-  updateQueuedMessage,
-} from "./chat-queue.ts";
+import { admitQueuedMessageForSession, updateQueuedMessage } from "./chat-queue.ts";
 import {
   moveQueuedChatMessage,
   retryQueuedChatMessage,
@@ -61,8 +56,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function trackOutboxProjection(host: Parameters<typeof subscribeChatOutboxProjection>[0]) {
-  const unsubscribe = subscribeChatOutboxProjection(host);
+function trackOutboxProjection(
+  host: Parameters<ReturnType<typeof chatOutboxOwner>["subscribe"]>[0],
+) {
+  const unsubscribe = chatOutboxOwner(host).subscribe(host);
   outboxSubscriptions.push(unsubscribe);
   return unsubscribe;
 }
@@ -319,7 +316,7 @@ describe("queued message edit round-trip", () => {
       }
       const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
       if (mutation === "remove") {
-        removeQueuedMessageWithoutReleasing(stalePane as never, "queued-1");
+        chatOutboxOwner(stalePane).remove(stalePane as never, "queued-1");
       } else {
         expect(
           updateQueuedMessage(stalePane as never, "queued-1", (item) => ({
@@ -635,7 +632,7 @@ describe("queued message edit round-trip", () => {
           applyChatAgentsList(host, { ...agentsList, mainKey: "current" }, host.client!);
         }
         host.sessionKey = "agent:main:current";
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
         expect(host.chatQueue).toEqual([]);
         const active = activeQueuedMessageEdit(host);
         render(
@@ -664,7 +661,7 @@ describe("queued message edit round-trip", () => {
         // Returning the real routing facts restores the original owner, not a renamed token.
         applyChatAgentsList(host, agentsList, host.client!);
         host.sessionKey = SESSION_KEY;
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
         expect(activeQueuedMessageEdit(host)?.draftText).toBe("Unsaved original correction");
         expect(cancelQueuedMessageEdit(host)).toBe(true);
         expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);

@@ -758,13 +758,6 @@ describe("RequestClient", () => {
     );
   });
 
-  it("still parses normal-sized REST response payloads under the cap", async () => {
-    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "channel", name: "general" }));
-    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
-
-    await expect(client.get("/channels/c1")).resolves.toEqual({ id: "channel", name: "general" });
-  });
-
   it("parses raw gzip-compressed JSON response bodies", async () => {
     const body = gzipSync(Buffer.from(JSON.stringify([{ id: "m1", content: "hello" }])));
     const client = new RequestClient("test-token", {

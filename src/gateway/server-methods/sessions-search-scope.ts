@@ -1,13 +1,10 @@
-import {
-  ErrorCodes,
-  errorShape,
-  type SessionsSearchParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionsSearchParams } from "../../../packages/gateway-protocol/src/index.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -18,10 +15,7 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
   const normalizedRequest =
     params.agentId === undefined ? null : normalizeAgentIdStrict(params.agentId);
   if (normalizedRequest && !normalizedRequest.ok) {
-    return {
-      ok: false as const,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${params.agentId}"`),
-    };
+    return invalidSessionRequest(`Unknown agent id "${params.agentId}"`);
   }
   const requestedAgentId = normalizedRequest?.value;
   const resolvedSessionKeys:
@@ -58,10 +52,7 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
     agentIds.size > 1 ||
     (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
   ) {
-    return {
-      ok: false as const,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "sessions.search supports one agent per call"),
-    };
+    return invalidSessionRequest("sessions.search supports one agent per call");
   }
   let agentId = requestedAgentId ?? agentIds.values().next().value;
   if (!agentId) {

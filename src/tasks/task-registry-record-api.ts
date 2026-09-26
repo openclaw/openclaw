@@ -4,7 +4,6 @@ import { updateTask } from "./task-registry-mutation.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
 import { withTaskRegistryMutation, ensureTaskRegistryReady, tasks } from "./task-registry-state.js";
 import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
-import type { TaskRunStateTransitionParams } from "./task-registry-transition.operation.js";
 import {
   parseTaskNotifyPolicy,
   type JsonValue,
@@ -12,19 +11,10 @@ import {
   type TaskNotifyPolicy,
   type TaskRecord,
   type TaskRuntime,
+  type TaskRunStateTransitionParams,
   type TaskStatus,
   type TaskTerminalOutcome,
 } from "./task-registry.types.js";
-
-export function setTaskCleanupAfterById(params: {
-  taskId: string;
-  cleanupAfter: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  return updateTask(params.taskId, {
-    cleanupAfter: params.cleanupAfter,
-  });
-}
 
 export function markTaskTerminalById(params: {
   taskId: string;
@@ -134,6 +124,7 @@ export function recordTaskProgressByRunId(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: JsonValue;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
@@ -141,6 +132,7 @@ export function recordTaskProgressByRunId(params: {
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     childSessionKey: params.childSessionKey,
+    detail: params.detail,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,

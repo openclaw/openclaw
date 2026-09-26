@@ -2,6 +2,8 @@ import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type {
   createChannelProgressDraftCompositor,
+  LivePreviewDeliveryResult,
+  LivePreviewLifecycle,
   TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
@@ -71,7 +73,7 @@ export type FreshTelegramSessionEntryLoader = ((
   clear: () => void;
 };
 
-export type TelegramAnswerBlockDelivery = {
+type TelegramAnswerBlockDelivery = {
   payload: ReplyPayload;
   text: string;
   buttons: import("./button-types.js").TelegramInlineButtons | undefined;
@@ -117,12 +119,12 @@ export type TelegramQueuedAnswerBlockRotation = {
   text?: string;
   shouldRotateBeforeDelivery: boolean;
 };
-export type TelegramBufferedFinalSettlement = {
+type TelegramBufferedFinalSettlement = {
   visibleReplySent: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
   assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-  resolve: (result: { visibleReplySent: boolean }) => void;
+  resolve: (result: LivePreviewDeliveryResult) => void;
   reject: (error: unknown) => void;
 };
 
@@ -157,9 +159,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  finalAnswerDeliveryStarted: boolean;
-  finalAnswerDelivered: boolean;
   verboseProgressActive: () => boolean;
+  previewLifecycle: LivePreviewLifecycle<ReplyPayload, number>;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;
   progressPreambleEnabled: boolean | undefined;
@@ -188,13 +189,12 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramProgressStateSlice &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
-    queuedFinal: boolean;
+    finalDispatchClaimed: boolean;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
     progressContinuationAdopted?: boolean;
-    finalReplyOutcome?: "failed" | "suppressed";
     dispatchError?: unknown;
   };

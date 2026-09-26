@@ -380,9 +380,8 @@ suite.define(() => {
       await openWorkboardFilters(writable.page);
       const highPriority = writable.page
         .getByRole("group", { name: "Priority", exact: true })
-        .getByRole("checkbox", { name: /High/u });
-      await highPriority.focus();
-      await writable.page.keyboard.press("Space");
+        .getByRole("checkbox", { name: /High/u, disabled: false });
+      await highPriority.press("Space");
       await expect.poll(() => highPriority.isChecked()).toBe(true);
       await highPriority.uncheck();
       await expect.poll(() => highPriority.isChecked()).toBe(false);
@@ -467,8 +466,9 @@ suite.define(() => {
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(editForm, "Title", editedCard.title);
       await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
-      await editForm.getByRole("radio", { name: "High", exact: true }).focus();
-      await writable.page.keyboard.press("Space");
+      const priority = editForm.getByRole("radio", { name: "High", exact: true, disabled: false });
+      await priority.press("Space");
+      expect(await priority.isChecked()).toBe(true);
       await setWorkboardDraftField(editForm, "Labels", "ui, proof, e2e");
       const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
       await editForm.getByRole("button", { name: /^Save$/u }).click();

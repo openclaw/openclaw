@@ -59,7 +59,7 @@ suite.define(() => {
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/old"]').count())
             .toBe(1);
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
           await page.locator(".cmd-palette__input").fill("needle");
           await palette.getByText("Needle old", { exact: true }).waitFor();
@@ -85,7 +85,11 @@ suite.define(() => {
             ? "Some models could not be refreshed. Open Models to try again."
             : "Models unavailable";
           await automations.getByText(warning, { exact: true }).waitFor();
-          await palette.getByRole("status").filter({ hasText: warning }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: warning })
+            .waitFor();
           expect(await palette.getByText("Needle old", { exact: true }).count()).toBe(0);
           expect(await palette.getByText("Needle current", { exact: true }).count()).toBe(
             hasRows ? 1 : 0,
@@ -101,14 +105,20 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, `internal-catalog-automations-${hasRows}.png`),
           });
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           await page.locator(".cmd-palette__input").fill("needle");
-          await palette.getByRole("status").filter({ hasText: warning }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: warning })
+            .waitFor();
 
           await gateway.setMethodResponse("models.list", { models: [] });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
           await expect.poll(() => automations.getByText(warning, { exact: true }).count()).toBe(0);
-          await expect.poll(() => palette.getByRole("status").count()).toBe(0);
+          await expect
+            .poll(() => palette.locator(".cmd-palette__search").getByRole("status").count())
+            .toBe(0);
           expect(await palette.getByText("Needle current", { exact: true }).count()).toBe(0);
           expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
           const requests = await gateway.getRequests();

@@ -107,7 +107,7 @@ vi.mock("./matrix/actions/profile.js", () => ({
 }));
 
 vi.mock("./matrix/accounts.js", () => ({
-  resolveMatrixAccount: (...args: unknown[]) => resolveMatrixAccountMock(...args),
+  resolveMatrixAccountAsync: async (...args: unknown[]) => resolveMatrixAccountMock(...args),
   resolveMatrixAccountConfig: (...args: unknown[]) => resolveMatrixAccountConfigMock(...args),
 }));
 

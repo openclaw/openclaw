@@ -12,6 +12,7 @@ import {
   FakeChild,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
+import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 
@@ -60,6 +61,9 @@ beforeEach(async () => {
   mocks.spawn.mockImplementation((_command: string, args: string[]) => {
     const child = new FakeChild(nextPid++);
     children.set(child.pid, child);
+    if (args.includes("--update-canary")) {
+      return child;
+    }
     completeCanaryCommand(child, args, () => ({
       pluginInventory: undefined,
       pluginErrors: false,
@@ -91,6 +95,140 @@ describe("canary teardown evidence", () => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
   });
+
+  it.each(["timer", "elapsed"] as const)(
+    "does not start removal when custody resolves after the cleanup budget (%s)",
+    async (expiry) => {
+      vi.useFakeTimers();
+      const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(0);
+      const custody = createDeferredCore<boolean>();
+      const removal = vi.spyOn(fs, "rm");
+      const onProgress = vi.fn();
+      const onWarning = vi.fn();
+      try {
+        const pending = cleanupUpdateTemporaryDirectory({
+          root,
+          directory: path.join(root, "unverified-copy"),
+          name: "candidate-state-cleanup",
+          canRemove: () => custody.promise,
+          onProgress,
+          onWarning,
+        });
+        expect(onProgress).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            status: "in_progress",
+            detail: expect.stringContaining("waiting for directory custody verification"),
+          }),
+        );
+        monotonicClock.mockReturnValue(300_000);
+        if (expiry === "timer") {
+          await vi.advanceTimersByTimeAsync(300_000);
+        } else {
+          custody.resolve(true);
+        }
+        await pending;
+        expect(onWarning).toHaveBeenCalledWith(
+          expect.objectContaining({
+            command: "",
+            termination: "timeout",
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("ownership could not be verified"),
+            }),
+          }),
+        );
+        custody.resolve(true);
+        await Promise.resolve();
+        expect(removal).not.toHaveBeenCalled();
+        expect(onProgress).toHaveBeenCalledTimes(1);
+        expect(onProgress.mock.calls[0]?.[0].detail).not.toContain("filesystem removal");
+      } finally {
+        custody.resolve(false);
+        removal.mockRestore();
+        monotonicClock.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["completed", "deadline"] as const)(
+    "records the disposable-copy wait after a passed canary (%s)",
+    async (outcome) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const removalStarted = createDeferredCore<string>();
+      const removal = createDeferredCore();
+      const remove = fs.rm.bind(fs);
+      const heldRemoval = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (
+          typeof target === "string" &&
+          path.basename(target).startsWith("openclaw-update-canary-")
+        ) {
+          removalStarted.resolve(target);
+          return removal.promise;
+        }
+        return remove(target, options);
+      });
+      const onProgress = vi.fn();
+      const onStep = vi.fn();
+      const pending = validateUpdateCandidateCanary({
+        ...canaryStateOptions(3_000),
+        onProgress,
+        onStep,
+      });
+      let retained: string | undefined;
+      try {
+        retained = await removalStarted.promise;
+        expect(onStep).toHaveBeenCalledWith(
+          expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
+        );
+        expect(onProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            step: "candidate-state-cleanup",
+            status: "in_progress",
+            startedAtMs: Date.now(),
+            detail: expect.stringContaining("budget=300000ms"),
+          }),
+        );
+        expect(onProgress.mock.calls.at(-1)?.[0].detail).toContain(retained);
+        if (outcome === "completed") {
+          removal.resolve();
+        } else {
+          await vi.advanceTimersByTimeAsync(300_000);
+        }
+        const result = await pending;
+        expect(result.status).toBe("ok");
+        if (outcome === "completed") {
+          expect(onProgress).toHaveBeenCalledWith(
+            expect.objectContaining({ step: "candidate-state-cleanup", status: "completed" }),
+          );
+          expect(result.steps.some((step) => step.advisory)).toBe(false);
+        } else {
+          const warning = result.steps.find((step) => step.name === "candidate-state-cleanup")!;
+          expect(warning).toMatchObject({
+            termination: "timeout",
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: expect.stringContaining("300000ms"),
+            },
+          });
+          expect(warning.advisory?.message).toContain(retained);
+          expect(warning.advisory?.message).toContain("after the updater exits");
+          expect(onStep).toHaveBeenCalledWith(warning);
+          const beforeLateRemoval = onProgress.mock.calls.length;
+          removal.resolve();
+          await Promise.resolve();
+          expect(onProgress).toHaveBeenCalledTimes(beforeLateRemoval);
+        }
+      } finally {
+        removal.resolve();
+        await pending;
+        heldRemoval.mockRestore();
+        vi.useRealTimers();
+        if (retained) {
+          await remove(retained, { recursive: true, force: true });
+        }
+      }
+    },
+  );
 
   it.each([
     "passed",
@@ -162,29 +300,40 @@ describe("canary teardown evidence", () => {
       });
       try {
         const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
-        const failed = result.steps.at(-1)!;
-        expect(result).toMatchObject({ status: "error", phase: "lint" });
-        expect(failed.termination).toBe("timeout");
-        if (["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report)) {
-          const message = `Update health check completed, then ${report === "pipes" ? "output pipes stayed open" : "failed to exit"} (${["pipes", "natural", "unconfirmed"].includes(report) ? "termination requested" : "killed"} at 0.9 s)`;
-          if (report !== "failed") {
-            expect(failed.failureFacts?.[0]?.message).toBe(message);
-          }
-          const rendered = renderUpdateRunReport(
-            updateRunReportInputFromResult({ ...result, mode: "git", root }),
-          );
+        const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
+        expect(step.termination).toBe("timeout");
+        const completed = ["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report);
+        const rendered = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+        );
+        if (completed) {
+          const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
+          expect(step.warnings).toEqual([message]);
           expect(rendered.markdown).toContain(message);
           if (report === "failed") {
-            expect(failed.failureFacts?.map((fact) => fact.message)).toEqual(
+            expect(result).toMatchObject({ status: "error", phase: "lint" });
+            expect(step.failureFacts?.map((fact) => fact.message)).toEqual(
               lintFindings.map((finding) => finding.message),
             );
+          } else {
+            expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+            expect(step.failureFacts).toBeUndefined();
           }
         } else {
-          expect(failed.failureFacts?.[0]?.message).toBe(
-            "Update health check failed (deadline exceeded)",
-          );
-          expect(result.logTail.join("\n")).toContain("deadline exceeded");
-          expect(JSON.stringify(result)).not.toContain("completed, then failed to exit");
+          expect(result).toMatchObject({
+            status: "error",
+            phase: "lint",
+            reason: "candidate-checks-timeout",
+          });
+          expect(step.failureFacts).toEqual([
+            {
+              check: "lint",
+              code: "candidate-checks-timeout",
+              message: "Update lint checks phase timed out (899ms)",
+            },
+          ]);
+          expect(rendered.markdown).toContain("checks phase");
+          expect(JSON.stringify(result)).not.toContain("exit phase");
         }
       } finally {
         clock.mockRestore();

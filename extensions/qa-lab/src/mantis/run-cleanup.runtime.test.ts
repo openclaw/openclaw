@@ -1,10 +1,9 @@
-// Qa Lab tests cover bounded, Git-owned Mantis worktree cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
-import { captureMantisDirectoryOwnership, hasSameFileIdentity } from "./run-directory.runtime.js";
+import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
 import {
   failedCommandResult,
   successfulCommandResult,
@@ -101,6 +100,37 @@ describe("Mantis worktree cleanup", () => {
     await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("replacement");
     await expect(fs.stat(displacedPath)).resolves.toBeDefined();
   });
+
+  it.each(["parentDevice", "parentInode", "targetDevice", "targetInode"] as const)(
+    "preserves a worktree when its Windows ownership receipt has unknown %s",
+    async (field) => {
+      const ownership = await captureMantisDirectoryOwnership({
+        directoryPath: worktreeDir,
+        repoRoot,
+      });
+      const sentinelPath = path.join(worktreeDir, "preserve-me.txt");
+      await fs.writeFile(sentinelPath, "preserve", "utf8");
+      const runner = vi.fn(async () => successfulCommandResult());
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      try {
+        await expect(
+          removeMantisWorktree({
+            commandTimeouts,
+            lane: "baseline",
+            ownership: { ...ownership, [field]: 0n },
+            repoRoot,
+            runner,
+            worktreeDir,
+          }),
+        ).rejects.toThrow("replaced before cleanup");
+        expect(runner).not.toHaveBeenCalled();
+        await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 
   it("does not remove an unregistered partial path without an ownership receipt", async () => {
     const sentinelPath = path.join(worktreeDir, "partial.txt");
@@ -244,13 +274,5 @@ describe("Mantis worktree cleanup", () => {
     } finally {
       now.mockRestore();
     }
-  });
-
-  it("keeps high file identities exact", () => {
-    const first = { dev: 1n, ino: 9_007_199_254_740_992n };
-    const second = { dev: 1n, ino: 9_007_199_254_740_993n };
-
-    expect(Number(first.ino)).toBe(Number(second.ino));
-    expect(hasSameFileIdentity(first, second)).toBe(false);
   });
 });

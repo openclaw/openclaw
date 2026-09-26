@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   emitAgentEvent,
@@ -11,9 +12,15 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { retainTaskAgentEventLineage } from "./task-registry-agent-event-lineage.js";
+import * as taskDelivery from "./task-registry-delivery.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
+import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
+import { captureTaskPersistenceReceipt } from "./task-registry-records.js";
 import * as taskRegistryState from "./task-registry-state.js";
 import { getTaskById } from "./task-registry.js";
 import {
@@ -28,17 +35,33 @@ import {
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetGatewayWorkAdmission();
-  resetSystemEventsForTest();
+let deliveries: ReturnType<typeof captureTaskDeliveryWork>;
+beforeEach(() => {
+  deliveries = captureTaskDeliveryWork();
+});
+
+afterEach(async () => {
+  try {
+    await deliveries.settle();
+  } finally {
+    deliveries[Symbol.dispose]();
+    vi.restoreAllMocks();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    resetAgentEventsForTest({ preserveListeners: true });
+    resetGatewayWorkAdmission();
+    resetSystemEventsForTest();
+  }
 });
 
 async function joinEvents() {
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  // Scenario assertions own accepted-event errors; join that prefix before its notifications.
+  await Promise.allSettled([
+    captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission),
+  ]);
+  await deliveries.settle();
+  await setImmediate();
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
 }
 
 function emitTool(runId: string, name: string) {
@@ -215,6 +238,14 @@ describe("task agent event preparation", () => {
         const writes = vi.spyOn(store, "runAgentEventMutationAsync");
         vi.spyOn(taskRegistryState.taskRegistryLog, "warn").mockImplementation(() => {});
         let projectionReads = 0;
+        const readsBeforeNotifications: number[] = [];
+        const notify = taskDelivery.maybeDeliverTaskStateChangeUpdate;
+        vi.spyOn(taskDelivery, "maybeDeliverTaskStateChangeUpdate").mockImplementation(
+          (...args) => {
+            readsBeforeNotifications.push(projectionReads);
+            return notify(...args);
+          },
+        );
         vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
           const snapshot = await readSnapshot(...args);
           if (args[1] === undefined && ++projectionReads === 1) {
@@ -225,11 +256,17 @@ describe("task agent event preparation", () => {
         });
         let fenceSettled = false;
         let fence: Promise<unknown> | undefined;
+        const onCommitted = vi.fn();
+        const closeLineage = retainTaskAgentEventLineage(
+          captureOpenClawStateWorkerContext().admission,
+          task.runId!,
+          onCommitted,
+        );
         try {
           emitAgentEvent({
             runId: task.runId!,
             stream: "lifecycle",
-            data: { phase: "start", startedAt: task.createdAt + 1 },
+            data: { phase: "start", startedAt: task.createdAt - 1_000 },
           });
           taskRegistryState.invalidateTaskRegistryProjection();
           await withTestTimeout(entered.promise, 5_000, "Projection read did not begin");
@@ -263,9 +300,20 @@ describe("task agent event preparation", () => {
         } finally {
           release.resolve();
           await joinEvents();
+          closeLineage();
         }
         expect(await fence).toBe(outcome === "rollback" ? failure : undefined);
-        expect(projectionReads).toBe(1);
+        if (outcome === "commit") {
+          expect(onCommitted).toHaveBeenCalledExactlyOnceWith(captureTaskPersistenceReceipt(task), {
+            ...captureTaskPersistenceReceipt(task),
+            createdAt: task.createdAt - 1_000,
+          });
+        } else {
+          expect(onCommitted).not.toHaveBeenCalled();
+        }
+        // Delivery starts after event settlement and owns any later projection preparation.
+        expect(readsBeforeNotifications).toEqual(outcome === "commit" ? [1] : []);
+        expect(readsBeforeNotifications[0] ?? projectionReads).toBe(1);
         expect(writes).not.toHaveBeenCalled();
         const durable = loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId);
         expect(durable).toMatchObject({
@@ -276,6 +324,17 @@ describe("task agent event preparation", () => {
         const read = await prepareTaskRegistryRead();
         expect(read?.isTaskSettled(task.taskId)).toBe(true);
         expect(read?.getTaskById(task.taskId)).toEqual(durable);
+        const committedCount = onCommitted.mock.calls.length;
+        emitAgentEvent({
+          runId: task.runId!,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: task.createdAt - 2_000 },
+        });
+        await joinEvents();
+        expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId)?.createdAt).toBe(
+          task.createdAt - 2_000,
+        );
+        expect(onCommitted).toHaveBeenCalledTimes(committedCount);
       });
     },
   );
@@ -368,6 +427,7 @@ describe("task agent event preparation", () => {
           release.resolve();
         }
         try {
+          await fence;
           await joinEvents();
         } finally {
           configureTaskRegistryRuntime({ store });

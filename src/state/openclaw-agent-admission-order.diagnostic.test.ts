@@ -68,7 +68,7 @@ function seed() {
   database.db.exec(`
     INSERT INTO memory_index_chunks
       (id,path,start_line,end_line,hash,model,text,embedding,updated_at)
-      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text','[]',1);
+      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text',X'',1);
     INSERT INTO memory_index_chunk_recall_metadata (chunk_id, importance)
       VALUES ('synthetic-parent',1);
   `);
@@ -381,9 +381,9 @@ describe("asynchronous canonical admission", () => {
   });
 
   it.each([false, true])(
-    "preserves physical index repair policy (unrelated damage: %s)",
+    "refuses physical index corruption without changing it (unrelated damage: %s)",
     async (unrelated) => {
-      const { options, writer } = seed();
+      const { options, pathname, writer } = seed();
       writer.exec(`
       INSERT INTO cache_entries (scope,key,value_json,expires_at,updated_at)
       VALUES ('scope-a','key-a','{}',100,1);
@@ -409,20 +409,20 @@ describe("asynchronous canonical admission", () => {
       }
       const version = Number(writer.prepare("PRAGMA schema_version").get()?.schema_version);
       writer.exec(`PRAGMA writable_schema=OFF; PRAGMA schema_version=${version + 1};`);
-      expect(writer.prepare("PRAGMA integrity_check").all()).not.toEqual([
-        { integrity_check: "ok" },
-      ]);
+      const findings = writer.prepare("PRAGMA integrity_check").all();
+      expect(findings).not.toEqual([{ integrity_check: "ok" }]);
       writer.close();
-      if (unrelated) {
-        await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
-          /integrity_check failed/,
-        );
-      } else {
-        const database = await openOpenClawAgentDatabaseAsync(options);
-        expect(database.db.prepare("PRAGMA integrity_check").all()).toEqual([
-          { integrity_check: "ok" },
+      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+        /integrity_check failed.*openclaw doctor --fix/,
+      );
+      const unchanged = realOpen(pathname, { readOnly: true });
+      try {
+        expect(unchanged.prepare("PRAGMA integrity_check").all()).toEqual(findings);
+        expect(unchanged.prepare("SELECT key FROM cache_entries NOT INDEXED").all()).toEqual([
+          { key: "key-a" },
         ]);
-        expect(ordinaryWrite(options)).toEqual({ n: 1 });
+      } finally {
+        unchanged.close();
       }
     },
   );

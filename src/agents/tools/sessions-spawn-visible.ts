@@ -14,6 +14,7 @@ import {
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -64,12 +65,18 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
+import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+
+const SessionsSpawnPlacementSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("local") }, { additionalProperties: false }),
+  SessionMoveProfileTargetSchema,
+]);
 
 export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   placement: Type.Optional({
-    ...SessionMoveProfileTargetSchema,
+    ...SessionsSpawnPlacementSchema,
     description:
-      "Cloud destination: kind=profile, profileId, optional os and machineClass. Requires visible=true and worktree=true. Omitted selectors use profile defaults; first task starts only after cloud dispatch.",
+      'Execution placement: omitted or {kind: "local"} uses local execution for native and ACP runs. {kind: "profile", profileId, os?, machineClass?} selects a configured cloud profile and requires visible=true and worktree=true. Never supply placeholder selectors. Omitted cloud selectors use profile defaults; the first task starts only after cloud dispatch.',
   }),
   visible: Type.Optional(
     Type.Boolean({
@@ -145,17 +152,18 @@ export async function maybeSpawnVisibleSession(params: {
 }): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
-  const placement = params.raw.placement;
+  const requestedPlacement = params.raw.placement;
   if (
-    placement !== undefined &&
-    (!Value.Check(SessionMoveProfileTargetSchema, placement) ||
-      params.raw.visible !== true ||
-      !worktree)
+    requestedPlacement !== undefined &&
+    (!Value.Check(SessionsSpawnPlacementSchema, requestedPlacement) ||
+      (requestedPlacement.kind === "profile" && (params.raw.visible !== true || !worktree)))
   ) {
     throw new ToolInputError(
-      'placement requires visible=true, worktree=true, and {kind: "profile", profileId, os?, machineClass?} with non-empty selectors.',
+      'Omit placement for local execution or use {kind: "local"} with no cloud selectors. ' +
+        'For a configured cloud profile, use {kind: "profile", profileId, os?, machineClass?} with non-empty selectors, visible=true, and worktree=true.',
     );
   }
+  const placement = requestedPlacement?.kind === "profile" ? requestedPlacement : undefined;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
@@ -428,6 +436,9 @@ export async function maybeSpawnVisibleSession(params: {
             actor: { type: "agent", id: requesterAgentId },
             requesterSessionKey: requesterKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(params.options?.sessionPermissionPolicy
+              ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
+              : {}),
             ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
             inheritedToolPolicy: {
               version: 1,
@@ -441,7 +452,7 @@ export async function maybeSpawnVisibleSession(params: {
     let response: {
       key?: string;
       sessionId?: string;
-      entry?: { lifecycleRevision?: string };
+      entry?: Pick<SessionEntry, "createdActor" | "lifecycleRevision" | "owner">;
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
@@ -470,9 +481,6 @@ export async function maybeSpawnVisibleSession(params: {
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
-        ...(params.options?.sessionPermissionPolicy
-          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
-          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(projectId ? { projectId } : {}),
@@ -619,33 +627,41 @@ export async function maybeSpawnVisibleSession(params: {
       if (placement) {
         params.options?.assertActive?.();
       }
-      (params.options?.registerRun ?? registerSubagentRun)({
-        runId,
-        requesterTurnRunId: params.options?.requesterTurnRunId,
-        childSessionKey,
-        controllerSessionKey: ownership.controllerSessionKey,
-        requesterSessionKey: ownership.completionRequesterSessionKey,
-        completionRequesterSessionId,
-        requesterOrigin: normalizeDeliveryContext({
-          channel: params.options?.agentChannel,
-          accountId: params.options?.agentAccountId,
-          to:
-            params.options?.currentMessagingTarget ??
-            params.options?.currentChannelId ??
-            params.options?.agentTo,
-          threadId: params.options?.currentThreadTs ?? params.options?.agentThreadId,
-        }),
-        requesterDisplayKey: ownership.completionRequesterDisplayKey,
-        task: params.task,
-        taskName: params.taskName,
-        agentId: targetAgentId,
-        requesterAgentId,
-        cleanup: "keep",
-        label: params.label || undefined,
-        runTimeoutSeconds,
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        spawnMode: "run",
-      });
+      await (params.options?.registerRun ?? registerSubagentRun)(
+        {
+          runId,
+          requesterTurnRunId: params.options?.requesterTurnRunId,
+          childSessionKey,
+          controllerSessionKey: ownership.controllerSessionKey,
+          requesterSessionKey: ownership.completionRequesterSessionKey,
+          completionRequesterSessionId,
+          requesterOrigin: normalizeDeliveryContext({
+            channel: params.options?.agentChannel,
+            accountId: params.options?.agentAccountId,
+            to:
+              params.options?.currentMessagingTarget ??
+              params.options?.currentChannelId ??
+              params.options?.agentTo,
+            threadId: params.options?.currentThreadTs ?? params.options?.agentThreadId,
+          }),
+          requesterDisplayKey: ownership.completionRequesterDisplayKey,
+          task: params.task,
+          taskName: params.taskName,
+          agentId: targetAgentId,
+          requesterAgentId,
+          cleanup: "keep",
+          label: params.label || undefined,
+          runTimeoutSeconds,
+          expectsCompletionMessage: params.expectsCompletionMessage,
+          spawnMode: "run",
+        },
+        {
+          assertCurrent: () => {
+            params.options?.signal?.throwIfAborted();
+            params.options?.assertActive?.();
+          },
+        },
+      );
     } catch (error) {
       if (placement) {
         await terminateCloudRun(childSessionKey, runId);
@@ -678,11 +694,15 @@ export async function maybeSpawnVisibleSession(params: {
       cleanup: "keep",
       ...(response.placement ? { placement: response.placement } : {}),
       ...(sessionUrl ? { sessionUrl } : {}),
-      owner: {
-        type: "agent",
-        id: requesterAgentId,
-        ...(ownerLabel ? { label: ownerLabel } : {}),
-      },
+      owner: resolveVisibleSessionOwner(
+        response.entry,
+        {
+          type: "agent",
+          id: requesterAgentId,
+          ...(ownerLabel ? { label: ownerLabel } : {}),
+        },
+        cfg,
+      ),
     };
   } finally {
     reservation.release();

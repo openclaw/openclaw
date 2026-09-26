@@ -20,24 +20,79 @@ export type {
   LiveTransportQaSuiteCommandOptions,
 } from "./qa-runner-runtime.js";
 
+/** Inspect hot transcript evidence without admitting a writer or restoring cold sessions. */
+export async function visitQaSqliteTranscriptEvents(
+  databasePath: string,
+  visit: (eventJson: string) => void,
+): Promise<void> {
+  const [{ openNodeSqliteDatabase }, { tableExists, tableHasColumn }, queries, payload] =
+    await Promise.all([
+      import("../infra/node-sqlite.js"),
+      import("../state/openclaw-state-db-schema-helpers.js"),
+      import("../infra/kysely-sync.js"),
+      import("../config/sessions/transcript-payload.js"),
+    ]);
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    if (!tableExists(database, "transcript_events")) {
+      return;
+    }
+    const db = queries.getNodeSqliteKysely<{
+      transcript_events: { session_id: string; seq: number; event_json: string };
+    }>(database);
+    // QA release fixtures can belong to a published pre-compression schema.
+    const eventJson = tableHasColumn(database, "transcript_events", "event_zstd")
+      ? payload.transcriptEventJsonSql(database).as("event_json")
+      : "event_json";
+    for (const row of queries.iterateSqliteQuerySync(
+      database,
+      db.selectFrom("transcript_events").select(eventJson).orderBy("session_id").orderBy("seq"),
+    )) {
+      if (typeof row.event_json === "string") {
+        visit(row.event_json);
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
 /** Release only this QA root's parent stores before its files are removed. */
 export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
-  const [auth, { closeOpenClawAgentDatabasesAsync }, state, paths] = await Promise.all([
+  const [
+    auth,
+    { closeOpenClawAgentDatabasesAsync },
+    state,
+    { openClawStateDatabaseCache },
+    paths,
+    { closeIdleSqliteCoordinators },
+  ] = await Promise.all([
     import("../agents/auth-profiles/sqlite.js"),
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-cache.js"),
     import("../state/openclaw-state-db.paths.js"),
+    import("../infra/sqlite-coordinator.js"),
   ]);
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
   await closeOpenClawAgentDatabasesAsync(tempRoot);
-  await state.closeOpenClawStateDatabaseByPathAsync(
-    paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
-  );
+  const statePath = paths.resolveOpenClawStateSqlitePath({
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  });
+  // Packaged auth can hand this tree to a different UID before Gateway startup.
+  // Close only admitted parent state, never discover a child-private database.
+  if (openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(statePath)) {
+    await state.closeOpenClawStateDatabaseByPathAsync(statePath);
+  }
+  closeIdleSqliteCoordinators(tempRoot);
 }
 
-type QaRuntimeSurface = {
+type QaRuntimeSurface = Pick<
+  ReturnType<typeof loadQaRunnerRuntimeModule>,
+  "defaultQaRuntimeModelForMode" | "createQaLiveLaneGateway"
+> & {
   acquireQaCredentialLease: <TPayload>(options: {
     env?: NodeJS.ProcessEnv;
     kind: string;
@@ -52,20 +107,6 @@ type QaRuntimeSurface = {
     release(): Promise<void>;
     source: "convex" | "env";
   }>;
-  defaultQaRuntimeModelForMode: (
-    mode: string,
-    options?: {
-      alternate?: boolean;
-      preferredLiveModel?: string;
-    },
-  ) => string;
-  createQaLiveLaneGateway: () => {
-    start: (...args: unknown[]) => Promise<unknown>;
-    stop: () => Promise<{
-      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
-      errors: unknown[];
-    }>;
-  };
   startQaCredentialLeaseHeartbeat: (lease: {
     heartbeat(): Promise<void>;
     heartbeatIntervalMs: number;
@@ -198,15 +239,7 @@ function renderQaDockerCommandFailure(command: string, args: string[], error: un
 }
 
 function normalizeDockerServiceStatus(row?: { Health?: string; State?: string }) {
-  const health = row?.Health?.trim();
-  if (health) {
-    return health;
-  }
-  const state = row?.State?.trim();
-  if (state) {
-    return state;
-  }
-  return "unknown";
+  return row?.Health?.trim() || row?.State?.trim() || "unknown";
 }
 
 function firstDockerOutputLine(stdout: string) {

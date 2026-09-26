@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
@@ -31,10 +30,8 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./app-server/session-binding-store.js";
-import {
-  createCodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
-} from "./app-server/session-binding.js";
+import { createCodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -140,7 +137,7 @@ describe("codex command", () => {
         sessionKey: context.sessionKey,
       };
       const bindingStore = createCodexAppServerBindingStore(
-        createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        createCodexSqliteTestBindingStateStore({
           namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
           maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
           overflowPolicy: "reject-new",
@@ -253,7 +250,9 @@ describe("codex command", () => {
         }
       };
       let leasedClient: CodexAppServerClient | undefined;
-      let parent: ReturnType<typeof codexNativeSubagentMonitorRuntime.register> | undefined;
+      let parent:
+        | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
+        | undefined;
       let successor: Awaited<ReturnType<typeof consumeCodexAppServerLiveThread>>;
       try {
         leasedClient = await getLeasedSharedCodexAppServerClient({
@@ -262,7 +261,7 @@ describe("codex command", () => {
           agentDir: resolveDefaultAgentDir(context.config),
         });
         expect(leasedClient).toBe(harness.client);
-        parent = codexNativeSubagentMonitorRuntime.register({
+        parent = await codexNativeSubagentMonitorRuntime.register({
           client: leasedClient,
           parentThreadId,
         });

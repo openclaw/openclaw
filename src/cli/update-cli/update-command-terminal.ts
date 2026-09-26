@@ -3,15 +3,19 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import {
+  createUpdateErrorFact,
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
@@ -19,9 +23,10 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
+  failUpdateCommandRun,
   createUpdateCommandFailureResult,
   UnreportedUpdateAdmissionOutcome,
   type UpdateAdmissionReportParams,
@@ -30,7 +35,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
   readUpdateCommandTerminalRecord,
   type UpdateCommandTerminalRecord,
@@ -65,8 +70,13 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 export async function prepareUnexpectedUpdateCommandFailure(
   error: unknown,
   opts: UpdateCommandOptions & { run: Run },
+  onPublishedRecord?: PublishedRecord,
 ): Promise<UpdateCommandFailure> {
-  const failure = { mode: "unknown" as const, durationMs: 0, failure: { cause: error } };
+  const failure = {
+    mode: "unknown" as const,
+    durationMs: 0,
+    failure: { cause: error },
+  };
   let fact: UpdateFailureFact;
   try {
     const recorded = failUpdateCommandRun(error, opts.run);
@@ -93,10 +103,10 @@ export async function prepareUnexpectedUpdateCommandFailure(
       onTerminalRecord,
     );
   };
-  if (!deferUpdateCommandTerminalResult(opts.run, publish)) {
-    await publish();
-  }
-  return new UpdateCommandFailure(result, 1, fact.message, { cause: error });
+  const published = deferUpdateCommandTerminalResult(opts.run, publish)
+    ? result
+    : await publish(undefined, onPublishedRecord);
+  return new UpdateCommandFailure(published, 1, fact.message, { cause: error });
 }
 
 /** Enclose the real executor so its final checks and release precede terminal output. */
@@ -109,6 +119,16 @@ export async function withUpdateCommandTerminalResult<T>(
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
   let run: Run | undefined;
+  const notifyResult = (result: UpdateRunResult) => {
+    try {
+      opts.onResult?.(result);
+    } catch (cause) {
+      // An observer cannot replace or redeliver the terminal owner's outcome.
+      defaultRuntime.error(
+        `Warning: Update result observer failed: ${createUpdateErrorFact("update", cause, run?.env).message}`,
+      );
+    }
+  };
   let registrationOpen = true;
   const registerRun = (admitted: Run) => {
     if (!registrationOpen || run || terminalOwners.has(admitted)) {
@@ -128,6 +148,12 @@ export async function withUpdateCommandTerminalResult<T>(
       terminalOwners.delete(run);
     }
   }
+  if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
+    throw outcome.error;
+  }
+  await run?.sourceArtifactLock?.release().catch((error: unknown) => {
+    defaultRuntime.error(`Warning: Artifact lock release failed: ${formatErrorMessage(error)}`);
+  });
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
@@ -154,12 +180,33 @@ export async function withUpdateCommandTerminalResult<T>(
     };
   }
   if (owner.publish) {
-    const result = await owner.publish(
-      "error" in outcome ? outcome.error : undefined,
-      opts.onTerminalRecord,
-    );
-    opts.onResult?.(result);
-    if ("error" in outcome) {
+    let published: UpdateRunResult | undefined;
+    try {
+      published = await owner.publish(
+        "error" in outcome ? outcome.error : undefined,
+        opts.onTerminalRecord,
+      );
+    } catch (error) {
+      // A recovery publisher already owns its result and settlement exception.
+      if (
+        collectNestedErrorCandidates(error).some((cause) => cause instanceof UpdateCommandFailure)
+      ) {
+        throw error;
+      }
+      outcome = {
+        error:
+          "error" in outcome && outcome.error !== error
+            ? new AggregateError([outcome.error, error], "Update result publication failed", {
+                cause: error,
+              })
+            : error,
+      };
+      published = undefined;
+    }
+    if (published) {
+      notifyResult(published);
+    }
+    if (published && "error" in outcome) {
       const failure = outcome.error;
       if (
         failure instanceof UpdateCommandPendingRecoveryFailure ||
@@ -167,12 +214,12 @@ export async function withUpdateCommandTerminalResult<T>(
         activationTimeout
       ) {
         // Publication does not restore authority for outer failure triage.
-        throw new UpdateCommandFinalizedRecoveryFailure(result);
+        throw new UpdateCommandFinalizedRecoveryFailure(published);
       }
       // This report has already been printed. Do not let pending-recovery triage
       // print it a second time or launch recovery using a now-released fence.
       throw new UpdateCommandFailure(
-        result,
+        published,
         failure instanceof UpdateCommandFailure ? failure.exitCode : 1,
         formatErrorMessage(failure),
         {
@@ -182,6 +229,52 @@ export async function withUpdateCommandTerminalResult<T>(
         },
       );
     }
+  }
+  if (run && "error" in outcome && !(outcome.error instanceof UpdateCommandFailure)) {
+    const error = outcome.error;
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    const causes = collectNestedErrorCandidates(error);
+    const primaryFailure = causes.find(
+      (cause): cause is UpdateCommandFailure => cause instanceof UpdateCommandFailure,
+    );
+    let failure: UpdateCommandFailure;
+    try {
+      if (
+        primaryFailure ||
+        causes.some(
+          (cause) =>
+            cause instanceof UpdateCommandRecoveryPendingError ||
+            cause instanceof UpdateRecoveryRequiredError,
+        )
+      ) {
+        throw error;
+      }
+      // Executor settlement and terminal publication can fail outside the inner unwind.
+      // Re-admit diagnostic writes before triage can offer an empty report.
+      await assertUpdateRecoveryAdmission({ env: run.env });
+      failure = await prepareUnexpectedUpdateCommandFailure(
+        error,
+        { ...opts, run },
+        opts.onTerminalRecord,
+      );
+    } catch (cause) {
+      throw new UpdateCommandPendingRecoveryFailure(
+        primaryFailure?.result ??
+          createUpdateCommandFailureResult({
+            mode: "unknown",
+            durationMs: 0,
+            failure: { cause: error },
+          }),
+        formatErrorMessage(cause),
+        { cause: error },
+      );
+    }
+    if (!(failure instanceof UpdateCommandPendingRecoveryFailure)) {
+      notifyResult(failure.result);
+    }
+    throw failure;
   }
   if ("error" in outcome) {
     throw outcome.error;
@@ -306,13 +399,14 @@ export async function recordUpdatePackageCompletion(
     return;
   }
   const step = { ...retained, stderrTail: retained.stderrTail };
-  if (step.exitCode !== 0 && !step.stderrTail?.includes(transaction.backupRoot)) {
-    step.stderrTail = [
-      step.stderrTail,
-      `Recovery transaction backup path: ${transaction.backupRoot}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+  if (step.exitCode !== 0) {
+    const recoveryPath = `Recovery transaction backup path: ${transaction.backupRoot}`;
+    if (!step.advisory) {
+      step.warnings = [...(step.warnings ?? []), recoveryPath];
+    }
+    if (!step.stderrTail?.includes(transaction.backupRoot)) {
+      step.stderrTail = [step.stderrTail, recoveryPath].filter(Boolean).join("\n");
+    }
   }
   result.steps = [...result.steps, step];
   if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
@@ -397,12 +491,13 @@ async function publishPreMutationUpdateOutcome(
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
-  if (run && active && params.message) {
+  const nextAction = params.nextAction ?? params.message;
+  if (run && active && nextAction) {
     recordUpdateRunPhase(
       run.runId,
       active.phase,
       {
-        origin: { nextAction: params.message },
+        origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
       { env: run.env },
@@ -459,7 +554,7 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  await printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction });
   return result;
 }
 

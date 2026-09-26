@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -38,11 +37,12 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("update failure triage admission", () => {
-  it("presents a manual terminal failure after its admission request releases the interlock", async () => {
+  it("makes a manual terminal failure diagnosable only after an explicit action", async () => {
     const harness = updateRunHarness(async (method) => {
       if (method === "update.run") {
         return { runId: FAILURE.runId };
@@ -56,6 +56,9 @@ describe("update failure triage admission", () => {
       await overlays.runUpdate();
       expect(overlays.snapshot.updateRun).toEqual(FAILURE);
       expect(overlays.snapshot.updateRunning).toBe(false);
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
+      expect(onUpdateFailure).not.toHaveBeenCalled();
+      overlays.diagnoseUpdateFailure(FAILURE.runId);
       expect(onUpdateFailure).toHaveBeenCalledOnce();
       expect(onUpdateFailure.mock.calls[0]![1].admit()).toBe(true);
     } finally {
@@ -63,7 +66,7 @@ describe("update failure triage admission", () => {
     }
   });
 
-  it("carries the run failure once across events, status refreshes, access changes, and reload", async () => {
+  it("keeps a failure passive across events, refreshes, access changes, and reload", async () => {
     let run = updateRunFixture();
     const request = vi.fn<RequestFn>(async (method) =>
       method === "update.runs.get" ? { run } : { lastRun: run },
@@ -78,7 +81,11 @@ describe("update failure triage admission", () => {
       run = FAILURE;
       harness.emitEvent("update.run.changed", run);
       await flushMicrotasks();
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
+      expect(onUpdateFailure).not.toHaveBeenCalled();
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
+      overlays.diagnoseUpdateFailure("stale-attempt");
+      expect(onUpdateFailure).not.toHaveBeenCalled();
+      overlays.diagnoseUpdateFailure(FAILURE.runId);
       const [failure, admission] = onUpdateFailure.mock.calls[0]!;
       expect(failure).toMatchObject({
         id: FAILURE.runId,
@@ -112,30 +119,37 @@ describe("update failure triage admission", () => {
       await flushMicrotasks();
       expect(overlays.snapshot.updateRun).toEqual(FAILURE);
       expect(onUpdateFailure).toHaveBeenCalledOnce();
+      overlays.diagnoseUpdateFailure(FAILURE.runId);
+      expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+      expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
       expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
     } finally {
       overlays.dispose();
     }
   });
 
-  it.each(["Gateway", "profile"] as const)(
-    "scopes a consumed diagnostic to its %s across switching and reload",
+  it.each(["Gateway", "profile", "client", "reconnect"] as const)(
+    "retires a queued diagnostic on %s changes without starting another",
     async (boundary) => {
       const request = vi.fn<RequestFn>(async () => ({ lastRun: FAILURE }));
       const harness = updateRunHarness(request);
       const initialGateway = harness.gateway.connection.gatewayUrl;
       const admin = harness.gateway.snapshot.hello;
-      const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>(
-        (_failure, admission) => expect(admission.admit()).toBe(true),
-      );
+      const onUpdateFailure =
+        vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
       let overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      const originalClient = harness.gateway.snapshot.client;
       const switchScope = (other: boolean) => {
+        if (boundary === "client") {
+          harness.update({ client: other ? client(request) : originalClient });
+          return;
+        }
         harness.gateway.connection.gatewayUrl =
           boundary === "Gateway" && other ? "ws://other.test" : initialGateway;
         harness.update({ phase: "connecting", client: null, hello: null });
         harness.update({
           phase: "connected",
-          client: client(request),
+          client: boundary === "reconnect" ? originalClient : client(request),
           hello: admin,
           selfUser:
             boundary === "profile" && other
@@ -145,18 +159,24 @@ describe("update failure triage admission", () => {
       };
       try {
         await flushMicrotasks();
+        expect(onUpdateFailure).not.toHaveBeenCalled();
+        overlays.diagnoseUpdateFailure(FAILURE.runId);
         const admission = onUpdateFailure.mock.calls[0]![1];
         switchScope(true);
         await flushMicrotasks();
         expect(admission.isCurrent()).toBe(false);
-        expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+        expect(admission.admit()).toBe(false);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
         switchScope(false);
         await flushMicrotasks();
         overlays.dispose();
         overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
         await flushMicrotasks();
         expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+        overlays.diagnoseUpdateFailure(FAILURE.runId);
         expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+        expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
       } finally {
         overlays.dispose();
       }
@@ -174,6 +194,7 @@ describe("update failure triage admission", () => {
       const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
       try {
         await flushMicrotasks();
+        overlays.diagnoseUpdateFailure(FAILURE.runId);
         const admission = onUpdateFailure.mock.calls[0]![1];
         run = updateRunFixture({
           runId: "00000000-0000-4000-8000-000000000002",
@@ -184,6 +205,8 @@ describe("update failure triage admission", () => {
         if (source === "campaign") {
           harness.emitEvent("update.available", { schedule: CAMPAIGN });
           expect(overlays.snapshot.updateRunning).toBe(true);
+          expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
+          overlays.diagnoseUpdateFailure(FAILURE.runId);
           expect(overlays.snapshot.updateRun).toEqual(FAILURE);
           expect(admission.isCurrent()).toBe(false);
           expect(admission.admit()).toBe(false);
@@ -196,6 +219,8 @@ describe("update failure triage admission", () => {
         expect(admission.admit()).toBe(false);
         expect(overlays.snapshot.updateRun).toEqual(run);
         expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
+        overlays.diagnoseUpdateFailure(run.runId);
         expect(onUpdateFailure).toHaveBeenCalledOnce();
       } finally {
         overlays.dispose();
@@ -248,6 +273,8 @@ describe("update failure triage admission", () => {
       const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
       try {
         await flushMicrotasks();
+        expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
+        overlays.diagnoseUpdateFailure(run.runId);
         expect(onUpdateFailure).not.toHaveBeenCalled();
       } finally {
         overlays.dispose();
@@ -265,6 +292,9 @@ describe("update failure triage admission", () => {
       await flushMicrotasks();
       expect(overlays.snapshot.updateRun).toBeNull();
       expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
+      expect(onUpdateFailure).not.toHaveBeenCalled();
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe("recorded:1000");
+      overlays.diagnoseUpdateFailure("recorded:1000");
       expect(onUpdateFailure).toHaveBeenCalledOnce();
     } finally {
       overlays.dispose();
@@ -309,7 +339,7 @@ describe("update failure triage admission", () => {
     });
     const request = vi.fn<RequestFn>(async (method, _params, options) => {
       if (method === "update.run") {
-        options?.onSent?.();
+        options?.onSent?.("update-run-request");
         throw new GatewayRequestError(failure);
       }
       return method === "update.status" ? { lastRun: previous } : {};
@@ -328,27 +358,38 @@ describe("update failure triage admission", () => {
     }
   });
 
-  it.each(["recorded:1000", "stable-handoff"])(
-    "does not replay the stable v2026.9.1 consumed diagnostic %s after reload",
-    async (id) => {
-      const scope = gatewayCredentialScope("ws://gateway.test");
-      const stored = JSON.stringify({ triaged: [JSON.stringify([scope, null, id])] });
-      sessionStorage.setItem("openclaw:control-ui:update:v1", stored);
-      const harness = updateRunHarness(async () => ({
-        sentinel: {
-          kind: "update",
-          status: "error",
-          ts: 1_000,
-          stats: { reason: "build-failed", ...(id === "stable-handoff" ? { handoffId: id } : {}) },
-        },
-      }));
-      const onUpdateFailure = vi.fn();
+  it.each(["available", "denied", "full"])(
+    "admits each explicit click once when session storage is %s",
+    async (storageState) => {
+      const storage = createStorageMock();
+      if (storageState === "denied") {
+        vi.spyOn(storage, "getItem").mockImplementation(() => {
+          throw new Error("Access denied");
+        });
+      } else if (storageState === "full") {
+        vi.spyOn(storage, "setItem").mockImplementation(() => {
+          throw new Error("Quota exceeded");
+        });
+      }
+      vi.stubGlobal("sessionStorage", storage);
+      const harness = updateRunHarness(async () => ({ lastRun: FAILURE }));
+      const onUpdateFailure =
+        vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
       const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
       try {
         await flushMicrotasks();
-        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
         expect(onUpdateFailure).not.toHaveBeenCalled();
-        expect(sessionStorage.getItem("openclaw:control-ui:update:v1")).toBe(stored);
+        overlays.diagnoseUpdateFailure(FAILURE.runId);
+        const first = onUpdateFailure.mock.calls[0]![1];
+        overlays.diagnoseUpdateFailure(FAILURE.runId);
+        const second = onUpdateFailure.mock.calls[1]![1];
+        expect(first.isCurrent()).toBe(false);
+        expect(first.admit()).toBe(false);
+        expect(second.admit()).toBe(true);
+        expect(second.admit()).toBe(false);
+        overlays.diagnoseUpdateFailure(FAILURE.runId);
+        expect(onUpdateFailure.mock.calls[2]![1].admit()).toBe(true);
+        expect(onUpdateFailure).toHaveBeenCalledTimes(3);
       } finally {
         overlays.dispose();
       }

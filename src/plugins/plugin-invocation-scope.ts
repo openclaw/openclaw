@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
   getPluginInstance,
   getPluginValueInstance,
@@ -79,16 +80,29 @@ export class PluginInvocationScope {
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
     this.assertOpen();
-    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys(), {
-      retained: this.consumers.size > 0,
-      parent: this,
-      kind: this.consumerKind,
-    });
+    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys());
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks
     // now, but keep their physical completion until the cleanup owner drains.
     const closed = Promise.all(
-      [...this.consumers.values()].map((consumer) => consumer.close(() => finished.promise)),
+      [...this.consumers].map(([instance, consumer]) =>
+        consumer.close(() => {
+          const teardown = pluginInstanceInvocation.getStore();
+          if (!teardown) {
+            throw new Error("Plugin consumer cleanup has no invocation");
+          }
+          // Transfer only the teardown token, never the closed operation scope or caller authority.
+          const run = <T>(operation: () => T): T =>
+            cleanup.run(() =>
+              pluginInstanceInvocation.run(teardown, () => instance.runCleanup(operation)),
+            );
+          cleanup.bindings.set(instance, {
+            run,
+            wrap: instance.createRegistryView(this.registry, run),
+          });
+          return finished.promise;
+        }),
+      ),
     );
     void closed.catch(() => {});
     this.closed = true;

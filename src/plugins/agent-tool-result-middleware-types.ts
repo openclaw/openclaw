@@ -4,7 +4,7 @@ import type { PluginToolMatcher } from "./hook-types.js";
 
 export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
 
-export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex";
+export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex" | "agentsapi";
 
 export type AgentToolResultMiddlewareEvent = {
   threadId?: string;
@@ -36,6 +36,7 @@ export type AgentToolResultMiddleware = (
 
 export type AgentToolResultMiddlewareOptions = {
   matcher?: PluginToolMatcher;
+  /** Defaults to the plugin's contracts.agentToolResultMiddleware declaration. */
   runtimes?: AgentToolResultMiddlewareRuntime[];
 };
 

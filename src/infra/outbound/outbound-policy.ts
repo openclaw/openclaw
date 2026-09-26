@@ -70,21 +70,14 @@ function resolveContextGuardTarget(
     return undefined;
   }
 
-  if (action === "thread-reply" || action === "thread-create") {
-    if (typeof params.channelId === "string") {
-      return params.channelId;
+  const keys =
+    action === "thread-reply" || action === "thread-create"
+      ? ["channelId", "to"]
+      : ["to", "channelId"];
+  for (const key of keys) {
+    if (typeof params[key] === "string") {
+      return params[key];
     }
-    if (typeof params.to === "string") {
-      return params.to;
-    }
-    return undefined;
-  }
-
-  if (typeof params.to === "string") {
-    return params.to;
-  }
-  if (typeof params.channelId === "string") {
-    return params.channelId;
   }
   return undefined;
 }
@@ -123,10 +116,12 @@ function isCrossContextTarget(params: {
   );
 }
 
-function resolveAgentMessageToolsConfig(
-  cfg: OpenClawConfig,
-  agentId?: string | null,
-): MessageToolsConfig | undefined {
+/** Resolves message-tool policy after applying agent-specific overrides. */
+export function resolveEffectiveMessageToolsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): MessageToolsConfig | undefined {
+  const { cfg, agentId } = params;
   const trimmedAgentId = agentId?.trim();
   const globalConfig = cfg.tools?.message;
   if (!trimmedAgentId) {
@@ -169,16 +164,6 @@ function resolveAgentMessageToolsConfig(
           }
         : undefined,
   };
-}
-
-/**
- * Resolves the message-tool policy after applying any agent-specific overrides.
- */
-export function resolveEffectiveMessageToolsConfig(params: {
-  cfg: OpenClawConfig;
-  agentId?: string | null;
-}): MessageToolsConfig | undefined {
-  return resolveAgentMessageToolsConfig(params.cfg, params.agentId);
 }
 
 /**

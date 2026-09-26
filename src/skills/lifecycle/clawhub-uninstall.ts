@@ -9,6 +9,7 @@ import {
   formatClawHubSkillRef,
   parseRequestedClawHubSkillRef,
   untrackClawHubSkill,
+  resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import {
@@ -28,6 +29,10 @@ export type { ClawHubSkillUninstallPlan } from "./workspace-types.js";
 export async function planClawHubSkillUninstall(
   params: Parameters<WorkspaceSkillLifecycle["planClawHubSkillUninstall"]>[0],
 ): Promise<ClawHubSkillUninstallPlanResult> {
+  const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
+  if (tracking) {
+    return await tracking.planClawHubSkillUninstall(params);
+  }
   let requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
   try {
     requestedRef = parseRequestedClawHubSkillRef(params.slug);
@@ -153,11 +158,20 @@ export async function applyClawHubSkillUninstall(
     removeDir?: typeof fs.rm;
     rename?: typeof fs.rename;
     untrack?: typeof untrackClawHubSkill;
-    beforePersistentApply?: () => void;
-    /** Compensation keeps the exact package lease, independently of canceled parent execution. */
-    beforeRollback?: () => void;
-  } = {},
-): Promise<{ ok: true } | { ok: false; error: string }> {
+    /** Await remote authority, then retain the synchronous local mutation checks. */
+    authorizeMutation?: Parameters<typeof untrackClawHubSkill>[4];
+  } & Parameters<WorkspaceSkillLifecycle["applyClawHubSkillUninstall"]>[1] = {},
+): ReturnType<WorkspaceSkillLifecycle["applyClawHubSkillUninstall"]> {
+  const tracking = resolveWorkspaceClawHubSkills(plan.workspaceDir);
+  if (tracking) {
+    return await tracking.applyClawHubSkillUninstall(plan, {
+      beforePersistentApply: deps.beforePersistentApply,
+      beforeRollback: deps.beforeRollback,
+      onCommittedChange:
+        deps.onCommittedChange ??
+        (hasCommittedSkillChangeHooks() ? dispatchCommittedSkillChangeBestEffort : undefined),
+    });
+  }
   const current = await planClawHubSkillUninstall({
     workspaceDir: plan.workspaceDir,
     slug: plan.requestedRef,
@@ -166,7 +180,7 @@ export async function applyClawHubSkillUninstall(
   if (!current.ok) {
     return { ok: false, error: current.error };
   }
-  const shouldDispatchChange = hasCommittedSkillChangeHooks();
+  const shouldDispatchChange = Boolean(deps.onCommittedChange) || hasCommittedSkillChangeHooks();
   const before = shouldDispatchChange
     ? await snapshotCommittedSkillArtifactBestEffort({
         skillDir: plan.targetDir,
@@ -198,11 +212,17 @@ export async function applyClawHubSkillUninstall(
     deps.beforeRollback?.();
   };
   const restoreStaged = async () => {
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("rollback");
+    }
     assertRollbackCurrent();
     await rename(stagedDir, plan.targetDir);
     staged = false;
   };
   try {
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("apply");
+    }
     deps.beforePersistentApply?.();
     await rename(plan.targetDir, stagedDir);
     staged = true;
@@ -215,24 +235,38 @@ export async function applyClawHubSkillUninstall(
       await restoreStaged();
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
     }
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("apply");
+    }
     deps.beforePersistentApply?.();
     restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(
       plan.workspaceDir,
       plan.slug,
       deps.beforePersistentApply,
       assertRollbackCurrent,
+      deps.authorizeMutation,
     );
+    if (deps.authorizeMutation) {
+      await deps.authorizeMutation("apply");
+    }
     deps.beforePersistentApply?.();
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
     removed = true;
     if (shouldDispatchChange) {
+      if (deps.authorizeMutation) {
+        await deps.authorizeMutation("apply");
+      }
       deps.beforePersistentApply?.();
-      await dispatchCommittedSkillChangeBestEffort({
-        action: "removed",
-        source: "clawhub",
-        workspaceDir: plan.workspaceDir,
-        before,
-      });
+      try {
+        await (deps.onCommittedChange ?? dispatchCommittedSkillChangeBestEffort)({
+          action: "removed",
+          source: "clawhub",
+          workspaceDir: plan.workspaceDir,
+          before,
+        });
+      } catch {
+        // Forwarding is best-effort, like local hooks; removal has already committed.
+      }
     }
     return { ok: true };
   } catch (error) {

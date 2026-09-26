@@ -26,12 +26,6 @@ export type ChatMetadataProjectionFacts = {
   modelCatalog: ModelCatalogSnapshot;
 };
 
-export type PreparedAgentProjection<T = ChatMetadataResult> = {
-  modelCatalog: ModelCatalogEntry[];
-  read: () => T;
-  isCurrent: () => boolean;
-};
-
 export async function prepareChatMetadataModelProjection(params: {
   context: GatewayModelCatalogContext;
   facts: ChatMetadataProjectionFacts;
@@ -41,7 +35,11 @@ export async function prepareChatMetadataModelProjection(params: {
   profileProvider?: string;
   runtimeOverride?: string;
   assertCurrent?: () => void;
-}): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
+}): Promise<{
+  modelCatalog: ModelCatalogEntry[];
+  read: () => { models?: ModelChoice[] };
+  isCurrent: () => boolean;
+}> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.

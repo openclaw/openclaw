@@ -1,5 +1,3 @@
-// Googlechat plugin module implements monitor routing behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createFixedWindowRateLimiter,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -48,7 +46,7 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
       log: target.runtime.log,
       throwOnFailure: true,
       handler: async (req, res) => {
-        const handled = await handleGoogleChatWebhookRequest(req, res);
+        const handled = await googleChatWebhookRequestHandler(req, res);
         if (!handled && !res.headersSent) {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -57,11 +55,4 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
       },
     },
   }).unregister;
-}
-
-async function handleGoogleChatWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  return await googleChatWebhookRequestHandler(req, res);
 }

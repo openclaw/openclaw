@@ -26,6 +26,7 @@ const coverageInputs = {
   npm_telegram_provider_mode: "npmTelegramProviderMode",
   npm_telegram_scenario: "npmTelegramScenario",
   plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
+  extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
   telegram_waiver: "telegramWaiver",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
@@ -215,16 +216,36 @@ export function publicationIntentInputs(intent) {
   };
 }
 
+export function normalizePublicationLaneInputs(value) {
+  object(value, ["extension_test_exclude_patterns_json"], "source-admission lane inputs");
+  return Object.fromEntries(
+    Object.entries(value).map(([key, raw]) => {
+      if (typeof raw !== "string" || raw.length > 4096) {
+        throw new Error(`invalid ${key}`);
+      }
+      const entries = JSON.parse(raw);
+      if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
+        throw new Error(`${key} must be a JSON array of strings`);
+      }
+      return [key, JSON.stringify(entries)];
+    }),
+  );
+}
+
 export function decodePublicationDispatchEnvelope(raw) {
   if (typeof raw !== "string" || !raw || Buffer.byteLength(raw) > maximumBytes) {
     throw new Error("trusted_workflow_json requires a bounded source-admission envelope");
   }
   const value = object(
     JSON.parse(raw),
-    ["trustedWorkflow", "validationPurpose", "publicationSelection"],
+    ["trustedWorkflow", "validationPurpose", "publicationSelection", "laneInputs"],
     "source-admission envelope",
   );
-  if (Object.keys(value).length !== 3) {
+  if (
+    ["trustedWorkflow", "validationPurpose", "publicationSelection"].some(
+      (key) => !Object.hasOwn(value, key),
+    )
+  ) {
     throw new Error("source-admission envelope requires identity, purpose and selection");
   }
   const trustedWorkflow = value.trustedWorkflow;
@@ -243,8 +264,11 @@ export function decodePublicationDispatchEnvelope(raw) {
       throw new Error("invalid source-admission tooling identity");
     }
   }
+  const laneInputs =
+    value.laneInputs === undefined ? undefined : normalizePublicationLaneInputs(value.laneInputs);
   return {
     trustedWorkflow,
+    ...(laneInputs === undefined ? {} : { laneInputs }),
     ...normalizePublicationIntent(
       value.validationPurpose,
       value.publicationSelection === null ? "" : publicationSourceJson(value.publicationSelection),
@@ -252,16 +276,19 @@ export function decodePublicationDispatchEnvelope(raw) {
   };
 }
 
-export function publicationDispatchEnvelope(trustedWorkflow, intent) {
+export function publicationDispatchEnvelope(trustedWorkflow, intent, laneInputs) {
   return publicationSourceJson(
-    decodePublicationDispatchEnvelope(publicationSourceJson({ trustedWorkflow, ...intent })),
+    decodePublicationDispatchEnvelope(
+      publicationSourceJson({ trustedWorkflow, ...intent, ...(laneInputs ? { laneInputs } : {}) }),
+    ),
   );
 }
 
 function dispatchEnvelopeFromInputs(inputs) {
   if (
     Object.hasOwn(inputs, "validation_purpose") ||
-    Object.hasOwn(inputs, "publication_selection_json")
+    Object.hasOwn(inputs, "publication_selection_json") ||
+    Object.hasOwn(inputs, "extension_test_exclude_patterns_json")
   ) {
     throw new Error("source intent must use only the trusted_workflow_json envelope");
   }
@@ -270,7 +297,8 @@ function dispatchEnvelopeFromInputs(inputs) {
 
 export function publicationSourceRequest(env) {
   const inputs = JSON.parse(env.PUBLICATION_INPUTS_JSON);
-  const { trustedWorkflow, ...intent } = dispatchEnvelopeFromInputs(inputs);
+  const { trustedWorkflow, laneInputs, ...intent } = dispatchEnvelopeFromInputs(inputs);
+  const coverageSource = { ...inputs, extension_test_exclude_patterns_json: "[]", ...laneInputs };
   const tooling = JSON.parse(env.PUBLICATION_TOOLING_JSON);
   if (
     trustedWorkflow &&
@@ -287,7 +315,7 @@ export function publicationSourceRequest(env) {
     "fail_fast",
     "dispatch_release_evidence",
   ]) {
-    coverage[key] = text(String(inputs[key] ?? ""), key);
+    coverage[key] = text(String(coverageSource[key] ?? ""), key);
   }
   coverage.live_suite_filter = env.PUBLICATION_LIVE_FILTER ?? coverage.live_suite_filter;
   coverage.cross_os_suite_filter =
@@ -389,8 +417,20 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  object(value.coverage, coverageKeys, "source admission coverage");
-  if (coverageKeys.some((key) => !Object.hasOwn(value.coverage, key))) {
+  // Published admissions bind this retired empty field into their digest.
+  object(value.coverage, [...coverageKeys, "known_flaky_jobs_json"], "source admission coverage");
+  if (
+    Object.hasOwn(value.coverage, "known_flaky_jobs_json") &&
+    value.coverage.known_flaky_jobs_json !== "[]"
+  ) {
+    throw new Error("source admission known_flaky_jobs_json must be empty");
+  }
+  if (
+    coverageKeys.some(
+      (key) =>
+        key !== "extension_test_exclude_patterns_json" && !Object.hasOwn(value.coverage, key),
+    )
+  ) {
     throw new Error("source admission coverage is incomplete");
   }
   for (const entry of Object.values(value.coverage)) {
@@ -555,7 +595,11 @@ export function validatePublicationSourceBinding(record, expected = {}) {
       }
     }
     for (const [input, key] of Object.entries(coverageInputs)) {
-      if (String(record.validationInputs[key] ?? "") !== fact.coverage[input]) {
+      const historicalDefault = input === "extension_test_exclude_patterns_json" ? "[]" : "";
+      if (
+        String(record.validationInputs[key] ?? historicalDefault) !==
+        (fact.coverage[input] ?? historicalDefault)
+      ) {
         throw new Error(`source admission coverage ${key} differs from manifest`);
       }
     }
@@ -1093,6 +1137,10 @@ if (invokedAsMain) {
       const identity =
         envelope.trustedWorkflow === null ? "" : publicationSourceJson(envelope.trustedWorkflow);
       appendFileSync(process.env.GITHUB_OUTPUT, `trusted_workflow_json=${identity}\n`);
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `extension_test_exclude_patterns_json=${envelope.laneInputs?.extension_test_exclude_patterns_json ?? "[]"}\n`,
+      );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);
       const normalized = publicationIntentInputs(request);

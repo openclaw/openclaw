@@ -42,6 +42,26 @@ describe("session group catalog readers", () => {
     ]);
   });
 
+  it("replaces prior defaults without changing catalog metadata or inputs", () => {
+    const groups = Object.freeze([
+      Object.freeze({ name: "Client", position: 4, cwd: "/old/client", worktree: true }),
+      Object.freeze({ name: "Local", position: 1, cwd: "/old/local", worktree: true }),
+      Object.freeze({ name: "Missing", position: 8, cwd: "/old/missing", worktree: true }),
+    ]);
+    const payload = Object.freeze({
+      defaults: Object.freeze([
+        Object.freeze({ name: "Client", worktree: false }),
+        Object.freeze({ name: "Local", cwd: "/repos/local" }),
+      ]),
+    });
+
+    expect(mergeSessionGroupDefaults(groups, payload)).toStrictEqual([
+      { name: "Client", position: 4, worktree: false },
+      { name: "Local", position: 1, cwd: "/repos/local" },
+      { name: "Missing", position: 8 },
+    ]);
+  });
+
   it("reads normalized section order", () => {
     expect(
       readSidebarSectionOrder({

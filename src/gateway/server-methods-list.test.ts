@@ -232,6 +232,19 @@ describe("listGatewayMethods", () => {
       "themes.get",
       "themes.set",
       "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -284,6 +297,19 @@ describe("listGatewayMethods", () => {
       "themes.get",
       "themes.set",
       "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
     ]);
   });
 
@@ -465,6 +491,19 @@ describe("listGatewayMethods", () => {
       "themes.get",
       "themes.set",
       "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
+      "sessions.providerReview.continue",
+      "users.linkChannelIdentity",
+      "users.unlinkChannelIdentity",
+      "users.listChannelIdentities",
+      "users.personalFile.get",
+      "users.personalFile.set",
+      "portal.session.list",
+      "portal.session.open",
+      "portal.session.close",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

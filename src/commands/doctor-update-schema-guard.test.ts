@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
 import * as packageRoot from "../infra/openclaw-root.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -20,10 +20,13 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
+import { backupRestoreCommand } from "./backup-restore.js";
+import { buildBackupArchivePath } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
@@ -73,6 +76,7 @@ async function legacyAgentFixture(postCore: boolean) {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(pathname);
   try {
+    restoreEmptyV21StorageForHistoricalFixture(db);
     removeCanonicalValidationFromHistoricalAgentFixture(db);
     db.exec(`
       DROP TABLE session_transcript_cold_archives;
@@ -182,6 +186,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
     const logs = runtime();
     const create = vi.spyOn(backupCreate, "createBackupArchive");
     const verify = vi.spyOn(backupVerify, "verifyBackupArchive");
+    const onVerifiedBackup = vi.fn();
     const authority = { runId: f.runId, assertCurrent: vi.fn() };
     const maintenance = await beginDoctorMaintenance({
       root: null,
@@ -196,9 +201,19 @@ it("retains a verified canonical backup before permitting the normal schema migr
           schemas: f.schemas,
           runtime: logs,
           postCoreSchemaRepair: authority,
+          onVerifiedBackup,
         });
         expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
         expect(verify).toHaveBeenCalledTimes(1);
+        const identity = fs.statSync(f.pathname);
+        expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
+          expect.objectContaining({
+            role: "agent",
+            agentId: "main",
+            dev: identity.dev,
+            ino: identity.ino,
+          }),
+        ]);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
           migrateOpenClawAgentDatabaseForMaintenance(
             { agentId: "main", pathname: f.pathname },
@@ -251,6 +266,7 @@ it.each([
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = await legacyAgentFixture(true);
     let active = true;
+    const onVerifiedBackup = vi.fn();
     const canceled = new AbortController();
     const assertCurrent = () => {
       canceled.signal.throwIfAborted();
@@ -286,6 +302,7 @@ it.each([
           guardUpdateDoctorSchemaUpgrade({
             schemas: f.schemas,
             postCoreSchemaRepair: { runId: f.runId, assertCurrent },
+            onVerifiedBackup,
           }),
         ),
       ).rejects.toThrow(
@@ -301,6 +318,7 @@ it.each([
       await maintenance?.release();
     }
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+    expect(onVerifiedBackup).not.toHaveBeenCalled();
   });
 });
 
@@ -351,7 +369,7 @@ it("revalidates the update owner after integrity work before committing an agent
   });
 });
 
-it("refuses configured unregistered WAL state before package commit and before live post-core repair", async () => {
+it("refuses early unregistered WAL state and admits post-core repair after verified capture", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const f = await legacyAgentFixture(false);
     unregisterOpenClawAgentDatabase({ agentId: "main", path: f.pathname });
@@ -391,6 +409,7 @@ it("refuses configured unregistered WAL state before package commit and before l
       recordUpdateRunStep(f.runId, { step: "openclaw doctor", status: "completed" });
       recordUpdateRunStep(f.runId, { step: "post-update verification", status: "in_progress" });
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+      const create = vi.spyOn(backupCreate, "createBackupArchive");
       const maintenance = await beginDoctorMaintenance({
         root: null,
         options: { repair: true },
@@ -404,10 +423,41 @@ it("refuses configured unregistered WAL state before package commit and before l
               postCoreSchemaRepair: { runId: f.runId, assertCurrent() {} },
             }),
           ),
-        ).rejects.toThrow("no captured canonical image");
+        ).resolves.toMatchObject({
+          pendingMigrations: [
+            {
+              kind: "agent",
+              agentId: "main",
+              path: pathname,
+              foundVersion: 19,
+              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+            },
+          ],
+        });
       } finally {
         await maintenance?.release();
       }
+      const archive = await expectDefined(create.mock.results[0], "canonical backup creation")
+        .value;
+      const restoredRoot = state.path("restored");
+      await backupRestoreCommand(runtime(), { archive: archive.archivePath, target: restoredRoot });
+      const restoredPath = path.join(
+        restoredRoot,
+        buildBackupArchivePath(archive.archiveRoot, pathname),
+      );
+      const restored = new DatabaseSync(restoredPath, { readOnly: true });
+      try {
+        expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+        expect(
+          restored.prepare("SELECT key,value_json FROM cache_entries ORDER BY key").all(),
+        ).toEqual([
+          { key: "retained", value_json: '{"keep":true}' },
+          { key: "wal-only", value_json: '{"durable":true}' },
+        ]);
+      } finally {
+        restored.close();
+      }
+      expect(fs.existsSync(`${restoredPath}-wal`)).toBe(false);
       expect(
         files.map((file) => fs.readFileSync(file)),
         JSON.stringify(

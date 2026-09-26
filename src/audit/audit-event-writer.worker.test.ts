@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { listAuditEvents } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input, messageEvent, decisionReceipt } from "./audit-event-writer.test-support.js";
@@ -62,17 +63,13 @@ describe("audit writer shared worker", () => {
       const progress = setInterval(() => {
         eventLoopTicks += 1;
       }, 1);
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        vi.spyOn(native.DatabaseSync.prototype, "close"),
-        ...(["get", "all", "run", "iterate"] as const).map((operation) =>
-          vi.spyOn(native.StatementSync.prototype, operation),
-        ),
-      ];
+      const counters = observeMainThreadSql({ includeClose: true });
       const startedAt = performance.now();
       const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
-      const recorder = createAuditEventRecorder({ messageMode: "all", writer });
+      const recorder = createAuditEventRecorder({
+        getConfig: () => ({ logging: { audit: { messages: "all" } } }),
+        writer,
+      });
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
       let hostSqlCounts: number[];
       let readyMs = 0;
@@ -127,8 +124,11 @@ describe("audit writer shared worker", () => {
           batchDrainMs = performance.now() - batchStartedAt;
         } finally {
           clearInterval(progress);
-          hostSqlCounts = [nativeOpens, ...counters.map((counter) => counter.mock.calls.length)];
-          counters.forEach((counter) => counter.mockRestore());
+          hostSqlCounts = [
+            nativeOpens,
+            ...counters.calls.map((counter) => counter.mock.calls.length),
+          ];
+          counters.restore();
           restoreConstructor();
         }
       }

@@ -40,12 +40,8 @@ type SetAtPathOptions = {
   schema?: JsonSchemaRecord;
 };
 
-function parseIndexSegment(raw: string): number | undefined {
-  return parseConfigPathArrayIndex(raw);
-}
-
 function isIndexSegment(raw: string): boolean {
-  return parseIndexSegment(raw) !== undefined;
+  return parseConfigPathArrayIndex(raw) !== undefined;
 }
 
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
@@ -78,10 +74,6 @@ export function validatePathSegments(path: PathSegment[]): void {
   }
 }
 
-function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(value, key);
-}
-
 export function getAtPath(
   root: unknown,
   path: readonly PathSegment[],
@@ -92,7 +84,7 @@ export function getAtPath(
       return { found: false };
     }
     if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
+      const index = parseConfigPathArrayIndex(segment);
       if (index === undefined || index >= current.length) {
         return { found: false };
       }
@@ -100,7 +92,7 @@ export function getAtPath(
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!hasOwnPathKey(record, segment)) {
+    if (!Object.hasOwn(record, segment)) {
       return { found: false };
     }
     current = record[segment];
@@ -116,10 +108,6 @@ export function formatConfigUnsetMissingPathMessage(params: {
     return `Config path not found in authored config: ${params.path}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use ${formatCliCommand("openclaw config set <path> <value>")} to override the inherited value.`;
   }
   return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
-}
-
-function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
-  return isPlainRecord(value);
 }
 
 function schemaTypes(schema: JsonSchemaRecord): Set<string> {
@@ -147,7 +135,7 @@ function schemaAlternatives(
       continue;
     }
     for (const entry of entries) {
-      if (isSchemaRecord(entry)) {
+      if (isPlainRecord(entry)) {
         alternatives.push(...schemaAlternatives(entry, seen));
       }
     }
@@ -157,7 +145,7 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
+    schemaTypes(schema).has("array") || isPlainRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 
@@ -165,9 +153,9 @@ function schemaLooksObject(schema: JsonSchemaRecord): boolean {
   const types = schemaTypes(schema);
   return (
     types.has("object") ||
-    isSchemaRecord(schema.properties) ||
+    isPlainRecord(schema.properties) ||
     schema.additionalProperties === true ||
-    isSchemaRecord(schema.additionalProperties)
+    isPlainRecord(schema.additionalProperties)
   );
 }
 
@@ -175,24 +163,24 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
     if (schemaLooksArray(alternative)) {
-      const index = parseIndexSegment(segment);
+      const index = parseConfigPathArrayIndex(segment);
       if (index !== undefined) {
         const indexedItem = Array.isArray(alternative.items)
           ? alternative.items[index]
           : alternative.items;
-        if (isSchemaRecord(indexedItem)) {
+        if (isPlainRecord(indexedItem)) {
           schemas.push(indexedItem);
         }
       }
       continue;
     }
-    const properties = isSchemaRecord(alternative.properties)
+    const properties = isPlainRecord(alternative.properties)
       ? (alternative.properties as Record<string, unknown>)
       : undefined;
     const explicit = properties?.[segment];
-    if (isSchemaRecord(explicit)) {
+    if (isPlainRecord(explicit)) {
       schemas.push(explicit);
-    } else if (isSchemaRecord(alternative.additionalProperties)) {
+    } else if (isPlainRecord(alternative.additionalProperties)) {
       schemas.push(alternative.additionalProperties);
     }
   }
@@ -283,7 +271,7 @@ export function setAtPath(
       options,
     });
     if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
+      const index = parseConfigPathArrayIndex(segment);
       if (index === undefined) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
@@ -298,7 +286,7 @@ export function setAtPath(
       throw new Error(`Cannot traverse into "${segment}" (not an object)`);
     }
     const record = current as Record<string, unknown>;
-    const existing = hasOwnPathKey(record, segment) ? record[segment] : undefined;
+    const existing = Object.hasOwn(record, segment) ? record[segment] : undefined;
     if (!existing || typeof existing !== "object") {
       record[segment] = nextIsIndex ? [] : {};
     }
@@ -306,7 +294,7 @@ export function setAtPath(
   }
 
   if (Array.isArray(current)) {
-    const index = parseIndexSegment(last);
+    const index = parseConfigPathArrayIndex(last);
     if (index === undefined) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
@@ -333,8 +321,15 @@ function modelArrayIds(value: unknown): Set<string> | null {
   return ids;
 }
 
-function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
+type ConfigMergeResult = { value: unknown; suppliedPaths: PathSegment[][] };
+
+function mergeModelArrays(
+  existing: unknown[],
+  patch: unknown[],
+  path: PathSegment[],
+): ConfigMergeResult {
   const merged = [...existing];
+  const suppliedPaths: PathSegment[][] = [];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
     if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
@@ -343,6 +338,7 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
   }
   for (const entry of patch) {
     if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+      suppliedPaths.push([...path, String(merged.length)]);
       merged.push(entry);
       continue;
     }
@@ -350,13 +346,17 @@ function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
     const existingIndex = indexById.get(id);
     if (existingIndex === undefined) {
       indexById.set(id, merged.length);
+      suppliedPaths.push([...path, String(merged.length)]);
       merged.push(entry);
       continue;
     }
     const existingEntry = merged[existingIndex];
     merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
+    for (const key of Object.keys(entry)) {
+      suppliedPaths.push([...path, String(existingIndex), key]);
+    }
   }
-  return merged;
+  return { value: merged, suppliedPaths };
 }
 
 function isProviderModelListPath(path: PathSegment[]): boolean {
@@ -370,16 +370,20 @@ type MergePath = {
   segment: PathSegment;
 };
 
-function appendMergePath(parent: MergePath | undefined, segment: PathSegment): MergePath {
-  return { parent, segment };
-}
-
 function toMergePath(path: PathSegment[]): MergePath | undefined {
   let current: MergePath | undefined;
   for (const segment of path) {
-    current = appendMergePath(current, segment);
+    current = { parent: current, segment };
   }
   return current;
+}
+
+function mergePathSegments(path: MergePath): PathSegment[] {
+  const segments: PathSegment[] = [];
+  for (let current: MergePath | undefined = path; current; current = current.parent) {
+    segments.push(current.segment);
+  }
+  return segments.toReversed();
 }
 
 function isProviderModelListMergePath(path: MergePath): boolean {
@@ -394,28 +398,35 @@ function isProviderModelListMergePath(path: MergePath): boolean {
   );
 }
 
-function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
+function mergeConfigValue(
+  existing: unknown,
+  patch: unknown,
+  path: PathSegment[],
+): ConfigMergeResult {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
-    return mergeModelArrays(existing, patch);
+    return mergeModelArrays(existing, patch, path);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
+    const suppliedPaths: PathSegment[][] = [];
     // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
     const pending = [{ target: next, patch, path: toMergePath(path) }];
     while (pending.length > 0) {
       const frame = pending.pop()!;
       for (const [key, value] of Object.entries(frame.patch)) {
         const current = frame.target[key];
-        const childPath = appendMergePath(frame.path, key);
+        const childPath: MergePath = { parent: frame.path, segment: key };
         if (
-          hasOwnPathKey(frame.target, key) &&
+          Object.hasOwn(frame.target, key) &&
           isProviderModelListMergePath(childPath) &&
           Array.isArray(current) &&
           Array.isArray(value)
         ) {
-          frame.target[key] = mergeModelArrays(current, value);
+          const merged = mergeModelArrays(current, value, mergePathSegments(childPath));
+          frame.target[key] = merged.value;
+          suppliedPaths.push(...merged.suppliedPaths);
         } else if (
-          hasOwnPathKey(frame.target, key) &&
+          Object.hasOwn(frame.target, key) &&
           isPlainRecord(current) &&
           isPlainRecord(value)
         ) {
@@ -424,10 +435,11 @@ function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]
           pending.push({ target: child, patch: value, path: childPath });
         } else {
           frame.target[key] = value;
+          suppliedPaths.push(mergePathSegments(childPath));
         }
       }
     }
-    return next;
+    return { value: next, suppliedPaths };
   }
   throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
 }
@@ -437,14 +449,13 @@ export function mergeAtPath(
   path: PathSegment[],
   value: unknown,
   options?: SetAtPathOptions,
-): void {
+): PathSegment[][] {
   const existing = getAtPath(root, path);
-  setAtPath(
-    root,
-    path,
-    existing.found ? mergeConfigValue(existing.value, value, path) : value,
-    options,
-  );
+  const merged = existing.found
+    ? mergeConfigValue(existing.value, value, path)
+    : { value, suppliedPaths: [path] };
+  setAtPath(root, path, merged.value, options);
+  return merged.suppliedPaths;
 }
 
 function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
@@ -457,10 +468,6 @@ function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
     joined === "plugins.entries" ||
     joined === "auth.profiles"
   );
-}
-
-function isProtectedArrayReplacementPath(path: PathSegment[]): boolean {
-  return isProviderModelListPath(path);
 }
 
 function formatRemovedEntries(entries: string[]): string {
@@ -496,7 +503,7 @@ export function assertNonDestructiveReplacement(params: {
       );
     }
   }
-  if (isProtectedArrayReplacementPath(params.path)) {
+  if (isProviderModelListPath(params.path)) {
     const existingIds = modelArrayIds(existing.value);
     const nextIds = modelArrayIds(params.value);
     if (!existingIds || !nextIds) {
@@ -521,7 +528,7 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
   const current = getAtPath(root, path.slice(0, -1)).value;
 
   if (Array.isArray(current)) {
-    const index = parseIndexSegment(last);
+    const index = parseConfigPathArrayIndex(last);
     if (index === undefined || index >= current.length) {
       return { removed: false };
     }
@@ -532,7 +539,7 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
     return { removed: false };
   }
   const record = current as Record<string, unknown>;
-  if (!hasOwnPathKey(record, last)) {
+  if (!Object.hasOwn(record, last)) {
     return { removed: false };
   }
   delete record[last];

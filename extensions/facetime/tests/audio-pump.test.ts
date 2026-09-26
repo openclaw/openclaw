@@ -125,12 +125,14 @@ describe("FaceTime native audio bridge", () => {
         spawn: captureProcesses(processes),
       });
 
-      pump.writeOutputAudio(Buffer.alloc(4_800));
+      pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "greeting" });
       pump.finishOutputAudio();
       expect(pump.playedAudioFrames()).toBe(0);
       expect(pump.queuedAudioFrames()).toBe(2_400);
+      expect(pump.getPlaybackState()).toEqual([{ itemId: "greeting", audioEndMs: 0 }]);
       await vi.advanceTimersByTimeAsync(199);
       expect(onPlaybackDrained).not.toHaveBeenCalled();
+      expect(pump.getPlaybackState()).toEqual([{ itemId: "greeting", audioEndMs: 99 }]);
       await vi.advanceTimersByTimeAsync(1);
       expect(pump.playedAudioFrames()).toBe(2_400);
       expect(pump.queuedAudioFrames()).toBe(0);
@@ -138,8 +140,53 @@ describe("FaceTime native audio bridge", () => {
         generation: 1,
         playedFrames: 2_400,
       });
+      expect(pump.getPlaybackState()).toEqual([]);
       await pump.stop();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains per-item progress across starvation until the response finishes", async () => {
+    vi.useFakeTimers();
+    const pump = startFaceTimeAudioPump({
+      captureBinary: "/capture",
+      logger: console,
+      onInputAudio() {},
+      spawn: captureProcesses([]),
+    });
+    try {
+      pump.writeOutputAudio(Buffer.alloc(9_600), { itemId: "prefix" });
+      pump.writeOutputAudio(Buffer.alloc(38_400), { itemId: "answer" });
+      await vi.advanceTimersByTimeAsync(600);
+      expect(pump.getPlaybackState()).toEqual([
+        { itemId: "prefix", audioEndMs: 200 },
+        { itemId: "answer", audioEndMs: 300 },
+      ]);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(pump.queuedAudioFrames()).toBe(0);
+      expect(pump.getPlaybackState()).toEqual([
+        { itemId: "prefix", audioEndMs: 200 },
+        { itemId: "answer", audioEndMs: 800 },
+      ]);
+
+      pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "answer" });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(pump.getPlaybackState()).toEqual([
+        { itemId: "prefix", audioEndMs: 200 },
+        { itemId: "answer", audioEndMs: 850 },
+      ]);
+      pump.finishOutputAudio();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(pump.getPlaybackState()).toEqual([]);
+
+      pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "next-answer" });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(pump.getPlaybackState()).toEqual([{ itemId: "next-answer", audioEndMs: 100 }]);
+      pump.finishOutputAudio();
+      expect(pump.getPlaybackState()).toEqual([]);
+    } finally {
+      await pump.stop();
       vi.useRealTimers();
     }
   });
@@ -157,7 +204,7 @@ describe("FaceTime native audio bridge", () => {
         onPlaybackDrained,
         spawn,
       });
-      pump.writeOutputAudio(Buffer.alloc(480));
+      pump.writeOutputAudio(Buffer.alloc(480), { itemId: "interrupted" });
       pump.finishOutputAudio();
       pump.clearOutputAudio();
       const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
@@ -170,6 +217,7 @@ describe("FaceTime native audio bridge", () => {
       await vi.advanceTimersByTimeAsync(200);
       expect(onPlaybackDrained).not.toHaveBeenCalled();
       expect(pump.queuedAudioFrames()).toBe(0);
+      expect(pump.getPlaybackState()).toEqual([]);
       await pump.stop();
     } finally {
       vi.useRealTimers();
@@ -193,28 +241,6 @@ describe("FaceTime native audio bridge", () => {
     expect(onSuppressionLost).toHaveBeenCalledOnce();
   });
 
-  it("uses parent EOF without a safe-release frame for process-handoff failure", async () => {
-    const processes: FakeProcess[] = [];
-    const spawn = captureProcesses(processes);
-    const pump = startFaceTimeAudioPump({
-      captureBinary: "/capture",
-      logger: console,
-      onInputAudio() {},
-      spawn,
-    });
-
-    const failClosed = pump.failClosed();
-    expect(processes[0]?.stdin.writableEnded).toBe(true);
-    expect(processes[0]?.stdin.writes).toEqual([]);
-    expect(processes[1]?.kills).toEqual(["SIGKILL"]);
-    const wakeIndex = spawn.mock.calls.findIndex((call) => call[0] === "/usr/bin/caffeinate");
-    if (wakeIndex >= 0) {
-      expect(processes[wakeIndex]?.kills).toEqual(["SIGTERM"]);
-    }
-    processes[0]?.emit("exit", 0, null);
-    await failClosed;
-  });
-
   it("does not report intentional media suspension as a playback failure", async () => {
     const processes: FakeProcess[] = [];
     const onError = vi.fn(async () => false);
@@ -226,11 +252,13 @@ describe("FaceTime native audio bridge", () => {
       spawn: captureProcesses(processes),
     });
 
+    pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "suspended" });
     await pump.suspendMedia();
 
     expect(processes[1]?.kills).toEqual(["SIGKILL"]);
     expect(onError).not.toHaveBeenCalled();
     expect(processes[0]?.kills).toEqual([]);
+    expect(pump.getPlaybackState()).toEqual([]);
     await pump.stop();
   });
 

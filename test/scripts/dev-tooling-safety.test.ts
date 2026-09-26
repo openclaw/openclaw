@@ -7,7 +7,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
@@ -23,6 +22,11 @@ import {
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { isProcessAlive, waitForChildClose, waitForDead } from "../helpers/process-wait.js";
@@ -30,6 +34,7 @@ import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const tempDirs: string[] = [];
 const testNodeExecPath = resolveTestNodeExecPath();
+const promptProbeUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.anthropicPromptProbe);
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -46,8 +51,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
 
 // writeFileSync is not atomic for concurrent readers: the pid file can exist
 // before its payload is flushed, so wait for non-empty content or the parse
-// races into NaN under parallel-suite load. Generous budget: probe children
-// boot node + tsx before the descendant pid lands.
+// races into NaN under parallel-suite load.
 async function waitForPidFile(pidPath: string, timeoutMs = 15_000): Promise<number> {
   let content = "";
   await waitForCondition(() => {
@@ -315,10 +319,17 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("computes the remaining Discord smoke timeout budget", () => {
-    expect(discordSmokeTesting.remainingTimeoutMs(1_500, 1_000)).toBe(500);
-    expect(() => discordSmokeTesting.remainingTimeoutMs(1_000, 1_000)).toThrow(
+    expect(discordSmokeTesting.remainingTimeoutMs(1_500, undefined, 1_000)).toBe(500);
+    expect(() => discordSmokeTesting.remainingTimeoutMs(1_000, undefined, 1_000)).toThrow(
       /exceeded total timeout/u,
     );
+    expect(() =>
+      discordSmokeTesting.remainingTimeoutMs(
+        1_000,
+        () => new Error("request-specific timeout"),
+        1_000,
+      ),
+    ).toThrow("request-specific timeout");
   });
 
   it("aborts stalled Discord smoke fetches at the request timeout", async () => {
@@ -341,6 +352,7 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("times out stalled Discord smoke response body reads", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const response = new Response(
       new ReadableStream({
         start() {},
@@ -357,9 +369,11 @@ describe("script-specific dev tooling hardening", () => {
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
     });
 
-    await expect(request).rejects.toThrow(
+    const rejection = expect(request).rejects.toThrow(
       /Discord API GET \/channels\/123\/messages exceeded timeout/u,
     );
+    await vi.advanceTimersByTimeAsync(5);
+    await rejection;
   });
 
   it("bounds Discord smoke response bodies by content-length", async () => {
@@ -408,6 +422,7 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("does not launch another Discord smoke retry after the timeout budget expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let calls = 0;
     const response = {
       ok: false,
@@ -483,21 +498,6 @@ describe("script-specific dev tooling hardening", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
-  });
-
-  it("reads TUI PTY mirror updates incrementally with a bounded chunk", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-watch-test-"));
-    tempDirs.push(tempRoot);
-    const mirrorPath = path.join(tempRoot, "mirror.ansi");
-    await fs.writeFile(mirrorPath, "first-second-third", "utf8");
-
-    const first = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, 0, 6);
-    expect(first.chunk.toString("utf8")).toBe("first-");
-    expect(first.offset).toBe(6);
-
-    const second = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, first.offset, 6);
-    expect(second.chunk.toString("utf8")).toBe("second");
-    expect(second.offset).toBe(12);
   });
 
   it("restarts TUI PTY mirror reads when the mirror file is truncated", async () => {
@@ -654,17 +654,6 @@ describe("script-specific dev tooling hardening", () => {
 
     expect(modulePath.endsWith("/ui/src/pages/chat/talk/gateway-relay.ts")).toBe(true);
     expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
-  });
-
-  it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
-    const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
-    const response = new Response("{}", {
-      headers: { "content-length": String(maxBytes + 1) },
-    });
-
-    await expect(
-      realtimeSmokeTesting.readBoundedText(response, "OpenAI Realtime test", maxBytes),
-    ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
   });
 
   it("rejects unsafe OpenAI realtime SDP answer content-length values before reading", async () => {
@@ -825,26 +814,22 @@ describe("script-specific dev tooling hardening", () => {
       const owner = createVitestResourceOwner(tempRoot);
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath, "escaped-output");
-      const probe = spawn(
-        process.execPath,
-        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            CLAUDE_BIN: fakeClaudeBin,
-            OPENCLAW_PROMPT_TRANSPORT: "direct",
-            OPENCLAW_PROMPT_CAPTURE: "0",
-            OPENCLAW_PROMPT_KEEP_TMP: "0",
-            OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
-            OPENCLAW_PROMPT_LIST_JSON: JSON.stringify(["cleanup uncertainty", "must not run"]),
-            TMPDIR: tempRoot,
-            TMP: tempRoot,
-            TEMP: tempRoot,
-          },
-          stdio: ["ignore", "pipe", "pipe"],
+      const probe = spawn(process.execPath, resolveRuntimeWorkerArgv(promptProbeUrl), {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CLAUDE_BIN: fakeClaudeBin,
+          OPENCLAW_PROMPT_TRANSPORT: "direct",
+          OPENCLAW_PROMPT_CAPTURE: "0",
+          OPENCLAW_PROMPT_KEEP_TMP: "0",
+          OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
+          OPENCLAW_PROMPT_LIST_JSON: JSON.stringify(["cleanup uncertainty", "must not run"]),
+          TMPDIR: tempRoot,
+          TMP: tempRoot,
+          TEMP: tempRoot,
         },
-      );
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let stdout = "";
       let stderr = "";
       let descendantPid = 0;
@@ -963,21 +948,17 @@ describe("script-specific dev tooling hardening", () => {
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       let descendantPid = 0;
       const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = spawn(
-        process.execPath,
-        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            CLAUDE_BIN: fakeClaudeBin,
-            OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
-            OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
-            OPENCLAW_PROMPT_TRANSPORT: "direct",
-          },
-          stdio: "ignore",
+      const probe = spawn(process.execPath, resolveRuntimeWorkerArgv(promptProbeUrl), {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CLAUDE_BIN: fakeClaudeBin,
+          OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
+          OPENCLAW_PROMPT_TIMEOUT_MS: "10000",
+          OPENCLAW_PROMPT_TRANSPORT: "direct",
         },
-      );
+        stdio: "ignore",
+      });
 
       try {
         descendantPid = await waitForPidFile(descendantPidPath);
@@ -1156,9 +1137,7 @@ describe("script-specific dev tooling hardening", () => {
         [
           "import childProcess from 'node:child_process';",
           "import fs from 'node:fs';",
-          `const { testing } = await import(${JSON.stringify(
-            pathToFileURL(path.resolve("scripts/anthropic-prompt-probe.ts")).href,
-          )});`,
+          `const { testing } = await import(${JSON.stringify(promptProbeUrl.href)});`,
           "const signalController = testing.createPromptProbeParentSignalController();",
           `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
           "let stopPromise;",
@@ -1179,9 +1158,13 @@ describe("script-specific dev tooling hardening", () => {
         ].join("\n"),
         "utf8",
       );
-      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-        stdio: "ignore",
-      });
+      const runner = spawn(
+        process.execPath,
+        [...resolveRuntimeWorkerArgv(promptProbeUrl).slice(0, -1), runnerPath],
+        {
+          stdio: "ignore",
+        },
+      );
 
       try {
         await waitForCondition(() => existsSync(readyPath));

@@ -46,21 +46,22 @@ function finiteJsonUnchecked(value: unknown): "valid" | "oversized" | "invalid" 
     if (typeof entry !== "object" || !entry || ancestors.has(entry)) {
       return false;
     }
-    if (!Array.isArray(entry) && !record(entry)) {
+    const array = Array.isArray(entry);
+    if (array ? Object.getPrototypeOf(entry) !== Array.prototype : !record(entry)) {
       return false;
     }
     const keys = Reflect.ownKeys(entry);
-    if (keys.length > MAX_NODES || (Array.isArray(entry) && entry.length > MAX_NODES)) {
+    if (keys.length > MAX_NODES || (array && entry.length > MAX_NODES)) {
       nodes = MAX_NODES + 1;
       return true;
     }
     if (keys.some((key) => typeof key !== "string")) {
       return false;
     }
-    if (Array.isArray(entry) && keys.length !== entry.length + 1) {
+    if (array && keys.length !== entry.length + 1) {
       return false;
     }
-    if (Array.isArray(entry)) {
+    if (array) {
       for (let index = 0; index < entry.length; index++) {
         if (!Object.hasOwn(entry, index)) {
           return false;
@@ -69,7 +70,7 @@ function finiteJsonUnchecked(value: unknown): "valid" | "oversized" | "invalid" 
     }
     ancestors.add(entry);
     for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(entry))) {
-      if (Array.isArray(entry) && key === "length") {
+      if (array && key === "length") {
         continue;
       }
       // Hidden data would disappear from the admitted structured clone.
@@ -111,7 +112,7 @@ function decisionEntry(value: unknown): boolean {
 }
 
 /** Returns false only for locally unsupported resource size, never silently truncates. */
-export function validateDecisionBatch(batch: DecisionBatch): boolean {
+export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
   const shape = finiteJson(batch);
   if (shape === "invalid") {
     throw new DecisionContractError();

@@ -57,13 +57,7 @@ export function readJsonPointer(
       current = current[index];
       continue;
     }
-    if (!isJsonObject(current)) {
-      return failOrUndefined({
-        onMissing,
-        message: `JSON pointer segment "${token}" does not exist.`,
-      });
-    }
-    if (!Object.hasOwn(current, token)) {
+    if (!isJsonObject(current) || !Object.hasOwn(current, token)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,

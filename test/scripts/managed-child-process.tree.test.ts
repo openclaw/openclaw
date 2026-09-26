@@ -43,6 +43,32 @@ it("cancels admission while Windows platform code loads without spawning or reta
   owner.assertReleased();
 });
 
+it("preserves deferred spawn errors and releases ownership when output streams were never created", async () => {
+  const root = dirs.make("managed-spawn-no-streams-");
+  const owner = createVitestResourceOwner(root);
+  const child = new ChildProcess();
+  const failure = Object.assign(new Error("file descriptor limit reached"), { code: "EMFILE" });
+  // Node returns before creating stdout/stderr on EMFILE/ENFILE, then emits error.
+  const emitted = once(child, "error");
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const listeners = signals.map((signal) => process.listenerCount(signal));
+  mocks.spawn.mockImplementation(() => {
+    process.nextTick(() => child.emit("error", failure));
+    return child;
+  });
+  const outcome = runManagedCommand({
+    bin: "fixture",
+    platform: "darwin",
+    shell: false,
+    stdio: "pipe",
+    env: { TMPDIR: root },
+  }).catch((error: unknown) => error);
+  await emitted;
+  expect(await outcome).toBe(failure);
+  owner.assertReleased();
+  expect(signals.map((signal) => process.listenerCount(signal))).toEqual(listeners);
+});
+
 it("preserves requested command inputs across Windows platform loading", async () => {
   const root = dirs.make("managed-platform-inputs-");
   const child = new ChildProcess();
@@ -112,6 +138,68 @@ it.each(["returned false", "ESRCH"])(
   },
 );
 
+it.each([false, true])(
+  "retains signal failures after strict POSIX cleanup joins (leader signal fails: %s)",
+  async (leaderSignalFails) => {
+    const root = dirs.make("managed-joined-diagnostics-");
+    const owner = createVitestResourceOwner(root);
+    const child = new ChildProcess();
+    Object.defineProperties(child, { pid: { value: 12345 }, exitCode: { value: 0 } });
+    // spawn with ignored stdio returns null streams, unlike an unspawned ChildProcess.
+    child.stdout = null;
+    child.stderr = null;
+    const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
+    const leaderError = Object.assign(new Error("leader signal denied"), { code: "EACCES" });
+    mocks.spawn.mockReturnValue(child);
+    const leaderSignal = vi.spyOn(child, "kill").mockImplementation(() => {
+      if (leaderSignalFails) {
+        throw leaderError;
+      }
+      return false;
+    });
+    let terminationAttempted = false;
+    const groupSignal = vi.spyOn(process, "kill").mockImplementation((_pid, received) => {
+      if (received === 0) {
+        throw Object.assign(new Error("group observation"), {
+          code: terminationAttempted ? "ESRCH" : "EPERM",
+        });
+      }
+      terminationAttempted = true;
+      throw groupError;
+    });
+
+    await expect(
+      runManagedCommand({
+        bin: "fixture",
+        platform: "darwin",
+        shell: false,
+        stdio: "ignore",
+        requireProcessTreeExit: true,
+        env: { TMPDIR: root },
+        onReady: () => {
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "EPROCESSGROUP_CLEANUP_FAILED",
+      processGroupId: 12345,
+      processTreeState: "terminated",
+      cause: expect.objectContaining({
+        name: "AggregateError",
+        errors: leaderSignalFails ? [groupError, leaderError] : [groupError],
+      }),
+    });
+    expect(groupSignal.mock.calls).toEqual([
+      [-12345, 0],
+      [-12345, "SIGKILL"],
+      [-12345, 0],
+    ]);
+    expect(leaderSignal).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    owner.assertReleased();
+  },
+);
+
 it.each([
   ["win32", true, true],
   ["win32", false, true],
@@ -128,9 +216,6 @@ it.each([
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
-    child.stdout.destroy();
-    child.stderr.destroy();
-    await closed;
     const descendantOutput = new PassThrough();
     const stopSurvivor = () => {
       if (!terminates) {
@@ -179,8 +264,14 @@ it.each([
         cleanupDrainTimeoutMs: 0,
         env: { TMPDIR: root },
         onReady: () => {
-          child.emit("exit", 0, null);
-          child.emit("close", 0, null);
+          // Real spawn returns before pipe close events. Close before leader exit,
+          // but only after the command has acquired and observed its output.
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          void closed.then(() => {
+            child.emit("exit", 0, null);
+            child.emit("close", 0, null);
+          });
         },
       }).catch((error: unknown) => error);
       if (platform === "win32") {

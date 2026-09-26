@@ -3,64 +3,59 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { filterCurrentTaskRunBackings } from "./task-backing-records.js";
-import { getTaskMirroredFlowIds } from "./task-flow-runtime-internal.js";
-import { clearTaskActivity } from "./task-registry-activity.js";
+import {
+  getTaskMirroredFlowIds,
+  prepareTaskFlowRegistryRead,
+} from "./task-flow-runtime-internal.js";
 import { isActiveTaskStatus } from "./task-registry-common.js";
-import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
-import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
-import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
+import {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+  prepareTaskRegistryReadOwner,
+  type TaskRegistryRead,
+} from "./task-registry-read.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
-  cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
   compareTasksNewestFirst,
   pickPreferredRunIdTask,
-  snapshotTaskRecords,
   selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
+import { controlRuntimeLoader, deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import {
-  TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
-  TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
-  controlRuntimeLoader,
-  deliveryRuntimeLoader,
-  type TaskRegistryDeliveryRuntime,
-  type TaskRegistryGlobalWithRuntimeOverrides,
-} from "./task-registry-runtime-loaders.js";
-import {
-  withTaskRegistryMutation,
-  bumpTaskRegistryRevision,
   clearTaskRegistryMemory,
-  emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
   readTaskRegistryRevision,
   resetTaskRegistryRestoreState,
-  taskDeliveryStates,
   taskIdsByOwnerKey,
   taskIdsByParentFlowId,
   taskIdsByRelatedSessionKey,
   tasks,
 } from "./task-registry-state.js";
-import {
-  removeTaskIndexes,
-  recordTaskRegistryProjectionWrite,
-  getTaskRegistryProcessState,
-} from "./task-registry.process-state.js";
-import {
-  tryPersistTaskDelete,
-  getTaskRegistryStore,
-  resetTaskRegistryRuntimeForTests,
-} from "./task-registry.store.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
+import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
-import { resolveTaskSessionAgentId } from "./task-session-identity.js";
+import { resolveTaskSessionAgentId, taskMatchesRelatedSession } from "./task-session-identity.js";
 
-export function listTaskRecordsUnsorted(): TaskRecord[] {
+type TaskSessionActivity = Pick<
+  TaskRecord,
+  "taskKind" | "status" | "requesterSessionKey" | "ownerKey"
+>;
+
+/** Cleanup reads session activity without copying retained task payloads. */
+export function listTaskSessionActivity(): TaskSessionActivity[] {
   ensureTaskRegistryReady();
-  return snapshotTaskRecords(tasks);
+  return Array.from(tasks.values(), (task) => ({
+    taskKind: task.taskKind,
+    status: task.status,
+    requesterSessionKey: task.requesterSessionKey,
+    ownerKey: task.ownerKey,
+  }));
 }
 
 /** Coarse tree candidates; callers still enforce agent identity and current control authority. */
@@ -69,32 +64,6 @@ export function listTaskRecordsForOwnerTree(rootOwnerKeys: ReadonlySet<string>):
   return selectTaskRecordsForOwnerTree(tasks, taskIdsByOwnerKey, rootOwnerKeys).map((task) =>
     cloneTaskRecord(task),
   );
-}
-
-function taskMatchesRelatedSession(
-  task: TaskRecord,
-  sessionKey: string | undefined,
-  sessionAgentId?: string,
-  cfg?: OpenClawConfig,
-): boolean {
-  if (!sessionKey) {
-    return true;
-  }
-  return [
-    { key: task.requesterSessionKey, agentId: task.requesterAgentId },
-    { key: task.childSessionKey, agentId: task.agentId },
-    // ownerKey belongs to the requester. task.agentId is the executor/child
-    // candidate and must never adopt a colliding bare requester session.
-    { key: task.ownerKey, agentId: task.requesterAgentId },
-  ].some((candidate) => {
-    if (normalizeOptionalString(candidate.key) !== sessionKey) {
-      return false;
-    }
-    if (!sessionAgentId) {
-      return true;
-    }
-    return resolveTaskSessionAgentId(candidate.key, candidate.agentId, cfg) === sessionAgentId;
-  });
 }
 
 function taskMatchesAgent(
@@ -177,6 +146,7 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
+  prepareRead?: ReturnType<typeof createTaskRegistryReadPreparation>;
   offset: number;
   limit: number;
   expectedRevision?: number;
@@ -195,7 +165,8 @@ export async function listTaskRecordPage(params: {
     "cursor_stale" | "registry_changed"
   >
 > {
-  let read = await prepareTaskRegistryRead();
+  const prepareRead = params.prepareRead ?? createTaskRegistryReadPreparation();
+  let read = await prepareRead();
   if (!read) {
     return err("registry_changed");
   }
@@ -211,7 +182,7 @@ export async function listTaskRecordPage(params: {
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
       const preparationStartedAt = performance.now();
-      read = await prepareTaskRegistryRead();
+      read = await prepareRead();
       if (!read) {
         return err("registry_changed");
       }
@@ -398,16 +369,29 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function listTasksForAgentId(agentId: string): TaskRecord[] {
-  ensureTaskRegistryReady();
-  const lookup = agentId.trim();
-  if (!lookup) {
-    return [];
+/** Accepted task events and ACP backing facts are prepared before selecting a run. */
+export async function findTaskByRunIdAsync(
+  runId: string,
+  prepared?: TaskRegistryRead,
+): Promise<TaskRecord | undefined> {
+  const read = prepared ?? (await prepareTaskRegistryRead());
+  if (!read) {
+    throw new Error("Task lookup did not stabilize. Retry the status lookup.");
   }
-  return [...tasks.values()]
-    .filter((task) => task.agentId?.trim() === lookup)
-    .map((task) => cloneTaskRecord(task))
-    .toSorted(compareTasksNewestFirst);
+  let matches = read.getTasksByRunId(runId);
+  const needsFlows = matches.some((task) => task.runtime === "acp" && task.childSessionKey?.trim());
+  const flows = needsFlows ? await prepareTaskFlowRegistryRead() : undefined;
+  if (needsFlows && !flows) {
+    throw new Error("Task backing lookup did not stabilize. Retry the status lookup.");
+  }
+  // Flow preparation can publish or replace task rows. Consume current admitted facts.
+  matches = read.getTasksByRunId(runId);
+  return pickPreferredRunIdTask(
+    filterCurrentTaskRunBackings(
+      matches,
+      (flowId) => flows?.getTaskFlowById(flowId)?.syncMode === "task_mirrored",
+    ),
+  );
 }
 
 export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
@@ -534,41 +518,6 @@ export function resolveTaskForLookupToken(token: string): TaskRecord | undefined
   );
 }
 
-export function deleteTaskRecordById(taskId: string): boolean {
-  return withTaskRegistryMutation(
-    () => {
-      ensureTaskRegistryReady();
-      const current = tasks.get(taskId);
-      if (!current) {
-        return false;
-      }
-      ensureLinkedTaskFlowRegistryReady(current);
-      // Persist the delete before mutating memory, as a single atomic store
-      // operation. If persistence fails, leave the in-memory record intact and
-      // report that no delete was applied.
-      if (!tryPersistTaskDelete(taskId)) {
-        return false;
-      }
-      const indexedCurrent = tasks.get(taskId);
-      if (indexedCurrent) {
-        removeTaskIndexes(indexedCurrent);
-      }
-      clearTaskActivity(taskId);
-      recordTaskRegistryProjectionWrite("task", taskId, true);
-      tasks.delete(taskId);
-      bumpTaskRegistryRevision();
-      taskDeliveryStates.delete(taskId);
-      emitTaskRegistryObserverEvent(() => ({
-        kind: "deleted",
-        taskId: current.taskId,
-        previous: cloneTaskRecordForObserver(current),
-      }));
-      return true;
-    },
-    () => false,
-  );
-}
-
 export function resetTaskRegistryForTests() {
   clearTaskFlowSyncRetries();
   getTaskRegistryProcessState().runOwners.clear();
@@ -580,32 +529,4 @@ export function resetTaskRegistryForTests() {
   controlRuntimeLoader.clear();
   // Close the default SQLite handle too, even when a custom store was configured.
   getTaskRegistryStore().close?.();
-}
-
-export function resetTaskRegistryDeliveryRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
-  ] = null;
-  deliveryRuntimeLoader.clear();
-}
-
-export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
-  ] = runtime;
-  deliveryRuntimeLoader.clear();
-}
-
-export function resetTaskRegistryControlRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
-  ] = null;
-  controlRuntimeLoader.clear();
-}
-
-export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
-  ] = runtime;
-  controlRuntimeLoader.clear();
 }

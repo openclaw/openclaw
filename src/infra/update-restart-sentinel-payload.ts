@@ -1,8 +1,7 @@
-// Builds restart sentinel payloads for update handoff reporting.
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { isUpdateGatewayReadinessPending } from "./update-run-step.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type ForegroundUpdateOrigin = {
   owner: string;
@@ -14,8 +13,6 @@ export type ForegroundUpdateOrigin = {
   configPath: string;
 };
 
-// Update restart sentinel payloads carry update result details across a process
-// restart so the next gateway can report completion or failure.
 /** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
   runId?: string;
@@ -75,7 +72,6 @@ function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["rec
     : { serviceRestartSafe: false, reason: recovery.reason };
 }
 
-/** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;

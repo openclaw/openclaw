@@ -434,6 +434,14 @@ export function renderTerminalPanelActions(params: {
 
 export function renderTerminalUploadLayer(upload: TerminalPanelUploadController) {
   const progress = upload.progress;
+  const progressLabel =
+    progress &&
+    (progress.state === "failed"
+      ? t("terminal.uploadFailed")
+      : t("terminal.uploadProgress", {
+          current: String(progress.current),
+          total: String(progress.total),
+        }));
   return html`${
     upload.dragActive
       ? html`<div class="tp-drop-overlay">${t("terminal.dropFiles")}</div>`
@@ -448,16 +456,7 @@ export function renderTerminalUploadLayer(upload: TerminalPanelUploadController)
         >
           <div class="tp-upload-card__header">
             <div class="tp-upload-card__copy">
-              <div class="tp-upload-card__title">
-                ${
-                  progress.state === "failed"
-                    ? t("terminal.uploadFailed")
-                    : t("terminal.uploadProgress", {
-                        current: String(progress.current),
-                        total: String(progress.total),
-                      })
-                }
-              </div>
+              <div class="tp-upload-card__title">${progressLabel}</div>
               <div class="tp-upload-card__file">${progress.fileName}</div>
             </div>
             <div class="tp-upload-card__actions">
@@ -484,14 +483,7 @@ export function renderTerminalUploadLayer(upload: TerminalPanelUploadController)
           <div
             class="tp-upload-progress"
             role="progressbar"
-            aria-label=${
-              progress.state === "failed"
-                ? t("terminal.uploadFailed")
-                : t("terminal.uploadProgress", {
-                    current: String(progress.current),
-                    total: String(progress.total),
-                  })
-            }
+            aria-label=${progressLabel}
             aria-valuemin="0"
             aria-valuemax=${String(progress.total)}
             aria-valuenow=${String(progress.completed)}

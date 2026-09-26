@@ -61,14 +61,6 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
   video: "video.description",
 };
 
-function resolveDecisionFailureReason(
-  decision: Awaited<ReturnType<typeof runCapability>>["decision"],
-): string | undefined {
-  // runCapability stores detailed failed-attempt reasons; file APIs expose the
-  // first normalized reason as the thrown error message.
-  return normalizeDecisionReason(findDecisionReason(decision, "failed"));
-}
-
 function buildFileContext(params: {
   filePath: string;
   mediaUrl?: string;
@@ -138,10 +130,6 @@ function basenameFromMediaReference(value: string): string {
   return path.basename(value);
 }
 
-function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"]): boolean {
-  return input.some((entry) => entry.type === "image");
-}
-
 /** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
@@ -160,11 +148,7 @@ async function runFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const ctx = buildFileContext({
-    ...params,
-    capability: params.capability,
-    scopeContext: params.scopeContext,
-  });
+  const ctx = buildFileContext(params);
   const attachments = normalizeMediaAttachments(ctx);
   const decisionBase = {
     capability: params.capability,
@@ -233,7 +217,7 @@ async function runFile(
     });
     if (result.outputs.length === 0 && result.decision.outcome === "failed") {
       throw new Error(
-        resolveDecisionFailureReason(result.decision) ??
+        normalizeDecisionReason(findDecisionReason(result.decision, "failed")) ??
           `${params.capability} understanding failed`,
       );
     }
@@ -241,16 +225,13 @@ async function runFile(
       (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
     );
     const text = output?.text?.trim();
-    const fileResult: RunMediaUnderstandingFileResult = {
+    return {
       text: text || undefined,
       provider: output?.provider,
       model: output?.model,
       output,
+      decision: result.decision,
     };
-    if (result.decision) {
-      fileResult.decision = result.decision;
-    }
-    return fileResult;
   } finally {
     await cache.cleanup();
   }
@@ -366,7 +347,7 @@ async function readImageDescriptionInput(params: {
 /** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
-  if (!hasStructuredImageInput(params.input)) {
+  if (!params.input.some((entry) => entry.type === "image")) {
     throw new Error("Structured extraction requires at least one image input.");
   }
   const provider = getMediaUnderstandingProvider(

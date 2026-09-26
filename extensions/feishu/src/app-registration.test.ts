@@ -17,7 +17,7 @@ const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
 }));
 
-vi.mock("./qr-terminal.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   renderQrTerminal: renderQrTerminalMock,
 }));
 
@@ -169,18 +169,11 @@ function beginRegistrationPayload(
   };
 }
 
-function beginRegistrationWithServer<T>(
-  handler: (req: IncomingMessage, res: ServerResponse) => void,
-  run: (options: RegistrationFetchOptions) => Promise<T>,
-): Promise<T> {
-  return withRegistrationServer(handler, run);
-}
-
 function beginRegistrationJson<T>(
   payload: Record<string, unknown>,
   run: (options: RegistrationFetchOptions) => Promise<T>,
 ): Promise<T> {
-  return beginRegistrationWithServer((req, res) => {
+  return withRegistrationServer((req, res) => {
     void readRegistrationAction(req).then((action) => {
       if (action !== "begin") {
         res.writeHead(400);
@@ -241,38 +234,37 @@ describe("Feishu app registration", () => {
   });
 
   it("stops polling promptly when abortSignal fires during the poll interval", async () => {
-    let requestCount = 0;
-    await withRegistrationServer(
-      (_req, res) => {
-        requestCount += 1;
-        writeJson(res, { error: "authorization_pending" });
-      },
-      async ({ fetchImpl, lookupFn }) => {
-        const controller = new AbortController();
-        const started = Date.now();
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => Response.json({ error: "authorization_pending" }));
+    const controller = new AbortController();
+    let outcome: Awaited<ReturnType<typeof pollAppRegistration>> | undefined;
+    const poll = pollAppRegistration({
+      deviceCode: "device-code",
+      interval: 30,
+      expireIn: 600,
+      abortSignal: controller.signal,
+      fetchImpl: withFetchPreconnect(fetchMock),
+      lookupFn: hermeticPublicLookup,
+    }).then((result) => {
+      outcome = result;
+    });
 
-        const poll = pollAppRegistration({
-          deviceCode: "device-code",
-          interval: 30,
-          expireIn: 600,
-          abortSignal: controller.signal,
-          fetchImpl,
-          lookupFn,
-        });
-        // Let the first poll resolve and the loop enter its 30s interval sleep.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 200);
-        });
-        controller.abort();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(outcome).toBeUndefined();
 
-        await expect(poll).resolves.toEqual({ status: "timeout" });
-        expect(Date.now() - started).toBeLessThan(10_000);
-        expect(requestCount).toBe(1);
-        console.log(
-          `[feishu pollAppRegistration abort proof] interval=30s aborted_after=200ms elapsed=${Date.now() - started}ms requests=${requestCount} outcome=timeout`,
-        );
-      },
-    );
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(outcome).toEqual({ status: "timeout" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      controller.abort();
+      // Join the poll even when a regression leaves its interval asleep after abort.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await poll;
+    }
   });
 
   it("prints scan-to-create QR codes with compact terminal rendering", async () => {
@@ -311,11 +303,6 @@ describe("Feishu app registration", () => {
         }
         expect(elapsedMs).toBeGreaterThanOrEqual(60);
         expect(elapsedMs).toBeLessThan(2_000);
-        console.log(
-          `[feishu fetchFeishuJson hang proof] timed_out=${!outcome.ok} name=${
-            outcome.ok ? "n/a" : (outcome.error as Error).name
-          } elapsed_ms=${elapsedMs}`,
-        );
       },
     );
   });
@@ -329,7 +316,7 @@ describe("Feishu app registration", () => {
           canceled: () => boolean;
         }
       | undefined;
-    await beginRegistrationWithServer(
+    await withRegistrationServer(
       (_req, res) => {
         streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
       },
@@ -342,33 +329,6 @@ describe("Feishu app registration", () => {
 
     expect(streamState?.canceled()).toBe(true);
     expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu fetchFeishuJson bound proof] over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
-  });
-
-  // under-cap: a normal-sized valid JSON response is parsed and returned correctly.
-  it("parses under-cap Feishu API JSON responses and returns the typed payload", async () => {
-    const payload = {
-      device_code: "dev-code-123",
-      verification_uri_complete: "https://accounts.feishu.cn/verify?x=1",
-      user_code: "UC-456",
-      interval: 5,
-      expire_in: 300,
-    };
-
-    await beginRegistrationJson(payload, async (options) => {
-      const result = await beginAppRegistration("feishu", options);
-      expect(result).toMatchObject({
-        deviceCode: "dev-code-123",
-        userCode: "UC-456",
-        interval: 5,
-        expireIn: 300,
-      });
-      console.log(
-        `[feishu fetchFeishuJson bound proof] under-cap: returned=${JSON.stringify(result)}`,
-      );
-    });
   });
 
   it("sends bound reads through the real SSRF guard before local socket redirect", async () => {
@@ -386,17 +346,16 @@ describe("Feishu app registration", () => {
       ).resolves.toMatchObject({
         deviceCode: "device-code",
         userCode: "user-code",
+        interval: 5,
+        expireIn: 300,
       });
     });
 
     expect(fetchCalls).toEqual(["https://accounts.feishu.cn/oauth/v1/app/registration"]);
-    console.log(
-      `[feishu fetchFeishuJson bound proof] real-ssrf-guard: guarded_url=${fetchCalls[0]} socket=127.0.0.1`,
-    );
   });
 
   it("wraps malformed Feishu API JSON with a feishu.api labelled error", async () => {
-    await beginRegistrationWithServer(
+    await withRegistrationServer(
       (_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end("not-valid-json{{");

@@ -244,25 +244,17 @@ function matchToolsBySenderPolicy(
       return match;
     }
   }
-  const senderE164 = normalizeCandidate(params.senderE164, "e164");
-  if (senderE164) {
-    const match = compiled.buckets.e164.get(senderE164);
-    if (match) {
-      return match;
-    }
-  }
-  const senderUsername = normalizeCandidate(params.senderUsername, "username");
-  if (senderUsername) {
-    const match = compiled.buckets.username.get(senderUsername);
-    if (match) {
-      return match;
-    }
-  }
-  const senderName = normalizeCandidate(params.senderName, "name");
-  if (senderName) {
-    const match = compiled.buckets.name.get(senderName);
-    if (match) {
-      return match;
+  for (const [type, value] of [
+    ["e164", params.senderE164],
+    ["username", params.senderUsername],
+    ["name", params.senderName],
+  ] as const) {
+    const candidate = normalizeCandidate(value, type);
+    if (candidate) {
+      const match = compiled.buckets[type].get(candidate);
+      if (match) {
+        return match;
+      }
     }
   }
   return compiled.wildcard;

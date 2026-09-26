@@ -53,6 +53,34 @@ requirement.
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
+New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
+only while its dashboard is focused. Quick Chat keeps the separate global
+`Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
+in front.
+
+## Chrome setup bridge
+
+The selected main dashboard can explicitly inspect, install, or verify Chrome
+setup on the computer running the companion, including when the dashboard's
+Gateway is remote. Loading the dashboard does not run setup. Chrome retains its
+extension installation approval; the companion does not ask for a pairing key.
+
+The dashboard adapter is
+`window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: "chrome-extension-setup", action})`,
+where `action` is `inspect`, `install`, or `verify`. Its Promise resolves directly
+to the canonical CLI setup JSON, including pending and blocked results, and
+rejects on transport, invalid-action, or CLI execution errors. It shares the
+existing native browser document token, origin/path, and generation checks;
+reading tabs and other dashboard windows do not receive this bridge.
+
+The adapter invokes only
+`openclaw browser extension setup --action ACTION --json --wait-ms 1000`
+through the companion's local CLI owner. Profile selection is left to the CLI so
+a saved profile is not overridden. Callers cannot choose commands, paths,
+profiles, or URLs. Platform bootstrap support comes from the CLI result rather
+than the app platform: a Windows app build alone does not establish that native
+host bootstrap is supported or verified.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
@@ -113,6 +141,16 @@ cargo build
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+
+On macOS, a test launch with an isolated `HOME` or `CFFIXED_USER_HOME` can make
+the user's default keychain unavailable to that process. The saved-Gateway notice
+describes the app's launch environment; it does not mean the Mac has no login
+keychain. Keep credential-free tests isolated and treat saved-Gateway storage as
+unavailable in that fixture. Do not restore the user's keychain or redirect the
+test to real credentials to silence the notice. For an installed app, quit and
+reopen it from Finder to use the normal login environment. If the configured
+keychain is still unavailable, check its configuration in Keychain Access before
+attempting any repair.
 
 ### Inline browser live regression on Linux
 
@@ -320,6 +358,8 @@ the additional sign-in options.
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
+If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
+
 While a newer Gateway release waits for its Linux app, the latest release keeps
 the previous published Linux updater manifest. Its original version, signature,
 and download URL stay intact. Successful Linux publication advances that
@@ -504,7 +544,7 @@ Core finalization remains independent of Linux readiness. After finalization,
 a detached mirror-only request catches up the legacy endpoint. A dispatch is
 not a successful mirror: cancellation, queue overflow, timeout, or readback
 failure leaves a visible degraded result for reconciliation. See the
-[Linux publication contract](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication).
+[Linux publication contract](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps

@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import type { Client as TeamsHttpClient } from "@microsoft/teams.common";
+import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
@@ -25,6 +25,7 @@ vi.mock("./send-context.js", () => ({ resolveMSTeamsSendContext }));
 
 const conversationId = "19:handoff@thread.v2";
 const serviceUrl = "https://smba.trafficmanager.net/amer";
+const fixtureToken = "fixture-token";
 const cfg = { channels: { msteams: { enabled: true } } } as OpenClawConfig;
 
 type ConnectorRequest = { method: string; path: string; activity: Record<string, unknown> };
@@ -68,8 +69,11 @@ async function createConnectorFixture() {
     appPassword: "fixture-secret",
     tenantId: "fixture-tenant",
   });
-  const token = vi.spyOn(app.tokenManager, "getBotToken").mockResolvedValue("fixture-token");
-  const http = (app.api as unknown as { http: TeamsHttpClient }).http;
+  if (!(app.api instanceof TeamsApiClient)) {
+    throw new Error("expected the real Teams SDK API client");
+  }
+  const token = vi.spyOn(app.tokenProvider, "getAppToken").mockResolvedValue(fixtureToken);
+  const http = app.api.http;
   http.use({
     request: ({ config }) => {
       const destination = new URL(config.url!);
@@ -129,7 +133,7 @@ describe("registered Teams delivery handoff", () => {
       fixture.token.mockImplementation(async () => {
         tokenStarted.resolve();
         await releaseToken.promise;
-        return "fixture-token";
+        return fixtureToken;
       });
       const context = createMSTeamsReplayContext(
         {
@@ -220,7 +224,7 @@ describe("registered Teams delivery handoff", () => {
       fixture.token.mockImplementation(async () => {
         tokenStarted.resolve();
         await releaseToken.promise;
-        return "fixture-token";
+        return fixtureToken;
       });
       try {
         const handoff = {
@@ -418,7 +422,7 @@ describe("registered Teams delivery handoff", () => {
     fixture.token.mockImplementationOnce(async () => {
       firstToken.resolve();
       await releaseFirst.promise;
-      return "fixture-token";
+      return fixtureToken;
     });
     try {
       const firstDispatch = vi.fn(async () => {});
@@ -605,7 +609,7 @@ describe("registered Teams delivery handoff", () => {
       fixture.token.mockImplementation(async () => {
         tokenStarted.resolve();
         await releaseToken.promise;
-        return "fixture-token";
+        return fixtureToken;
       });
       try {
         await withInlineImage(async (media) => {

@@ -4,10 +4,13 @@ import * as sqlitePostCommit from "../infra/sqlite-post-commit.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
-import { updateTask, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { commitTaskDeliveryFixture } from "./task-registry-delivery.test-support.js";
+import { updateTask } from "./task-registry-mutation.js";
 import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
-import { deleteTaskRecordById, resetTaskRegistryForTests } from "./task-registry-query.js";
+import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
+import { resetTaskRegistryForTests } from "./task-registry-query.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
+import { captureTaskRetentionSelection } from "./task-registry-retention.operation.js";
 import {
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReadyAsync,
@@ -62,6 +65,84 @@ describe("worker publication scope", () => {
     notifyPolicy: "silent",
     createdAt: 1,
   };
+
+  it.each(["none", "replacement"] as const)(
+    "publishes only the current committed deletion after %s during readback",
+    async (change) => {
+      const expired = {
+        ...task,
+        status: "succeeded" as const,
+        endedAt: task.createdAt,
+        cleanupAfter: 0,
+      };
+      const { store, context, events } = await prepare([expired]);
+      const readStarted = createDeferred();
+      const releaseRead = createDeferred();
+      let deleted = false;
+      const completion = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => new Map(),
+          publicationDeletions: () =>
+            new Map<string, TaskRecord>(deleted ? [[task.taskId, expired]] : []),
+        },
+        async (beginRecovery) => {
+          beginRecovery();
+          const source = await store.prepareRetentionSourceAsync(context, task.taskId);
+          if (!source) {
+            throw new Error("Expected the retained task source");
+          }
+          const result = await store.runInitialMutationAsync(
+            context,
+            {
+              type: "tasks.applyRetention",
+              input: {
+                taskId: task.taskId,
+                selection: captureTaskRetentionSelection(expired),
+                sourceVersion: source.version,
+                now: Date.now(),
+                cronHistoryOverflow: false,
+              },
+            },
+            () => context.admission.assertCurrent(),
+          );
+          expect(result).toMatchObject({ kind: "task-retention-commit", outcome: "pruned" });
+          deleted = true;
+        },
+        async () => {
+          const snapshot = store.loadSnapshot();
+          readStarted.resolve();
+          await releaseRead.promise;
+          return snapshot;
+        },
+      );
+      try {
+        await readStarted.promise;
+        expect(store.loadSnapshot().tasks.has(task.taskId)).toBe(false);
+        expect(tasks.get(task.taskId)).toEqual(expired);
+        expect(events).toEqual([]);
+        if (change !== "none") {
+          const replacement = { ...task, runId: "replacement-run" };
+          store.upsertTaskWithDeliveryState({ task: replacement });
+          publishTaskRecordAfterAtomicStore(replacement);
+        }
+        releaseRead.resolve();
+        await completion;
+        expect(events).toEqual(
+          change === "none"
+            ? ["deleted:existing-task:original-run"]
+            : ["upserted:existing-task:replacement-run"],
+        );
+        expect(tasks.get(task.taskId)?.runId).toBe(
+          change === "replacement" ? "replacement-run" : undefined,
+        );
+      } finally {
+        releaseRead.resolve();
+        await completion;
+      }
+    },
+  );
 
   it.each(
     (["before read", "during read", "during effects"] as const).flatMap((phase) =>
@@ -394,7 +475,7 @@ describe("worker publication scope", () => {
         } else if (change === "no-op refresh") {
           withTaskRegistryMutation(() => {});
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else if (change === "unrelated row") {
           expect(updateTask(other.taskId, { task: "Other changed" })).not.toBeNull();
         } else if (change === "row ABA") {
@@ -544,45 +625,33 @@ describe("worker publication scope", () => {
     },
   );
 
-  it.each(["rebound", "rebound then deleted"] as const)(
-    "publishes known run-scoped records exactly once when %s",
-    async (change) => {
-      const { store, context, events } = await prepare([task]);
-      const scope = { taskId: "requested-task", runId: task.runId };
-      let reads = 0;
+  it("publishes known run-scoped records exactly once when rebound", async () => {
+    const { store, context, events } = await prepare([task]);
+    const scope = { taskId: "requested-task", runId: task.runId };
+    let reads = 0;
 
-      await runTaskRegistryWorkerMutation(
-        {
-          admission: context.admission,
-          scope,
-          publicationRecords: () => new Map([[task.taskId, { ...task, task: "Committed" }]]),
-        },
-        async () => {
-          store.upsertTaskWithDeliveryState({ task: { ...task, task: "Committed" } });
-        },
-        async () => {
-          const snapshot = await store.loadMutationSnapshotAsync(context, scope);
-          if (reads++ === 0) {
-            expect(updateTask(task.taskId, { runId: "replacement-run" })).not.toBeNull();
-            if (change === "rebound then deleted") {
-              expect(deleteTaskRecordById(task.taskId)).toBe(true);
-            }
-          }
-          return snapshot;
-        },
-      );
+    await runTaskRegistryWorkerMutation(
+      {
+        admission: context.admission,
+        scope,
+        publicationRecords: () => new Map([[task.taskId, { ...task, task: "Committed" }]]),
+      },
+      async () => {
+        store.upsertTaskWithDeliveryState({ task: { ...task, task: "Committed" } });
+      },
+      async () => {
+        const snapshot = await store.loadMutationSnapshotAsync(context, scope);
+        if (reads++ === 0) {
+          expect(updateTask(task.taskId, { runId: "replacement-run" })).not.toBeNull();
+        }
+        return snapshot;
+      },
+    );
 
-      expect(events).toEqual(
-        change === "rebound"
-          ? ["upserted:existing-task:replacement-run"]
-          : ["upserted:existing-task:replacement-run", "deleted:existing-task:replacement-run"],
-      );
-      expect(reads).toBe(1);
-      expect(tasks.get(task.taskId)?.runId).toBe(
-        change === "rebound" ? "replacement-run" : undefined,
-      );
-    },
-  );
+    expect(events).toEqual(["upserted:existing-task:replacement-run"]);
+    expect(reads).toBe(1);
+    expect(tasks.get(task.taskId)?.runId).toBe("replacement-run");
+  });
 });
 
 describe("worker publication during canonical reads", () => {
@@ -622,7 +691,7 @@ describe("worker publication during canonical reads", () => {
         if (change === "activity") {
           emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task }));
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else {
           const database = createProjectionTransactionDatabase();
           const lookup = vi
@@ -671,69 +740,59 @@ describe("worker publication during canonical reads", () => {
     },
   );
 
-  it.each(["value", "absent"] as const)(
-    "does not publish a held task snapshot after %s ABA",
-    async (change) => {
-      const task: TaskRecord = {
-        taskId: "aba-task",
-        runtime: "cli",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        task: "Original",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: 1,
-      };
-      const { store, context } = await prepare(change === "value" ? [task] : []);
-      const published: string[] = [];
-      configureTaskRegistryRuntime({
-        observers: {
-          onEvent(event) {
-            if (event.kind === "upserted") {
-              published.push(event.task.task);
-            } else if (event.kind === "deleted") {
-              published.push("deleted");
-            }
-          },
+  it("does not publish a held task snapshot after value ABA", async () => {
+    const task: TaskRecord = {
+      taskId: "aba-task",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Original",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+    };
+    const { store, context } = await prepare([task]);
+    const published: string[] = [];
+    configureTaskRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind === "upserted") {
+            published.push(event.task.task);
+          } else if (event.kind === "deleted") {
+            published.push("deleted");
+          }
         },
-      });
-      let reads = 0;
-      await expect(
-        runTaskRegistryWorkerMutation(
-          {
-            admission: context.admission,
-            scope: { taskId: task.taskId },
-            publicationRecords: () => new Map([[task.taskId, { ...task, task: "Held snapshot" }]]),
-          },
-          async () => {
-            store.upsertTaskWithDeliveryState({ task: { ...task, task: "Held snapshot" } });
-            return "committed";
-          },
-          async () => {
-            const snapshot = store.loadSnapshot();
-            if (reads++ === 0) {
-              if (change === "value") {
-                expect(updateTask(task.taskId, { task: "Intermediate" })).not.toBeNull();
-                expect(updateTask(task.taskId, { task: "Original" })).not.toBeNull();
-              } else {
-                // The ordinary delete refreshes the committed row before removing it.
-                expect(deleteTaskRecordById(task.taskId)).toBe(true);
-              }
-            }
-            return snapshot;
-          },
-        ),
-      ).resolves.toBe("committed");
+      },
+    });
+    let reads = 0;
+    await expect(
+      runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => new Map([[task.taskId, { ...task, task: "Held snapshot" }]]),
+        },
+        async () => {
+          store.upsertTaskWithDeliveryState({ task: { ...task, task: "Held snapshot" } });
+          return "committed";
+        },
+        async () => {
+          const snapshot = store.loadSnapshot();
+          if (reads++ === 0) {
+            expect(updateTask(task.taskId, { task: "Intermediate" })).not.toBeNull();
+            expect(updateTask(task.taskId, { task: "Original" })).not.toBeNull();
+          }
+          return snapshot;
+        },
+      ),
+    ).resolves.toBe("committed");
 
-      expect(authoritativeTasks.get(task.taskId)?.task).toBe(
-        change === "value" ? "Original" : undefined,
-      );
-      expect(published).toEqual(change === "value" ? ["Intermediate", "Original"] : ["deleted"]);
-      expect(reads).toBe(1);
-    },
-  );
+    expect(authoritativeTasks.get(task.taskId)?.task).toBe("Original");
+    expect(published).toEqual(["Intermediate", "Original"]);
+    expect(reads).toBe(1);
+  });
 
   it.each(["unrelated read", "same-task read", "before observers"] as const)(
     "settles one committed mutation during %s churn without replaying publication effects",

@@ -99,6 +99,8 @@ const SECTION_DOCS_URLS = {
 } as const satisfies Record<string, string>;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "plugins.entries.*.hooks.timeoutMs": "Automatic (per hook)",
+  "plugins.entries.*.hooks.timeouts.*": "Automatic (plugin or hook default)",
   "gateway.cliAgents.enabled": "Default (enabled)",
   "nodeHost.autoUpdate.enabled": "Default (enabled)",
   "tools.loopDetection.enabled": "Default (post-compaction protection only)",
@@ -118,22 +120,13 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
 
-function isKernelOwnedChannelHintPath(path: string): boolean {
-  if (path === "channels") {
-    return true;
-  }
-  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
-    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
-    : undefined;
-  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
-}
-
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
 function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
   }
-  return !isKernelOwnedChannelHintPath(path);
+  const channelKey = path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0];
+  return channelKey === undefined || !isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */

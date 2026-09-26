@@ -47,4 +47,20 @@ docker_build_run cleanup-build \
   "$ROOT_DIR"
 
 echo "==> Run cleanup smoke test"
-docker_e2e_docker_run_cmd run --rm --platform "$PLATFORM" -t "$IMAGE_NAME"
+limit_summary=""
+limit_args=(-e GITHUB_ACTIONS)
+cleanup_limit_summary() {
+  local command_exit="$?"
+  if [[ -n "$limit_summary" ]]; then
+    cat "$limit_summary" >> "$GITHUB_STEP_SUMMARY"
+    rm -f "$limit_summary"
+  fi
+  return "$command_exit"
+}
+trap cleanup_limit_summary EXIT
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  limit_summary="$(mktemp "${TMPDIR:-/tmp}/openclaw-cleanup-limits.XXXXXX")"
+  chmod 0666 "$limit_summary"
+  limit_args+=(-e GITHUB_STEP_SUMMARY=/tmp/openclaw-limit-summary.md -v "$limit_summary:/tmp/openclaw-limit-summary.md")
+fi
+docker_e2e_docker_run_cmd run --rm --platform "$PLATFORM" -t "${limit_args[@]}" "$IMAGE_NAME"

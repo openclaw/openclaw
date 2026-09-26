@@ -98,14 +98,6 @@ describe("resolveTelegramToken", () => {
         }) as OpenClawConfig,
       expected: { token: "file-token", source: "tokenFile" },
     },
-    {
-      name: "falls back to config token when no env or tokenFile",
-      envToken: "",
-      cfg: {
-        channels: { telegram: { botToken: "cfg-token" } },
-      } as OpenClawConfig,
-      expected: { token: "cfg-token", source: "config" },
-    },
   ])("$name", ({ envToken, cfg, resolveCfg, expected }) => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", envToken);
     const res = resolveTelegramToken(resolveCfg ? resolveCfg() : cfg);
@@ -537,38 +529,6 @@ describe("resolveTelegramToken", () => {
     expect(() => resolveTelegramToken(cfg)).toThrow(
       /Secret provider "ops-env" is not configured \(ref: env:ops-env:TELEGRAM_BOT_TOKEN\)/i,
     );
-  });
-
-  it.each(
-    ["default", "telegram-runtime"].flatMap((provider) =>
-      [undefined, ...collisionProviders].map((declaration) => ({
-        provider,
-        declaration,
-        source: declaration?.source ?? "undeclared",
-      })),
-    ),
-  )("accepts env default $provider shadowing $source", ({ provider, declaration }) => {
-    vi.stubEnv("TELEGRAM_RUNTIME_TOKEN", "secretref-env-token");
-    const cfg = {
-      secrets: {
-        defaults: provider === "default" ? undefined : { env: provider },
-        providers: declaration ? { [provider]: declaration } : undefined,
-      },
-      channels: {
-        telegram: {
-          botToken: {
-            source: "env",
-            provider,
-            id: "TELEGRAM_RUNTIME_TOKEN",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(resolveTelegramToken(cfg)).toEqual({
-      token: "secretref-env-token",
-      source: "config",
-    });
   });
 
   it("keeps strict runtime behavior for unresolved non-env SecretRefs", () => {

@@ -45,10 +45,8 @@ import {
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
-import {
-  normalizePluginDependencySpecs,
-  type PluginDependencySpecMap,
-} from "./status-dependencies-core.js";
+import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 type InstalledPackageMetadata = {
   packageDescription?: string;
@@ -75,9 +73,14 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
-    // Only bundledDist changes runtime selection; legacy absence and build stamps hash alike.
+    // Admission receipts and build stamps do not change selection or registration identity.
     plugins: index.plugins.map(
-      ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
+      ({
+        doctorContractFile: _doctorContractFile,
+        sourceAdmissions: _sourceAdmissions,
+        packageBuild,
+        ...plugin
+      }) => ({
         ...plugin,
         ...(packageBuild?.bundledDist === undefined
           ? {}

@@ -25,6 +25,7 @@ import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fres
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
@@ -45,12 +46,20 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const isWorkerDeployConfig = (config: TsdownConfig) =>
   hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
+const isWorkerFileToolPlanningConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(
+    config,
+    "worker/file-tool-planning.worker",
+    "src/worker/worker-deploy-file-tool-planning.ts",
+  );
 const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
   hasWorkerEntry(
     config,
     "worker/image-processor.worker",
     "src/worker/worker-deploy-image-processor.ts",
   );
+const isWorkerSqliteStoreConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(config, "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts");
 const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
   hasWorkerEntry(
     config,
@@ -73,7 +82,9 @@ const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
   );
 const workerBuildTargets = [
   ["worker", isWorkerDeployConfig],
+  ["file-tool-planning", isWorkerFileToolPlanningConfig],
   ["image-processor", isWorkerImageProcessorConfig],
+  ["sqlite-store", isWorkerSqliteStoreConfig],
   ["receiver", isWorkerRsyncReceiverConfig],
   ["github-launcher", isWorkerGitHubExecLauncherConfig],
   ["service-relay", isWorkerServiceChildRelayConfig],
@@ -593,6 +604,94 @@ describe("tsdown config", () => {
     }
   });
 
+  it.each([
+    { target: "runtime", entry: "parser" },
+    { target: "nested", entry: "extensions/fixture/.setup/parser" },
+    { target: "worker", entry: "worker/parser" },
+  ])("loads the Bash grammar from the relocated $target package", async ({ target, entry }) => {
+    const root = fs.realpathSync(createTempDir("openclaw-bash-parser-"));
+    const worker = target === "worker";
+    const selected = configs.find(
+      worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
+    );
+    expect(selected).toBeDefined();
+    const outDir = path.join(root, "build");
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: { [entry]: path.resolve("src/infra/command-explainer/tree-sitter-runtime.ts") },
+      outDir,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const installed = path.join(root, "installed package");
+      fs.mkdirSync(installed);
+      fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ type: "module" }));
+      fs.renameSync(outDir, path.join(installed, "dist"));
+      const require = createRequire(import.meta.url);
+      if (worker) {
+        expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
+          `${entry}.mjs`,
+        ]);
+      } else {
+        // Install only the engine package. The grammar must come from emitted assets,
+        // even when the entrypoint is nested and the whole package has moved.
+        const engineRoot = path.dirname(require.resolve("web-tree-sitter"));
+        fs.cpSync(engineRoot, path.join(installed, "node_modules/web-tree-sitter"), {
+          recursive: true,
+        });
+        const grammarRoot = path.dirname(require.resolve("tree-sitter-bash/tree-sitter-bash.wasm"));
+        for (const [output, source] of [
+          ["tree-sitter-bash.wasm", "tree-sitter-bash.wasm"],
+          ["tree-sitter-bash.LICENSE", "LICENSE"],
+        ] as const) {
+          expect(fs.readFileSync(path.join(installed, "dist", output))).toEqual(
+            fs.readFileSync(path.join(grammarRoot, source)),
+          );
+        }
+      }
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            [
+              "--input-type=module",
+              "--eval",
+              `
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+const entry = pathToFileURL(process.argv[1]);
+assert.throws(() => createRequire(entry).resolve("tree-sitter-bash"), { code: "MODULE_NOT_FOUND" });
+const { parseBashForCommandExplanation } = await import(entry.href);
+const tree = await parseBashForCommandExplanation('printf "%s" "$(whoami)" | cat');
+try {
+  assert.equal(tree.rootNode.hasError, false);
+  assert.deepEqual(tree.rootNode.descendantsOfType("command").map(node => node.childForFieldName("name").text), ["printf", "whoami", "cat"]);
+} finally {
+  tree.delete();
+}
+console.log("relocated Bash parser works without native grammar package");
+`,
+              path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
+            ],
+            { cwd: installed, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe(
+        "relocated Bash parser works without native grammar package",
+      );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each(["runtime", "worker"])(
     "keeps service relay dependencies inside the emitted %s artifact closure",
     async (target) => {
@@ -903,13 +1002,29 @@ describe("tsdown config", () => {
           )
           .join("\n"),
       );
+      if (declarations) {
+        materializeNativeCompiler(root);
+        fs.writeFileSync(
+          path.join(root, "tsconfig.json"),
+          JSON.stringify({
+            compilerOptions: {
+              module: "NodeNext",
+              target: "ES2023",
+              types: [],
+              // The fixture checks bundling of authored declarations, not their type surface.
+              skipLibCheck: true,
+            },
+            files: ["entry.d.ts"],
+          }),
+        );
+      }
       const { bundles } = await build({
         ...selected,
         config: false,
         cwd: root,
         entry: [entry],
         outDir: path.join(root, "dist"),
-        tsconfig: false,
+        tsconfig: declarations ? path.join(root, "tsconfig.json") : false,
         dts: declarations ? { emitDtsOnly: true } : false,
         logLevel: "silent",
       });
@@ -933,6 +1048,37 @@ describe("tsdown config", () => {
       expect(source).not.toMatch(/^import(?!\s+type\b).*from ["']tsdown["'];?$/mu);
     },
   );
+
+  it("gives every standalone declaration caller one canonical package config", () => {
+    for (const packageName of [
+      "gateway-client",
+      "gateway-protocol",
+      "sdk",
+      "retry",
+      "normalization-core",
+      "net-policy",
+      "media-understanding-common",
+      "media-generation-core",
+      "media-core",
+      "acp-core",
+    ]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
+      ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
+      expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
+      const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
+      expect(selected, packageName).toHaveLength(1);
+      const sources = Object.values(selected[0]!.entry ?? {});
+      for (const entry of Object.values(manifest.exports)) {
+        expect(sources).toContain(
+          entry.import.replace("./dist/", `packages/${packageName}/src/`).replace(/\.mjs$/u, ".ts"),
+        );
+      }
+      if (packageName === "acp-core") {
+        expect(sources).toContain("packages/acp-core/src/error-format.ts");
+      }
+    }
+  });
 
   it("isolates runtime output from bounded declaration-only graphs", () => {
     const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
@@ -1066,7 +1212,9 @@ describe("tsdown config", () => {
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
+    const fileToolPlanningConfig = configs.find(isWorkerFileToolPlanningConfig);
     const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
+    const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
     const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
     const relayConfig = configs.find(isWorkerServiceChildRelayConfig);
@@ -1074,8 +1222,14 @@ describe("tsdown config", () => {
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
     });
+    expect(fileToolPlanningConfig?.entry).toEqual({
+      "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
+    });
     expect(imageProcessorConfig?.entry).toEqual({
       "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
+    });
+    expect(sqliteStoreConfig?.entry).toEqual({
+      "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
     });
     expect(receiverConfig?.entry).toEqual({
       "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
@@ -1139,7 +1293,9 @@ describe("tsdown config", () => {
     } as Parameters<OutExtensions>[0];
     for (const config of [
       workerConfig,
+      fileToolPlanningConfig,
       imageProcessorConfig,
+      sqliteStoreConfig,
       receiverConfig,
       launcherConfig,
       relayConfig,

@@ -89,6 +89,7 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 | `discord`                | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `discord.svg`        |
 | `duckduckgo`             | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `duckduckgo.svg`     |
 | `fish-audio-speech`      | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `fishaudio.svg`      |
+| `github`                 | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `github.svg`         |
 | `google-meet`            | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `googlemeet.svg`     |
 | `googlechat`             | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `googlechat.svg`     |
 | `imessage`               | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `imessage.svg`       |
@@ -98,6 +99,7 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 | `msteams`                | [`simple-icons@11.15.0`](https://www.npmjs.com/package/simple-icons/v/11.15.0) | `microsoftteams.svg` |
 | `nextcloud-talk`         | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `nextcloud.svg`      |
 | `onepassword`            | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `1password.svg`      |
+| `onnx`                   | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `onnx.svg`           |
 | `searxng`                | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `searxng.svg`        |
 | `signal`                 | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `signal.svg`         |
 | `slack`                  | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `slack.svg`          |
@@ -111,16 +113,22 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 
 Exa, Firecrawl, Tavily, and Voyage use the corresponding monochrome `exa.svg`, `firecrawl.svg`, `tavily.svg`, and `voyage.svg` files from [`@lobehub/icons-static-svg@1.95.0`](https://www.npmjs.com/package/@lobehub/icons-static-svg/v/1.95.0). Their geometry is unchanged. Source: [Lobe Icons](https://github.com/lobehub/lobe-icons), MIT license.
 
+TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typesafe.ai/), with its original `0 0 16.487 24` view box. The fill is normalized to `currentColor`; geometry is unchanged.
+
 ## OpenClaw action glyphs
 
 Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icons-tools.ts`](../ui/src/components/icons-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
+
+FaceTime reuses the existing [Voice Call phone glyph](voice-call/assets/activity.svg) byte-for-byte for its realtime voice carrier.
+
+QuickJS Code Mode reuses the existing [mxc sandbox glyph](mxc/assets/activity.svg) byte-for-byte for its isolated executor.
 
 Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity grid. They indicate the capability rather than reproducing a service’s larger app tile. Related actions deliberately share a visual family:
 
 | Capability              | Plugins                                                                                                          |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Agent or task flow      | `a2a`, `acpx`, `llm-task`, `raft`, `reef`                                                                        |
-| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`, `webhooks`                                  |
+| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`                                              |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |

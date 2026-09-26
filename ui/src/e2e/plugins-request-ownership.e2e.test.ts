@@ -41,7 +41,7 @@ function detail(id: string, name: string, installed = false): PluginDiscoveryDet
   return {
     plugin: {
       id,
-      catalog: { name, official: true, categories: [] },
+      catalog: { name, official: true, categories: ["productivity"] },
       local: {
         present: installed,
         installed,
@@ -208,61 +208,44 @@ suite.define(() => {
     });
   });
 
-  it.each([false, true])(
-    "keeps the selected install wizard after an older detail response (installing=%s)",
-    async (installing) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const alpha = detail("ch_YWxwaGE", "Alpha");
-        const beta = detail("ch_YmV0YQ", "Beta");
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          deferredMethods: ["plugins.catalog.get"],
-          methodResponses: {
-            "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
-            "plugins.catalog.browse": {
-              cases: [
-                { match: { intent: "all" }, response: { items: [alpha.plugin, beta.plugin] } },
-                { match: { intent: "featured" }, response: { items: [] } },
-                { match: { intent: "trending" }, response: { items: [] } },
-              ],
-            },
-            "plugins.catalog.categories": { categories: [] },
-            "plugins.catalog.get": beta,
+  it("starts only the latest install after an older catalog detail response", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const alpha = detail("ch_YWxwaGE", "Alpha");
+      const beta = detail("ch_YmV0YQ", "Beta");
+      const gateway = await installMockGateway(page, {
+        featureMethods,
+        deferredMethods: ["plugins.catalog.get", "plugins.install"],
+        methodResponses: {
+          "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+          "plugins.catalog.browse": { items: [alpha.plugin, beta.plugin] },
+          "plugins.catalog.categories": {
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Tasks and work organization.",
+                icon: "list-todo",
+                order: 0,
+              },
+            ],
           },
-        });
-        await page.goto(`${suite.server.baseUrl}plugins`);
-        await page.getByRole("button", { name: "Install Alpha", exact: true }).click();
-        await gateway.waitForRequest("plugins.catalog.get", { match: { id: alpha.plugin.id } });
-        await page.getByRole("button", { name: "Install Beta", exact: true }).click();
-        const wizard = page.locator(".plugin-install-wizard");
-        await wizard.getByRole("heading", { name: "Beta", exact: true }).waitFor();
-        try {
-          if (installing) {
-            await gateway.deferNext("plugins.install");
-            await wizard.getByRole("button", { name: "Install Beta", exact: true }).click();
-            const request = await gateway.waitForRequest("plugins.install");
-            expect(request.params).toEqual({ source: "clawhub", packageName: "beta" });
-          }
-          await gateway.resolveDeferred("plugins.catalog.get", alpha);
-          await captureSettled(
-            page,
-            installing ? "plugin-installing-ownership" : "plugin-review-ownership",
-            page.locator("openclaw-modal-dialog dialog"),
-          );
-          expect(await wizard.getByRole("heading").textContent()).toBe("Beta");
-          expect(await wizard.getAttribute("data-stage")).toBe(
-            installing ? "installing" : "review",
-          );
-          expect(await gateway.getRequests("plugins.install")).toHaveLength(installing ? 1 : 0);
-        } finally {
-          if (installing) {
-            await gateway.rejectDeferred("plugins.install", {
-              code: "UNAVAILABLE",
-              message: "Synthetic install complete",
-            });
-          }
-        }
+          "plugins.catalog.get": beta,
+        },
       });
-    },
-  );
+      await page.goto(`${suite.server.baseUrl}plugins`);
+      await page.getByRole("button", { name: "Install Alpha", exact: true }).first().click();
+      await gateway.waitForRequest("plugins.catalog.get", { match: { id: alpha.plugin.id } });
+      await page.getByRole("button", { name: "Install Beta", exact: true }).first().click();
+      const request = await gateway.waitForRequest("plugins.install");
+      expect(request.params).toEqual({ source: "clawhub", packageName: "beta" });
+      await gateway.resolveDeferred("plugins.catalog.get", alpha);
+      await captureSettled(page, "plugin-installing-ownership");
+      expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+      expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
+      await gateway.rejectDeferred("plugins.install", {
+        code: "UNAVAILABLE",
+        message: "Synthetic install complete",
+      });
+    });
+  });
 });

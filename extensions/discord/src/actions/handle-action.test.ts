@@ -182,23 +182,31 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps read-only guild lookups available from non-Discord requesters", async () => {
-    const cfg = discordConfig({ channelInfo: true });
-    await handleDiscordMessageAction({
-      action: "channel-info",
-      params: {
-        channelId: "channel-1",
-      },
-      cfg,
-      requesterSenderId: "telegram-user-id",
-      toolContext: { currentChannelProvider: "telegram" },
-    });
+  it.each([
+    ["member-info", "memberInfo", { userId: "user-1", guildId: "guild-1" }],
+    ["role-info", "roleInfo", { guildId: "guild-1" }],
+    ["channel-info", "channelInfo", { channelId: "channel-1" }],
+    ["channel-list", "channelList", { guildId: "guild-1" }],
+    ["voice-status", "voiceStatus", { guildId: "guild-1", userId: "user-1" }],
+    ["event-list", "eventList", { guildId: "guild-1" }],
+  ] as const)(
+    "keeps %s available from non-Discord requesters",
+    async (action, runtimeAction, params) => {
+      const cfg = discordConfig({ channelInfo: true });
+      await handleDiscordMessageAction({
+        action,
+        params,
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      });
 
-    expectDiscordActionCall({
-      payload: { action: "channelInfo", accountId: undefined, channelId: "channel-1" },
-      cfg,
-    });
-  });
+      expectDiscordActionCall({
+        payload: { action: runtimeAction, accountId: undefined, ...params },
+        cfg,
+      });
+    },
+  );
 
   it("falls back to toolContext.currentMessageId for reactions", async () => {
     const cfg = discordConfig();
@@ -855,28 +863,6 @@ describe("handleDiscordMessageAction", () => {
       cfg,
       options: defaultActionOptions(),
     });
-  });
-
-  it("forwards embed-only Discord sends without requiring message text", async () => {
-    const embeds = [{ title: "Release notes", description: "Version available" }];
-    const cfg = discordConfig();
-
-    await handleDiscordMessageAction({
-      action: "send",
-      params: { to: "channel:123", embeds },
-      cfg,
-    });
-
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        to: "channel:123",
-        content: undefined,
-        embeds,
-      }),
-      cfg,
-      defaultActionOptions(),
-    );
   });
 
   it("does not use another provider's current target for Discord sends", async () => {

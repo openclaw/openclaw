@@ -2,8 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   assertProjectWorktreeImportReport,
   assertProjectWorktreeStartupLog,
@@ -14,9 +13,12 @@ import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
 } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const sessionKey = "agent:main:dashboard:legacy-project-worktree";
 const original = {
@@ -121,14 +123,14 @@ function doctorOwnerFixture(files: Record<string, string>) {
 }
 
 describe("published project-worktree Doctor ownership evidence", () => {
-  it("selects the defining Doctor chunk while retaining valid forwarding exports", () => {
+  it("selects the defining Doctor chunk while retaining valid forwarding exports", async () => {
     const { root, identity } = doctorOwnerFixture({
       "doctor-owner-entry.mjs": schemaForwarder,
       "doctor-owner-real.mjs": schemaDefinition,
     });
     expect(resolveWorkerCellExport(schemaForwarder, schemaSymbol)).toBe(schemaSymbol);
     expect(
-      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, ts),
+      await resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, parser),
     ).toEqual([
       "doctor-owner-real.mjs",
       schemaSymbol,
@@ -155,22 +157,22 @@ describe("published project-worktree Doctor ownership evidence", () => {
       files: { "doctor-owner-real.mjs": `function ${schemaSymbol}( {` },
       error: /Cannot parse package owner/,
     },
-  ])("rejects $name before importing Doctor code", ({ files, error }) => {
+  ])("rejects $name before importing Doctor code", async ({ files, error }) => {
     const { root, identity } = doctorOwnerFixture(files);
-    expect(() =>
-      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, ts),
-    ).toThrow(error);
+    await expect(
+      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, parser),
+    ).rejects.toThrow(error);
   });
 
-  it("rejects changed candidate owner bytes", () => {
+  it("rejects changed candidate owner bytes", async () => {
     const { root, identity } = doctorOwnerFixture({ "doctor-owner-real.mjs": schemaDefinition });
     writeFileSync(
       path.join(root, "dist/doctor-owner-real.mjs"),
       `${schemaDefinition}\n// changed\n`,
     );
-    expect(() =>
-      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, ts),
-    ).toThrow(/Package owner changed/);
+    await expect(
+      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, parser),
+    ).rejects.toThrow(/Package owner changed/);
   });
 
   it("prepares the independent schema before startup and repairs workspace metadata between runs", () => {

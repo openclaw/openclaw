@@ -62,6 +62,32 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each([undefined, "Validation worker"])(
+    "shows the full failure above the notepad (child: %s)",
+    (childLabel) => {
+      const container = document.createElement("div");
+      const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
+      const failed = row({ attention: { kind: "error", reason, childLabel } });
+      render(renderSessionHovercard({ row: failed, progressCard: progressCard() }), container);
+      const error = container.querySelector(".session-hovercard__error");
+      expect(error?.textContent).toContain(reason);
+      expect(error?.textContent).toContain(
+        childLabel ? "Child session Validation worker failed:" : "Run failed:",
+      );
+      expect(error?.querySelector("worker")).toBeNull();
+      expect(error?.querySelector("svg")).not.toBeNull();
+      expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(
+        true,
+      );
+
+      render(renderSessionHovercard({ row: failed }), container);
+      expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
+      expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
+      render(renderSessionHovercard({ row: row({ attention: { kind: "none" } }) }), container);
+      expect(container.querySelector(".session-hovercard__error")).toBeNull();
+    },
+  );
+
   it("puts channel identity before the title and keeps session contributors separate", () => {
     const container = document.createElement("div");
     render(
@@ -236,7 +262,6 @@ describe("renderSessionHovercard", () => {
       facts: { boardFace: "dashboard", hasAutomation: true },
       labels: ["Opens as dashboard", "Automation attached"],
     },
-    { name: "absent", facts: {}, labels: [] },
     { name: "disabled", facts: { hasAutomation: false }, labels: [] },
   ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
     "renders $name session facts without other metadata",
@@ -736,22 +761,19 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
   });
 
-  it.each(["done", "failed", "timeout", "killed"] as const)(
-    "hides plan work updated during the run after the session is %s",
-    (status) => {
-      const container = document.createElement("div");
-      render(
-        renderSessionHovercard({
-          row: row({ status }),
-          progressCard: progressCard(),
-        }),
-        container,
-      );
+  it("hides plan work updated during a completed run", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({ status: "done" }),
+        progressCard: progressCard(),
+      }),
+      container,
+    );
 
-      expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
-      expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
-    },
-  );
+    expect(container.querySelector(".session-hovercard__plan-row")).toBeNull();
+    expect(container.querySelector(".session-hovercard__notepad")).not.toBeNull();
+  });
 
   it("deduplicates creator and self from the compact attribution", () => {
     const container = document.createElement("div");

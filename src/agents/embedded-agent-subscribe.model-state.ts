@@ -172,10 +172,21 @@ export function createEmbeddedModelState(
       publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
         case "turn_end":
-          // Async tool fragments emit message_end before the provider response finishes.
-          successfulModelResponse ||=
+          // message_end may describe an async tool fragment, not a completed provider response.
+          if (
+            !successfulModelResponse &&
             (message.stopReason === "stop" || message.stopReason === "toolUse") &&
-            !isProviderRefusalAssistantError(message);
+            !isProviderRefusalAssistantError(message)
+          ) {
+            successfulModelResponse = true;
+            params.onContextAccountingEvent?.({
+              kind: "model",
+              contextTokens: deriveSessionTotalTokens({
+                lastCallUsage: normalizeUsage(message.usage),
+              }),
+              successful: true,
+            });
+          }
           return;
         case "message_start":
           pending = undefined;
@@ -208,6 +219,7 @@ export function createEmbeddedModelState(
             contextTokens: deriveSessionTotalTokens({
               lastCallUsage: normalizeUsage(message.usage),
             }),
+            successful: false,
           });
       }
     },

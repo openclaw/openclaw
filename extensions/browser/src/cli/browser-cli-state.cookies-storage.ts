@@ -1,7 +1,6 @@
-/**
- * Browser CLI cookie and Web Storage commands.
- */
 import type { Command } from "commander";
+import { inheritOptionFromParent } from "openclaw/plugin-sdk/cli-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -11,11 +10,6 @@ import {
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, inheritOptionFromParent } from "./core-api.js";
-
-function resolveUrl(opts: { url?: string }): string | undefined {
-  return normalizeOptionalString(opts.url);
-}
 
 function resolveTargetId(rawTargetId: unknown, command: Command): string | undefined {
   return (
@@ -24,7 +18,6 @@ function resolveTargetId(rawTargetId: unknown, command: Command): string | undef
   );
 }
 
-/** Registers Browser cookies and storage subcommands. */
 export function registerBrowserCookiesAndStorageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -54,7 +47,7 @@ export function registerBrowserCookiesAndStorageCommands(
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const targetId = resolveTargetId(opts.targetId, cmd);
-      const url = resolveUrl(opts);
+      const url = normalizeOptionalString(opts.url);
       if (!url) {
         defaultRuntime.error(danger("Missing required --url option for cookies set"));
         defaultRuntime.exit(1);
@@ -90,7 +83,7 @@ export function registerBrowserCookiesAndStorageCommands(
 
   const storage = browser.command("storage").description("Read/write localStorage/sessionStorage");
 
-  function registerStorageKind(kind: "local" | "session") {
+  for (const kind of ["local", "session"] as const) {
     const cmd = storage.command(kind).description(`${kind}Storage commands`);
 
     cmd
@@ -145,7 +138,4 @@ export function registerBrowserCookiesAndStorageCommands(
         });
       });
   }
-
-  registerStorageKind("local");
-  registerStorageKind("session");
 }

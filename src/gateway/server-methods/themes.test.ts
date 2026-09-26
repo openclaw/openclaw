@@ -110,11 +110,20 @@ async function invoke(
 }
 
 function pluginTheme(): ThemeCatalogEntry {
-  const definition = createThemeDefinitionFixture();
+  const definition = createThemeDefinitionFixture({
+    mascot: "none",
+    workingPhrases: ["Building"],
+    critters: ["penguin", "fedora"],
+    avatarHat: "fedora",
+  });
   return {
     id: "space-pack/xenovessel",
     name: definition.name,
     description: definition.description,
+    mascot: definition.mascot,
+    workingPhrases: definition.workingPhrases,
+    critters: definition.critters,
+    avatarHat: definition.avatarHat,
     source: "plugin",
     pluginId: "space-pack",
     modes: ["dark"],
@@ -124,13 +133,14 @@ function pluginTheme(): ThemeCatalogEntry {
 
 function beforeWorkerCommit(checkpoint: () => void) {
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-    createAdmission((request, grant) => {
-      if (request.stage === "commit") {
-        checkpoint();
-      }
-      admit(request, grant);
-    }),
+  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (admit, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
+          checkpoint();
+        }
+        admit(request, grant);
+      }, attachment),
   );
 }
 
@@ -174,8 +184,23 @@ async function withConcurrentPreferenceSnapshots<T>(count: number, run: () => Pr
 
 describe("theme RPC", () => {
   it("lists descriptive choices and inspects a plugin definition without exposing palettes in list entries", async () => {
-    pluginThemes.push(pluginTheme());
-    const { definition, ...descriptor } = pluginTheme();
+    const entry = {
+      ...pluginTheme(),
+      artwork: {
+        hats: {
+          beret: { url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/hat/beret?v=abc" },
+        },
+        critters: {
+          ferris: {
+            url: "/__openclaw__/plugin-theme-art/space-pack/xenovessel/critter/ferris?v=def",
+            title: "a crab, allegedly",
+            crossMs: 15000,
+          },
+        },
+      },
+    };
+    pluginThemes.push(entry);
+    const { definition, ...descriptor } = entry;
     const listed = await invoke("themes.list");
     expect(listed).toMatchObject({
       ok: true,
@@ -189,8 +214,9 @@ describe("theme RPC", () => {
     });
     expect(await invoke("themes.get", { id: descriptor.id })).toMatchObject({
       ok: true,
-      payload: { theme: descriptor, definition },
+      payload: { theme: descriptor, definition, artwork: entry.artwork },
     });
+    expect(await invoke("themes.get", { id: "claw" })).not.toHaveProperty("payload.artwork");
   });
 
   it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
@@ -201,7 +227,12 @@ describe("theme RPC", () => {
     const requester = client(requesterProfileId);
     const other = { ...client(otherProfileId), connId: "other-browser" };
     const broadcastToConnIds = vi.fn();
-    const definition = createThemeDefinitionFixture();
+    const definition = createThemeDefinitionFixture({
+      mascot: "none",
+      workingPhrases: ["Building", "Compiling"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
+    });
     expect(
       await invoke(
         "themes.import",
@@ -222,7 +253,14 @@ describe("theme RPC", () => {
       ok: true,
       payload: {
         current: { id: "user/xenovessel", mode: "dark", scope: "profile" },
-        theme: { id: "user/xenovessel", source: "user" },
+        theme: {
+          id: "user/xenovessel",
+          source: "user",
+          mascot: "none",
+          workingPhrases: ["Building", "Compiling"],
+          critters: ["penguin", "fedora"],
+          avatarHat: "fedora",
+        },
         definition,
         application: "saved",
       },
@@ -244,6 +282,32 @@ describe("theme RPC", () => {
       "ui.themeMode": "dark",
     });
     expect(getUserPreferences(otherProfileId)).toEqual({});
+    expect(await invoke("themes.get", { id: "user/xenovessel" })).toMatchObject({
+      ok: true,
+      payload: {
+        theme: {
+          mascot: "none",
+          workingPhrases: ["Building", "Compiling"],
+          critters: ["penguin", "fedora"],
+          avatarHat: "fedora",
+        },
+        definition,
+      },
+    });
+    expect(await invoke("themes.list")).toMatchObject({
+      ok: true,
+      payload: {
+        themes: expect.arrayContaining([
+          expect.objectContaining({
+            id: "user/xenovessel",
+            mascot: "none",
+            workingPhrases: ["Building", "Compiling"],
+            critters: ["penguin", "fedora"],
+            avatarHat: "fedora",
+          }),
+        ]),
+      },
+    });
   });
 
   it("rolls back the imported definition when selecting it fails in storage", async () => {

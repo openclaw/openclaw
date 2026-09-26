@@ -26,7 +26,9 @@ export type ControlUiLinkReaderPreviewParams = {
   /** Selected agent hint; the receiving owner still authorizes identity selection. */
   agentId?: string;
 };
-export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
+export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  refresh?: boolean;
+};
 export type ControlUiLinkReaderImage = {
   /** Echo the validated requested image URL. */
   url: string;
@@ -42,6 +44,8 @@ export type ControlUiLinkReaderPreview = {
   badge?: {
     label: string;
     tone: "neutral" | "positive" | "negative" | "attention" | "accent";
+    /** Timestamp of the event represented by the badge, displayed instead of creation time. */
+    timestamp?: string;
   };
   author?: string;
   /** Optional HTTPS profile link on the source origin. */

@@ -27,9 +27,27 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
 const rolloutSha = "c".repeat(40);
+const mergeBaseSha = "d".repeat(40);
+const comparisonPath = `/repos/openclaw/openclaw/compare/${staleSha}...${headSha}`;
 const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function interruptedJsonResponse(error: Error) {
+  let started = false;
+  return new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (!started) {
+          started = true;
+          controller.enqueue(new TextEncoder().encode('{"partial":'));
+        } else {
+          controller.error(error);
+        }
+      },
+    }),
+  );
+}
+
 const pullPath = "/repos/openclaw/openclaw/pulls/7";
 const issuePath = "/repos/openclaw/openclaw/issues/7";
 const pullRequest = {
@@ -58,7 +76,11 @@ const approvalNotice = {
   body: `<!-- openclaw:dependency-graph-guard -->\n<!-- openclaw:approval-request ${JSON.stringify({ head: headSha, base: "main", requestedAt: "2026-01-01T00:00:00Z" })} -->\n`,
 };
 
-function runDependencyGuard(routes: Record<string, unknown> = {}, mode = "enforce") {
+function runDependencyGuard(
+  routes: Record<string, unknown> = {},
+  mode = "enforce",
+  autoscrubToken: string | null = "fixture-autoscrub-token",
+) {
   const dir = tempDirs.make("openclaw-dependency-guard-");
   const eventPath = path.join(dir, "event.json");
   const fixturePath = path.join(dir, "fixture.json");
@@ -83,6 +105,10 @@ function runDependencyGuard(routes: Record<string, unknown> = {}, mode = "enforc
           base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
         },
         [`GET ${pullPath}/files`]: [{ filename: "pnpm-workspace.yaml" }],
+        [`GET ${comparisonPath}`]: {
+          base_commit: { sha: staleSha },
+          merge_base_commit: { sha: staleSha },
+        },
         [`GET ${issuePath}/comments`]: [],
         [`GET ${issuePath}/labels`]: [],
         "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: "write" },
@@ -110,7 +136,7 @@ function runDependencyGuard(routes: Record<string, unknown> = {}, mode = "enforc
         GITHUB_OUTPUT: outputPath,
         OPENCLAW_GUARD_TEST_FIXTURE: fixturePath,
         OPENCLAW_DEPENDENCY_GUARD_MODE: mode,
-        OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: "fixture-autoscrub-token",
+        ...(autoscrubToken ? { OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: autoscrubToken } : {}),
       },
     },
   );
@@ -303,14 +329,92 @@ describe("dependency guard script", () => {
   });
 
   it.each([
-    { lateApproval: false, writeError: false },
-    { lateApproval: true, writeError: false },
-    { lateApproval: false, writeError: true },
+    { role: "write", headVersion: "1", expected: "success", notice: false },
+    { role: "admin", headVersion: "1", expected: "success", notice: false },
+    { role: "write", headVersion: "2", expected: "failure", notice: true },
   ])(
-    "preserves autoscrub with late approval=$lateApproval and write error=$writeError",
-    ({ lateApproval, writeError }) => {
+    "evaluates PR manifest changes from the merge base ($role author, version $headVersion)",
+    ({ role, headVersion, expected, notice }) => {
+      const content = (version: string, test: string) => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(
+          JSON.stringify({ devDependencies: { example: version }, scripts: { test } }),
+        ).toString("base64"),
+      });
+      const manifestPath = "/repos/openclaw/openclaw/contents/package.json";
+      const result = runDependencyGuard({
+        [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
+        [`GET ${comparisonPath}`]: {
+          base_commit: { sha: staleSha },
+          merge_base_commit: { sha: mergeBaseSha },
+        },
+        [`GET ${manifestPath}?ref=${mergeBaseSha}`]: content("1", "old"),
+        [`GET ${manifestPath}?ref=${staleSha}`]: content("2", "old"),
+        [`GET ${manifestPath}?ref=${headSha}`]: content(headVersion, "new"),
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+        "GET /repos/openclaw/openclaw/collaborators/contributor/permission": { role_name: role },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.statuses.at(-1)?.body?.state).toBe(expected);
+      expect(result.calls.some((call) => call.body?.body)).toBe(notice);
+      if (notice) {
+        expect(result.stdout).toContain("/allow-dependencies-change");
+      }
+    },
+  );
+
+  it.each(["added", "removed"])("still detects a manifest that is %s", (status) => {
+    const manifestPath = "/repos/openclaw/openclaw/contents/package.json";
+    const content = {
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(JSON.stringify({ dependencies: { example: "1" } })).toString("base64"),
+    };
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [{ filename: "package.json", status }],
+      [`GET ${manifestPath}?ref=${staleSha}`]: status === "added" ? { httpError: 404 } : content,
+      [`GET ${manifestPath}?ref=${headSha}`]: status === "removed" ? { httpError: 404 } : content,
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.stdout).toContain("/allow-dependencies-change");
+  });
+
+  it.each([
+    { base_commit: { sha: headSha }, merge_base_commit: { sha: mergeBaseSha } },
+    { base_commit: { sha: staleSha }, merge_base_commit: { sha: "invalid" } },
+  ])("fails closed when the manifest merge base is invalid: %j", (comparison) => {
+    const result = runDependencyGuard({
+      [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
+      [`GET ${comparisonPath}`]: comparison,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("merge base");
+    expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    expect(result.calls.some((call) => call.path === "/graphql")).toBe(false);
+  });
+
+  it.each([
+    { lateApproval: false, writeError: false, headChanged: false },
+    { lateApproval: true, writeError: false, headChanged: false },
+    { lateApproval: false, writeError: true, headChanged: false },
+    { lateApproval: false, writeError: false, headChanged: true },
+  ])(
+    "preserves autoscrub with late approval=$lateApproval, write error=$writeError, head changed=$headChanged",
+    ({ lateApproval, writeError, headChanged }) => {
       const result = runDependencyGuard(
         {
+          [`GET ${pullPath}`]: {
+            responses: [
+              pullRequest,
+              pullRequest,
+              headChanged
+                ? { ...pullRequest, head: { ...pullRequest.head, sha: staleSha } }
+                : pullRequest,
+            ],
+          },
           [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
           [`GET ${issuePath}/comments`]: {
             responses: [
@@ -339,8 +443,13 @@ describe("dependency guard script", () => {
         );
       }
       const writes = result.calls.filter((call) => call.path === "/graphql");
-      expect(writes).toHaveLength(lateApproval ? 0 : 1);
-      if (!lateApproval) {
+      expect(writes).toHaveLength(lateApproval || headChanged ? 0 : 1);
+      if (headChanged) {
+        expect(result.stdout).toContain("Superseded");
+        expect(result.calls.some((call) => call.body?.body)).toBe(false);
+        expect(result.stderr).not.toContain("Autoscrub failed");
+      }
+      if (!lateApproval && !headChanged) {
         expect(writes[0]?.body?.variables?.input).toMatchObject({
           expectedHeadOid: headSha,
           fileChanges: {
@@ -353,6 +462,95 @@ describe("dependency guard script", () => {
       expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
     },
   );
+
+  it("restores modified, deleted, and added lockfiles from the PR merge base after main advances", () => {
+    const content = (text: string) => ({
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(text).toString("base64"),
+    });
+    const result = runDependencyGuard(
+      {
+        [`GET ${pullPath}`]: { ...pullRequest, changed_files: 4 },
+        [`GET ${pullPath}/files`]: [
+          { filename: "pnpm-lock.yaml", status: "modified" },
+          { filename: "tools/package-lock.json", status: "removed" },
+          { filename: "new/package-lock.json", status: "added" },
+          { filename: "README.md", status: "modified" },
+        ],
+        [`GET ${comparisonPath}`]: {
+          base_commit: { sha: staleSha },
+          merge_base_commit: { sha: mergeBaseSha },
+        },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${mergeBaseSha}`]:
+          content("original lockfile"),
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${staleSha}`]:
+          content("unrelated main update"),
+        [`GET /repos/openclaw/openclaw/contents/tools/package-lock.json?ref=${mergeBaseSha}`]:
+          content("original nested lockfile"),
+        [`GET /repos/openclaw/openclaw/contents/tools/package-lock.json?ref=${staleSha}`]: {
+          httpError: 404,
+        },
+        [`GET /repos/openclaw/openclaw/contents/new/package-lock.json?ref=${mergeBaseSha}`]: {
+          httpError: 404,
+        },
+        [`GET /repos/openclaw/openclaw/contents/new/package-lock.json?ref=${staleSha}`]: content(
+          "independently added on main",
+        ),
+        "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: rolloutSha } } } },
+      },
+      "autoscrub",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const writes = result.calls.filter((call) => call.path === "/graphql");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.body?.variables?.input).toEqual({
+      branch: { repositoryNameWithOwner: "openclaw/openclaw", branchName: "change" },
+      expectedHeadOid: headSha,
+      fileChanges: {
+        additions: [
+          { path: "pnpm-lock.yaml", contents: content("original lockfile").content },
+          {
+            path: "tools/package-lock.json",
+            contents: content("original nested lockfile").content,
+          },
+        ],
+        deletions: [{ path: "new/package-lock.json" }],
+      },
+      message: { headline: "chore: remove dependency lockfile change" },
+    });
+    expect(result.stdout).toContain(`Merge base: \`${mergeBaseSha}\``);
+    expect(result.stdout).not.toContain("Verification result:");
+  });
+
+  it("keeps dependency approval required when an editable fork has no autoscrub token", () => {
+    const routes = {
+      [`GET ${pullPath}`]: {
+        ...pullRequest,
+        maintainer_can_modify: true,
+        head: { ...pullRequest.head, repo: { id: 2, full_name: "contributor/openclaw" } },
+      },
+      [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+    };
+    const autoscrub = runDependencyGuard(routes, "autoscrub", null);
+    expect(autoscrub.status, autoscrub.stderr).toBe(0);
+    expect(autoscrub.calls.some((call) => call.path === "/graphql")).toBe(false);
+    expect(autoscrub.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    const notice = autoscrub.calls.find(
+      (call) => call.path === `${issuePath}/comments` && call.method === "POST",
+    );
+    expect(notice?.body?.body).toContain("Automatic lockfile cleanup is best effort.");
+    expect(notice?.body?.body).toContain("/allow-dependencies-change");
+    expect(notice?.body?.body).toContain("git restore");
+
+    const enforcement = runDependencyGuard(routes, "enforce", null);
+    expect(enforcement.status, enforcement.stderr).toBe(0);
+    expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(enforcement.stdout).toContain("/allow-dependencies-change");
+    expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
+  });
 
   it.each(["detect", "autoscrub", "enforce"])(
     "does not approve or autoscrub a grandfathered lockfile PR in %s mode",
@@ -506,6 +704,7 @@ describe("dependency guard script", () => {
 
   it("renders deterministic removal guidance for blocked lockfile changes", () => {
     const body = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
@@ -523,8 +722,9 @@ describe("dependency guard script", () => {
     expect(body).toContain("- `tools/nested/pnpm-lock.yaml`\n");
     expect(body).toContain("- `package.json`\n");
     expect(body).toContain(
-      "git checkout 'origin/main' -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
+      "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
     );
+    expect(body).toContain("git fetch 'https://github.com/openclaw/openclaw.git' 'main'");
     expect(body).toContain("```text\n/allow-dependencies-change\n```");
     expect(body).toContain(`Current SHA: \`${headSha}\``);
     expect(body).toContain("A later push requires a fresh approval comment.");
@@ -532,6 +732,7 @@ describe("dependency guard script", () => {
 
   it("shell-quotes PR-controlled paths in removal guidance", () => {
     const body = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "release/canary branch",
       headSha,
       lockfileChanges: [
@@ -542,7 +743,7 @@ describe("dependency guard script", () => {
     });
 
     expect(body).toContain(
-      "git checkout 'origin/release/canary branch' -- 'dir with spaces/pnpm-lock.yaml' 'safe/quote'\\''$(touch bad);/package-lock.json'",
+      "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'dir with spaces/pnpm-lock.yaml' 'safe/quote'\\''$(touch bad);/package-lock.json'",
     );
   });
 
@@ -635,6 +836,7 @@ describe("dependency guard script", () => {
     const body = renderAutoscrubbedDependencyComment({
       baseBranch: "main",
       commitSha: staleSha,
+      mergeBaseSha,
       lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
     });
 
@@ -645,23 +847,24 @@ describe("dependency guard script", () => {
     expect(body).toContain("`tools/nested/pnpm-lock.yaml`");
     expect(body).toContain(`Cleanup commit: \`${staleSha}\``);
     expect(body).toContain(
-      "restored each listed lockfile from the target branch and pushed the cleanup commit to this PR head",
+      "restored each listed lockfile to its merge-base state, removing files added by this PR",
     );
-    expect(body).toContain(
-      "this PR no longer carries those package lockfile diffs after the cleanup commit",
-    );
+    expect(body).toContain(`Merge base: \`${mergeBaseSha}\``);
+    expect(body).not.toContain("Verification result:");
     expect(isAutoscrubbedDependencyComment({ body })).toBe(true);
   });
 
   it("renders fork and dependency-manifest autoscrub guidance", () => {
     const forkBody = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
       dependencyManifestChanges: [],
-      autoscrubStatus: { kind: "not-attempted" },
+      autoscrubStatus: { kind: "unavailable" },
     });
     const unsafeBody = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
@@ -672,6 +875,7 @@ describe("dependency guard script", () => {
       },
     });
     const mixedBody = renderBlockedDependencyComment({
+      baseRepository: "openclaw/openclaw",
       baseBranch: "main",
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
@@ -682,10 +886,8 @@ describe("dependency guard script", () => {
       },
     });
 
-    expect(forkBody).toContain("Auto-scrub was not attempted");
-    expect(forkBody).toContain(
-      "only push deterministic cleanup commits to PR branches that maintainers can modify",
-    );
+    expect(forkBody).toContain("Automatic lockfile cleanup is best effort.");
+    expect(forkBody).toContain("These lockfile changes remain in this PR.");
     expect(unsafeBody).toContain("changes package manifest dependency graph fields");
     expect(unsafeBody).toContain("- `package.json`\n");
     expect(unsafeBody).toContain("Dependency graph changes require maintainer review");
@@ -699,6 +901,9 @@ describe("dependency guard script", () => {
     const baseApi = {
       request: async (requestPath: string) => {
         calls.push({ api: "base", path: requestPath });
+        if (requestPath.includes("/compare/")) {
+          return { base_commit: { sha: "base-sha" }, merge_base_commit: { sha: mergeBaseSha } };
+        }
         if (requestPath.includes("/contents/pnpm-lock.yaml?")) {
           return {
             content: Buffer.from("base lockfile").toString("base64"),
@@ -752,12 +957,13 @@ describe("dependency guard script", () => {
       },
     );
 
-    expect(commit).toEqual({ sha: staleSha });
+    expect(commit).toEqual({ sha: staleSha, mergeBaseSha });
     expect(calls.map((call) => `${call.api}:${call.path}`)).toEqual([
-      "base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=base-sha",
+      `base:/repos/openclaw/openclaw/compare/base-sha...${headSha}?per_page=1&page=2`,
+      `base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${mergeBaseSha}`,
       "write:graphql",
     ]);
-    expect(calls[1]?.variables).toMatchObject({
+    expect(calls[2]?.variables).toMatchObject({
       input: {
         branch: {
           repositoryNameWithOwner: "contributor/openclaw",
@@ -796,21 +1002,6 @@ describe("dependency guard script", () => {
     );
   });
 
-  it("bounds GitHub error bodies by streamed bytes", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(GITHUB_ERROR_BODY_MAX_BYTES + 1));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(readBoundedGitHubErrorText(response)).rejects.toThrow(
-      `GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
-    );
-  });
-
   it("preserves GitHub status when an error body exceeds the cap", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (() =>
@@ -828,7 +1019,7 @@ describe("dependency guard script", () => {
 
     try {
       await expect(githubApi("token").request("/repos/openclaw/openclaw")).rejects.toMatchObject({
-        message: `403 Forbidden: GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
+        message: `GitHub API GET /repos/openclaw/openclaw failed: 403 Forbidden: GitHub error response body exceeded ${GITHUB_ERROR_BODY_MAX_BYTES} bytes`,
         status: 403,
       });
     } finally {
@@ -836,33 +1027,183 @@ describe("dependency guard script", () => {
     }
   });
 
-  it("retries transient GitHub API failures within the request timeout", async () => {
+  it.each([
+    { method: "GET", status: 500 },
+    { method: "HEAD", status: 500 },
+    { method: "GET", status: 503 },
+  ])("recovers from HTTP $status on $method requests", async ({ method, status }) => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("unicorn", { status: 503, statusText: "Unavailable" }))
-      .mockResolvedValueOnce(Response.json({ ok: true }));
+      .mockResolvedValueOnce(new Response("unicorn", { status, statusText: "Server Error" }))
+      .mockResolvedValueOnce(
+        method === "HEAD" ? new Response(null, { status: 204 }) : Response.json({ ok: true }),
+      );
 
     await expect(
       githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(
         "/repos/openclaw/openclaw/pulls/1/files",
+        { method },
       ),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual(method === "HEAD" ? null : { ok: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry non-idempotent GitHub API requests", async () => {
+  it.each([
+    { method: "POST", status: 500 },
+    { method: "PATCH", status: 500 },
+    { method: "DELETE", status: 500 },
+    { method: "POST", status: 503 },
+  ])("does not retry HTTP $status on $method writes", async ({ method, status }) => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response("unicorn", { status: 503, statusText: "Unavailable" }));
+      .mockResolvedValue(new Response("unicorn", { status, statusText: "Server Error" }));
 
     await expect(
       githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(
         "/repos/openclaw/openclaw/issues/1/comments",
-        { method: "POST", body: "{}" },
+        { method, body: "{}" },
       ),
-    ).rejects.toMatchObject({ status: 503 });
+    ).rejects.toMatchObject({
+      status,
+      message: `GitHub API ${method} /repos/openclaw/openclaw/issues/1/comments failed: ${status} Server Error: unicorn`,
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { method: "GET", code: "ECONNRESET", phase: "connection" },
+    { method: "GET", code: "EAI_AGAIN", phase: "connection" },
+    { method: "GET", code: "ENOTFOUND", phase: "connection" },
+    { method: "HEAD", code: "UND_ERR_SOCKET", phase: "connection" },
+    { method: "GET", code: "UND_ERR_SOCKET", phase: "body" },
+    { method: "GET", code: "ECONNRESET", phase: "body" },
+  ])("recovers from $code in the $phase of $method requests", async ({ method, code, phase }) => {
+    const error = new TypeError("terminated", { cause: Object.assign(new Error(), { code }) });
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+      if (phase === "body") {
+        return interruptedJsonResponse(error);
+      }
+      throw error;
+    });
+    fetchImpl.mockResolvedValueOnce(
+      method === "HEAD" ? new Response(null, { status: 204 }) : Response.json({ complete: true }),
+    );
+
+    await expect(
+      githubApi("token", { fetchImpl, retryDelaysMs: [0] }).request(pullPath, { method }),
+    ).resolves.toEqual(method === "HEAD" ? null : { complete: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares the bounded retry budget between connection, HTTP, and body failures", async () => {
+    const error = new TypeError("terminated", {
+      cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockImplementation(async () => interruptedJsonResponse(error));
+
+    await expect(
+      githubApi("token", { fetchImpl, retryDelaysMs: [0, 0, 0] }).request(pullPath),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(`GitHub API GET ${pullPath} failed: ECONNRESET`),
+      cause: error,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not replay a write whose response body was interrupted", async () => {
+    const error = new TypeError("terminated", {
+      cause: Object.assign(new Error(), { code: "UND_ERR_SOCKET" }),
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => interruptedJsonResponse(error));
+    await expect(
+      githubApi("token", { fetchImpl }).request(issuePath, { method: "POST", body: "{}" }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(`GitHub API POST ${issuePath} failed: UND_ERR_SOCKET`),
+      cause: error,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["invalid JSON", "unknown stream error"])(
+    "does not retry %s responses",
+    async (failure) => {
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () =>
+          failure === "invalid JSON"
+            ? new Response("invalid JSON")
+            : interruptedJsonResponse(new Error("unknown stream error")),
+        );
+      await expect(githubApi("token", { fetchImpl }).request(pullPath)).rejects.toThrow();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["POST", "PATCH", "DELETE"])(
+    "does not retry connection failures on %s writes",
+    async (method) => {
+      const error = new TypeError("fetch failed", {
+        cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+      });
+      const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(error);
+      await expect(
+        githubApi("token", { fetchImpl }).request(issuePath, { method, body: "{}" }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining(`GitHub API ${method} ${issuePath} failed: ECONNRESET`),
+        cause: error,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    new DOMException("aborted", "AbortError"),
+    new TypeError("fetch failed", {
+      cause: Object.assign(new Error("certificate expired"), { code: "CERT_HAS_EXPIRED" }),
+    }),
+    new TypeError("invalid request"),
+  ])("does not retry non-transient fetch rejection %s", async (error) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(error);
+    await expect(githubApi("token", { fetchImpl }).request(pullPath)).rejects.toMatchObject({
+      cause: error,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { method: "GET", phase: "connection" },
+    { method: "POST", phase: "connection" },
+    { method: "GET", phase: "body" },
+    { method: "POST", phase: "body" },
+  ])(
+    "does not retry or mark an aborted $method $phase error for recovery",
+    async ({ method, phase }) => {
+      const controller = new AbortController();
+      const error = new TypeError("fetch failed", {
+        cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+      });
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+        controller.abort(error);
+        if (phase === "body") {
+          return interruptedJsonResponse(error);
+        }
+        throw error;
+      });
+      const request = githubApi("token", { fetchImpl }).request(pullPath, {
+        method,
+        signal: controller.signal,
+      });
+      await expect(request).rejects.toMatchObject({ cause: error });
+      await expect(request).rejects.not.toHaveProperty("code");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds successful GitHub API response bodies", async () => {
     const request = githubApi("token", {
@@ -878,6 +1219,37 @@ describe("dependency guard script", () => {
     await expect(request).rejects.toThrow("GitHub response body exceeded 64 bytes");
     expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
   });
+
+  it.each(["connection", "body"])(
+    "keeps the original request timeout active during %s retry backoff",
+    async (phase) => {
+      vi.useFakeTimers();
+      let signal: AbortSignal | undefined;
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+        signal = init?.signal ?? undefined;
+        const error = new TypeError("terminated", {
+          cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+        });
+        if (phase === "body") {
+          return interruptedJsonResponse(error);
+        }
+        throw error;
+      });
+      const request = githubApi("token", {
+        fetchImpl,
+        timeoutMs: 5,
+        retryDelaysMs: [10_000],
+      }).request(pullPath);
+      const rejection = expect(request).rejects.toThrow(
+        `GitHub API GET ${pullPath} exceeded timeout 5ms`,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(signal?.aborted).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;

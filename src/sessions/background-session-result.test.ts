@@ -1,11 +1,23 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
 import { callGatewayHandler } from "../gateway/server-methods/skills.test-helpers.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
@@ -16,8 +28,10 @@ import { onSessionTranscriptUpdate } from "./transcript-events.js";
 
 describe("commitBackgroundResultToSession", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
-      closeOpenClawAgentDatabasesForTest();
+    afterEach(async () => {
+      for (const root of tempDirs.dirs) {
+        await closeOpenClawAgentDatabasesAsync(root);
+      }
       cleanup();
     }),
   );
@@ -48,6 +62,7 @@ describe("commitBackgroundResultToSession", () => {
       assertAllowed: () => {},
     });
     let commitSettled = false;
+    const controller = new AbortController();
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const commit = commitBackgroundResultToSession({
@@ -58,76 +73,103 @@ describe("commitBackgroundResultToSession", () => {
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
       config: target.config,
+      signal: controller.signal,
     });
-    void commit.then(() => {
-      commitSettled = true;
-    });
+    const observations: Promise<void>[] = [
+      commit.then(
+        () => {
+          commitSettled = true;
+        },
+        () => {
+          commitSettled = true;
+        },
+      ),
+    ];
+    let laterAdmission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
 
-    await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
-    expect(commitSettled).toBe(false);
-    let laterAdmissionSettled = false;
-    const laterAdmission = beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [target.sessionKey, target.sessionId],
-      assertAllowed: () => {},
-    });
-    void laterAdmission.then(() => {
-      laterAdmissionSettled = true;
-    });
-    await Promise.resolve();
-    expect(laterAdmissionSettled).toBe(false);
-    admission.release();
+    try {
+      await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
+      expect(commitSettled).toBe(false);
+      let laterAdmissionSettled = false;
+      laterAdmission = beginSessionWorkAdmission({
+        scope: target.storePath,
+        identities: [target.sessionKey, target.sessionId],
+        assertAllowed: () => {},
+        signal: controller.signal,
+      });
+      observations.push(
+        laterAdmission.then(
+          () => {
+            laterAdmissionSettled = true;
+          },
+          () => {
+            laterAdmissionSettled = true;
+          },
+        ),
+      );
+      await Promise.resolve();
+      expect(laterAdmissionSettled).toBe(false);
+      admission.release();
 
-    const first = await commit;
-    expect(first).toMatchObject({ ok: true });
-    (await laterAdmission).release();
-    const retry = await commitBackgroundResultToSession({
-      agentId: "main",
-      sessionKey: target.sessionKey,
-      expectedGeneration: target.generation,
-      text: "Automation finished while the chat was active.",
-      idempotencyKey: "cron-current-completion:cron:job-1:1000",
-      provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
-      config: target.config,
-    });
-    expect(retry).toEqual(first);
-    await expect(
-      commitBackgroundResultToSession({
+      const first = await commit;
+      expect(first).toMatchObject({ ok: true });
+      (await laterAdmission).release();
+      const retry = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
         expectedGeneration: target.generation,
-        text: "A different completion must not reuse the committed run.",
+        text: "Automation finished while the chat was active.",
         idempotencyKey: "cron-current-completion:cron:job-1:1000",
         provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
         config: target.config,
-      }),
-    ).rejects.toThrow("conflicts with the admitted message");
-
-    const events = await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-    });
-    expect(events).toEqual([
-      expect.objectContaining({ type: "session" }),
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({
-          api: "openclaw-transcript",
+      });
+      expect(retry).toEqual(first);
+      await expect(
+        commitBackgroundResultToSession({
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          expectedGeneration: target.generation,
+          text: "A different completion must not reuse the committed run.",
           idempotencyKey: "cron-current-completion:cron:job-1:1000",
-          model: "automation-result",
-          openclawAutomation: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
-          provider: "openclaw",
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Automation finished while the chat was active." }],
-          usage: expect.objectContaining({ input: 0, output: 0, totalTokens: 0 }),
+          provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
+          config: target.config,
         }),
-      }),
-    ]);
-    expect(updates).toHaveLength(1);
-    unsubscribe();
+      ).rejects.toThrow("conflicts with the admitted message");
+
+      const events = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({ type: "session" }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            api: "openclaw-transcript",
+            idempotencyKey: "cron-current-completion:cron:job-1:1000",
+            model: "automation-result",
+            openclawAutomation: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
+            provider: "openclaw",
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Automation finished while the chat was active." }],
+            usage: expect.objectContaining({ input: 0, output: 0, totalTokens: 0 }),
+          }),
+        }),
+      ]);
+      expect(updates).toHaveLength(1);
+    } finally {
+      controller.abort();
+      admission.release();
+      unsubscribe();
+      await laterAdmission?.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+      await Promise.allSettled([commit, ...observations]);
+    }
   });
 
   it("cancels a background completion's pure wait without waiting for old work release", async () => {
@@ -164,51 +206,58 @@ describe("commitBackgroundResultToSession", () => {
           signal: controller.signal,
         });
         pending.push(completion);
-        pending.push(
-          completion.then(
-            (value) => {
-              completionOutcome = { status: "fulfilled", value };
-            },
-            (reason: unknown) => {
-              completionOutcome = { status: "rejected", reason };
-            },
-          ),
+        const completionSettlement = completion.then(
+          (value) => {
+            completionOutcome = { status: "fulfilled", value };
+          },
+          (reason: unknown) => {
+            completionOutcome = { status: "rejected", reason };
+          },
         );
+        pending.push(completionSettlement);
         await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
         expect(getActiveSessionLifecycleMutationCount()).toBe(1);
         expect(prepareDisplayContent).not.toHaveBeenCalled();
-        pending.push(
-          admission.run(async () => {
-            sourceResponse = await callGatewayHandler(
-              sessionMutationHandlers,
-              "sessions.patch",
-              { key: target.sessionKey, pinned: true },
-              {
-                context: {
-                  getRuntimeConfig: () => target.config,
-                  loadGatewayModelCatalog: vi.fn(async () => []),
-                  getSessionEventSubscriberConnIds: () => new Set<string>(),
-                  broadcastToConnIds: vi.fn(),
-                  chatAbortControllers: new Map(),
-                  chatQueuedTurns: new Map(),
-                  dedupe: new Map(),
-                },
+        const sourceMutation = admission.run(async () => {
+          sourceResponse = await callGatewayHandler(
+            sessionMutationHandlers,
+            "sessions.patch",
+            { key: target.sessionKey, pinned: true },
+            {
+              context: {
+                getRuntimeConfig: () => target.config,
+                getSessionEventSubscriberConnIds: () => new Set<string>(),
+                broadcastToConnIds: vi.fn(),
+                chatAbortControllers: new Map(),
+                chatQueuedTurns: new Map(),
+                dedupe: new Map(),
               },
-            );
-            return sourceResponse;
-          }),
-        );
-        controller.abort();
-        await vi.waitFor(() => {
-          expect(
-            completionOutcome,
-            "cancelled background completion must settle while the unrelated old lease stays held",
-          ).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+            },
+          );
+          return sourceResponse;
         });
-        await vi.waitFor(() => expect(sourceResponse).toMatchObject({ ok: true }));
+        pending.push(sourceMutation);
+        controller.abort();
+        await completionSettlement;
+        expect(
+          completionOutcome,
+          "cancelled background completion must settle while the unrelated old lease stays held",
+        ).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+        await expect(sourceMutation).resolves.toMatchObject({ ok: true });
         expect(admission.isActive()).toBe(true);
         expect(getActiveSessionLifecycleMutationCount()).toBe(0);
         expect(prepareDisplayContent).not.toHaveBeenCalled();
+        const scope = {
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          sessionId: target.sessionId,
+          storePath: target.storePath,
+        };
+        expect(loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" })).toMatchObject({
+          pinnedAt: expect.any(Number),
+          sessionId: target.sessionId,
+        });
+        await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
       } finally {
         controller.abort();
         admission.release();
@@ -233,43 +282,73 @@ describe("commitBackgroundResultToSession", () => {
     });
   });
 
-  it("keeps canonical model text separate from structured display content", async () => {
-    const target = await createTarget();
-    const content = [
-      { type: "text", text: "Example report" },
-      {
-        type: "image",
-        url: "/api/chat/media/outgoing/source-session/attachment-1/full",
-        alt: "report.png",
-      },
-    ];
-    const commit = await commitBackgroundResultToSession({
-      agentId: "main",
-      sessionKey: target.sessionKey,
-      expectedGeneration: target.generation,
-      text: "Example report\nreport.png",
-      prepareDisplayContent: async () => content,
-      idempotencyKey: "cron-current-completion:cron:job-media:4000",
-      provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
-      config: target.config,
-    });
-    expect(commit).toMatchObject({ ok: true });
+  it.each([false, true])(
+    "settles accepted display content with provider review paused=%s",
+    async (paused) => {
+      const target = await createTarget();
+      if (paused) {
+        const scope = {
+          agentId: "main",
+          storePath: target.storePath,
+          sessionKey: target.sessionKey,
+        };
+        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+        writeSessionEntry(
+          database,
+          target.sessionKey,
+          {
+            sessionId: target.sessionId,
+            lifecycleRevision: target.generation.lifecycleRevision,
+            updatedAt: 1,
+            providerReview: {
+              id: "review",
+              sessionId: target.sessionId,
+              runId: "refused-run",
+              provider: "openai",
+              model: "gpt-5.6-sol",
+              runtimeId: "openclaw",
+              api: "openai-responses",
+            },
+          },
+          { providerReviewMutation: true },
+        );
+      }
+      const content = [
+        { type: "text", text: "Example report" },
+        {
+          type: "image",
+          url: "/api/chat/media/outgoing/source-session/attachment-1/full",
+          alt: "report.png",
+        },
+      ];
+      const commit = await commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
+        text: "Example report\nreport.png",
+        prepareDisplayContent: async () => content,
+        idempotencyKey: "cron-current-completion:cron:job-media:4000",
+        provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
+        config: target.config,
+      });
+      expect(commit).toMatchObject({ ok: true });
 
-    const events = await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-    });
-    const messageEvent = events.find(
-      (event) =>
-        readTranscriptEventMessage(event)?.idempotencyKey ===
-        "cron-current-completion:cron:job-media:4000",
-    );
-    const message = readTranscriptEventMessage(messageEvent);
-    expect(message?.content).toEqual([{ type: "text", text: "Example report\nreport.png" }]);
-    expect(message?.openclawDisplayContent).toEqual(content);
-  });
+      const events = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      });
+      const messageEvent = events.find(
+        (event) =>
+          readTranscriptEventMessage(event)?.idempotencyKey ===
+          "cron-current-completion:cron:job-media:4000",
+      );
+      const message = readTranscriptEventMessage(messageEvent);
+      expect(message?.content).toEqual([{ type: "text", text: "Example report\nreport.png" }]);
+      expect(message?.openclawDisplayContent).toEqual(content);
+    },
+  );
 
   it("refuses an archived target conversation", async () => {
     const target = await createTarget();

@@ -156,6 +156,19 @@ async function stagingFixture(mac: MacScriptFixture) {
   await write(path.join(root, "operator-sentinel"), "ambient home must remain untouched");
   await write(path.join(tmp, "other-task/sentinel"), "unrelated scratch must survive");
   await cp("scripts/stage-mac-node-worker.sh", path.join(scripts, "stage-mac-node-worker.sh"));
+  await write(path.join(scripts, "tsx.mjs"), "");
+  await write(
+    path.join(scripts, "prune-mac-node-worker.ts"),
+    `
+const fs = require('node:fs');
+const path = require('node:path');
+const runtime = process.argv[2];
+fs.rmSync(path.join(runtime, 'lib/node_modules/openclaw/dist/control-ui'), {
+  force: true,
+  recursive: true,
+});
+`,
+  );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
   await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');
@@ -401,48 +414,38 @@ export function registerMacWorkerMaterializationTests() {
         }),
     );
 
-    it.for(["standard", "elevation-host"])(
-      "rejects unavailable worker scratch before %s publication",
-      (variant, { mac }) =>
-        mac.lifetime.run(async () => {
-          const fixture = await stagingFixture(mac);
-          const before = snapshot(fixture.root);
-          const result = await fixture.run(variant, path.join(fixture.tmp, "unavailable"));
-          expect(result.status, result.stderr).not.toBe(0);
-          expect(fixture.readScratchObservations()).toEqual([]);
-          expect(existsSync(fixture.calls)).toBe(false);
-          expect(snapshot(fixture.root)).toEqual(before);
-        }),
-    );
+    it("rejects unavailable worker scratch before publication", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await stagingFixture(mac);
+        const before = snapshot(fixture.root);
+        const result = await fixture.run("standard", path.join(fixture.tmp, "unavailable"));
+        expect(result.status, result.stderr).not.toBe(0);
+        expect(fixture.readScratchObservations()).toEqual([]);
+        expect(existsSync(fixture.calls)).toBe(false);
+        expect(snapshot(fixture.root)).toEqual(before);
+      }));
 
-    it.for(["standard", "elevation-host"])(
-      "cleans worker scratch and product staging after %s pack failure",
-      (variant, { mac }) =>
-        mac.lifetime.run(async () => {
-          const fixture = await stagingFixture(mac);
-          await write(path.join(fixture.root, "reject-pack"), "");
-          const before = readdirSync(fixture.root).toSorted();
-          const result = await fixture.run(variant);
-          expect(result.status, result.stderr).toBe(41);
-          expect(fixture.readScratchObservations().map(({ phase }) => phase)).toEqual(["pack"]);
-          expect(existsSync(fixture.calls)).toBe(false);
-          expect(existsSync(fixture.destination)).toBe(false);
-          expectWorkerScratchCleaned(fixture);
-          expect(
-            readdirSync(fixture.root)
-              .filter((name) => name !== path.basename(fixture.scratchLog))
-              .toSorted(),
-          ).toEqual(before);
-        }),
-    );
+    it("cleans worker scratch and product staging after pack failure", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const fixture = await stagingFixture(mac);
+        await write(path.join(fixture.root, "reject-pack"), "");
+        const before = readdirSync(fixture.root).toSorted();
+        const result = await fixture.run("standard");
+        expect(result.status, result.stderr).toBe(41);
+        expect(fixture.readScratchObservations().map(({ phase }) => phase)).toEqual(["pack"]);
+        expect(existsSync(fixture.calls)).toBe(false);
+        expect(existsSync(fixture.destination)).toBe(false);
+        expectWorkerScratchCleaned(fixture);
+        expect(
+          readdirSync(fixture.root)
+            .filter((name) => name !== path.basename(fixture.scratchLog))
+            .toSorted(),
+        ).toEqual(before);
+      }));
 
-    it.for(
-      ["standard", "elevation-host"].flatMap((variant) =>
-        ["verification", "occupied", "occupied-link"].map((failure) => ({ variant, failure })),
-      ),
-    )(
-      "publishes neither architecture on second $variant $failure failure",
-      ({ variant, failure }, { mac }) =>
+    it.for(["verification", "occupied", "occupied-link"])(
+      "publishes neither architecture on second %s failure",
+      (failure, { mac }) =>
         mac.lifetime.run(async () => {
           const fixture = await stagingFixture(mac);
           if (failure === "verification") {
@@ -454,7 +457,7 @@ export function registerMacWorkerMaterializationTests() {
             await symlink("missing", path.join(fixture.destination, "x86_64"));
           }
           const before = existsSync(fixture.destination) ? snapshot(fixture.destination) : [];
-          const result = await fixture.run(variant);
+          const result = await fixture.run("standard");
           expect(result.status, result.stderr).toBe(failure === "verification" ? 42 : 1);
           const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
           expect(calls).toHaveLength(2);

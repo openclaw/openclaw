@@ -253,6 +253,7 @@ describe("spawn context-engine resource custody", () => {
     const settleFailedLaunch = vi.fn(async () => {});
     const cancelledScope = {
       waitForClaim: () => undefined,
+      waitForRetirementPublication: () => undefined,
       canLaunch: () => false,
       canCleanupSession: () => true,
       canAcceptLaunch: () => true,

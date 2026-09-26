@@ -262,6 +262,29 @@ export async function createMarginImage(
   return Buffer.from(encoded, "base64");
 }
 
+export async function resizeMarginViewport(page: Page, width: number): Promise<void> {
+  await page.setViewportSize({ width, height: 1200 });
+  // Excluded cases have no mobile measurement between resizes. Await native
+  // layout publication before issuing the desktop restore.
+  await page.evaluate(
+    (expectedWidth) =>
+      new Promise<void>((resolve) => {
+        const observer = new ResizeObserver(([entry]) => {
+          if (
+            window.innerWidth !== expectedWidth ||
+            entry?.borderBoxSize[0]?.inlineSize !== expectedWidth
+          ) {
+            return;
+          }
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document.documentElement, { box: "border-box" });
+      }),
+    width,
+  );
+}
+
 export async function measureMargin(page: Page, testCase: MarginCase) {
   const target = page.locator(`.chat-thread ${testCase.selector}`).first();
   await target.waitFor();

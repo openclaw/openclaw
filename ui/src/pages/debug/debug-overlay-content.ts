@@ -3,6 +3,7 @@ import "../../styles/debug-data.css";
 import { property, state as litState } from "lit/decorators.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -16,7 +17,6 @@ import {
   type DebugOverlayStatusSnapshot,
 } from "./debug-overlay-sections.ts";
 
-const DEBUG_OVERLAY_POLL_INTERVAL_MS = 2000;
 const DEBUG_OVERLAY_HISTORY_LIMIT = 90;
 
 type SectionState =
@@ -29,24 +29,32 @@ class DebugOverlayContent extends OpenClawLightDomElement {
   @property({ type: Boolean }) minimized = false;
   @litState() private sections = new Map<string, SectionState>();
 
-  private requestController: AbortController | null = null;
-  private requestActive = false;
+  private readonly requestControllers = new Map<string, AbortController>();
   private requestGeneration = 0;
   private statusHistory: DebugOverlayStatusSample[] = [];
   private readonly polling = new PollController(
     this,
-    DEBUG_OVERLAY_POLL_INTERVAL_MS,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
     () => void this.refreshSections(),
+    false,
+    "visible",
   );
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetSections(),
     ensureInitialData: () => void this.refreshSections(),
+    onPageActivation: () => this.syncPolling(),
   });
   private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
+    () =>
+      !this.minimized && document.visibilityState !== "hidden" ? this.context?.gateway : undefined,
     (gateway, notify) => gateway.subscribeEventLog(notify),
   );
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.syncPolling();
+  }
 
   override disconnectedCallback(): void {
     this.polling.stop();
@@ -57,9 +65,10 @@ class DebugOverlayContent extends OpenClawLightDomElement {
 
   private resetSections(): void {
     this.requestGeneration += 1;
-    this.requestController?.abort();
-    this.requestController = null;
-    this.requestActive = false;
+    for (const controller of this.requestControllers.values()) {
+      controller.abort();
+    }
+    this.requestControllers.clear();
     this.statusHistory = [];
     this.sections = new Map(
       DEBUG_OVERLAY_SECTIONS.map((section) => [
@@ -69,10 +78,19 @@ class DebugOverlayContent extends OpenClawLightDomElement {
     );
   }
 
+  private syncPolling(): void {
+    if (document.visibilityState === "hidden") {
+      this.polling.stop();
+    } else if (this.polling.start()) {
+      void this.refreshSections();
+    }
+    this.requestUpdate();
+  }
+
   private async refreshSections(): Promise<void> {
     const gateway = this.gateway.gateway;
     const client = this.gateway.connected ? this.gateway.client : null;
-    if (!this.isConnected || this.requestActive) {
+    if (!this.isConnected || document.visibilityState === "hidden") {
       return;
     }
     if (!gateway || !client) {
@@ -81,28 +99,29 @@ class DebugOverlayContent extends OpenClawLightDomElement {
       );
       return;
     }
-    this.requestActive = true;
-    const generation = ++this.requestGeneration;
-    const controller = new AbortController();
-    this.requestController?.abort();
-    this.requestController = controller;
+    const generation = this.requestGeneration;
     const sections = this.minimized
       ? DEBUG_OVERLAY_SECTIONS.filter((section) => section.id === "status")
       : DEBUG_OVERLAY_SECTIONS;
     const requests = sections.map(async (section): Promise<void> => {
+      // A slow roster or lane read must not stop fresh vitals, or overlap itself.
+      if (this.requestControllers.has(section.id)) {
+        return;
+      }
+      const controller = new AbortController();
+      this.requestControllers.set(section.id, controller);
       try {
         const value = await section.load({ client, gateway }, controller.signal);
         this.updateSection(generation, section.id, { status: "ready", value });
       } catch {
         this.updateSection(generation, section.id, { status: "unavailable" });
+      } finally {
+        if (this.requestControllers.get(section.id) === controller) {
+          this.requestControllers.delete(section.id);
+        }
       }
     });
     await Promise.allSettled(requests);
-    if (!this.isConnected || generation !== this.requestGeneration) {
-      return;
-    }
-    this.requestController = null;
-    this.requestActive = false;
   }
 
   private updateSection(generation: number, id: string, state: SectionState): void {
@@ -110,12 +129,16 @@ class DebugOverlayContent extends OpenClawLightDomElement {
       return;
     }
     if (id === "status" && state.status === "ready") {
+      this.polling.stop();
+      this.polling.start();
       // SAFETY: The status descriptor owns this section id and always returns a status snapshot.
       const snapshot = state.value as DebugOverlayStatusSnapshot;
-      this.statusHistory = [
-        ...this.statusHistory.slice(-(DEBUG_OVERLAY_HISTORY_LIMIT - 1)),
-        { at: Date.now(), status: snapshot },
-      ];
+      if (this.statusHistory.at(-1)?.at !== snapshot.sampledAt) {
+        this.statusHistory = [
+          ...this.statusHistory.slice(-(DEBUG_OVERLAY_HISTORY_LIMIT - 1)),
+          { at: snapshot.sampledAt, status: snapshot },
+        ];
+      }
     }
     const next = new Map(this.sections);
     next.set(id, state);

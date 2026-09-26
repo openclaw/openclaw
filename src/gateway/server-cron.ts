@@ -346,6 +346,9 @@ async function finalizeCronCompletionAnnouncement(params: {
           },
           payload: { text },
           abortSignal,
+          ...(params.runStartedAtMs === undefined
+            ? {}
+            : { completion: { job: params.job, runStartedAt: params.runStartedAtMs } }),
           onDeliveryAttempt: (reachedRecipient) => {
             deliveryMayHaveReachedRecipient ||= reachedRecipient;
           },
@@ -773,8 +776,8 @@ export function buildGatewayCronService(params: {
         return listConfiguredSessionStoreAgentIds(cfg);
       }
     },
-    isAgentAvailable: (agentId) =>
-      !isAgentDeletionBlocked(agentId) &&
+    isAgentAvailable: (agentId, database, facts) =>
+      !(facts?.deletionBlocked ?? isAgentDeletionBlocked(agentId, { env }, database)) &&
       !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
@@ -827,15 +830,8 @@ export function buildGatewayCronService(params: {
       );
       return timeoutMs === 0 ? undefined : timeoutMs;
     },
-    runIsolatedAgentJob: async ({
-      job,
-      message,
-      abortSignal,
-      onExecutionStarted,
-      onExecutionPhase,
-      onLaneWait,
-      executionIdentity,
-    }) => {
+    runIsolatedAgentJob: async (request) => {
+      const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
       const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
@@ -850,15 +846,9 @@ export function buildGatewayCronService(params: {
       }
       try {
         return await runCronIsolatedAgentTurn({
+          ...request,
           cfg: runtimeConfig,
           deps: params.deps,
-          job,
-          message,
-          abortSignal,
-          onExecutionStarted,
-          onExecutionPhase,
-          onLaneWait,
-          executionIdentity,
           agentId,
           sessionKey,
           lane: "cron",

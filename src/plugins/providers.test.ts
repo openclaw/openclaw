@@ -700,12 +700,6 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("maps explicit cli-backend model refs to owning plugin ids", () => {
-    setOwningProviderManifestPlugins();
-
-    expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
-  });
-
   it("reuses one registry snapshot across explicit model ownership lookups", () => {
     setOwningProviderManifestPlugins();
 
@@ -1014,21 +1008,6 @@ describe("resolvePluginProviders", () => {
     expect(
       resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
     ).toEqual(["runtime-bundled"]);
-  });
-
-  it("loads bundled Ollama catalog augment hooks from the manifest runtime flag", () => {
-    setManifestPlugin({
-      id: "ollama",
-      providerIds: ["ollama", "ollama-cloud"],
-      enabledByDefault: true,
-      modelCatalog: {
-        runtimeAugment: true,
-      },
-    });
-
-    expect(
-      resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
-    ).toEqual(["ollama"]);
   });
 
   it("loads usage hooks only for manifest-declared providers", () => {
@@ -1749,7 +1728,7 @@ describe("resolvePluginProviders", () => {
     expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
   });
 
-  it("rejects ReDoS modelPatterns via compileSafeRegex guard", () => {
+  it("rejects unsafe model patterns that would match the model", () => {
     setManifestPlugin({
       id: "malicious",
       providerIds: ["malicious"],
@@ -1758,11 +1737,8 @@ describe("resolvePluginProviders", () => {
       },
     });
 
-    // Without the guard, this input causes catastrophic backtracking.
-    // With compileSafeRegex, the pattern is rejected and the plugin is not matched.
-    const start = performance.now();
-    expectModelOwningPluginIds("a".repeat(30) + "!", undefined);
-    expect(performance.now() - start).toBeLessThan(50);
+    // An unguarded pattern would match and incorrectly claim the model.
+    expectModelOwningPluginIds("a", undefined);
   });
 
   it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {

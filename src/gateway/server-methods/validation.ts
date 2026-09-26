@@ -17,6 +17,10 @@ export type Validator<T> = ((params: unknown) => params is T) & {
   errors?: ValidationError[] | null;
 };
 
+type ValidatedGatewayRequestHandler<T> = (
+  options: Omit<GatewayRequestHandlerOptions, "params"> & { params: T },
+) => ReturnType<GatewayRequestHandler>;
+
 /** Validate params and return the standard method error without emitting a response. */
 export function validateGatewayMethodParams<T>(
   params: unknown,
@@ -47,20 +51,33 @@ export function assertValidParams<T>(
   return false;
 }
 
+function hasValidMethodParams<T>(
+  options: GatewayRequestHandlerOptions,
+  validate: Validator<T>,
+  method: string,
+): options is GatewayRequestHandlerOptions & { params: T } {
+  return assertValidParams(options.params, validate, method, options.respond);
+}
+
+export function defineValidatedGatewayHandler<T>(
+  method: string,
+  validate: Validator<T>,
+  handler: ValidatedGatewayRequestHandler<NoInfer<T>>,
+): GatewayRequestHandler {
+  return (options) => {
+    if (!hasValidMethodParams(options, validate, method)) {
+      return;
+    }
+    // Opaque request authority is bound to this exact options object.
+    return handler(options);
+  };
+}
+
 /** Bind a core method to its schema before exposing it through the open plugin registry. */
 export function defineValidatedGatewayMethod<Method extends keyof GatewayCoreRequestParams>(
   method: Method,
   validate: Validator<NoInfer<GatewayCoreRequestParams[Method]>>,
-  handler: (
-    options: Omit<GatewayRequestHandlerOptions, "params"> & {
-      params: GatewayCoreRequestParams[Method];
-    },
-  ) => ReturnType<GatewayRequestHandler>,
+  handler: ValidatedGatewayRequestHandler<GatewayCoreRequestParams[Method]>,
 ): GatewayRequestHandler {
-  return (options) => {
-    if (!assertValidParams(options.params, validate, method, options.respond)) {
-      return;
-    }
-    return handler({ ...options, params: options.params });
-  };
+  return defineValidatedGatewayHandler<GatewayCoreRequestParams[Method]>(method, validate, handler);
 }

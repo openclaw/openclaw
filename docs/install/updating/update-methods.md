@@ -346,6 +346,10 @@ still use them. `openclaw update` still runs Doctor after installing the candida
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
 
+The fresh post-core continuation runs repairing Doctor before plugin convergence,
+including when an older updater already ran Doctor without `--fix`. This completes
+pending legacy state even when the configuration itself needs no repair.
+
 Doctor also brings drifted active official npm plugins to the installed OpenClaw
 release, honoring recorded non-default tags and pins newer than its plugin cohort.
 It uses the same plugin updater as `openclaw update` and leaves third-party plugins
@@ -354,8 +358,8 @@ the reason; it does not prevent the other repairs from completing. Restore
 registry access or wait for the missing package, then rerun `openclaw doctor --fix`.
 
 `OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1` skips package-local postinstall
-cleanup, but still completes the lifecycle marker. It does not disable Doctor or
-Gateway startup migrations.
+cleanup, but still completes the lifecycle marker. Doctor migrations remain
+enabled.
 
 <Warning>
 Older packages, including `2026.8.1`, can migrate the state database during
@@ -418,9 +422,9 @@ needs attention.
 
     For package updates, the check runs before registry lookups and database-schema validation. Managed update runs retain the warning in update history so it also appears in the Control UI.
 
-    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. It reports each family's bytes and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
+    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
 
-    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. A usable alternative, unknown capacity, or incomplete measurement remains a warning with the available numbers. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
+    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable alternative or unknown free-space reading does not itself stop the update. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
 
     This check runs in the installed updater; an already-installed 2026.9.3 updater retains its prior behavior for its own first upgrade hop.
 

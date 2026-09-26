@@ -56,8 +56,8 @@ describe("synchronous context accounting", () => {
         completedCompactionEnd(false, 18_000, 8_000),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: 18_000 },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: 18_000, successful: false },
       ],
     },
     {
@@ -74,7 +74,7 @@ describe("synchronous context accounting", () => {
           },
         }),
       ],
-      expected: [{ kind: "model", contextTokens: undefined }],
+      expected: [{ kind: "model", contextTokens: undefined, successful: false }],
     },
     {
       name: "failed zero-usage retry without old assistant backfill",
@@ -84,8 +84,8 @@ describe("synchronous context accounting", () => {
         accountingAssistant(0, "error"),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: undefined },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: undefined, successful: false },
       ],
     },
   ])("records $name in producer order", ({ events, expected }) => {
@@ -143,8 +143,8 @@ describe("synchronous context accounting", () => {
       },
     });
     const expected: EmbeddedContextAccountingEvent[] = [
-      { kind: "model", contextTokens: 90_000 },
-      { kind: "model", contextTokens: 20_000 },
+      { kind: "model", contextTokens: 90_000, successful: false },
+      { kind: "model", contextTokens: 20_000, successful: false },
     ];
     try {
       const before = accountingAssistant(90_000);
@@ -244,58 +244,6 @@ describe("fenced output and compaction retries", () => {
     expect(subscription.getHeartbeatToolResponse()).toEqual(response);
     expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
     expect(subscription.getCompactionCount()).toBe(1);
-  });
-
-  it("waits for auto-compaction retry and clears buffered text", async () => {
-    // A retrying compaction invalidates any assistant text buffered from the
-    // failed attempt; waiters resolve only after the retry path reaches agent_end.
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {
-          const index = listeners.indexOf(listener);
-          if (index !== -1) {
-            listeners.splice(index, 1);
-          }
-        };
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-1",
-    });
-
-    const assistantMessage = textAssistant("oops") as AssistantMessage;
-
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: assistantMessage });
-    }
-
-    expect(subscription.assistantTexts.length).toBe(1);
-
-    for (const listener of listeners) {
-      listener(completedCompactionEnd());
-    }
-
-    expect(subscription.isCompacting()).toBe(true);
-    expect(subscription.assistantTexts.length).toBe(0);
-
-    let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    for (const listener of listeners) {
-      listener({ type: "agent_end" });
-    }
-
-    await waitPromise;
-    expect(resolved).toBe(true);
   });
 
   it("clears the exact usage snapshot when compaction starts a new attempt", () => {

@@ -23,7 +23,6 @@ import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   installationTargetEnv,
   resolveInstallationTarget,
-  withInstallationTarget,
   type InstallationTarget,
 } from "../infra/installation-target-context.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -229,13 +228,7 @@ export async function triageCommand(
   const bundle: TriageBundle = deferDiagnostics
     ? { kind: "deferred" }
     : await collectTriageBundle(options.noExport === true, redaction);
-  const prompt = renderTriagePrompt({
-    findings,
-    bundle,
-    redaction,
-    updateFailure,
-    failure: automatic?.failure,
-  });
+
   // Packaged OpenClaw/Bun hosts cannot interpret npm shim entrypoints. Reuse the
   // active Node runtime or require an installed node.exe before choosing a shim.
   const nodeExecutable = isNodeRuntime(process.execPath)
@@ -281,6 +274,16 @@ export async function triageCommand(
       resolveAgentEffectiveModelPrimary(config, agentId),
     );
   }
+  const prompt = renderTriagePrompt({
+    findings,
+    bundle,
+    redaction,
+    updateFailure,
+    failure: automatic?.failure,
+    ...(runEmbedded && automatic && !automatic.diagnosticOnly
+      ? { maintenanceHandoff: true as const }
+      : {}),
+  });
   const canStartAgent = allowAgent && (runEmbedded || handoff !== undefined);
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
   const outputDir = path.join(target.stateDir, "logs", "support");
@@ -542,23 +545,18 @@ export async function triageCommand(
   }
 
   if (automatic && !automatic.diagnosticOnly) {
-    const result = await withInstallationTarget(target, async () => {
-      const { agentExecCommand } = await import("./agent-exec.js");
-      if (!isCurrent()) {
-        return { exitCode: 1 };
-      }
-      return agentExecCommand(prompt, agentOptions, runtime, {
-        abortSignal: automatic.signal,
-        timeoutMs: 600_000,
-        maxToolCalls: 40,
-        assertSourceCurrent: automatic.assertCurrent,
-      });
+    const { runAutomaticTriageRepair } = await import("./triage-automatic-repair.js");
+    return runAutomaticTriageRepair({
+      runtime,
+      target,
+      targetEnv,
+      prompt,
+      isCurrent,
+      installRoot: agentCwd ?? process.cwd(),
+      signal: automatic.signal,
+      allowGatewayActivation: automatic.failure.gateway === "verify-running",
+      formatError: (error) => triageCollectionError(error, redaction),
     });
-    if (result.exitCode !== 0) {
-      exitCliAfterOutput(runtime, result.exitCode);
-    }
-
-    return;
   }
 
   const { runUpdateRepairLoop } = await import("../infra/update-repair-agent.js");

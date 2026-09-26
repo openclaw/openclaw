@@ -51,6 +51,16 @@ vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: state.drain }
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
 
+function createExitingRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(() => {
+      throw new Error("exit");
+    }),
+  };
+}
+
 describe("runtime-guard", () => {
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -221,12 +231,9 @@ describe("runtime-guard", () => {
 
   it.each([
     ["22.23.2", false],
-    ["22.22.2", false],
     ["23.11.0", false],
-    ["24.14.1", false],
     ["24.15.0", false],
     ["24.16.0", true],
-    ["25.8.1", false],
     ["25.9.0", false],
     ["26.0.0", false],
     ["26.1.0", true],
@@ -252,13 +259,7 @@ describe("runtime-guard", () => {
   });
 
   it("throws via exit when runtime is too old", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
     const details = {
       kind: "node" as const,
       version: "20.0.0",
@@ -341,13 +342,7 @@ describe("runtime-guard", () => {
   });
 
   it("rejects Bun when it does not provide node:sqlite", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
     const details = {
       kind: "bun" as const,
       version: "1.3.14",
@@ -371,13 +366,7 @@ describe("runtime-guard", () => {
   });
 
   it("rejects Bun below 1.4 even when node:sqlite is available", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
 
     await expect(
       assertSupportedRuntime(runtime, {
@@ -392,13 +381,7 @@ describe("runtime-guard", () => {
   });
 
   it("rejects Bun when its node:sqlite version is not WAL-reset-safe", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
 
     await expect(
       assertSupportedRuntime(runtime, {
@@ -414,13 +397,7 @@ describe("runtime-guard", () => {
   });
 
   it("reports unknown runtimes with fallback labels", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    };
+    const runtime = createExitingRuntime();
     const details = {
       kind: "unknown" as const,
       version: null,

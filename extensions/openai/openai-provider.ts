@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -10,6 +9,8 @@ import {
   buildFamilyForwardCompatModel,
   buildManifestModelProviderConfig,
   DEFAULT_CONTEXT_TOKENS,
+  findCatalogTemplate,
+  matchesExactOrPrefix,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
@@ -25,7 +26,7 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
-  isOpenAIHttpsApiBaseUrl,
+  isOpenAIApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
@@ -46,7 +47,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
-  OPENAI_GPT_6_ASTRA_MODEL_ID,
+  OPENAI_GPT_6_MODEL_IDS,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
@@ -62,12 +63,14 @@ import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
-  buildOpenAISyntheticCatalogEntry,
-  findCatalogTemplate,
-  matchesExactOrPrefix,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+import {
+  isSIWCAuthFlow,
+  TOKEN_SHARING_AUTH_FLOW,
+  TOKEN_SHARING_RESOURCE,
+} from "./token-sharing.js";
 
 type OpenAILiveModelReaders = Pick<
   typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime"),
@@ -92,7 +95,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.154.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.155.1";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -160,10 +163,6 @@ type BuildOpenAILiveProviderConfigParams = {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 };
-
-function shouldFetchOpenAILiveModels(baseUrl: string): boolean {
-  return isOpenAIHttpsApiBaseUrl(baseUrl);
-}
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
   return OPENAI_MANIFEST_PROVIDER.models.map((model) =>
@@ -266,7 +265,7 @@ async function buildOpenAILiveProviderConfig(
     normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   const models = fallback.models;
-  if (!shouldFetchOpenAILiveModels(baseUrl)) {
+  if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
   }
   const [
@@ -550,10 +549,9 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
       if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
         return [];
       }
-      // Offline hints cover established subscription routes. Astra's phased
-      // rollout and other GPT-5.6 tiers require successful account discovery.
+      // New model availability comes from successful account discovery.
       if (
-        modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+        OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
         (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID)
       ) {
         return [];
@@ -811,7 +809,7 @@ function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
 
 const OPENAI_GPT_FORWARD_COMPAT_CASES = [
   {
-    match: [OPENAI_GPT_6_ASTRA_MODEL_ID],
+    match: OPENAI_GPT_6_MODEL_IDS,
     templateIds: [OPENAI_GPT_56_SOL_MODEL_ID, OPENAI_GPT_55_MODEL_ID],
   },
   {
@@ -859,7 +857,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
-    modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+    OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
@@ -921,6 +919,12 @@ export function buildOpenAIProvider(): ProviderPlugin {
     wizard: apiKeyDefinition.wizard,
   });
   for (const method of providerDefinition.auth) {
+    if (method.id === "siwc") {
+      method.starterModel = OPENAI_DEFAULT_MODEL;
+      method.run = async (ctx) =>
+        (await import("./token-sharing-oauth.runtime.js")).loginTokenSharing(ctx);
+      continue;
+    }
     if (method.id === "oauth" || method.id === "device-code") {
       method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
       method.run = chatGPTAuthRuns[method.id];
@@ -946,6 +950,31 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (isSIWCAuthFlow(auth.authFlow)) {
+          // Token sharing authorizes Responses, not either model-discovery endpoint.
+          const sharing = auth.authFlow === TOKEN_SHARING_AUTH_FLOW;
+          const provider = buildOpenAIStaticPlatformProviderConfig(
+            undefined,
+            TOKEN_SHARING_RESOURCE,
+          );
+          return {
+            providers: {
+              [PROVIDER_ID]: {
+                ...provider,
+                models: sharing
+                  ? provider.models.filter((model) => model.api === "openai-responses")
+                  : [],
+              },
+            },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                profileId: auth.profileId,
+                status: sharing ? ("unavailable" as const) : ("auth-rejected" as const),
+              },
+            ],
+          };
+        }
         if (auth.preparationFailed) {
           return null;
         }
@@ -1109,6 +1138,14 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     ...responsesHooks,
     prepareExtraParams: (ctx) => {
+      if (ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW) {
+        return {
+          ...ctx.extraParams,
+          transport: "sse",
+          store: false,
+          responsesServerCompaction: false,
+        };
+      }
       const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID];
       const useCodexTransport =
         shouldUseCodexResponsesHooks({
@@ -1117,13 +1154,18 @@ export function buildOpenAIProvider(): ProviderPlugin {
           baseUrl: ctx.model?.baseUrl,
         }) ||
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
-          (!providerConfig?.baseUrl || isOpenAIHttpsApiBaseUrl(providerConfig.baseUrl)) &&
+          (!providerConfig?.baseUrl || isOpenAIApiBaseUrl(providerConfig.baseUrl)) &&
           resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
       return (useCodexTransport ? nativeResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
-    refreshOAuth: codexHooks.refreshOAuth,
+    refreshOAuth: async (credential) =>
+      isSIWCAuthFlow(credential.authFlow)
+        ? (await import("./token-sharing-oauth.runtime.js")).refreshTokenSharingCredential(
+            credential,
+          )
+        : codexHooks.refreshOAuth(credential),
     buildUnknownModelHint: ({ modelId }) => buildOpenAIUnknownModelHint(modelId),
     buildMissingAuthMessage: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
@@ -1145,64 +1187,43 @@ export function buildOpenAIProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {
-      const openAiGpt55ProTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54Template = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54ProTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54MiniTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-      });
-      const openAiGpt54NanoTemplate = findCatalogTemplate({
-        entries: ctx.entries,
-        providerId: PROVIDER_ID,
-        templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
-      });
-      return [
-        buildOpenAISyntheticCatalogEntry(openAiGpt55ProTemplate, {
+      const models = [
+        {
           id: OPENAI_GPT_55_PRO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
           contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54Template, {
+        },
+        {
           id: OPENAI_GPT_54_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54ProTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_PRO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54MiniTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_MINI_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
-        }),
-        buildOpenAISyntheticCatalogEntry(openAiGpt54NanoTemplate, {
+        },
+        {
           id: OPENAI_GPT_54_NANO_MODEL_ID,
-          reasoning: true,
-          input: ["text", "image"],
+          templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
           contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS,
-        }),
-      ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+        },
+      ];
+      return models.flatMap(({ templateIds, ...model }) => {
+        const template = findCatalogTemplate({
+          entries: ctx.entries,
+          providerId: PROVIDER_ID,
+          templateIds,
+        });
+        const input: ("text" | "image")[] = ["text", "image"];
+        return template ? [{ ...template, ...model, name: model.id, reasoning: true, input }] : [];
+      });
     },
   };
 }

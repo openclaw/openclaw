@@ -12,6 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -22,7 +23,6 @@ import {
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
@@ -131,6 +131,12 @@ describe("cron runtime row publication", () => {
     const after = database
       .prepare("SELECT * FROM cron_jobs WHERE store_key = ? ORDER BY sort_order")
       .all(storeKey);
+    const grantDefinitionProjection = (row: Record<string, unknown>) => ({
+      revision: row.grant_definition_revision,
+      generation: row.grant_definition_generation,
+      updatedAt: row.grant_definition_updated_at,
+    });
+    expect(after.map(grantDefinitionProjection)).toEqual(before.map(grantDefinitionProjection));
     expect(after.filter((row) => !committed.includes(row.job_id as string))).toEqual(
       before.filter((row) => !committed.includes(row.job_id as string)),
     );
@@ -253,7 +259,7 @@ describe("cron runtime row publication", () => {
         expect.objectContaining({ action: "finished", jobId: job.id, status: "error", error }),
       );
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(store.storePath),
           jobId: job.id,
           limit: 1,

@@ -117,6 +117,24 @@
       }
     },
     {
+      "name": "@openclaw/cua-computer",
+      "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "cua-computer",
+          "label": "CUA Computer"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cua-computer",
+          "npmSpec": "@openclaw/cua-computer",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diagnostics-otel",
       "description": "OpenClaw diagnostics OpenTelemetry exporter",
       "source": "official",
@@ -822,6 +840,24 @@
           "npmSpec": "@openclaw/tokenjuice",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.28"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/typesafe",
+      "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "typesafe",
+          "label": "TypeSafe AI"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/typesafe",
+          "npmSpec": "@openclaw/typesafe",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
         }
       }
     },

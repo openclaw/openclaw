@@ -97,7 +97,7 @@ async function withStoredInboundDocument<T>(
   });
 }
 
-async function runInboundVoiceNoteCase(params: {
+async function expectInboundVoiceNote(params: {
   buildMedia: (
     saved: { id: string; path: string },
     stateDir: string,
@@ -129,7 +129,10 @@ async function runInboundVoiceNoteCase(params: {
         media,
         providerRegistry,
       });
-      return { result, transcribeAudio, saved };
+      expect(result.decision.outcome).toBe("success");
+      expect(result.outputs[0]?.text).toBe("hello from the voice note");
+      expect(transcribeAudio).toHaveBeenCalledTimes(1);
+      return { result, transcribeAudio };
     } finally {
       await cache.cleanup();
     }
@@ -165,32 +168,6 @@ describe("inbound media-store references in the attachment url field", () => {
     });
   });
 
-  it("reports blocked HTTP documents when remote URLs are disabled", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const ctx: MsgContext = {
-      Body: "<media:document>",
-      media: toInboundMediaFacts([
-        {
-          url: "https://example.test/report.txt",
-          contentType: "text/plain",
-          kind: "document",
-        },
-      ]),
-    };
-
-    try {
-      await applyMediaUnderstanding({
-        ctx,
-        cfg: createUrlDisabledFileCfg(),
-      });
-
-      expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
   it("never renders signed URL query credentials as attachment names", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const ctx: MsgContext = {
@@ -214,13 +191,14 @@ describe("inbound media-store references in the attachment url field", () => {
       expect(ctx.Body).toContain('name="report.docx"');
       expect(ctx.Body).not.toContain("SECRETSIG");
       expect(ctx.Body).not.toContain("AKIA123");
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
     }
   });
 
   it("transcribes a voice note referenced only by media://inbound", async () => {
-    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+    const { result } = await expectInboundVoiceNote({
       buildMedia: (saved) => ({
         url: `media://inbound/${saved.id}`,
         contentType: "audio/ogg",
@@ -230,12 +208,10 @@ describe("inbound media-store references in the attachment url field", () => {
     expect(formatDecisionSummary(result.decision)).toBe(
       "audio: success (1/1) via openai/gpt-4o-transcribe",
     );
-    expect(result.outputs[0]?.text).toBe("hello from the voice note");
-    expect(transcribeAudio).toHaveBeenCalledTimes(1);
   });
 
   it("prefers a valid local path over a conflicting media:// alias", async () => {
-    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+    const { transcribeAudio } = await expectInboundVoiceNote({
       buildMedia: async (saved) => {
         const alternatePath = path.join(path.dirname(saved.path), "alternate.ogg");
         await fs.writeFile(alternatePath, createSafeAudioFixtureBuffer(2048, 0x41));
@@ -247,30 +223,23 @@ describe("inbound media-store references in the attachment url field", () => {
       },
     });
 
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]?.text).toBe("hello from the voice note");
-    expect(transcribeAudio).toHaveBeenCalledTimes(1);
     expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
       createSafeAudioFixtureBuffer(2048, 0x41),
     );
   });
 
   it("prefers the media:// alias when the supplied path is stale", async () => {
-    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+    await expectInboundVoiceNote({
       buildMedia: (saved) => ({
         path: path.join(path.dirname(saved.path), "missing.ogg"),
         url: `media://inbound/${saved.id}`,
         contentType: "audio/ogg",
       }),
     });
-
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]?.text).toBe("hello from the voice note");
-    expect(transcribeAudio).toHaveBeenCalledTimes(1);
   });
 
   it("prefers the media:// alias when the supplied path is blocked", async () => {
-    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+    await expectInboundVoiceNote({
       buildMedia: async (saved, stateDir) => {
         const blockedPath = path.join(stateDir, "blocked.ogg");
         await fs.writeFile(blockedPath, "blocked");
@@ -281,47 +250,15 @@ describe("inbound media-store references in the attachment url field", () => {
         };
       },
     });
-
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]?.text).toBe("hello from the voice note");
-    expect(transcribeAudio).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to a valid path when the media:// alias is invalid", async () => {
-    const { result, transcribeAudio } = await runInboundVoiceNoteCase({
+    await expectInboundVoiceNote({
       buildMedia: (saved) => ({
         path: saved.path,
         url: "media://outbound/not-an-inbound-file.ogg",
         contentType: "audio/ogg",
       }),
-    });
-
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]?.text).toBe("hello from the voice note");
-    expect(transcribeAudio).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns the stored path for media:// aliases", async () => {
-    await withStoredInboundAudio(async (saved) => {
-      const cache = new MediaAttachmentCache(
-        [{ index: 0, url: `media://inbound/${saved.id}`, mime: "audio/ogg" }],
-        {
-          localPathRoots: [path.dirname(saved.path)],
-          includeDefaultLocalPathRoots: false,
-        },
-      );
-      try {
-        const result = await cache.getPath({
-          attachmentIndex: 0,
-          maxBytes: 4096,
-          timeoutMs: 1000,
-        });
-
-        expect(result.path).toBe(await fs.realpath(saved.path));
-        expect(result.cleanup).toBeUndefined();
-      } finally {
-        await cache.cleanup();
-      }
     });
   });
 
@@ -348,11 +285,11 @@ describe("inbound media-store references in the attachment url field", () => {
           timeoutMs: 1000,
         });
 
-        expect(result.path).toBe(await fs.realpath(saved.path));
-        expect(result.cleanup).toBeUndefined();
+        expect(result).toBe(await fs.realpath(saved.path));
       } finally {
         await cache.cleanup();
       }
+      expect((await fs.stat(saved.path)).isFile()).toBe(true);
     });
   });
 

@@ -160,6 +160,16 @@ export function resolveProviderAuthOverview(params: {
     authEvidenceMap: params.authEvidenceMap,
     skipSetupProviderFallback: hasPrecomputedCandidates || hasPrecomputedEvidence,
   });
+  const env = envKey
+    ? {
+        value:
+          envKey.source.includes("OAUTH_TOKEN") ||
+          normalizeLowercaseStringOrEmpty(envKey.source).includes("oauth")
+            ? "OAuth (env)"
+            : maskApiKey(envKey.apiKey),
+        source: envKey.source,
+      }
+    : undefined;
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
@@ -192,13 +202,10 @@ export function resolveProviderAuthOverview(params: {
         ),
       };
     }
-    if (envKey) {
-      const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
-      const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth");
+    if (env) {
       return {
         kind: "env",
-        detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
+        detail: env.value,
       };
     }
     if (usableCustomKey) {
@@ -223,19 +230,7 @@ export function resolveProviderAuthOverview(params: {
       apiKey: apiKeyCount,
       labels,
     },
-    ...(envKey
-      ? {
-          env: {
-            value: (() => {
-              const normalizedSource = normalizeLowercaseStringOrEmpty(envKey.source);
-              return envKey.source.includes("OAUTH_TOKEN") || normalizedSource.includes("oauth")
-                ? "OAuth (env)"
-                : maskApiKey(envKey.apiKey);
-            })(),
-            source: envKey.source,
-          },
-        }
-      : {}),
+    ...(env ? { env } : {}),
     ...(customKey
       ? {
           modelsJson: {

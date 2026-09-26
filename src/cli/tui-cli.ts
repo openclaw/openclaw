@@ -2,10 +2,9 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 // Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsHelp } from "./help-format.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 import { resolveSessionTarget } from "./session-target.js";
 import { addTuiOptions } from "./tui-cli-options.js";
@@ -87,7 +86,7 @@ export async function runTuiCliAction(
           tlsFingerprint: opts.tlsFingerprint,
         }),
     session: resolved?.sessionKey ?? opts.session,
-    ...(resolved?.parsed.kind === "url" ? { agentId: resolved.parsed.agentId } : {}),
+    ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),
     thinking: opts.thinking,
     message: opts.message,
@@ -113,10 +112,7 @@ export function registerTuiCli(program: Command) {
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
-    .addHelpText(
-      "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/tui"))
     .action(async (target: string | undefined, opts: TuiCliOptions, cmd: Command) => {
       try {
         // `cmd.name()` always returns the canonical subcommand name (`tui`).

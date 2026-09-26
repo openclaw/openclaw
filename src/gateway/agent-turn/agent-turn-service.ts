@@ -25,7 +25,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { isAcceptedAgentDedupePayload, replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
@@ -91,6 +91,7 @@ export function createAgentTurnService(
       isOneShotModelRun,
       isRawModelRun,
       agentDedupeKeys,
+      swarmExecutionLane,
     } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
@@ -127,6 +128,7 @@ export function createAgentTurnService(
       context,
       respond,
       reserveDedupe: dedupeLifecycle.reserve,
+      bindDedupeSessionTarget: dedupeLifecycle.bindSessionTarget,
       clearDedupe: dedupeLifecycle.clearUnaccepted,
     });
     if (!routing) {
@@ -216,11 +218,9 @@ export function createAgentTurnService(
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
-      let resolvedStorePath: string | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
         assertAdmissionCurrent,
-        cfg,
         runId,
         lifecycleGeneration,
         agentDedupeKeys,
@@ -237,7 +237,6 @@ export function createAgentTurnService(
         getResolvedSessionId: () => resolvedSessionId,
         getResolvedSessionAgentId: () => resolvedSessionAgentId,
         getAgentId: () => agentId,
-        getCfgForAgent: () => cfgForAgent,
         getSessionPersisted: () => sessionPersistedBeforeGatewayAdmission,
         getSupersededSessionId: () => supersededSessionId,
         setAdmittedSessionId: (sessionId) => {
@@ -311,7 +310,6 @@ export function createAgentTurnService(
           failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
-        resolvedStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
@@ -393,6 +391,12 @@ export function createAgentTurnService(
           return;
         }
         const persistedSession = await persistAgentSessionPhase({
+          onSessionCommitted: (committedEntry) =>
+            dedupeLifecycle.bindSessionTarget({
+              sessionKey: canonicalSessionKey,
+              agentId: sessionAgentId,
+              sessionId: committedEntry.sessionId,
+            }),
           assertAdmissionCurrent,
           request,
           cfg: cfgLocal,
@@ -570,7 +574,6 @@ export function createAgentTurnService(
             resolvedSessionKey,
             requestedSessionKey,
             resolvedSessionId,
-            storePath: resolvedStorePath,
             agentId,
             activeSessionAgentId,
             delivery,
@@ -585,6 +588,7 @@ export function createAgentTurnService(
             inputProvenance: preparedDispatch.userTurn.inputProvenance,
             runId,
             agentDedupeKeys,
+            swarmExecutionLane,
             spawnedBy: spawnedByValue,
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
@@ -641,7 +645,14 @@ export function createAgentTurnService(
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
     const activeChatEntry = context.chatAbortControllers.get(runId);
-    const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
+    // Cancellation can retire the controller before dispatch publishes its result;
+    // sessionless admissions also retain their RPC owner in the accepted dedupe.
+    let source: "agent" | "chat" | undefined;
+    if (activeChatEntry) {
+      source = activeChatEntry.kind === "agent" ? "agent" : "chat";
+    } else if (isAcceptedAgentDedupePayload(context.dedupe.get(`agent:${runId}`)?.payload)) {
+      source = "agent";
+    }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const queuedResult = () => {
       const queued = context.chatQueuedTurns.get(runId);
@@ -662,17 +673,13 @@ export function createAgentTurnService(
     const runContext = getAgentRunContext(runId);
     const initialSession =
       queuedBeforeWait?.session ??
-      getAgentJobSession(runId, hasActiveChatRun ? "chat" : undefined) ??
+      getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
       captureAgentJobSession(runContext);
     const wait = async () => {
       if (queuedBeforeWait) {
         return queuedBeforeWait;
       }
-      const snapshot = await waitForAgentJob({
-        runId,
-        timeoutMs,
-        ...(hasActiveChatRun ? { source: "chat" } : {}),
-      });
+      const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
       const queuedAfterWait = queuedResult();
       if (queuedAfterWait) {
         return queuedAfterWait;

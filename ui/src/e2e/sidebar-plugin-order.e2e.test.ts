@@ -1,4 +1,4 @@
-// Plugin-provided Pages share the sidebar's drag order and saved preferences.
+// Pointer and keyboard reordering share the sidebar's persisted ordering owners.
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -24,7 +24,13 @@ suite.define(() => {
       viewport: { height: 900, width: 1200 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
+      sessionGroups: ["Alpha", "Beta"],
+      sessions: [
+        { key: "agent:main:main", label: "Main" },
+        { key: "agent:main:alpha", label: "Alpha task", category: "Alpha" },
+        { key: "agent:main:beta", label: "Beta task", category: "Beta" },
+      ],
       controlUiTabs: [
         { id: "reports/daily", label: "Reports", pluginId: "reports", icon: "plug" },
         { id: "birdclaw", label: "Birdclaw", pluginId: "birdclaw", icon: "bird" },
@@ -69,9 +75,48 @@ suite.define(() => {
         "plugin:workboard/workboard",
         "route:cron",
       ]);
+      const reorderWorkboard = row("plugin:workboard/workboard").getByRole("button", {
+        name: "Reorder Workboard",
+        exact: true,
+      });
+      await reorderWorkboard.focus();
+      await page.keyboard.press("Enter");
+      await page.getByRole("menuitem", { name: "Move up", exact: true }).press("Enter");
+      const movedUp = [...expected];
+      const workboardIndex = movedUp.indexOf("plugin:workboard/workboard");
+      [movedUp[workboardIndex - 1], movedUp[workboardIndex]] = [
+        movedUp[workboardIndex]!,
+        movedUp[workboardIndex - 1]!,
+      ];
+      await expect.poll(keys).toEqual(movedUp);
+      await expect
+        .poll(() => reorderWorkboard.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await reorderWorkboard.click();
+      await page.getByRole("menuitem", { name: "Move down", exact: true }).click();
+      await expect.poll(keys).toEqual(expected);
+
+      const reorderBeta = sidebar.getByRole("button", { name: "Reorder Beta", exact: true });
+      await reorderBeta.focus();
+      await page.keyboard.press("Enter");
+      await page.getByRole("menuitem", { name: "Move up", exact: true }).press("Enter");
+      const sectionOrder = () =>
+        sidebar
+          .locator('[data-session-section^="category:"]')
+          .evaluateAll((sections) =>
+            sections.map((section) => section.getAttribute("data-session-section")),
+          );
+      await expect.poll(sectionOrder).toEqual(["category:Beta", "category:Alpha"]);
+      expect((await gateway.waitForRequest("sessions.groups.put")).params).toMatchObject({
+        names: ["Beta", "Alpha"],
+      });
+      await expect
+        .poll(() => reorderBeta.evaluate((element) => document.activeElement === element))
+        .toBe(true);
       await page.reload();
       await row("plugin:workboard/workboard").waitFor();
       await expect.poll(keys).toEqual(expected);
+      await expect.poll(sectionOrder).toEqual(["category:Beta", "category:Alpha"]);
       await captureUiProof(page, "plugin-drag-reloaded.png");
     } finally {
       await context.close();

@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import type { UpdateRunResult } from "../infra/update-runner.js";
+import { updateGitCheckout } from "../infra/update-runner-git.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ExitError } from "../runtime.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
 
@@ -155,7 +156,7 @@ export async function invokeUpdateCli(opts: UpdateCommandOptions) {
   if (opts.restart === false) {
     args.push("--no-restart");
   }
-  for (const key of ["channel", "tag", "timeout"] as const) {
+  for (const key of ["channel", "tag", "timeout", "admission"] as const) {
     if (opts[key] !== undefined) {
       args.push(`--${key}`, opts[key]);
     }
@@ -170,3 +171,39 @@ export const devTargetRefusalCases = [
   ["malformed inferred", "openclaw-dev-target:v1:not+base64url", true, false],
   ["malformed inferred JSON", "openclaw-dev-target:v1:not+base64url", true, true],
 ] as const;
+
+export const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult => ({
+  status: "ok",
+  mode: "git",
+  steps: [],
+  durationMs: 100,
+  after: { version: "1.0.0" },
+  ...overrides,
+});
+
+export const mockGitUpdateAfterMutation = (
+  result = makeOkUpdateResult({ mode: "git" }),
+  reinspect = false,
+) => {
+  const mutationAdmitted = vi.fn();
+  vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
+    await opts.inspectGitTarget({});
+    if (opts.prepareGitExposure) {
+      await opts.prepareGitExposure(
+        expectDefined(result.root, "candidate checkout"),
+        expectDefined(result.after?.sha ?? undefined, "candidate commit"),
+        undefined,
+      );
+    }
+    if (result.root) {
+      await opts.validateCandidate(result.root);
+    }
+    await expectDefined(opts.beforeGitMutation, "Git mutation admission")({});
+    mutationAdmitted();
+    if (reinspect) {
+      await opts.inspectGitTarget({});
+    }
+    return result;
+  });
+  return mutationAdmitted;
+};

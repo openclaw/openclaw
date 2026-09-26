@@ -1,16 +1,22 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferCanonicalSessionValidation } from "../config/sessions/session-canonical-validation-deferral.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   authorizeGatewayRequestPreDispatch,
   createRequestGatewayMethodRegistry,
 } from "./server-methods.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowAncestorReads } from "./session-row-projection-ancestors.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
+import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
 const certifyReadiness = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../config/sessions/session-canonical-validation-readiness.js", () => ({
@@ -196,3 +202,95 @@ it("returns canonical readiness from private preparation without entering the co
     database.close();
   }
 });
+
+it.each(["child", "parent"] as const)(
+  "rechecks %s membership after placement preparation and consumes the exact frame once",
+  async (changed) => {
+    const child = { agentId: "main", key: "agent:main:prepared-child" };
+    const parent = { agentId: "main", key: "agent:main:prepared-parent" };
+    const projection = createSessionRowProjectionFixture({
+      cfg,
+      store: {
+        [child.key]: { sessionId: "child", updatedAt: 1, parentSessionKey: parent.key },
+        [parent.key]: { sessionId: "parent", updatedAt: 1 },
+      },
+    });
+    const placementStarted = createDeferredCore();
+    const placementReply = createDeferredCore<WorkerSessionPlacementProjection>();
+    const membershipStarted = createDeferredCore();
+    const membershipReady = createDeferredCore();
+    const snapshot: WorkerSessionPlacementProjection = {
+      placements: new Map(),
+      moves: new Map(),
+      environments: new Map(),
+      workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
+    };
+    const readPlacement = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        placementStarted.resolve();
+        return placementReply.promise;
+      })
+      .mockResolvedValue(snapshot);
+    const placementFacts = createSessionRowPlacementProjection(
+      { readProjection: readPlacement },
+      () => undefined,
+    );
+    let dirtyKey: string | undefined;
+    const prepareMembership = vi.fn(async () => {
+      membershipStarted.resolve();
+      await membershipReady.promise;
+      dirtyKey = undefined;
+    });
+    const exact = createSessionRowAncestorReads({
+      state: () => ({ cfg, context: projection.state.rowContext }),
+      referenced: (key) => projection.describe({ agentId: "main", key }),
+      lookup: projection.describe,
+      prepareExactRows: () => undefined,
+      retainExactPreparation: () => () => {},
+      assertExactRowsPrepared: () => {},
+      retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
+      describe: projection.describe,
+      inOwnerContext: AsyncLocalStorage.snapshot(),
+      placementFacts,
+      membership: {
+        prepare: prepareMembership,
+        needsPreparation: (queries) => queries(cfg).some(({ key }) => key === dirtyKey),
+      },
+      isActive: () => true,
+      projection: () => projection,
+    });
+    const consume = vi.fn((read: SessionRowReadView) => {
+      expect(dirtyKey).toBeUndefined();
+      expect(placementFacts.isPrepared("child")).toBe(true);
+      expect(placementFacts.isPrepared("parent")).toBe(true);
+      const row = expectDefined(read.describe(child), "prepared child row");
+      return exact.ancestorRows(row)?.map(({ key }) => key);
+    });
+    try {
+      const prepared = exact.withPreparedExactRows(() => [child], consume, {
+        includeAncestors: true,
+      });
+      await Promise.race([placementStarted.promise, prepared]);
+      dirtyKey = changed === "child" ? child.key : parent.key;
+      placementReply.resolve(snapshot);
+      expect(
+        await Promise.race([
+          membershipStarted.promise.then(() => "membership"),
+          prepared.then(() => "consumed"),
+        ]),
+      ).toBe("membership");
+      expect(consume).not.toHaveBeenCalled();
+      membershipReady.resolve();
+      await expect(prepared).resolves.toEqual({ kind: "complete", value: [parent.key] });
+      expect(prepareMembership).toHaveBeenCalledOnce();
+      expect(consume).toHaveBeenCalledOnce();
+    } finally {
+      placementReply.resolve(snapshot);
+      membershipReady.resolve();
+      placementFacts.dispose();
+      projection.dispose();
+    }
+  },
+);

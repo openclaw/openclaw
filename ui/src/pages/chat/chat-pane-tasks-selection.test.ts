@@ -205,8 +205,8 @@ describe("chat pane embedded panels", () => {
       },
     );
 
-    it.each(["refusal", "rejection"] as const)(
-      "keeps a cancellation %s visible in task detail and after Back to the list",
+    it.each(["refusal", "rejection", "late rejection"] as const)(
+      "keeps a cancellation %s scoped to its task detail and visible in the list",
       async (outcome) => {
         const { mount, rails, renderPanels, state, task } = createReviewFixture({
           status: "running",
@@ -219,11 +219,36 @@ describe("chat pane embedded panels", () => {
         rails().backgroundTasks.onOpenTaskDetail?.(task);
         await renderPanels();
         await renderPanels();
+        const completedTask = {
+          ...task,
+          id: "completed-task",
+          taskId: "completed-task",
+          status: "completed" as const,
+          title: "Another completed task",
+        };
+        state.backgroundTasksState!.tasks!.push(completedTask);
+        state.backgroundTasksState!.taskDetails.set(completedTask.id, completedTask);
+        const openCompletedTask = async () => {
+          rails().backgroundTasks.onOpenTaskList?.();
+          await renderPanels();
+          rails().backgroundTasks.onToggleFinished();
+          await renderPanels();
+          [...mount.querySelectorAll<HTMLButtonElement>(".chat-tasks-rail__task-open")]
+            .find((button) => button.textContent?.includes(completedTask.title))!
+            .click();
+          await renderPanels();
+          expect(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent).toBe(
+            completedTask.title,
+          );
+        };
         const message =
           outcome === "refusal" ? "Task cannot be cancelled" : "Cancellation unavailable";
+        const pending = createDeferred<unknown>();
         const request = vi.spyOn(state.client!, "request");
         if (outcome === "refusal") {
           request.mockResolvedValueOnce({ found: true, cancelled: false, reason: message });
+        } else if (outcome === "late rejection") {
+          request.mockReturnValueOnce(pending.promise);
         } else {
           request.mockRejectedValueOnce(new Error(message));
         }
@@ -233,7 +258,22 @@ describe("chat pane embedded panels", () => {
           )!
           .click();
         expect(request).toHaveBeenCalledExactlyOnceWith("tasks.cancel", { taskId: task.id });
-        await vi.waitFor(() => expect(state.backgroundTasksState?.error).toBe(message));
+        if (outcome === "late rejection") {
+          await openCompletedTask();
+          pending.reject(new Error(message));
+        }
+        await request.mock.results[0]!.value.catch(() => undefined);
+        expect(state.backgroundTasksState?.error).toBe(message);
+        if (outcome !== "late rejection") {
+          await renderPanels();
+          expect(
+            mount.querySelector('[data-task-detail-panel] [role="alert"]')?.textContent,
+          ).toContain(message);
+          await openCompletedTask();
+        }
+        await renderPanels();
+        expect.soft(mount.querySelector('[data-task-detail-panel] [role="alert"]')).toBeNull();
+        rails().backgroundTasks.onOpenTaskDetail?.(task);
         await renderPanels();
         expect
           .soft(mount.querySelector('[data-task-detail-panel] [role="alert"]')?.textContent)
@@ -248,6 +288,28 @@ describe("chat pane embedded panels", () => {
         );
         expect(state.backgroundTasksState?.error).toBe(message);
         expect(request).toHaveBeenCalledOnce();
+        if (outcome === "refusal") {
+          const refreshed = createDeferred();
+          const requestUpdate = state.requestUpdate;
+          vi.spyOn(state, "requestUpdate").mockImplementation(() => {
+            requestUpdate?.();
+            if (!state.backgroundTasksState?.loading) {
+              refreshed.resolve();
+            }
+          });
+          request.mockRejectedValue(new Error("Task list unavailable"));
+          rails().backgroundTasks.onRefresh();
+          await refreshed.promise;
+          await renderPanels();
+          expect(mount.querySelector('.chat-tasks-rail [role="alert"]')?.textContent).toContain(
+            "Task list unavailable",
+          );
+          rails().backgroundTasks.onOpenTaskDetail?.(completedTask);
+          await renderPanels();
+          expect(
+            mount.querySelector('[data-task-detail-panel] [role="alert"]')?.textContent,
+          ).toContain("Task list unavailable");
+        }
       },
     );
 

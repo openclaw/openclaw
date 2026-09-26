@@ -6,11 +6,11 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import {
   readRestartSentinelSnapshot,
   writeRestartSentinelIfUnchanged,
 } from "./restart-sentinel.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "./update-control-plane-sentinel.js";
@@ -228,7 +228,7 @@ export async function runCampaignUpdate(params: {
     params.campaign.getState()?.id === campaignId;
   // The countdown may outlive its config. After this admission, the applying
   // owner retains its target until handoff or stop/drain settles it.
-  if (!isCurrent() || !params.canApply()) {
+  if (campaignId === undefined || !isCurrent() || !params.canApply()) {
     return "failed";
   }
   const run = createUpdateRun({
@@ -246,6 +246,7 @@ export async function runCampaignUpdate(params: {
     before: { version: VERSION },
   });
   const runId = run.runId;
+  params.campaign.bindRun(campaignId, runId);
   params.onUpdateRunCreated?.();
   const { channel, forced, tag, version } = params;
   const attempt = { channel, forced, tag, version };

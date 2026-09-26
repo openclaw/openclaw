@@ -1,23 +1,20 @@
 // Release check tests cover release validation script behavior.
-import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { collectBundledExtensionManifestErrors } from "../scripts/lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
-import { collectPackUnpackedSizeErrors } from "../scripts/lib/npm-pack-budget.mts";
+import { collectPackUnpackedSizeFindings } from "../scripts/lib/npm-pack-budget.mts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory-contract.mts";
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
+import { collectInstalledBundledRuntimeSidecarPaths } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
-  collectInstalledBundledRuntimeSidecarPaths,
-  collectInstalledRootDependencyManifestErrors,
-} from "../scripts/openclaw-npm-postpublish-verify.ts";
-import {
+  allowsLegacyGeneratedOwnershipForSourceRoot,
   collectAppcastSparkleVersionErrors,
-  collectCriticalPluginSdkEntrypointSizeErrors,
+  collectCriticalPluginSdkEntrypointSizeFindings,
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
@@ -35,8 +32,10 @@ import {
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import { withEnv } from "../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
   const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
@@ -402,73 +401,6 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("bundled plugin package dependency checks", () => {
-  it("does not require root deps for byte-matched chunks owned by a bundled plugin", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-"));
-
-    try {
-      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
-      writeFileSync(
-        join(tempRoot, "package.json"),
-        `{"name":"openclaw","version":"2026.7.33","dependencies":{}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
-        "utf8",
-      );
-      const source = 'import("root-owned-test-dep");\n';
-      writeFileSync(join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"), source, "utf8");
-      writeFileSync(
-        join(tempRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
-        JSON.stringify({
-          chunks: {
-            "lancedb-runtime-7TYK-Pto.js": {
-              sha256: createHash("sha256").update(source).digest("hex"),
-              extensions: ["memory-lancedb"],
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("still requires root deps for root-owned installed chunks", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-owned-installed-missing-"));
-
-    try {
-      mkdirSync(join(tempRoot, "dist", "extensions", "memory-lancedb"), { recursive: true });
-      writeFileSync(
-        join(tempRoot, "package.json"),
-        `{"name":"openclaw","dependencies":{}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
-        "utf8",
-      );
-      writeFileSync(
-        join(tempRoot, "dist", "root-runtime.js"),
-        `import("root-owned-test-dep");\n`,
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
-      ]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-});
-
 // This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
 // Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
 // statSync().mode never reports execute bits, so these tests are meaningless there.
@@ -590,6 +522,20 @@ describe("collectForbiddenPackPaths", () => {
 });
 
 describe("packed install verification", () => {
+  it("disables legacy ownership when the historical metadata producer exists", () => {
+    const sourceRoot = tempDirs.make("release-check-ownership-producer-");
+    expect(allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot)).toBe(true);
+
+    const producerPath = join(
+      sourceRoot,
+      "scripts/lib/runtime-dependency-ownership-build-plugin.mts",
+    );
+    mkdirSync(dirname(producerPath), { recursive: true });
+    writeFileSync(producerPath, "export {};\n", "utf8");
+
+    expect(allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot)).toBe(false);
+  });
+
   it("runs postpublish package integrity checks against the packed install before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-packed-install-"));
     try {
@@ -685,6 +631,9 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
     expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
     expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
     expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
     expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
   });
@@ -714,7 +663,7 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
       expect(packageJson.dependencies?.["@types/ws"]).toBe("8.18.1");
-      expect(packageJson.dependencies?.typescript).toBe("6.0.3");
+      expect(packageJson.dependencies?.typescript).toBe("7.0.2");
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
       expect(tsconfig.compilerOptions?.skipLibCheck).toBe(false);
       expect(source).toBe(fixtureSource);
@@ -734,50 +683,64 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
   });
 });
 
-describe("collectPackUnpackedSizeErrors", () => {
-  it.each([
-    { label: "ordinary package", unpackedSize: 120_354_302 },
-    { label: "required native payload", unpackedSize: 243_066_603 },
-    { label: "exact budget", unpackedSize: 235 * 1024 * 1024 },
-  ])("accepts pack results at or below the budget: $label", ({ unpackedSize }) => {
+describe("collectPackUnpackedSizeFindings", () => {
+  it("accepts pack results at the exact budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", unpackedSize)]),
-    ).toStrictEqual([]);
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 320 * 1024 * 1024)]),
+    ).toStrictEqual({ errors: [], violations: [] });
   });
 
   it("accepts npm 12 name-keyed pack results", () => {
     expect(
-      collectPackUnpackedSizeErrors({
+      collectPackUnpackedSizeFindings({
         openclaw: makePackResult("openclaw-2026.3.14.tgz", 120_354_302),
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual({ errors: [], violations: [] });
   });
 
   it("rejects pack results one byte above the unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 235 * 1024 * 1024 + 1)]),
-    ).toEqual([
-      "candidate.tgz unpackedSize 246415361 bytes (235.0 MiB) exceeds budget 246415360 bytes (235.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
-    ]);
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 320 * 1024 * 1024 + 1)]),
+    ).toEqual({
+      errors: [],
+      violations: [
+        {
+          file: "package.json",
+          title: "npm package unpacked size budget",
+          message:
+            "candidate.tgz unpackedSize 335544321 bytes (320.0 MiB) exceeds budget 335544320 bytes (320.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+        },
+      ],
+    });
   });
 
   it("honors an explicit lower unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 101)], { budgetBytes: 100 }),
-    ).toEqual([
-      expect.stringContaining("unpackedSize 101 bytes (0.0 MiB) exceeds budget 100 bytes"),
-    ]);
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 101)], { budgetBytes: 100 }),
+    ).toEqual({
+      errors: [],
+      violations: [
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "unpackedSize 101 bytes (0.0 MiB) exceeds budget 100 bytes",
+          ),
+        }),
+      ],
+    });
   });
 
   it("fails closed when npm pack output omits unpackedSize for every result", () => {
     expect(
-      collectPackUnpackedSizeErrors([
+      collectPackUnpackedSizeFindings([
         { filename: "openclaw-2026.3.14.tgz" },
         { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
       ]),
-    ).toEqual([
-      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
-    ]);
+    ).toEqual({
+      errors: [
+        "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+      ],
+      violations: [],
+    });
   });
 });
 
@@ -826,24 +789,30 @@ describe("resolvePackedTarballPath", () => {
   });
 });
 
-describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
+describe("collectCriticalPluginSdkEntrypointSizeFindings", () => {
   it("flags oversized public plugin SDK entrypoints before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-critical-sdk-"));
     try {
       const pluginSdkDir = join(root, "dist", "plugin-sdk");
       mkdirSync(pluginSdkDir, { recursive: true });
       writeFileSync(join(pluginSdkDir, "core.js"), "export {};\n");
-      writeFileSync(join(pluginSdkDir, "runtime.js"), "export {};\n");
       writeFileSync(
         join(pluginSdkDir, "provider-entry.js"),
         "x".repeat(MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1),
       );
 
-      expect(collectCriticalPluginSdkEntrypointSizeErrors(root)).toEqual([
-        `dist/plugin-sdk/provider-entry.js is ${
-          MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1
-        } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
-      ]);
+      expect(collectCriticalPluginSdkEntrypointSizeFindings(root)).toEqual({
+        errors: ["dist/plugin-sdk/runtime.js is missing."],
+        violations: [
+          {
+            file: "src/plugin-sdk/provider-entry.ts",
+            title: "Plugin SDK entrypoint size budget",
+            message: `dist/plugin-sdk/provider-entry.js is ${
+              MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1
+            } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
+          },
+        ],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

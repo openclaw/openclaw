@@ -1,11 +1,11 @@
 // Executes Chrome MCP navigation, snapshot, screenshot, and page actions.
 import fs from "node:fs/promises";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import {
   rethrowChromeMcpDocumentError,
+  ChromeMcpDocumentUnavailableError,
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
   type ChromeMcpTargetOperation,
@@ -14,12 +14,10 @@ import { extractJsonMessage, extractSnapshot } from "./chrome-mcp-result.js";
 import {
   callTargetTool,
   callTool,
-  clearChromeMcpSnapshotRefsForTarget,
   getChromeMcpRoutingState,
   listChromeMcpTargetsWithLease,
   resolveChromeMcpSnapshotRef,
-  validateChromeMcpSnapshotRefs,
-  wrapChromeMcpSnapshotRefs,
+  registerChromeMcpSnapshot,
   withChromeMcpTarget,
   type ChromeMcpPinnedTarget,
 } from "./chrome-mcp-routing.js";
@@ -76,7 +74,7 @@ export async function closeChromeMcpTab(
       // Chrome reuses that numeric id.
       const routing = getChromeMcpRoutingState(target.lease.session);
       routing.targetIdByPageId.delete(target.pageId);
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     },
   );
 }
@@ -133,10 +131,7 @@ export async function takeChromeMcpSnapshot(
   params: ChromeMcpTargetOperation,
 ): Promise<ChromeMcpSnapshotNode> {
   return await withChromeMcpTarget(params, async (target) => {
-    clearChromeMcpSnapshotRefsForTarget(
-      getChromeMcpRoutingState(target.lease.session),
-      params.targetId,
-    );
+    getChromeMcpRoutingState(target.lease.session).snapshotsByTarget.delete(params.targetId);
     const result = await callTool(
       params.profileName,
       target.profileOptions,
@@ -145,11 +140,8 @@ export async function takeChromeMcpSnapshot(
       params,
       target.lease,
     );
-    return wrapChromeMcpSnapshotRefs(
-      target.lease.session,
-      params.targetId,
-      extractSnapshot(result),
-    );
+    return registerChromeMcpSnapshot(target.lease.session, params.targetId, extractSnapshot(result))
+      .root;
   });
 }
 
@@ -159,48 +151,46 @@ export async function withChromeMcpDocument<T>(
   task: (document: { evaluate: (fn: string) => Promise<unknown> }) => Promise<T>,
 ): Promise<T> {
   return await withChromeMcpTarget(params, async (target) => {
-    clearChromeMcpSnapshotRefsForTarget(
-      getChromeMcpRoutingState(target.lease.session),
-      params.targetId,
-    );
-    let snapshot: ChromeMcpSnapshotNode;
+    const routing = getChromeMcpRoutingState(target.lease.session);
     try {
-      snapshot = extractSnapshot(
-        await callTool(
-          params.profileName,
-          target.profileOptions,
-          "take_snapshot",
-          { pageId: target.pageId, verbose: true },
-          params,
-          target.lease,
-        ),
-      );
-    } catch (error) {
-      rethrowChromeMcpDocumentError(error);
-    }
-    validateChromeMcpSnapshotRefs(snapshot);
-    const uid = normalizeOptionalString(snapshot.id);
-    if (!uid || snapshot.role?.trim().toLowerCase() !== "rootwebarea") {
-      throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
-    }
-    return await task({
-      evaluate: async (fn) => {
-        try {
+      let uid = routing.snapshotsByTarget.get(params.targetId)?.documentUid;
+      if (!uid) {
+        const snapshot = extractSnapshot(
+          await callTool(
+            params.profileName,
+            target.profileOptions,
+            "take_snapshot",
+            { pageId: target.pageId, verbose: true },
+            params,
+            target.lease,
+          ).catch(rethrowChromeMcpDocumentError),
+        );
+        uid = registerChromeMcpSnapshot(
+          target.lease.session,
+          params.targetId,
+          snapshot,
+        ).documentUid;
+      }
+      return await task({
+        evaluate: async (fn) => {
           return extractJsonMessage(
             await callTool(
               params.profileName,
               target.profileOptions,
               "evaluate_script",
-              { pageId: target.pageId, function: fn, args: [uid] },
+              { pageId: target.pageId, function: fn, args: [uid], waitForStableDom: false },
               params,
               target.lease,
-            ),
+            ).catch(rethrowChromeMcpDocumentError),
           );
-        } catch (error) {
-          return rethrowChromeMcpDocumentError(error);
-        }
-      },
-    });
+        },
+      });
+    } catch (error) {
+      if (error instanceof ChromeMcpDocumentUnavailableError) {
+        routing.snapshotsByTarget.delete(params.targetId);
+      }
+      throw error;
+    }
   });
 }
 

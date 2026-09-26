@@ -114,6 +114,8 @@ Administrators can still create shared profiles through the CLI (`openclaw model
 
 ### Pin and default rules
 
+Creating your own session with `operator.sessions.write` applies your saved new-chat default when available, or uses the Gateway's configured selection otherwise. Explicit personal account selection and changes to your new-chat default still require `operator.write`. Both creation paths retain the current connection, profile, and role checks.
+
 When a linked person creates a session, OpenClaw captures their default as that session's auth selection. The selection has the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: other people steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it. Knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. For runtimes using OpenClaw's auth fallback planner, the ordered shared profiles for the same provider remain failover candidates if the pinned account fails. This matches the behavior of an explicit pin. Claude CLI requires its selected account and does not substitute shared profiles or its native login when that account cannot be used.
 
 **Use Gateway defaults for new chats**, CLI `clear-default`, and API `users.unlinkAuthProfile` affect future sessions only. Changing a default does not repin existing chats, including unpinned chats using shared credentials. Adopting or forking an existing chat does not apply the current participant's default, and changing providers does not silently select their personal account. Expand the **Account** category in the model menu to make that explicit choice. Clearing a default neither deletes the saved credential nor revokes a provider token. Revoke it with the provider if existing sessions must stop using it. Links and existing session credentials follow verified profile merges, but an explicit unlink on the surviving profile is not reversed by a merge.
@@ -166,9 +168,17 @@ In the transcript, selected mentions show a small inline avatar beside the origi
 In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
 
 Use Up/Down to move through people, Home/End to jump to the first or last result,
-and Enter or Tab to insert the selected mention. Escape closes the picker. Filtering
-keeps the selected person when they still match. The picker shows placeholders while
-searching, an empty message when nobody matches, and **Retry** if the lookup fails.
+and Enter or Tab to insert the selected mention. Escape closes the picker. Typing a
+space immediately after `@` also closes it, so a standalone `@` and the prose after it
+stay ordinary text. Moving the cursor outside the active mention also closes the picker.
+Spaces within a typed name still search for that full name. Filtering
+keeps the selected person when they still match. The picker reuses recent results
+for the same search in the same composer, including after closing it or starting
+another mention. After five minutes, it refreshes cached results in the background
+without hiding the people you can already select. Switching sessions, profiles,
+or connections clears that cache. Results older than 30 minutes are discarded.
+The picker shows placeholders for uncached searches, an empty message when nobody
+matches, and **Retry** if a search without usable cached results fails.
 **Will notify** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 
@@ -194,9 +204,9 @@ The Inbox works without browser notification permission. For optional alerts whi
 
 ## Agent-spawned sessions
 
-Sessions an agent creates with `sessions_spawn` (`visible: true`) are attributed to the requesting agent. The creator and initial owner is the agent itself. The sidebar shows the agent's configured identity name and avatar, rather than an internal session key.
+Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. This assignment changes responsibility and display only; sharing and visibility authority remains anchored on the creator.
 
-The accepted spawn result doubles as a receipt. It includes the child session key, the run id, a direct Control UI `sessionUrl`, and an `owner` record naming the requesting agent. The `sessionUrl` is omitted when the Control UI is disabled. When an agent acknowledges the spawn in a chat channel, it puts the session URL on the first line and `Owner: <label>` on the second. You can then open the session and see who is responsible at a glance. Reassign the session to yourself with **Assign to me** if you take the work over. See [Sub-agents](/tools/subagents) for the spawn lifecycle.
+The accepted spawn result doubles as a receipt. It includes the child session key, the run id, a direct Control UI `sessionUrl`, and an `owner` record naming the stored owner. The `sessionUrl` is omitted when the Control UI is disabled. When an agent acknowledges the spawn in a chat channel, it puts the session URL on the first line and `Owner: <label>` on the second. You can then open the session and see who is responsible at a glance. Use **Assign to me** or the `sessions` tool only when responsibility should move again. See [Sub-agents](/tools/subagents) for the spawn lifecycle.
 
 ## Identity-scoped convenience state
 
@@ -228,7 +238,7 @@ New transcript messages keep qualified sender identity separate from display nam
 
 Older or otherwise unqualified messages retain their saved text and sender labels, with initials instead of inferred profile portraits and no person Activity link. OpenClaw does not rewrite those messages or reconstruct their authors from UUIDs, profile lookups, or participant history. This can remove profile presentation from an older message that really was profile-authored, because it did not record enough evidence to establish that fact. Transcript attribution, participant aggregates, and creator-based access decisions remain separate contracts. Attribution and participation never grant session access.
 
-GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically verifies the person's GitHub account under **Settings → Profile → Identity**. Public `Co-authored-by` credit remains a separate **Git co-author credit** toggle, on by default for verified accounts. Attribution uses that preference plus the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, account changes, and disabling future credit.
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically verifies the person's GitHub account under **Settings → Profile → Identity**. Public `Co-authored-by` credit remains a separate **Git co-author credit** toggle, on by default for verified accounts. Attribution uses that preference plus durable profile participation and the contributor snapshot captured when work is delegated. Inherited credit does not establish child participation, personal activity, ownership, or access. Display names and the four-person facepile projection are not identity evidence. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, account changes, and disabling future credit.
 
 ## Related
 

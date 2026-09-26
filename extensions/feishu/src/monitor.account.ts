@@ -47,10 +47,6 @@ export type FeishuReactionCreatedEvent = {
   action_time?: string;
 };
 
-type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
-  reaction_id?: string;
-};
-
 type ResolveReactionSyntheticEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -307,6 +303,36 @@ function registerEventHandlers(
     }
   };
 
+  const handleReaction = (data: unknown, action: "created" | "deleted") =>
+    runFeishuHandler({
+      errorMessage: `feishu[${accountId}]: error handling reaction ${action === "deleted" ? "removal event" : "event"}`,
+      task: async () => {
+        const myBotId = botOpenIds.get(accountId);
+        const syntheticEvent = await resolveReactionSyntheticEvent({
+          cfg,
+          accountId,
+          event: data as FeishuReactionCreatedEvent,
+          botOpenId: myBotId,
+          logger: log,
+          action,
+        });
+        if (!syntheticEvent || !context.isAccountActive()) {
+          return;
+        }
+        await handleFeishuMessage({
+          trackTask: context.trackTask,
+          cfg,
+          event: syntheticEvent,
+          botOpenId: myBotId,
+          botName: botNames.get(accountId),
+          runtime,
+          channelRuntime,
+          chatHistories,
+          accountId,
+        });
+      },
+    });
+
   eventDispatcher.register({
     "im.message.receive_v1": createFeishuMessageReceiveHandler({
       cfg,
@@ -370,72 +396,12 @@ function registerEventHandlers(
       fireAndForget,
       channelRuntime,
       autoJoin: context.vcAutoJoin,
+      abortSignal: context.abortSignal,
       isAccountActive: context.isAccountActive,
       trackTask: context.trackTask,
     }),
-    "im.message.reaction.created_v1": async (data) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction event`,
-        task: async () => {
-          const event = data as FeishuReactionCreatedEvent;
-          const myBotId = botOpenIds.get(accountId);
-          const syntheticEvent = await resolveReactionSyntheticEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: myBotId,
-            logger: log,
-          });
-          if (!syntheticEvent || !context.isAccountActive()) {
-            return;
-          }
-          const promise = handleFeishuMessage({
-            trackTask: context.trackTask,
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            channelRuntime,
-            chatHistories,
-            accountId,
-          });
-          await promise;
-        },
-      });
-    },
-    "im.message.reaction.deleted_v1": async (data) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction removal event`,
-        task: async () => {
-          const event = data as FeishuReactionDeletedEvent;
-          const myBotId = botOpenIds.get(accountId);
-          const syntheticEvent = await resolveReactionSyntheticEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: myBotId,
-            logger: log,
-            action: "deleted",
-          });
-          if (!syntheticEvent || !context.isAccountActive()) {
-            return;
-          }
-          const promise = handleFeishuMessage({
-            trackTask: context.trackTask,
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            channelRuntime,
-            chatHistories,
-            accountId,
-          });
-          await promise;
-        },
-      });
-    },
+    "im.message.reaction.created_v1": (data) => handleReaction(data, "created"),
+    "im.message.reaction.deleted_v1": (data) => handleReaction(data, "deleted"),
     "application.bot.menu_v6": createFeishuBotMenuHandler({
       cfg,
       accountId,
@@ -539,7 +505,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   }
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;
-  let stopped = false;
+  const accountStopped = new AbortController();
+  const accountAbortSignal = abortSignal
+    ? AbortSignal.any([abortSignal, accountStopped.signal])
+    : accountStopped.signal;
   const pendingTasks = new Set<Promise<void>>();
   const trackTask = (task: Promise<void>) => {
     pendingTasks.add(task);
@@ -579,10 +548,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
-      isAccountActive: () => !stopped && !abortSignal?.aborted,
+      isAccountActive: () => !accountAbortSignal.aborted,
       trackTask,
       vcAutoJoin: account.config.vcAutoJoin === true,
-      abortSignal,
+      abortSignal: accountAbortSignal,
       ...(durableIngress ? { resolveIngressLifecycle: durableIngress.resolveLifecycle } : {}),
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
@@ -610,7 +579,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
         ...(params.statusSink ? { statusSink: params.statusSink } : {}),
       });
     } finally {
-      stopped = true;
+      accountStopped.abort(new Error("Feishu account stopped"));
       try {
         await durableIngress?.stop();
       } finally {

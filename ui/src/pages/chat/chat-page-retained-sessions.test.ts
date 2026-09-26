@@ -2,7 +2,9 @@
 /* @vitest-environment-options {"url":"http://chat-page-retained.test/"} */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 
 vi.mock("./chat-pane.ts", () => ({}));
 vi.mock("../../app/native-gateways.runtime.ts", () => ({
@@ -11,9 +13,8 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   runSessionNavigationIntent,
@@ -22,13 +23,14 @@ import {
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
-import { createChatPageSessions } from "./chat-page.test-support.ts";
+import { setNavigationContext } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
 type RenderedPane = HTMLElement & {
   active: boolean;
+  onOpenSplitView?: () => void;
   hasQueuedMessageEdit?: boolean;
   draft?: string;
   focusComposer: boolean;
@@ -46,42 +48,6 @@ type RenderedPane = HTMLElement & {
   dashboardExpanded: boolean;
   sessionKey: string;
 };
-
-function setNavigationContext(page: ChatPage) {
-  const navigate = vi.fn();
-  const replace = vi.fn();
-  const patch = vi.fn(async () => null);
-  const agentSelectionState = { selectedId: "main" };
-  const chatAttachmentHandoff = {
-    prepare: vi.fn(),
-    consume: vi.fn(() => null),
-    clearPane: vi.fn(),
-    dispose: vi.fn(),
-  };
-  const context = {
-    basePath: "",
-    sessions: { ...createChatPageSessions(), patch },
-    chatSubmissions: createChatSubmissions(),
-    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
-    agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: {
-      snapshot: { hello: null },
-      setSessionKey: vi.fn(),
-      subscribe: () => () => undefined,
-    },
-    navigate,
-    replace,
-    agentSelection: {
-      state: agentSelectionState,
-      set: vi.fn((agentId: string) => {
-        agentSelectionState.selectedId = agentId;
-      }),
-    },
-    chatAttachmentHandoff,
-  } as unknown as ApplicationContext;
-  (page as unknown as { context: ApplicationContext }).context = context;
-  return { chatAttachmentHandoff, context, navigate, patch, replace };
-}
 
 function getRouteDraftForActivePane(page: ChatPage): string | undefined {
   const state = page as unknown as {
@@ -676,6 +642,56 @@ describe("chat page retained sessions", () => {
     }
   });
 
+  it("retires a retained preview when newer navigation supersedes its pending route", async () => {
+    const originalHref = window.location.href;
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frame) => frames.delete(frame));
+    const { page, paneFor } = await mountRetainedPage(
+      "agent:main:a",
+      "agent:main:b",
+      "agent:main:a",
+    );
+    const paneA = expectDefined(paneFor("agent:main:a"), "selected conversation");
+    const paneB = expectDefined(paneFor("agent:main:b"), "retained conversation");
+    const returnToA = vi.fn(() => true);
+    try {
+      runSessionNavigationIntent(paneA, {
+        face: "chat",
+        sessionKey: paneB.sessionKey,
+        commit: () => {
+          // Route history advances immediately; data is still awaiting its loader.
+          history.pushState(null, "", "/chat/pending-b");
+          return true;
+        },
+      });
+      frames.get(1)?.(0);
+      frames.get(2)?.(16);
+      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+      expect(page.data.sessionKey).toBe(paneA.sessionKey);
+
+      runSessionNavigationIntent(paneA, {
+        commit: returnToA,
+        face: "chat",
+        sessionKey: paneA.sessionKey,
+      });
+
+      expect(returnToA).toHaveBeenCalledOnce();
+      expect(paneA.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
+      expect(paneA.hasAttribute("inert")).toBe(false);
+      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
+      expect(paneB.hasAttribute("inert")).toBe(true);
+    } finally {
+      page.remove();
+      history.replaceState(null, "", originalHref);
+      vi.restoreAllMocks();
+    }
+  });
+
   it("cannot commit a retained navigation after supersession or page disposal", async () => {
     const frames = new Map<number, FrameRequestCallback>();
     let nextFrame = 0;
@@ -718,4 +734,233 @@ describe("chat page retained sessions", () => {
     disposedSecondFrame?.(32);
     expect(commitC).not.toHaveBeenCalled();
   });
+  it.each([
+    { entry: "button", scope: "global" },
+    { entry: "command", scope: "global" },
+    { entry: "edge-drop", scope: "global" },
+    { entry: "button", scope: "per-sender" },
+    { entry: "command", scope: "per-sender" },
+    { entry: "edge-drop", scope: "per-sender" },
+  ] as const)(
+    "preserves captured global ownership when creating a split via $entry ($scope)",
+    async ({ entry, scope }) => {
+      const workSessionKey = "agent:main:work";
+      const page = new ChatPage();
+      const { context } = setNavigationContext(page);
+      context.agents.state.agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope,
+        agents: [{ id: "main" }, { id: "research" }],
+      };
+      page.data = { sessionKey: "global", agentId: "research" };
+      document.body.append(page);
+      await page.updateComplete;
+      if (entry === "button") {
+        expectDefined(
+          page.querySelector<RenderedPane>("openclaw-chat-pane"),
+          "classic pane",
+        ).onOpenSplitView?.();
+      } else if (entry === "command") {
+        window.dispatchEvent(
+          new CustomEvent(UI_COMMAND_EVENT, {
+            detail: {
+              command: { kind: "split", direction: "right", sessionKey: workSessionKey },
+              sessionKey: "global",
+              agentId: "research",
+            },
+            cancelable: true,
+          }),
+        );
+      } else {
+        (
+          page as unknown as {
+            applySessionDrop: (
+              key: string,
+              pane: string,
+              zone: { kind: "edge"; edge: "right" },
+            ) => void;
+          }
+        ).applySessionDrop(workSessionKey, "p1", { kind: "edge", edge: "right" });
+      }
+      await page.updateComplete;
+      expect(
+        loadSettings().chatSplitLayout?.columns.map((column) => column.panes[0]?.sessionKey),
+      ).toEqual([
+        scope === "global" ? "agent:research:main" : "global",
+        entry === "button"
+          ? scope === "global"
+            ? "agent:research:main"
+            : "global"
+          : workSessionKey,
+      ]);
+      expect(page.querySelector("[data-unbound-pane-id]")).toBeNull();
+    },
+  );
+  it.each(["canonical replacement", "explicit command"] as const)(
+    "distinguishes an %s from implicit pane recovery",
+    async (reason) => {
+      const page = new ChatPage();
+      setNavigationContext(page);
+      const key = "agent:main:12345678-90ab-cdef-1234-567890abcdef";
+      const route = (title: string) =>
+        sessionNavigationTarget({
+          fallbackAgentId: "main",
+          face: "chat",
+          sessionKey: key,
+          row: { key, displayName: title },
+        }).href;
+      window.history.replaceState({}, "", route("Old title"));
+      page.data = { sessionKey: key };
+      patchSettings({
+        chatSplitLayout: {
+          activePaneId: "known",
+          columnWeights: [0.5, 0.5],
+          columns: [
+            { id: "c1", paneWeights: [1], panes: [{ id: "unknown", sessionKey: "global" }] },
+            { id: "c2", paneWeights: [1], panes: [{ id: "known", sessionKey: key }] },
+          ],
+        },
+      });
+      document.body.append(page);
+      await page.updateComplete;
+      expectDefined(
+        page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+        "unknown pane",
+      ).focus();
+      await page.updateComplete;
+      if (reason === "canonical replacement") {
+        expect(route("New title")).not.toBe(route("Old title"));
+        window.history.replaceState({}, "", route("New title"));
+        page.data = { sessionKey: key };
+      } else {
+        window.dispatchEvent(
+          new CustomEvent(UI_COMMAND_EVENT, {
+            detail: { command: { kind: "navigate", sessionKey: key }, agentId: "main" },
+            cancelable: true,
+          }),
+        );
+      }
+      await page.updateComplete;
+      expect(loadSettings().chatSplitLayout?.columns[0]?.panes[0]?.sessionKey).toBe(
+        reason === "canonical replacement" ? "global" : key,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "fences the router read already pending when an unknown pane is focused (new choice: %s)",
+    async (chooseAgain) => {
+      const page = new ChatPage();
+      const { context } = setNavigationContext(page);
+      const initial: SessionChatRouteData = { sessionKey: "agent:main:a" };
+      const destination: SessionChatRouteData = { sessionKey: "agent:main:b" };
+      const entered = createDeferred();
+      const release = createDeferred<SessionChatRouteData>();
+      const router = createRouter<
+        "chat" | "dashboard",
+        ApplicationContext,
+        Record<string, never>,
+        SessionChatRouteData
+      >({
+        routes: [
+          { id: "chat", path: "/chat", component: () => ({}), loader: () => initial },
+          {
+            id: "dashboard",
+            path: "/pending",
+            component: () => ({}),
+            loader: () => {
+              entered.resolve();
+              return release.promise;
+            },
+          },
+        ],
+      });
+      Object.assign(context, { router });
+      window.history.replaceState({}, "", "/chat");
+      const location = () => ({
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: window.location.hash,
+      });
+      const unsubscribe = router.subscribe((state) => {
+        const match = state.matches.find((entry) => entry.status === "success");
+        if (match?.data) {
+          page.data = match.data;
+        }
+      });
+      let pending: Promise<void> | undefined;
+      let replacement: Promise<void> | undefined;
+      try {
+        await router.start(
+          {
+            location,
+            push: (next) =>
+              window.history.pushState({}, "", next.pathname + next.search + next.hash),
+            replace: (next) =>
+              window.history.replaceState({}, "", next.pathname + next.search + next.hash),
+            listen: () => () => {},
+          },
+          "",
+          context,
+        );
+        patchSettings({
+          chatSplitLayout: {
+            activePaneId: "known",
+            columnWeights: [0.5, 0.5],
+            columns: [
+              { id: "c1", paneWeights: [1], panes: [{ id: "unknown", sessionKey: "global" }] },
+              {
+                id: "c2",
+                paneWeights: [1],
+                panes: [{ id: "known", sessionKey: initial.sessionKey }],
+              },
+            ],
+          },
+        });
+        document.body.append(page);
+        await page.updateComplete;
+        pending = router.navigate("dashboard", context);
+        await entered.promise;
+        expect(page.data).toBe(initial);
+        expectDefined(
+          page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+          "unknown pane",
+        ).focus();
+        await page.updateComplete;
+        if (chooseAgain) {
+          const owner = Object.assign(document.createElement("nav"), {
+            activeRouteId: "dashboard",
+            sessionKey: destination.sessionKey,
+          });
+          document.body.append(owner);
+          runSessionNavigationIntent(owner, {
+            face: "chat",
+            sessionKey: initial.sessionKey,
+            agentId: "main",
+            commit: () => {
+              replacement = router.navigate("chat", context);
+              return true;
+            },
+          });
+          expect(loadSettings().chatSplitLayout?.columns[0]?.panes[0]?.sessionKey).toBe(
+            initial.sessionKey,
+          );
+          await replacement;
+        }
+        release.resolve(destination);
+        await pending;
+        await page.updateComplete;
+        expect(loadSettings().chatSplitLayout?.columns[0]?.panes[0]?.sessionKey).toBe(
+          chooseAgain ? initial.sessionKey : "global",
+        );
+      } finally {
+        release.resolve(destination);
+        await Promise.allSettled([pending, replacement]);
+        unsubscribe();
+        router.stop();
+        page.remove();
+      }
+    },
+  );
 });

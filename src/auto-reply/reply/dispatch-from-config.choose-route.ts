@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import {
   buildCaptionedFinalTextFallback,
@@ -28,18 +29,15 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
-import {
-  maybeRefuseRestrictedRuntimeTakeover,
-  runtimeTakeoverHooksAllowed,
-} from "./dispatch-from-config.restricted-runtime.js";
+import { maybeRefuseRestrictedRuntimeTakeover } from "./dispatch-from-config.restricted-runtime.js";
 import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
   captureDeliveredTranscriptMirror,
@@ -100,8 +98,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     (state.suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
   const shouldSuppressDefaultToolProgressMessages = () =>
     params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
-  const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
-  const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
+  const shouldSendToolSummaries = () => !shouldSuppressDefaultToolProgressMessages();
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -111,7 +108,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     ctx.InboundEventKind !== "room_event" &&
     !state.sendPolicyDenied &&
     shouldEmitVerboseProgress() &&
-    shouldSendVerboseProgressMessages();
+    shouldSendToolSummaries();
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
     state.suppressAutomaticSourceDelivery &&
     state.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -563,7 +560,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (
     state.allowInboundHandlers &&
-    runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) &&
+    !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
     hookRunner?.hasHooks("before_dispatch")
   ) {
     // This outer lookup key is resolved from the routed context; fields inside
@@ -579,28 +576,27 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       },
     });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-      runWithDispatchLifecycleAdmission(
-        async () =>
-          await runWithDispatchAbortSignal(
-            getPreDispatchAbortSignal(),
-            () =>
-              hookRunner.runBeforeDispatch(
-                {
-                  messageId: state.hookState.hookContext.messageId,
-                  content: state.hookState.hookContext.content,
-                  body:
-                    state.hookState.hookContext.bodyForAgent ?? state.hookState.hookContext.body,
-                  channel: state.hookState.hookContext.channelId,
-                  sessionKey: beforeDispatchSessionKey,
-                  senderId: state.hookState.hookContext.senderId,
-                  replyToId: state.hookState.hookContext.replyToId,
-                  replyToIdFull: state.hookState.hookContext.replyToIdFull,
-                  replyToBody: state.hookState.hookContext.replyToBody,
-                  replyToSender: state.hookState.hookContext.replyToSender,
-                  replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
-                  isGroup: state.hookState.hookContext.isGroup,
-                  timestamp: state.hookState.hookContext.timestamp,
-                },
+      runWithDispatchLifecycleAdmission(async () => {
+        return await runWithDispatchAbortSignal(
+          getPreDispatchAbortSignal(),
+          () =>
+            hookRunner.runBeforeDispatch(
+              {
+                messageId: state.hookState.hookContext.messageId,
+                content: state.hookState.hookContext.content,
+                body: state.hookState.hookContext.bodyForAgent ?? state.hookState.hookContext.body,
+                channel: state.hookState.hookContext.channelId,
+                sessionKey: beforeDispatchSessionKey,
+                senderId: state.hookState.hookContext.senderId,
+                replyToId: state.hookState.hookContext.replyToId,
+                replyToIdFull: state.hookState.hookContext.replyToIdFull,
+                replyToBody: state.hookState.hookContext.replyToBody,
+                replyToSender: state.hookState.hookContext.replyToSender,
+                replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
+                isGroup: state.hookState.hookContext.isGroup,
+                timestamp: state.hookState.hookContext.timestamp,
+              },
+              withClaimingHookAdmission(
                 {
                   messageId: state.hookState.hookContext.messageId,
                   channelId: state.hookState.hookContext.channelId,
@@ -614,11 +610,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookState.hookContext.replyToSender,
                   replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
                 },
-                pluginSubagentRequester,
+                state.assertCurrentBindingRoute,
               ),
-            trackDispatchLifecycleWork,
-          ),
-      ),
+              pluginSubagentRequester,
+            ),
+          trackDispatchLifecycleWork,
+        );
+      }),
     );
     if (beforeDispatchResult?.handled) {
       const text = beforeDispatchResult.text;
@@ -676,9 +674,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
     };
   }
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
+    shouldSuppressProgressDelivery,
     shouldSuppressDefaultToolProgressMessages,
-    shouldSendVerboseProgressMessages,
     shouldSendToolSummaries,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,

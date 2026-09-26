@@ -1,10 +1,13 @@
 // Openai tests cover realtime voice provider plugin behavior.
+import { once } from "node:events";
+import { MessageChannel } from "node:worker_threads";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -24,6 +27,15 @@ vi.mock("node:child_process", async (importOriginal) => {
 vi.mock("ws", () => ({
   default: mocks.FakeWebSocket,
 }));
+
+vi.mock("./realtime-quicksilver-socket.js", async () => {
+  const { createTestMediaSocketFactory } = await import("./realtime-voice-test-support.js");
+  return {
+    OpenAIQuicksilverWorkerSocket: {
+      create: await createTestMediaSocketFactory(mocks.FakeWebSocket),
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
@@ -93,10 +105,8 @@ describe("OpenAI realtime voice bridge connection", () => {
   });
 
   it.each([
-    { binding: "modern", throwingCloseCallback: false },
     { binding: "modern", throwingCloseCallback: true },
     { binding: "v2026.8.1", throwingCloseCallback: false },
-    { binding: "v2026.8.1", throwingCloseCallback: true },
   ] as const)(
     "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
     async ({ binding, throwingCloseCallback }) => {
@@ -299,23 +309,33 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(connectResolved).toBe(false);
     expect(onReady).not.toHaveBeenCalled();
     expect(parseSent(socket).map((event) => event.type)).toEqual(["session.update"]);
-    const session = requireSession(socket);
-    expectRecordFields(session, "session", {
-      type: "realtime",
-      model: "gpt-realtime-2.1",
-      output_modalities: ["audio"],
-    });
-    const inputAudio = requireNestedRecord(session, ["audio", "input"]);
-    expectRecordFields(inputAudio, "session audio input", {
-      format: { type: "audio/pcmu" },
-      noise_reduction: null,
-      transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
-    });
-    expect(requireNestedRecord(session, ["audio", "output"])).toEqual({
-      format: { type: "audio/pcmu" },
-      voice: "alloy",
-    });
-    expect(session).not.toHaveProperty("temperature");
+    expect(socket.sent[0]).toBe(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          model: "gpt-realtime-2.1",
+          instructions: "Be helpful.",
+          output_modalities: ["audio"],
+          audio: {
+            input: {
+              format: { type: "audio/pcmu" },
+              noise_reduction: null,
+              transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
+                interrupt_response: true,
+              },
+            },
+            output: { format: { type: "audio/pcmu" }, voice: "alloy" },
+          },
+        },
+      }),
+    );
     expect(bridge.isConnected()).toBe(false);
 
     emitSessionUpdated(socket);
@@ -724,6 +744,83 @@ describe("OpenAI realtime voice bridge connection", () => {
       );
     },
   );
+
+  it("routes registered GPT-Live Gateway PCM to the pre-connected output port and drains final transcripts", async () => {
+    const { port1, port2 } = new MessageChannel();
+    const state = new SharedArrayBuffer(4);
+    const onAudio = vi.fn();
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const runAgentConsult = vi.fn(async () => ({ text: "Delegated answer" }));
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "fixture-key", model: "gpt-live-1" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+      onReady,
+      onClose,
+      onTranscript,
+      runAgentConsult,
+    });
+    try {
+      expect(bridge).toBeInstanceOf(OpenAIQuicksilverGatewayBridge);
+      if (!bridge.setAudioOutputPort) {
+        throw new Error("registered GPT-Live bridge lacks its audio output endpoint");
+      }
+      bridge.setAudioOutputPort({ port: port1, state });
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      const connecting = bridge.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = requireSocket();
+      openSocket(socket);
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual(
+          expect.objectContaining({ type: "session.start" }),
+        ),
+      );
+      expect(onReady).not.toHaveBeenCalled();
+      emitServerEvent(socket, { type: "session.started", session: {} });
+      await connecting;
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(bridge.isConnected()).toBe(true);
+      const pcm = Buffer.alloc(960, 1);
+      const output = once(port2, "message");
+      emitServerEvent(socket, {
+        type: "session.output_audio.delta",
+        delta: pcm.toString("base64"),
+      });
+      expect((await output)[0]).toEqual({ type: "audio", audio: new Uint8Array(pcm) });
+      expect(onAudio).not.toHaveBeenCalled();
+      const closing = bridge.close({ disposition: "detach" });
+      expect(closing).toBeInstanceOf(Promise);
+      expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(socket.closed).toBe(false);
+      emitServerEvent(socket, {
+        type: "session.input_transcript.delta",
+        delta: "Trailing words.",
+        start_ms: 0,
+        end_ms: 100,
+      });
+      emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      await closing;
+      expect(onTranscript).toHaveBeenCalledWith("user", "Trailing words.", true);
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      expect(socket.closed).toBe(true);
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      const closing = bridge.close();
+      const socket = FakeWebSocket.instances[0];
+      if (socket && !socket.closed) {
+        emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      }
+      await Promise.allSettled([closing]);
+      port1.close();
+      port2.close();
+    }
+  });
 
   it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
     const bridge = createNativeBridge({

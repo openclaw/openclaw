@@ -1,5 +1,6 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
+import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
@@ -17,6 +18,11 @@ const NO_CATALOG_CURSOR: string | null = null;
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
   overview: boolean;
+  selection: {
+    intent: PluginDiscoveryIntent;
+    category: string | null;
+    query: string;
+  };
   categories?: PluginDiscoveryCategory[];
   nextCursor?: string;
   remoteError?: string;
@@ -25,16 +31,7 @@ type CatalogPageLoad = {
 type PluginDiscoveryGateway = {
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
-  onEntriesChanged?: () => void;
 };
-
-function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
-  if (left.catalog.official !== right.catalog.official) {
-    return left.catalog.official ? -1 : 1;
-  }
-  const downloadOrder = (right.catalog.downloads ?? 0) - (left.catalog.downloads ?? 0);
-  return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
-}
 
 function rankedOverviewShelf(
   items: readonly PluginDiscoveryEntry[],
@@ -65,9 +62,14 @@ function appendUniqueEntries(
 
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
+  private resultSelection: CatalogPageLoad["selection"] | null = null;
   error: string | null = null;
   remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
+  categoriesError: string | null = null;
+  private categoriesReady = false;
+  private categoriesStarted = false;
+  private readonly categoriesTask: Task;
   featured: PluginDiscoveryEntry[] = [];
   trending: PluginDiscoveryEntry[] = [];
   loadMoreError: string | null = null;
@@ -84,6 +86,26 @@ export class PluginDiscoveryController {
     private readonly host: ReactiveControllerHost,
     private readonly gateway: PluginDiscoveryGateway,
   ) {
+    this.categoriesTask = new Task(host, {
+      autoRun: false,
+      args: () => [NO_CATALOG_CLIENT] as const,
+      task: ([client], { signal }) =>
+        client
+          ? client.request<{ categories: PluginDiscoveryCategory[] }>(
+              "plugins.catalog.categories",
+              {},
+              { signal },
+            )
+          : initialState,
+      onComplete: ({ categories }) => {
+        this.categories = categories;
+        this.categoriesReady = true;
+        this.categoriesError = null;
+      },
+      onError: (error) => {
+        this.categoriesError = formatUiError(error);
+      },
+    });
     this.browseTask = new Task(host, {
       autoRun: false,
       args: () =>
@@ -103,9 +125,18 @@ export class PluginDiscoveryController {
           items: page.items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
+        this.resultSelection = page.selection;
         this.remoteError = page.remoteError ?? null;
         if (page.overview) {
-          this.categories = page.categories ?? [];
+          // The overview is already fetched for cards. Use its canonical categories
+          // if it beats the lightweight read (including older ClawHub servers that
+          // cannot serve that endpoint), and retire the slower request.
+          if (page.categories) {
+            void this.categoriesTask.run([null]);
+            this.categories = page.categories;
+            this.categoriesReady = true;
+            this.categoriesError = null;
+          }
           this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
             0,
             CATALOG_SECTION_SIZE,
@@ -115,7 +146,6 @@ export class PluginDiscoveryController {
             CATALOG_SECTION_SIZE,
           );
         }
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.error = formatUiError(error);
@@ -143,12 +173,13 @@ export class PluginDiscoveryController {
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery
-              ? items.toSorted(compareOfficialDownloads)
+              ? items.toSorted((left, right) =>
+                  comparePluginCatalogEntries(left, right, this.category),
+                )
               : items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
         this.loadMoreError = page.remoteError ?? null;
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.loadMoreError = formatUiError(error);
@@ -157,7 +188,40 @@ export class PluginDiscoveryController {
   }
 
   get loading(): boolean {
-    return this.gateway.isConnected() && this.browseTask.status === TaskStatus.PENDING;
+    // Keep keyed cards and their open controls during a same-selection refresh.
+    // New filters must wait for their own result instead of showing the old selection.
+    return (
+      this.gateway.isConnected() &&
+      this.browseTask.status === TaskStatus.PENDING &&
+      (!this.result ||
+        this.resultSelection?.intent !== this.intent ||
+        this.resultSelection.category !== this.category ||
+        this.resultSelection.query !== this.committedQuery)
+    );
+  }
+
+  get categoriesLoading(): boolean {
+    return (
+      this.gateway.isConnected() &&
+      this.categoriesStarted &&
+      !this.categoriesReady &&
+      this.categoriesTask.status === TaskStatus.PENDING
+    );
+  }
+
+  async ensureCategories(retry = false): Promise<void> {
+    const client = this.gateway.getClient();
+    if (
+      !client ||
+      !this.gateway.isConnected() ||
+      this.categoriesReady ||
+      (this.categoriesStarted && (this.categoriesTask.status === TaskStatus.PENDING || !retry))
+    ) {
+      return;
+    }
+    this.categoriesError = null;
+    this.categoriesStarted = true;
+    await this.categoriesTask.run([client]);
   }
 
   get featuredLoading(): boolean {
@@ -197,11 +261,14 @@ export class PluginDiscoveryController {
     );
     const items =
       params.intent === "all" && !params.query
-        ? page.items.toSorted(compareOfficialDownloads)
+        ? page.items.toSorted((left, right) =>
+            comparePluginCatalogEntries(left, right, params.category),
+          )
         : page.items;
     return {
       items,
       overview,
+      selection: { intent: params.intent, category: params.category, query: params.query },
       ...(page.categories ? { categories: page.categories } : {}),
       ...(page.nextCursor && !params.query ? { nextCursor: page.nextCursor } : {}),
       ...(page.remoteError ? { remoteError: page.remoteError } : {}),
@@ -223,6 +290,10 @@ export class PluginDiscoveryController {
     this.committedQuery = this.query.trim();
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
+    this.resultSelection = null;
+    this.categories = [];
+    this.categoriesReady = false;
+    this.categoriesError = null;
     this.error = null;
     this.remoteError = null;
     this.featured = [];
@@ -231,6 +302,8 @@ export class PluginDiscoveryController {
   }
 
   disconnect(): void {
+    this.categoriesStarted = false;
+    void this.categoriesTask.run([null]);
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
       this.searchTimer = null;

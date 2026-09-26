@@ -24,13 +24,25 @@ export function spawnServiceChildRelay(params: {
   });
   const cleanup = createServiceChildCleanup();
   params.onSpawnCleanup?.(cleanup.promise);
-  // Native pipes are ready synchronously; only the broker waits for transferred handles.
-  const transportReady =
-    child instanceof BrokerChild
-      ? child.ready().catch((error: unknown) => {
-          cleanup.completion.reject(error);
-          throw error;
-        })
-      : undefined;
+  let transportReady: Promise<void> | undefined;
+  if (child instanceof BrokerChild) {
+    transportReady = child.ready().catch((error: unknown) => {
+      cleanup.completion.reject(error);
+      throw error;
+    });
+  } else if (child.pid === undefined) {
+    // Native spawn failures can lack stdio entirely. Join Node's close before
+    // releasing the no-process cleanup owner, and preserve its original errno.
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    transportReady = new Promise<Error>((resolve) => {
+      child.once("error", resolve);
+    }).then(async (error) => {
+      await closed;
+      cleanup.completion.resolve();
+      throw error;
+    });
+  }
   return { child, cleanup, transportReady };
 }

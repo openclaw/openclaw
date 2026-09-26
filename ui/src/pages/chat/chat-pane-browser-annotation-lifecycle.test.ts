@@ -14,6 +14,7 @@ import {
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
 import {
+  createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
   type TestChatPane,
@@ -87,10 +88,7 @@ describe("staged attachment composer adoption", () => {
     pane.paneId = paneId;
     pane.sessionKey = sessionKey;
     const stopAfterRestore = new Error("stop after attachment restore");
-    vi.spyOn(
-      pane.chatState as unknown as { startComposerPersistence: () => void },
-      "startComposerPersistence",
-    ).mockImplementation(() => {
+    vi.spyOn(pane.chatState.composerPersistence, "start").mockImplementation(() => {
       throw stopAfterRestore;
     });
     expect(() => pane.connectedCallback()).toThrow(stopAfterRestore);
@@ -99,7 +97,7 @@ describe("staged attachment composer adoption", () => {
 
   it("transfers the mounted package and releases fallback-only payloads on disconnect", () => {
     const owner = {} as GatewayBrowserClient;
-    const context = createSessionContext(owner, {} as SessionCapability);
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
     const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:current");
     const state = pane.state;
     const shared = storedAttachment("shared-annotation", true);
@@ -175,7 +173,7 @@ describe("staged attachment composer adoption", () => {
 
   it("restores an ordinary mixed package through a real pane remount", () => {
     const owner = {} as GatewayBrowserClient;
-    const context = createSessionContext(owner, {} as SessionCapability);
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
     const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:mixed-package");
     const image = storedAttachment("remount-image", false);
     const file = storedAttachment("remount-file", false);
@@ -199,7 +197,7 @@ describe("staged attachment composer adoption", () => {
 
   it("restores each retained session package under the same logical pane", () => {
     const owner = {} as GatewayBrowserClient;
-    const context = createSessionContext(owner, {} as SessionCapability);
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
     const first = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:first");
     const second = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:second");
     const firstAttachment = storedAttachment("retained-first", false);
@@ -315,7 +313,7 @@ describe("staged attachment composer adoption", () => {
 
   it("restores through a new pane after a null mount acquires its first Gateway client", () => {
     const client = {} as GatewayBrowserClient;
-    const context = createSessionContext(client, {} as SessionCapability);
+    const context = createSessionContext(client, createSessionCapabilityFixture());
     (context.gateway.snapshot as { client: GatewayBrowserClient | null }).client = null;
     const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:delayed-client");
     pane.active = true;
@@ -337,7 +335,7 @@ describe("staged attachment composer adoption", () => {
   it("rejects a new pane after client replacement instead of relabeling staged annotations", () => {
     const owner = {} as GatewayBrowserClient;
     const replacement = {} as GatewayBrowserClient;
-    const context = createSessionContext(owner, {} as SessionCapability);
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
     const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:replaced-client");
     pane.active = true;
     (
@@ -362,7 +360,7 @@ describe("staged attachment composer adoption", () => {
     const replacement = {} as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client: owner,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.active = true;
     (
@@ -425,7 +423,7 @@ describe("staged attachment composer adoption", () => {
     const client = {} as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.active = true;
     pane.connectedClient = null;
@@ -454,7 +452,7 @@ describe("staged attachment composer adoption", () => {
     const replacement = {} as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client: owner,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.active = true;
     (

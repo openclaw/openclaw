@@ -1,4 +1,3 @@
-// Skill loading config helpers resolve configured skill sources and enablement.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -17,6 +16,7 @@ import {
   isConfigPathTruthyWithDefaults,
   prepareBinaryAvailability,
 } from "../../shared/config-eval.js";
+import { isSessionSkillEnabled } from "../discovery/agent-filter.js";
 import type { SkillEligibilityContext, SkillEntry, SkillsInstallPreferences } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
@@ -27,13 +27,12 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.evaluateEnabled": true,
 };
 
-/** Platform helpers re-exported for skill loading callers and tests. */
 export { hasBinary };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {
   const raw = config?.skills?.install;
   const preferBrew = raw?.preferBrew ?? true;
-  const manager = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw?.nodeManager));
+  const manager = normalizeLowercaseStringOrEmpty(raw?.nodeManager);
   const nodeManager: SkillsInstallPreferences["nodeManager"] =
     manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm"
       ? manager
@@ -56,7 +55,7 @@ export function resolveSkillConfig(
   if (!skills || typeof skills !== "object") {
     return undefined;
   }
-  const entry = (skills as Record<string, SkillConfig | undefined>)[skillKey];
+  const entry = skills[skillKey];
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
@@ -91,32 +90,19 @@ export function isSkillEnvRequirementSatisfied(params: {
   );
 }
 
-function normalizeAllowlist(input: unknown): ReadonlySet<string> | undefined {
-  if (!input) {
-    return undefined;
-  }
-  if (!Array.isArray(input)) {
-    return undefined;
-  }
-  const normalized = normalizeStringEntries(input);
-  return normalized.length > 0 ? new Set(normalized) : undefined;
-}
-
 const BUNDLED_SOURCES = new Set(["openclaw-bundled", "openclaw-custodian"]);
 
-function isBundledSkill(entry: SkillEntry): boolean {
-  return BUNDLED_SOURCES.has(resolveSkillSource(entry.skill));
-}
-
 export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
-  return normalizeAllowlist(config?.skills?.allowBundled);
+  const input = config?.skills?.allowBundled;
+  const normalized = Array.isArray(input) ? normalizeStringEntries(input) : [];
+  return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet<string>): boolean {
   if (!allowlist || allowlist.size === 0) {
     return true;
   }
-  if (!isBundledSkill(entry)) {
+  if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
     return true;
   }
   const key = resolveSkillKey(entry.skill, entry);
@@ -165,7 +151,12 @@ export function shouldIncludeSkill(params: {
 
 export async function prepareSkillBinaryProbe(
   entries: SkillEntry[],
-  opts?: { config?: OpenClawConfig; eligibility?: SkillEligibilityContext },
+  opts?: {
+    config?: OpenClawConfig;
+    eligibility?: SkillEligibilityContext;
+    skillFilter?: string[];
+    skillOverrides?: Readonly<Record<string, boolean>>;
+  },
   assertCurrent?: () => void,
   runtime?: WorkspaceSkillSources["runtime"],
 ) {
@@ -181,6 +172,16 @@ export async function prepareSkillBinaryProbe(
     return true;
   };
   for (const entry of entries) {
+    if (
+      !isSessionSkillEnabled(
+        entry.skill.name,
+        opts?.skillFilter,
+        opts?.skillOverrides,
+        resolveSkillKey(entry.skill, entry),
+      )
+    ) {
+      continue;
+    }
     const requires = entry.metadata?.requires;
     if (!requires?.bins?.length && !requires?.anyBins?.length) {
       continue;

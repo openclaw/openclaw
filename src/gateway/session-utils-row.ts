@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
@@ -50,6 +53,7 @@ import {
   projectSessionParticipants,
 } from "./session-identity-projection.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
+import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
@@ -61,11 +65,9 @@ import {
   deriveSessionTitle,
   prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
-  resolvePositiveNumber,
   buildStoreChildSessionLinksWork,
   type SessionChildLink,
   resolveSessionChildOwners,
-  resolveSessionCompactionSummary,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -73,7 +75,6 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   buildSessionListRowMetadataContext,
   resolveTranscriptUsageFallbacks,
@@ -93,6 +94,7 @@ export function readSessionRowInputs(params: {
   modelSource?: GatewaySessionModelSource;
   key: string;
   entry?: InternalSessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
@@ -119,6 +121,7 @@ export function readSessionRowInputs(params: {
       cfg,
       key,
       entry,
+      preparedAcpMeta: params.preparedAcpMeta,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
       rowContext,
@@ -190,7 +193,7 @@ export function readSessionRowInputs(params: {
     modelContextWindow: contextWindowProfile.contextTokens,
     allowAsyncLoad: false,
   });
-  const resolvedModelContextTokens = resolvePositiveNumber(modelContext.contextTokens);
+  const resolvedModelContextTokens = asPositiveFiniteNumber(modelContext.contextTokens);
 
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
@@ -252,7 +255,7 @@ export function readSessionRowInputs(params: {
               contextWindowProfile.contextTokens,
             )
           : resolvedModelContextTokens,
-        authoredContextTokens: resolvePositiveNumber(modelContext.authoredContextTokens),
+        authoredContextTokens: asPositiveFiniteNumber(modelContext.authoredContextTokens),
       }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
@@ -297,23 +300,19 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-function resolveGatewaySessionActiveModel(params: {
+export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
-  agentId?: string;
+  agentId: string;
   storeAgentId?: string;
   sessionId?: string;
   sessionKey: string;
   projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel?: { provider: string; model: string };
-  modelSource?: GatewaySessionModelSource;
+  selectedModel: { provider: string; model: string };
   entry?: InternalSessionEntry;
-  storePath?: string;
+  storePath: string;
 }): { provider: string; model: string } | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
   const liveModel = resolveProjectedAgentRunModel({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -322,22 +321,10 @@ function resolveGatewaySessionActiveModel(params: {
   if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
     return liveModel ?? undefined;
   }
-  if (!params.entry?.fallbackNotice || params.storePath === undefined) {
+  if (!params.entry?.fallbackNotice) {
     return undefined;
   }
-  const selectedModel =
-    params.selectedModel ??
-    (params.modelSource
-      ? resolveSessionSelectedModelRef({
-          cfg: params.cfg,
-          source: params.modelSource,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        })
-      : undefined);
-  if (!selectedModel) {
-    return undefined;
-  }
+  const { selectedModel } = params;
 
   const fallbackEntry =
     params.activeModel === undefined
@@ -435,7 +422,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
       ? entry.pinnedAt
       : undefined;
-  const compactionSummary = resolveSessionCompactionSummary(entry);
 
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
@@ -551,6 +537,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     endedAt: undefined,
     runtimeMs: undefined,
     lastRunError: entry?.lastRunError,
+    providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
@@ -592,8 +579,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastTo: deliveryFields.lastTo,
     lastAccountId: deliveryFields.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId,
-    compactionCheckpointCount: compactionSummary.compactionCheckpointCount,
-    latestCompactionCheckpoint: compactionSummary.latestCompactionCheckpoint,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
   return { row, source: input };

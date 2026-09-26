@@ -24,7 +24,7 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
 
 vi.mock("../loading/workspace-skill-loader.js", () => {
   return {
-    loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+    prepareWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
   };
 });
 
@@ -361,39 +361,6 @@ describe("skills-install fallback edge cases", () => {
     }
   });
 
-  it("routes existing Go installs to the restart-stable user bin without changing Go config", async () => {
-    process.env.PATH = "/usr/bin";
-    process.env.GOBIN = "/operator/go/bin";
-    process.env.GOPATH = "/operator/go";
-    mockAvailableBinaries(["go", "brew"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-      signal: null,
-      killed: false,
-    });
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    const installCall = commandCallAt(0);
-    expect(installCall[0]).toEqual(["go", "install", "example.com/tool@latest"]);
-    const localBin = path.join(os.homedir(), ".local", "bin");
-    expect(installCall[1].env).toMatchObject({
-      GOBIN: localBin,
-      PATH: ["/usr/bin", localBin].join(path.delimiter),
-    });
-    expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
-    expect(process.env.GOBIN).toBe("/operator/go/bin");
-    expect(process.env.GOPATH).toBe("/operator/go");
-  });
-
   describe("resolveInstallerKindReadiness", () => {
     it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
       await withUid(1000, async () => {
@@ -489,30 +456,19 @@ describe("skills-install fallback edge cases", () => {
       expectLocalGoVersionEnvCall(0);
     });
 
-    it("keeps usable Go ready without consulting brew or apt", async () => {
-      mockAvailableBinaries(["go"]);
-      mockLocalGoVersion();
+    it("checks the local compiler independently of a configured Go toolchain", async () => {
+      const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
+      try {
+        process.env.GOTOOLCHAIN = "go1.22.4";
+        mockAvailableBinaries(["go"]);
+        mockLocalGoVersion();
 
-      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-      expectLocalGoVersionEnvCall(0);
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+        expectLocalGoVersionEnvCall(0);
+      } finally {
+        envSnapshot.restore();
+      }
     });
-
-    it.each(["local", "path", "go1.22.4", "asdf+auto"])(
-      "keeps a supported local compiler ready with GOTOOLCHAIN=%s",
-      async (toolchain) => {
-        const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
-        try {
-          process.env.GOTOOLCHAIN = toolchain;
-          mockAvailableBinaries(["go"]);
-          mockLocalGoVersion();
-
-          expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-          expectLocalGoVersionEnvCall(0);
-        } finally {
-          envSnapshot.restore();
-        }
-      },
-    );
 
     it("mirrors uv and brew fallbacks and passes unknown kinds through", async () => {
       mockAvailableBinaries([]);
@@ -724,7 +680,7 @@ describe("skills-install fallback edge cases", () => {
       process.env.PATH = "/usr/bin";
       process.env.GOBIN = "/operator/go/bin";
       process.env.GOPATH = "/operator/go";
-      mockAvailableBinaries(["go"]);
+      mockAvailableBinaries(["go", "brew"]);
       runCommandWithTimeoutMock.mockResolvedValueOnce({
         code: 0,
         stdout: "installed",
@@ -747,6 +703,7 @@ describe("skills-install fallback edge cases", () => {
         PATH: ["/usr/bin", localBin].join(path.delimiter),
       });
       expect(options.env).not.toHaveProperty("GOTOOLCHAIN");
+      expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
       expect(process.env.GOBIN).toBe("/operator/go/bin");
       expect(process.env.GOPATH).toBe("/operator/go");
     } finally {

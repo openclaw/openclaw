@@ -42,15 +42,22 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 
 ## Notes
 
-- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported.
+- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the canonical SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no canonical databases were captured (for example, a config-only export), not a full database recovery point.
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
-- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and unsafe symbolic links, confirms every manifest-declared payload exists, and validates the root SQLite snapshot and agent snapshots listed in its durable registry. It rejects sidecars for those snapshots and checks their integrity and database roles. Other files, including plugin snapshots already validated during creation, remain opaque during verification and restore. `openclaw backup create --verify` runs that validation immediately after writing the archive.
+- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and unsafe symbolic links, confirms every manifest-declared payload exists, and validates the root SQLite snapshot and agent snapshots listed in the manifest or captured durable registry. It rejects sidecars for those snapshots and checks their integrity and database roles, including each agent's identity. Other files, including plugin snapshots already validated during creation, remain opaque during verification and restore. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - Full archives include the active config and its required `$include` files, including dependencies outside the state directory. They preserve authored bytes, comments, and environment placeholders; resolved secrets are not written into the config copy. These additional files may contain sensitive data, so protect the archive accordingly.
 - AppleDouble metadata named `._*.sqlite`, such as `._cron.sqlite`, is excluded from state and agent database roots only when its file signature confirms the format. Real SQLite files and hardlink aliases with these names follow the same ownership rules as other databases.
 - Full archives refuse unresolved include graphs, files that change during config capture, and include aliases that cannot be represented safely. Fix missing or unreadable files, use regular-file include paths, or pause concurrent edits and retry. `--no-include-workspace` still includes required config dependencies, even within an excluded workspace.
 - `openclaw backup create --only-config` backs up just the active JSON config file, **not** its `$include` dependencies. It is a root-file export, not a complete modular-config recovery point.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
+
+Archive members live beneath a timestamped root and `payload/`, with source paths
+encoded below it. Counting entries beginning `.openclaw/agents/` therefore returns
+zero even when the agent databases are present. Inspect the root `manifest.json`
+and its `sqliteSnapshots` inventory, then run `openclaw backup verify <archive>`.
+A path reported as `covered by` another asset is included through that parent;
+it has not been excluded from the archive.
 
 ## Restore a full archive
 
@@ -335,6 +342,12 @@ sources. A custom agent root becomes a distinct `agent` asset only when no
 existing asset covers it; the manifest still records its agent id and root when
 another asset contains it. Missing paths are reported as skipped.
 
+A workspace can contain the state directory, including when the workspace is
+your home directory. A `covered` skip means that the enclosing asset includes
+those files. Repeated registrations of the same agent database resolve to one
+physical owner; distinct owners sharing one database still refuse the backup.
+This also applies with `--no-include-workspace`.
+
 Legacy audit raw archives, import claims, and scrub journals are excluded as raw
 files; recoverable audit sources receive sanitized backup replacements. Their
 `.quarantined-*` variants remain excluded and are retained locally without being
@@ -364,10 +377,17 @@ If an entry disappears during traversal or before it can be opened, the archive 
 Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
 
 Managed SQLite snapshots cover the shared OpenClaw database, the quarantine and
-integrity-verification store, per-agent databases
-recorded in the captured durable agent registry, and SQLite files under activated plugins'
-declared `backupResources` with `disposition: "include"`. A file's location under
-the state directory or an agent directory alone does not make it managed.
+integrity-verification store, and per-agent databases declared by configuration,
+recorded in the captured durable agent registry, or discovered at
+`<stateDir>/agents/<agentId>/agent/openclaw-agent.sqlite`. This includes configured
+custom `agentDir` locations and databases left in the default location after an
+agent moves or is removed from configuration. Distinct databases belonging to
+the same agent are captured separately. `--no-include-workspace` preserves this
+database coverage.
+
+SQLite files under activated plugins' declared `backupResources` with
+`disposition: "include"` also receive managed snapshots. Other filenames under
+the state directory or an agent directory alone do not establish SQLite ownership.
 
 Managed databases are captured with SQLite's online backup API and compacted
 offline with `VACUUM`. Committed write-ahead log (WAL) changes are included,
@@ -387,14 +407,16 @@ validating the database. These copies do not have a live-database consistency or
 deleted-data removal guarantee. Use the owning application's backup procedure
 when you need those guarantees.
 
-Hardlinks to a declared plugin SQLite database share one captured image, stored
+Hardlinks to a managed SQLite database share one captured image, stored
 as a separate regular archive entry for each name. Every hardlink must be an
-included SQLite file within declared plugin backup resources. If exactly
+included SQLite file owned by the core inventory or declared plugin backup resources. If exactly
 one name has a nonempty write-ahead log (WAL), that
 name supplies the committed data. Closed databases without a nonempty WAL remain
 supported. Multiple nonempty WALs, a nonempty rollback journal, or hardlinks
 outside the backup inventory cause an explicit refusal with no archive. Close
-the database writers cleanly and declare every hardlink in those resources before retrying.
+the database writers cleanly and include every hardlink in those resources before retrying.
+Changes to the shared database file during capture also refuse the backup, including
+a concurrent alias checkpoint that truncates its WAL before the journal checks repeat.
 Canonical OpenClaw database aliases retain their existing owner validation and
 sanitization.
 
@@ -444,6 +466,28 @@ OpenClaw does not enforce a built-in maximum backup size or per-file size limit.
 If final-directory durability confirmation fails after publication, the command reports failure but preserves the complete final entry rather than risk deleting a concurrent replacement.
 
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.
+
+Archive creation holds a SQLite lifetime transaction for its temporary
+`openclaw-backup-owned-*` scratch directory. The next backup run removes abandoned
+scratch only after acquiring exclusive custody; a running backup keeps its
+scratch even when it is old. Cleanup failures preserve the published archive
+and appear as warnings with the scratch path in both text and JSON output.
+The owned prefix also lets cleanup coordinate with a new creator before its
+token exists, without mistaking that allocation for legacy scratch.
+If cleanup wins before the creator claims its directory, creation retries with
+a fresh directory. A changed directory identity is still rejected.
+Scratch observed by the scan that disappears before cleanup is recorded as
+already reclaimed, without a warning or a claim that this pass removed it.
+
+`openclaw doctor` reports scratch in the active temporary directory and recorded
+archive destination directories. `openclaw doctor --fix` removes recognized
+scratch whose lifetime transaction has ended. Unknown contents, symbolic links,
+and legacy directories without a lifetime token are preserved with guidance for
+inspection. Older releases do not create these tokens, so stop older backup
+processes before manually removing their reported scratch directories.
+Published archives and package rollback backups are outside this cleanup.
+Retired scratch is renamed to `openclaw-backup-retired-*` before deletion so a
+later pass can finish partial cleanup even after the lifetime token is gone.
 
 ## Related
 

@@ -97,6 +97,8 @@ Optional request headers:
 
 `/v1/models` lists top-level agent targets (`openclaw`, `openclaw/default`, `openclaw/<agentId>`), not backend provider models and not sub-agents; sub-agents stay internal execution topology. If you omit `x-openclaw-model`, the selected agent runs with its normal configured model.
 
+The model list and detail endpoints require `operator.read` or a scope that includes it because they expose the global agent target inventory.
+
 `/v1/embeddings` uses the same agent-target `model` ids. Send `x-openclaw-model` (from a shared-secret caller, or an identity-bearing caller with `operator.admin`) to pick a specific embedding model; otherwise the request uses the selected agent's normal embedding setup.
 
 ## Session behavior

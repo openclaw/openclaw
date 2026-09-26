@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveXaiCatalogEntry } from "../model-definitions.js";
+import { isXaiGrokReleaseAtLeast } from "../model-id.js";
 import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
@@ -64,7 +65,7 @@ export function resolveXaiToolDefaultReasoningEffort(
   preferred: "none" | "low",
 ): "none" | "low" | undefined {
   // Per-model tool defaults must survive changes to the setup default.
-  return model === "grok-4.3" || model === "grok-4.6" ? preferred : undefined;
+  return model === "grok-4.3" || isXaiGrokReleaseAtLeast(model, [4, 6]) ? preferred : undefined;
 }
 
 function buildXaiResponsesToolBody(params: {

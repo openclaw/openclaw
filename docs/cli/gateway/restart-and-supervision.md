@@ -68,7 +68,15 @@ the refusal, and deep status reports it instead of an unavailable shutdown recor
 Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 
-`--force` skips the active-work drain and requests cancellation of active cron runs before cleanup. The normal shutdown path still joins accepted work; existing shutdown deadlines still apply. Plain `restart` normally uses the service-manager restart path.
+`--force` begins restart immediately and closes new admissions. The current CLI supplies the normal drain budget, capped by the native service shutdown deadline. Only work remaining at that deadline is canceled before cleanup. A safe restart whose deferral budget has already expired does not get a second drain budget. Plain `restart` normally uses the service-manager restart path.
+
+Forced requests from older callers that supply no drain budget get at most
+45 seconds to drain. Their 60-second replacement window reserves 10 seconds for
+cleanup and 5 seconds for replacement. This applies to interactive and update
+callers alike. If work remains when the drain expires, the Gateway records a
+warning with the remaining work categories in its restart history and log, then
+cancels that work through normal terminal recovery. Callers that supply a budget
+retain that budget, subject to native service deadlines.
 
 During an upgrade, restart records its reason and drain options in the existing
 Gateway state without starting a schema migration while the old Gateway is still
@@ -114,6 +122,10 @@ Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor s
 On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
 
 Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
+
+On Linux, discovery also recognizes legacy `openclaw-<profile>` unit names. A custom system unit can belong to the default installation when its OpenClaw launcher, service account, profile, and state/config paths identify that installation. Discovery uses systemd's effective command and environment, including drop-ins and environment files. If multiple custom units match or a wrapper makes their identity unclear, specify the intended unit with `OPENCLAW_SYSTEMD_UNIT`; OpenClaw does not choose the first unit carrying its marker.
+
+Doctor offers duplicate user-unit cleanup only when both managers' loaded Gateway commands identify the selected account, profile, state/config paths, and matching port selection. It rechecks the units after confirmation. Different or unverifiable identities leave the user unit in place. Cleanup removes only the confirmed user unit, then reports any remaining matching user unit or unverifiable discovery; another unit requires its own inspection and confirmation on a later Doctor run.
 
 On Linux, `openclaw gateway install --force` refuses a sealed systemd service
 definition, or one whose write authority cannot be verified, before changing

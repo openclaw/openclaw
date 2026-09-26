@@ -1,8 +1,9 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import { supportsCurrentWorkerLaunch, verifyWorkerAdmissionHandshake } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "./admission.js";
 import {
   DevicePlacementUnavailableError,
   resolveDevicePlacementEligibility,
@@ -33,7 +34,8 @@ import {
   type WorkerPlacementAuthorization,
   type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
-import type { WorkerEnvironmentReconcileCore, WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 
 export type WorkerPlacementRecoveryBarrier = (params: {
@@ -77,10 +79,10 @@ export function createWorkerPlacementDispatchStartup(options: {
 }) {
   const { environments, failure, placements } = options;
 
-  const retainInterruptedProvisioning = (
+  const retainInterruptedProvisioning = async (
     owned: WorkerDispatchPlacement,
     error: unknown,
-  ): WorkerDispatchPlacement | undefined => {
+  ): Promise<WorkerDispatchPlacement | undefined> => {
     const current = placements.get(owned.sessionId);
     if (
       error instanceof WorkerPlacementAdmissionTargetError ||
@@ -100,9 +102,26 @@ export function createWorkerPlacementDispatchStartup(options: {
     if (!environment || !isPendingProvisioningEnvironment(environment, current.environmentId)) {
       return undefined;
     }
-    // No await between owner validation and recording: shutdown retains this exact operation,
-    // while explicit Stop's durable destroy intent must always win.
-    environments.recordError(environment, error);
+    const assertCurrent = () => {
+      const latest = placements.get(owned.sessionId);
+      if (
+        latest?.state !== current.state ||
+        latest.generation !== current.generation ||
+        latest.environmentId !== current.environmentId ||
+        latest.sessionKey !== current.sessionKey ||
+        latest.agentId !== current.agentId ||
+        latest.executionMode !== current.executionMode ||
+        !isPendingProvisioningEnvironment(
+          environments.get(environment.environmentId),
+          current.environmentId,
+        )
+      ) {
+        throw new Error("Worker provisioning owner changed before shutdown retention");
+      }
+    };
+    // Explicit Stop must win while the diagnostic waits for the database worker.
+    await environments.recordError(environment, error, assertCurrent);
+    assertCurrent();
     return current;
   };
 
@@ -190,7 +209,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         !environment.leaseId ||
         !environment.bootstrapReceipt ||
         !supportsCurrentWorkerLaunch(environment.bootstrapReceipt) ||
-        !verifyWorkerAdmissionHandshake(environment.bootstrapReceipt, expectedBuild)
+        !sameWorkerBuild(environment.bootstrapReceipt, expectedBuild)
       ) {
         continue;
       }
@@ -544,7 +563,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     const handleRecoveryFailure = async (
       error: unknown,
     ): Promise<WorkerDispatchPlacement | undefined> => {
-      const retained = retainInterruptedProvisioning(recoveryOwnedPlacement, error);
+      const retained = await retainInterruptedProvisioning(recoveryOwnedPlacement, error);
       if (retained) {
         report(retained);
         interruptedByShutdown = true;

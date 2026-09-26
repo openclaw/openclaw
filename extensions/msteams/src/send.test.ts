@@ -122,39 +122,12 @@ vi.mock("./sdk-proactive.js", () => ({
   deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
 }));
 
-function createMockApp(overrides?: {
-  send?: ReturnType<typeof vi.fn>;
-  update?: ReturnType<typeof vi.fn>;
-  delete?: ReturnType<typeof vi.fn>;
-}) {
-  const sendFn = overrides?.send ?? vi.fn(async () => ({ id: "message-1" }));
-  const updateFn = overrides?.update ?? vi.fn(async () => ({ id: "updated" }));
-  const deleteFn = overrides?.delete ?? vi.fn(async () => {});
-  return {
-    send: sendFn,
-    api: {
-      conversations: {
-        activities: () => ({
-          create: sendFn,
-          update: updateFn,
-          delete: deleteFn,
-        }),
-      },
-    },
-  };
-}
-
 function mockProactiveSendContextFailure(error: string) {
   mockState.sendMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
   mockState.updateMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
   mockState.deleteMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
-  const failingApp = createMockApp({
-    send: vi.fn().mockRejectedValue(new Error(error)),
-    update: vi.fn().mockRejectedValue(new Error(error)),
-    delete: vi.fn().mockRejectedValue(new Error(error)),
-  });
   mockState.resolveMSTeamsSendContext.mockResolvedValue({
-    app: failingApp,
+    app: { id: "failing-app" },
     appId: "app-id",
     conversationId: "19:conversation@thread.tacv2",
     ref: {
@@ -172,7 +145,7 @@ function mockProactiveSendContextFailure(error: string) {
 
 function createSharePointSendContext(params: { conversationId: string; siteId: string }) {
   return {
-    app: createMockApp(),
+    app: { id: "sharepoint-app" },
     appId: "app-id",
     conversationId: params.conversationId,
     ref: {},
@@ -265,7 +238,7 @@ describe("sendMessageMSTeams", () => {
     mockState.extractFilename.mockResolvedValue("fallback.bin");
     mockState.requiresFileConsent.mockReturnValue(false);
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      app: createMockApp(),
+      app: { id: "send-app" },
       appId: "app-id",
       conversationId: "19:conversation@thread.tacv2",
       ref: {},
@@ -633,8 +606,7 @@ describe("editMessageMSTeams", () => {
   });
 
   it("updates with the resolved Teams conversation reference", async () => {
-    const mockUpdateActivity = vi.fn(async () => ({ id: "updated" }));
-    const mockApp = createMockApp({ update: mockUpdateActivity });
+    const mockApp = { id: "edit-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "app-id",
@@ -699,7 +671,7 @@ describe("editMessageMSTeams", () => {
   });
 
   it("updates an existing activity with a replacement Adaptive Card", async () => {
-    const mockApp = createMockApp();
+    const mockApp = { id: "adaptive-card-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       conversationId: "19:conversation@thread.tacv2",
@@ -739,8 +711,7 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("deletes with the resolved Teams conversation reference", async () => {
-    const mockDeleteActivity = vi.fn(async () => {});
-    const mockApp = createMockApp({ delete: mockDeleteActivity });
+    const mockApp = { id: "delete-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "app-id",
@@ -789,8 +760,7 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("uses app from the resolved context for delete operations", async () => {
-    const mockDeleteActivity = vi.fn(async () => {});
-    const mockApp = createMockApp({ delete: mockDeleteActivity });
+    const mockApp = { id: "context-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "my-app-id",

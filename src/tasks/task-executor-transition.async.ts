@@ -3,30 +3,40 @@ import {
   finishTaskMutation,
   retainTaskMutationFlowEffects,
 } from "./task-executor-mutation-effects.async.js";
-import type { CoreTaskCreation } from "./task-executor.types.js";
+import type { TaskMutationContext } from "./task-executor.types.js";
 import type { TaskInitialWorkerCommand } from "./task-initial-worker.types.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { isEquivalentTaskRecord, matchesTaskPersistenceReceipt } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   assertTaskRegistryOwnerCurrent,
   runTaskRegistryWorkerMutation,
   tasks,
 } from "./task-registry-state.js";
 import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
 
 /** Acknowledging a row does not mean its publication and required effects have settled. */
 export async function settleTaskRecordTransitionAsync(
-  creation: CoreTaskCreation,
+  creation: TaskMutationContext,
   command: Extract<
     TaskInitialWorkerCommand,
-    { type: "tasks.settleUnstarted" | "tasks.finalizeActive" }
+    {
+      type:
+        | "tasks.bindRunOwner"
+        | "tasks.maintainCron"
+        | "tasks.transitionRunRow"
+        | "tasks.settleUnstarted"
+        | "tasks.finalizeActive"
+        | "tasks.acknowledgeStateChange"
+        | "tasks.updateNotificationDelivery";
+    }
   >,
   assertCurrent: () => void,
 ): Promise<{
@@ -34,20 +44,30 @@ export async function settleTaskRecordTransitionAsync(
   publicationSettled: boolean;
 }> {
   const { context, store, flowStore, assertStores } = creation;
-  const { taskId, expectedTask } = command.input;
+  const { taskId } = command.input;
   assertCurrent();
   // Activity observers may reenter persistence, so flush before worker admission.
-  try {
-    assertTaskRegistryOwnerCurrent(context, store);
-    const projected = tasks.get(taskId);
-    if (projected && matchesTaskPersistenceReceipt(projected, expectedTask)) {
-      flushTaskActivity(taskId);
+  if (
+    command.type === "tasks.settleUnstarted" ||
+    command.type === "tasks.finalizeActive" ||
+    (command.type === "tasks.transitionRunRow" &&
+      command.input.kind === "state" &&
+      command.input.params.status !== undefined &&
+      isTerminalTaskStatus(command.input.params.status))
+  ) {
+    const { expectedTask } = command.input;
+    try {
+      assertTaskRegistryOwnerCurrent(context, store);
+      const projected = tasks.get(taskId);
+      if (projected && matchesTaskPersistenceReceipt(projected, expectedTask)) {
+        flushTaskActivity(taskId);
+      }
+    } catch (error) {
+      log.warn("Retained task transition no longer owns the active activity projection", {
+        taskId,
+        error,
+      });
     }
-  } catch (error) {
-    log.warn("Retained task transition no longer owns the active activity projection", {
-      taskId,
-      error,
-    });
   }
   assertCurrent();
   const scope = { taskId };
@@ -59,12 +79,13 @@ export async function settleTaskRecordTransitionAsync(
     {
       scope,
       admission: context.admission,
+      readIdentity: "preserved",
       taskRowsWritten: () => committed?.persisted ?? false,
       publicationRecords: () =>
         new Map<string, TaskRecord>(committed ? [[committed.task.taskId, committed.task]] : []),
       beforeObservers: async () => {
         flowHookEntered = true;
-        if (committed) {
+        if (committed && (command.type !== "tasks.bindRunOwner" || committed.persisted)) {
           const current = tasks.get(taskId);
           if (
             committed.becomesTerminal &&
@@ -82,7 +103,10 @@ export async function settleTaskRecordTransitionAsync(
       onPublicationError: () => {
         publicationFailed = true;
       },
-      forcePublish: () => committed?.task,
+      forcePublish: () =>
+        command.type === "tasks.bindRunOwner" && !committed?.persisted
+          ? undefined
+          : committed?.task,
     },
     async () => {
       const result = await store.runInitialMutationAsync(context, command, assertCurrent);
@@ -91,14 +115,24 @@ export async function settleTaskRecordTransitionAsync(
     },
     () => store.loadMutationSnapshotAsync(context, scope),
   );
-  if (!flowHookEntered && settled) {
+  if (!flowHookEntered && settled && (command.type !== "tasks.bindRunOwner" || settled.persisted)) {
     retainTaskMutationFlowEffects(context, store, flowStore, settled.task, "update");
   }
   if (settled?.deliver && settled.task.deliveryStatus !== "not_applicable") {
     try {
       assertTaskRegistryOwnerCurrent(context, store);
-      void maybeDeliverTaskStateChangeUpdate(taskId, settled.nextEvent);
-      void maybeDeliverTaskTerminalUpdate(taskId);
+      const observePublication = (publication: Promise<TaskRecord | null>) => {
+        void publication.catch((error: unknown) => {
+          log.warn("Committed task transition could not complete delivery publication", {
+            taskId,
+            error,
+          });
+        });
+      };
+      if (command.type !== "tasks.maintainCron") {
+        observePublication(maybeDeliverTaskStateChangeUpdate(settled.task, settled.nextEvent));
+      }
+      observePublication(maybeDeliverTaskTerminalUpdate(taskId));
     } catch (error) {
       log.warn("Committed task transition could not admit delivery publication", { taskId, error });
     }

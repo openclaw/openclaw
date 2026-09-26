@@ -17,6 +17,7 @@ const cases = [
     rule: "openclaw-boundaries/no-widen-then-assert",
     violation: `${FIXTURES}/widen-then-assert-violation.test.ts`,
     violations: 3,
+    lines: [3, 7, 13],
   },
   {
     rule: "openclaw-boundaries/no-chained-type-assertions",
@@ -26,7 +27,12 @@ const cases = [
 ];
 
 describe("oxlint boundary guards", () => {
-  let diagnostics: Array<{ filename: string; code: string; severity: string }>;
+  let diagnostics: Array<{
+    filename: string;
+    code: string;
+    severity: string;
+    labels: Array<{ span: { line: number } }>;
+  }>;
 
   beforeAll(() => {
     const violation = spawnSync(
@@ -62,5 +68,10 @@ describe("oxlint boundary guards", () => {
     expect(matching.map((diagnostic) => diagnostic.severity)).toEqual(
       Array(testCase.violations).fill("error"),
     );
+    if (testCase.lines) {
+      expect(matching.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual(
+        expect.arrayContaining(testCase.lines),
+      );
+    }
   });
 });

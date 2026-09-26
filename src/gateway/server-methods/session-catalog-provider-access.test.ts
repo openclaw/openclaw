@@ -18,6 +18,33 @@ import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
 import { listSessionCatalogProvider } from "./session-catalog-provider-access.js";
 
 describe("session catalog provider admission", () => {
+  it("starts fast providers while four distinct slow providers remain unsettled", async () => {
+    const gate = createDeferredCore<SessionCatalogHost[]>();
+    const slow: SessionCatalogProvider = {
+      id: "slow-catalog",
+      label: "Slow catalog",
+      list: vi.fn(() => gate.promise),
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+    };
+    const healthy: SessionCatalogProvider = {
+      ...slow,
+      id: "healthy-catalog",
+      list: vi.fn(async () => []),
+    };
+    const held = Array.from({ length: 4 }, (_, index) =>
+      listSessionCatalogProvider({ ...slow, id: `slow-catalog-${index}` }, {}),
+    );
+    const result = listSessionCatalogProvider(healthy, {});
+    try {
+      expect(healthy.list).toHaveBeenCalledOnce();
+      expect(slow.list).toHaveBeenCalledTimes(4);
+      await expect(result).resolves.toEqual([]);
+    } finally {
+      gate.resolve([]);
+      await Promise.allSettled([...held, result]);
+    }
+  });
+
   it("preserves the queued caller's plugin scope and retained Gateway root", async () => {
     resetGatewayWorkAdmission();
     const predecessor = tryBeginGatewayRootWorkAdmission("catalog-predecessor")!;
@@ -45,7 +72,12 @@ describe("session catalog provider admission", () => {
     const active = predecessor.run(async () =>
       withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: firstRegistry, pluginId: "first-owner", isWebchatConnect: () => false },
-        () => Promise.all(Array.from({ length: 4 }, () => listSessionCatalogProvider(blocker, {}))),
+        () =>
+          Promise.all(
+            Array.from({ length: 16 }, (_, index) =>
+              listSessionCatalogProvider({ ...blocker, id: `blocking-catalog-${index}` }, {}),
+            ),
+          ),
       ),
     );
     const pending = requester.run(async () =>
@@ -55,7 +87,7 @@ describe("session catalog provider admission", () => {
       ),
     );
     try {
-      expect(blocker.list).toHaveBeenCalledTimes(4);
+      expect(blocker.list).toHaveBeenCalledTimes(16);
       expect(queued.list).not.toHaveBeenCalled();
       gate.resolve([]);
       await Promise.all([active, pending]);
@@ -95,8 +127,11 @@ describe("session catalog provider admission", () => {
       const queued = { ...blocker, id: "retired-catalog", list: vi.fn(async () => []) };
       const successor = { ...blocker, id: "live-catalog", list: vi.fn(async () => []) };
       const activeOwner = new AbortController();
-      const active = Array.from({ length: 4 }, () =>
-        listSessionCatalogProvider(blocker, { signal: activeOwner.signal }),
+      const active = Array.from({ length: 16 }, (_, index) =>
+        listSessionCatalogProvider(
+          { ...blocker, id: `blocking-catalog-${index}` },
+          { signal: activeOwner.signal },
+        ),
       );
       const owner = new AbortController();
       const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal], [queued.id]);
@@ -118,7 +153,7 @@ describe("session catalog provider admission", () => {
       let nextError: unknown;
       let next: Promise<SessionCatalogHost[] | undefined> | undefined;
       try {
-        expect(blocker.list).toHaveBeenCalledTimes(4);
+        expect(blocker.list).toHaveBeenCalledTimes(16);
         expect(queued.list).not.toHaveBeenCalled();
         await expect
           .soft(listSessionCatalogProvider(queued, { signal: AbortSignal.abort(retirement) }))

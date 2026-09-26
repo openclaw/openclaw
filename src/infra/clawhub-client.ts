@@ -25,16 +25,19 @@ const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
 export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export type ClawHubRequestParams = {
+export type ClawHubFetchOptions = {
   baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: ClawHubFetch;
+};
+
+export type ClawHubRequestParams = ClawHubFetchOptions & {
   path?: string;
   url?: string;
   method?: "GET" | "POST";
   json?: unknown;
-  token?: string;
-  timeoutMs?: number;
   search?: Record<string, string | undefined>;
-  fetchImpl?: ClawHubFetch;
   skipAuth?: boolean;
   retryTransientReads?: boolean;
   headers?: Record<string, string>;
@@ -175,23 +178,18 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
 }
 
 function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search" | "url">): URL {
+  let url: URL;
   if (params.url) {
-    const url = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
-    for (const [key, value] of Object.entries(params.search ?? {})) {
-      if (!value) {
-        continue;
-      }
-      url.searchParams.set(key, value);
+    url = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
+  } else {
+    if (!params.path) {
+      throw new Error("ClawHub request path is required");
     }
-    return url;
+    url = new URL(`${normalizeBaseUrl(params.baseUrl)}/`);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
+    url.pathname = `${basePath}${requestPath}`;
   }
-  if (!params.path) {
-    throw new Error("ClawHub request path is required");
-  }
-  const url = new URL(`${normalizeBaseUrl(params.baseUrl)}/`);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
-  url.pathname = `${basePath}${requestPath}`;
   for (const [key, value] of Object.entries(params.search ?? {})) {
     if (!value) {
       continue;

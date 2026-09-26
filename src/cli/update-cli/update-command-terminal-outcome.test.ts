@@ -26,7 +26,8 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
@@ -34,6 +35,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
+  mockVerifiedGatewayRun,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
 import {
@@ -43,6 +45,12 @@ import {
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
+
+vi.mock("../../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-lock.js")>()),
+  readActiveGatewayLockPort: async () => 19101,
+}));
 
 // Keep the finalizer, swap/completion, executor, SQLite lease, ledger, and both
 // report consumers real. Unrelated plugin/native work has already succeeded.
@@ -71,6 +79,7 @@ let temporary: string;
 let jsonOutput: unknown[];
 let humanOutput: string[];
 beforeEach(async () => {
+  vi.mocked(verifyUpdatedGateway).mockReset();
   base = await fs.realpath(dirs.make("update-terminal-outcome-"));
   temporary = path.join(base, "private-tmp");
   await fs.mkdir(temporary, { mode: 0o700 });
@@ -235,7 +244,7 @@ async function scenario(
     runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
     env: { ...process.env },
   };
-  const rm = fs.rm.bind(fs);
+  const rmdir = fs.rmdir.bind(fs);
   const rename = fs.rename.bind(fs);
   const unlink = fs.unlink.bind(fs);
   const readlink = fs.readlink.bind(fs);
@@ -278,15 +287,16 @@ async function scenario(
     );
     injected = true;
   }
-  vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+  vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
     if (String(args[0]) === swap.transaction.backupRoot) {
       if (kind === "renamed" || kind === "retained") {
+        expect(await fs.readdir(swap.transaction.backupRoot)).toEqual([]);
         injected = true;
         throw Object.assign(new Error("fixture obsolete backup deletion denied"), {
           code: "EACCES",
         });
       }
-      await rm(...args);
+      await rmdir(...args);
       if (kind === "cleanup-read") {
         failNextLeaseRead = true;
       }
@@ -303,7 +313,7 @@ async function scenario(
       }
       return;
     }
-    await rm(...args);
+    await rmdir(...args);
     if (kind === "last-cleanup-read" && String(args[0]) === finalCleanupRoot) {
       failNextLeaseRead = true;
     }
@@ -380,6 +390,9 @@ async function scenario(
         );
       }
       try {
+        if (preparedRecovery) {
+          mockVerifiedGatewayRun(run);
+        }
         await finishSuccessfulPackageSwitch(
           { packageRoot: swap.packageRoot, run, json },
           {
@@ -639,6 +652,7 @@ describe("composed cleanup and terminal outcome", () => {
     "keeps repeated completion truthful for %s backup",
     async (kind) => {
       const value = await scenario(kind, true, true);
+      expect(value.injected).toBe(true);
       expect(value.retainedExists).toBe(true);
       expect(value.repeatedCompletion).toMatchObject({
         exitCode: 1,
@@ -679,7 +693,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
     expect(value.retainedExists).toBe(true);
     expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
-    // Hard failures use the canonical bounded summary; JSON above retains the full path.
+    // The recovery location survives separately from the bounded failure cause.
     expect(JSON.stringify(value.history)).toContain(path.basename(value.expectedRetained));
     expect(value.report).toContain(path.basename(value.expectedRetained));
     expect(
@@ -741,6 +755,7 @@ describe("composed cleanup and terminal outcome", () => {
   );
   it("preserves foreign terminal history and emits only the pending failure", async () => {
     const value = await scenario("foreign-revoked", true);
+    expect(value.injected).toBe(true);
     expect(value.exitCode).toBe(1);
     expect(value.jsonOutput).toHaveLength(1);
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });

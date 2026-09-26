@@ -1,8 +1,25 @@
 {
   "extends": "../tsconfig.json",
+  // This editor/lint graph includes tests; retain their compatibility augmentation.
+  "files": ["config/sessions/session-entry.test-compat.d.ts"],
   "compilerOptions": {
     "allowJs": true
   },
-  // Oxlint discovers this project for CommonJS test preloads; other sources use the root project.
-  "include": ["**/*.test-support.cjs"]
+  // Keep lint's source graph separate from UI and plugins, including shared ambient types.
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+    "**/*.test-support.cjs",
+    "../packages/**/*.d.ts",
+    "../packages/**/*.d.mts",
+    "../packages/**/*.d.cts",
+    "../ui/**/*.d.ts",
+    "../ui/**/*.d.mts",
+    "../ui/**/*.d.cts",
+    "../extensions/**/*.d.ts",
+    "../extensions/**/*.d.mts",
+    "../extensions/**/*.d.cts"
+  ]
 }

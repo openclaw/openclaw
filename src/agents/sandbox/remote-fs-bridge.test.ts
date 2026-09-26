@@ -2,10 +2,10 @@
 // the pinned mutation helper and remote stat/path guards.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "@openclaw/fs-safe/guest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "../../infra/guest-filesystem.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
 import { resolveSandboxFileMutationQueueKey } from "./file-mutation-identity.js";

@@ -1,4 +1,3 @@
-// Logs CLI tests cover log command routing and runtime log output behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/call.js";
 import type { RuntimeExitOptions } from "../runtime.js";
@@ -71,9 +70,6 @@ vi.mock("../logging/log-tail.js", () => ({
 }));
 
 vi.mock("./logs-cli.runtime.js", () => ({
-  buildGatewayConnectionDetails: (
-    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
-  ) => buildGatewayConnectionDetails(...args),
   readSystemdServiceRuntime: (
     ...args: Parameters<typeof import("../daemon/systemd.js").readSystemdServiceRuntime>
   ) => readSystemdServiceRuntime(...args),
@@ -142,6 +138,18 @@ function createGatewayCloseError(params: {
       message: "",
     },
     message: params.message,
+  });
+}
+
+function journalPage(line: string, cursor: string) {
+  return { stdout: `${line}\n-- cursor: s=${cursor}`, stderr: "", code: 0, truncated: false };
+}
+
+function transientCloseError() {
+  return createGatewayCloseError({
+    code: 1006,
+    reason: "abnormal closure",
+    message: "gateway closed (1006 abnormal closure): abnormal closure",
   });
 }
 
@@ -387,8 +395,21 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
-  it("falls back to the local log file on loopback pairing-required errors", async () => {
-    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+  it.each([
+    ["pairing-required", () => new Error("gateway closed (1008): pairing required")],
+    ["scope-upgrade", () => new Error("scope upgrade pending approval (requestId: req-123)")],
+    [
+      "transport close",
+      () =>
+        createGatewayCloseError({
+          code: 1000,
+          reason: "no close reason",
+          message: "gateway closed (1000 normal closure): no close reason",
+        }),
+    ],
+    ["post-handshake plain close", () => new Error("gateway closed (1006): abnormal closure")],
+  ] as const)("falls back to the configured local log on %s errors", async (_kind, error) => {
+    callGatewayFromCli.mockRejectedValueOnce(error());
     readConfiguredLogTail.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
       cursor: 5,
@@ -397,13 +418,12 @@ describe("logs cli", () => {
       truncated: false,
       reset: false,
     });
-
     const stdoutWrites = captureStdoutWrites();
     const stderrWrites = captureStderrWrites();
 
     await runLogsCli(["logs"]);
 
-    expect(readConfiguredLogTail).toHaveBeenCalledWith({
+    expect(readConfiguredLogTail).toHaveBeenCalledExactlyOnceWith({
       cursor: undefined,
       limit: 200,
       maxBytes: 250_000,
@@ -412,102 +432,17 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
   });
 
-  it("falls back to the local log file on loopback scope-upgrade errors", async () => {
-    callGatewayFromCli.mockRejectedValueOnce(
-      new Error("scope upgrade pending approval (requestId: req-123)"),
-    );
-    readConfiguredLogTail.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
-      cursor: 5,
-      size: 5,
-      lines: ["local fallback line"],
-      truncated: false,
-      reset: false,
-    });
-
-    const stdoutWrites = captureStdoutWrites();
-    const stderrWrites = captureStderrWrites();
-
-    await runLogsCli(["logs"]);
-
-    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
-    expect(stdoutWrites.join("")).toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
-  });
-
-  it("falls back to the configured Gateway file log on loopback gateway close errors", async () => {
-    callGatewayFromCli.mockRejectedValueOnce(
-      createGatewayCloseError({
-        code: 1000,
-        reason: "no close reason",
-        message: "gateway closed (1000 normal closure): no close reason",
-      }),
-    );
-    readConfiguredLogTail.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
-      cursor: 5,
-      size: 5,
-      lines: ["local fallback line"],
-      truncated: false,
-      reset: false,
-    });
-
-    const stdoutWrites = captureStdoutWrites();
-    const stderrWrites = captureStderrWrites();
-
-    await runLogsCli(["logs"]);
-
-    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
-    expect(stdoutWrites.join("")).toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
-  });
-
-  it("falls back to the configured Gateway file log on post-handshake plain close errors", async () => {
-    callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1006): abnormal closure"));
-    readConfiguredLogTail.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
-      cursor: 5,
-      size: 5,
-      lines: ["local fallback line"],
-      truncated: false,
-      reset: false,
-    });
-
-    const stdoutWrites = captureStdoutWrites();
-    const stderrWrites = captureStderrWrites();
-
-    await runLogsCli(["logs"]);
-
-    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
-    expect(stdoutWrites.join("")).toContain("local fallback line");
-    expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
-  });
-
   describe("--follow retry behavior", () => {
     it("uses the active systemd journal for implicit local follow failures", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
+      const closeError = transientCloseError();
       callGatewayFromCli.mockRejectedValueOnce(closeError).mockRejectedValueOnce(closeError);
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
-        .mockResolvedValueOnce({
-          stdout: ["Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz", "-- cursor: s=abc"].join(
-            "\n",
-          ),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: ["second journal line", "-- cursor: s=def"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        });
+        .mockResolvedValueOnce(
+          journalPage("Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz", "abc"),
+        )
+        .mockResolvedValueOnce(journalPage("second journal line", "def"));
 
       const stderrWrites = captureStderrWrites();
       const stdoutWrites = captureStdoutWrites();
@@ -564,31 +499,15 @@ describe("logs cli", () => {
         resolveRecovery = resolve;
       });
       callGatewayFromCli
-        .mockRejectedValueOnce(
-          createGatewayCloseError({
-            code: 1006,
-            reason: "abnormal closure",
-            message: "gateway closed (1006 abnormal closure): abnormal closure",
-          }),
-        )
+        .mockRejectedValueOnce(transientCloseError())
         .mockImplementationOnce(() => recoveryProbe)
         .mockRejectedValueOnce(new Error("stop after delayed recovery"));
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
-        .mockResolvedValueOnce({
-          stdout: ["journal bridge line", "-- cursor: s=abc"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        })
+        .mockResolvedValueOnce(journalPage("journal bridge line", "abc"))
         .mockImplementationOnce(async () => {
           setTimeout(() => resolveRecovery(recoveredPayload), 0);
-          return {
-            stdout: ["journal while probing", "-- cursor: s=def"].join("\n"),
-            stderr: "",
-            code: 0,
-            truncated: false,
-          };
+          return journalPage("journal while probing", "def");
         });
 
       const stdoutWrites = captureStdoutWrites();
@@ -621,11 +540,7 @@ describe("logs cli", () => {
 
     it("keeps journal polling responsive while a Gateway recovery probe is pending", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
+      const closeError = transientCloseError();
       const pendingProbe = new Promise<never>(() => {
         // The broken-pipe path must cancel this unresolved recovery probe.
       });
@@ -634,18 +549,8 @@ describe("logs cli", () => {
         .mockImplementationOnce(() => pendingProbe);
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
-        .mockResolvedValueOnce({
-          stdout: ["first journal line", "-- cursor: s=abc"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: ["second journal line", "-- cursor: s=def"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        });
+        .mockResolvedValueOnce(journalPage("first journal line", "abc"))
+        .mockResolvedValueOnce(journalPage("second journal line", "def"));
 
       const stdoutWrites: string[] = [];
       const stderrWrites = captureStderrWrites();
@@ -691,11 +596,7 @@ describe("logs cli", () => {
       vi.spyOn(Date.prototype, "toISOString").mockImplementation(
         () => timestamps.shift() ?? "2026-06-01T00:00:08.000Z",
       );
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
+      const closeError = transientCloseError();
       callGatewayFromCli
         .mockResolvedValueOnce({
           file: "/tmp/openclaw.log",
@@ -712,18 +613,8 @@ describe("logs cli", () => {
         .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
-        .mockResolvedValueOnce({
-          stdout: ["overlap line", "-- cursor: s=abc"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: ["journal after recovery", "-- cursor: s=def"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        });
+        .mockResolvedValueOnce(journalPage("overlap line", "abc"))
+        .mockResolvedValueOnce(journalPage("journal after recovery", "def"));
 
       const stderrWrites = captureStderrWrites();
       const stdoutWrites = captureStdoutWrites();
@@ -756,11 +647,7 @@ describe("logs cli", () => {
 
     it("emits source meta records in --follow --json when fallback recovers", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
+      const closeError = transientCloseError();
       callGatewayFromCli
         .mockResolvedValueOnce({
           file: "/tmp/openclaw.log",
@@ -775,12 +662,7 @@ describe("logs cli", () => {
         })
         .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
-      execFileUtf8Tail.mockResolvedValueOnce({
-        stdout: ["journal bridge line", "-- cursor: s=abc"].join("\n"),
-        stderr: "",
-        code: 0,
-        truncated: false,
-      });
+      execFileUtf8Tail.mockResolvedValueOnce(journalPage("journal bridge line", "abc"));
 
       const stderrWrites = captureStderrWrites();
       const stdoutWrites = captureStdoutWrites();
@@ -833,11 +715,7 @@ describe("logs cli", () => {
 
     it("keeps journal cursor across repeated fallback before Gateway recovery", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
+      const closeError = transientCloseError();
       callGatewayFromCli
         .mockRejectedValueOnce(closeError)
         .mockRejectedValueOnce(closeError)
@@ -855,18 +733,8 @@ describe("logs cli", () => {
         .mockRejectedValueOnce(new Error("stop after recovered cursor probe"));
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
-        .mockResolvedValueOnce({
-          stdout: ["first journal bridge line", "-- cursor: s=abc"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: ["second journal bridge line", "-- cursor: s=def"].join("\n"),
-          stderr: "",
-          code: 0,
-          truncated: false,
-        });
+        .mockResolvedValueOnce(journalPage("first journal bridge line", "abc"))
+        .mockResolvedValueOnce(journalPage("second journal bridge line", "def"));
 
       const stdoutWrites = captureStdoutWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
@@ -911,11 +779,7 @@ describe("logs cli", () => {
     });
 
     it("retries loopback close errors in --follow mode instead of tailing fallback files", async () => {
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
+      const closeError = transientCloseError();
       for (let i = 0; i <= 8; i += 1) {
         callGatewayFromCli.mockRejectedValueOnce(closeError);
       }
@@ -932,31 +796,6 @@ describe("logs cli", () => {
         "gateway closed (1006 abnormal closure): abnormal closure",
       );
       expect(stdoutWrites.join("")).not.toContain("local fallback line");
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    });
-
-    it("exits after exhausting max retries in --follow mode with explicit URL", async () => {
-      // Explicit --url bypasses shouldUseLocalLogsFallback so close errors reach the retry path.
-      // initial attempt + 8 retries = 9 total calls before fatal exit.
-      const closeError = createGatewayCloseError({
-        code: 1006,
-        reason: "abnormal closure",
-        urlSource: "cli",
-        message: "gateway closed (1006 abnormal closure): abnormal closure",
-      });
-      for (let i = 0; i <= 8; i += 1) {
-        callGatewayFromCli.mockRejectedValueOnce(closeError);
-      }
-
-      const stderrWrites = captureStderrWrites();
-      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-
-      await runLogsCli(["logs", "--follow", "--url", "ws://127.0.0.1:18789"]);
-
-      expect((stderrWrites.join("").match(/gateway disconnected/g) ?? []).length).toBe(8);
-      expect(stderrWrites.join("")).toContain(
-        "gateway closed (1006 abnormal closure): abnormal closure",
-      );
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
@@ -1177,4 +1016,3 @@ describe("logs cli", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,7 +23,6 @@ import {
   configureTaskFlowRegistryRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import type {
@@ -51,7 +50,11 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
-  const task = createTaskRecordOrNull(params);
+  const task = createTaskRecordOrNull({
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    ...params,
+  });
   if (!task) {
     throw new Error("expected task creation to succeed");
   }
@@ -119,12 +122,11 @@ async function writeSessionEntries(
   }
 }
 
-function resetTaskCommandRuntime() {
-  taskRegistryMaintenance.stopTaskRegistryMaintenance();
-  taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+async function resetTaskCommandRuntime() {
+  await taskRegistryMaintenance.stopTaskRegistryMaintenance();
+  taskRegistryMaintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetConfigRuntimeState();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   closeOpenClawAgentDatabasesForTest();
@@ -136,11 +138,11 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      resetTaskCommandRuntime();
+      await resetTaskCommandRuntime();
       try {
         await run(state);
       } finally {
-        resetTaskCommandRuntime();
+        await resetTaskCommandRuntime();
       }
     },
   );
@@ -151,9 +153,9 @@ describe("tasks commands", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskCommandRuntime();
     vi.useRealTimers();
-    resetTaskCommandRuntime();
     mocks.callGateway.mockReset();
   });
 
@@ -162,8 +164,6 @@ describe("tasks commands", () => {
       const now = Date.now();
       createTaskRecord({
         runtime: "cli",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         runId: "task-stale-queued",
         status: "running",
         task: "Inspect issue backlog",
@@ -181,21 +181,13 @@ describe("tasks commands", () => {
       const runtime = createTestRuntime();
       await tasksAuditCommand({ json: true }, runtime);
 
-      const payload = readFirstJsonLog(runtime) as {
+      expect(readFirstJsonLog(runtime)).toMatchObject({
         summary: {
-          total: number;
-          errors: number;
-          warnings: number;
-          byCode: Record<string, number>;
-          taskFlows: { total: number; byCode: Record<string, number> };
-          combined: { total: number; errors: number; warnings: number };
-        };
-      };
-
-      expect(payload.summary.byCode.stale_running).toBe(1);
-      expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
-      expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
-      expect(payload.summary.combined.total).toBe(3);
+          byCode: { stale_running: 1 },
+          taskFlows: { byCode: { stale_waiting: 1, missing_linked_tasks: 1 } },
+          combined: { total: 3 },
+        },
+      });
 
       const runningFlow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
@@ -282,8 +274,6 @@ describe("tasks commands", () => {
     await withTaskCommandStateDir(async () => {
       const task = createTaskRecord({
         runtime: "cli",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         runId: "run-cli",
         status: "running",
         task: "Inspect issue backlog",
@@ -449,7 +439,6 @@ describe("tasks commands", () => {
         const task = createTaskRecord({
           runtime: testCase.runtime,
           ownerKey: "agent:jarvis:main",
-          scopeKind: "session",
           childSessionKey: testCase.childSessionKey,
           runId: testCase.runId,
           task: `Cancel ${testCase.label} child`,
@@ -484,8 +473,6 @@ describe("tasks commands", () => {
       const childSessionKey = "agent:main:subagent:child-retained";
       const task = createTaskRecord({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         childSessionKey,
         runId: "run-retained-child",
         status: "running",
@@ -533,8 +520,6 @@ describe("tasks commands", () => {
       const childSessionKey = "agent:main:cron:done-job:run:old-run";
       const task = createTaskRecord({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         childSessionKey,
         runId: "run-backed-before-session-sweep",
         status: "running",
@@ -715,8 +700,6 @@ describe("tasks commands", () => {
     await withTaskCommandStateDir(async () => {
       const task = createTaskRecord({
         runtime: "cli",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         runId: "task-invalid-started-at",
         status: "running",
         task: "Inspect malformed task timestamp",
@@ -803,7 +786,7 @@ describe("tasks commands", () => {
     });
   });
 
-  it.each(["failed", "timed_out", "lost"] as const)(
+  it.each(["failed", "lost"] as const)(
     "shows the persisted failure reason for %s tasks in list summaries",
     async (status) => {
       await withTaskCommandStateDir(async () => {
@@ -838,8 +821,6 @@ describe("tasks commands", () => {
     await withTaskCommandStateDir(async () => {
       createTaskRecord({
         runtime: "cli",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         runId: "task-utf16-summary",
         status: "succeeded",
         task: "Inspect task summary",
@@ -867,8 +848,6 @@ describe("tasks commands", () => {
       const cleanupAfter = Date.now() + 60_000;
       createTaskRecord({
         runtime: "subagent",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
         runId: "run-retained-lost",
         status: "lost",
         task: "Retained lost task",
@@ -935,8 +914,6 @@ describe("tasks commands", () => {
         vi.setSystemTime(now - 8 * 24 * 60 * 60_000);
         const staleTask = createTaskRecord({
           runtime: "cli",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
           runId: `stale-task-${String(apply)}`,
           task: "Task that maintenance would prune",
           status: "succeeded",

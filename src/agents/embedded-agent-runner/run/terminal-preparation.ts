@@ -9,7 +9,7 @@ import type { PreparedProviderFailoverOwner } from "../../failover/provider-patt
 import { isProviderModelRerouted } from "../../provider-model-route.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
-import type { NormalizedUsage, UsageLike } from "../../usage.js";
+import type { NormalizedUsage } from "../../usage.js";
 import {
   hasMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
@@ -22,6 +22,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   buildUsageAgentMetaFields,
+  normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -92,7 +93,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    latestUsage: terminalAssistant?.usage as UsageLike | undefined,
+    latestUsage: normalizeAssistantUsageForContext(terminalAssistant),
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   // A runtime can observe its model without emitting message_end. That scoped
@@ -200,7 +201,12 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
-    lastToolError: attempt.lastToolError,
+    // A clean yield is a handoff, not a terminal tool failure. Keep the error
+    // on the attempt for diagnostics without turning the pause into a warning.
+    lastToolError:
+      attempt.yieldDetected && input.terminalState.outcome.status === "ok"
+        ? undefined
+        : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
     isHeartbeatTrigger: runParams.trigger === "heartbeat",
@@ -339,9 +345,6 @@ function replacePartialAssistantPayload(input: {
       typeof payload.text === "string" &&
       assistantTextSignatures.has(payload.text.trim()),
   );
-  if (partialPayloadIndex < 0) {
-    return [...payloads, { text: input.recoveredText }];
-  }
   const partialPayload = payloads[partialPayloadIndex];
   if (!partialPayload) {
     return [...payloads, { text: input.recoveredText }];

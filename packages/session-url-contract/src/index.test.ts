@@ -236,6 +236,16 @@ describe("buildControlUiSessionPath", () => {
       "/chat/main/~key/release-deadbeef",
     ],
     ["UUID", { sessionKey: UUID_KEY }, "/chat/main/12345678"],
+    ...(["dashboard", "subagent", "internal-session-effects"] as const).map(
+      (surface): [string, ChatParams, string] => [
+        `Incognito ${surface}`,
+        {
+          sessionKey: `agent:main:${surface}:incognito-12345678-90ab-cdef-1234-567890abcdef`,
+          displayName: "Private task",
+        },
+        `/chat/main/${surface}/incognito-12345678-90ab-cdef-1234-567890abcdef`,
+      ],
+    ),
     [
       "UUID slug",
       { sessionKey: UUID_KEY, displayName: "Deploy Monitor" },

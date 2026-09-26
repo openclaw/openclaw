@@ -7,6 +7,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
 } from "./worker-cell-package.mjs";
@@ -202,28 +206,29 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     owner.agentSchema > BASELINE_AGENT_SCHEMA,
     "Expected a published-to-candidate schema upgrade",
   );
-  const require = createRequire(path.join(packageRoot, "package.json"));
-  const parserPath = fs.realpathSync(require.resolve("typescript"));
-  assert(childOf(fs.realpathSync(packageRoot), parserPath), "Use the installed package's parser");
-  const ts = require(parserPath);
-  assert.equal(
-    ts.version,
-    readJson(path.join(packageRoot, "package.json")).dependencies.typescript,
-  );
+  const require = createRequire(import.meta.url);
+  const parserPath = fs.realpathSync(require.resolve("typescript/unstable/sync"));
+  const { version: parserVersion } = readJson(require.resolve("typescript/package.json"));
+  const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
+  const parser = createNativeTypeScriptParser({ cwd: packageRoot });
   const doctorBindings = {};
-  for (const [role, prefix, symbol] of [
-    ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
-    ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
-    ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
-    ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
-  ]) {
-    doctorBindings[role] = resolveWorkerCellFunctionBinding(
-      owner.identity,
-      packageRoot,
-      prefix,
-      symbol,
-      ts,
-    );
+  try {
+    for (const [role, prefix, symbol] of [
+      ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
+      ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
+      ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
+    ]) {
+      doctorBindings[role] = await resolveWorkerCellFunctionBinding(
+        owner.identity,
+        packageRoot,
+        prefix,
+        symbol,
+        parser,
+      );
+    }
+  } finally {
+    parser.close();
   }
   const doctor = await loadBindings(owner.identity, packageRoot, doctorBindings);
   const { agentDb } = readJson(ctx.importReceipt);
@@ -257,7 +262,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   }
   writeJson(path.join(ctx.artifacts, "worktree-schema-doctor.json"), {
     ownerBindings: doctor.evidence,
-    parser: { version: ts.version, sha256: digest(parserPath) },
+    parser: { source: "harness", version: parserVersion, sha256: digest(parserPath) },
     fromSchema: before.agent.schema,
     targetSchema: owner.agentSchema,
     result,
@@ -615,9 +620,14 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     ),
     transcript: rows(
       db.prepare(
-        "SELECT session_id,seq,event_json,created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq",
+        `SELECT session_id,seq,${sqliteTranscriptPayloadColumns(db)},created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq`,
       ),
-    ),
+    ).map((row) => ({
+      session_id: row.session_id,
+      seq: row.seq,
+      event_json: readSqliteTranscriptPayload(row),
+      created_at: row.created_at,
+    })),
   }));
   const expectedSchema = ["published-import", "before-schema"].includes(stage)
     ? BASELINE_AGENT_SCHEMA

@@ -1,4 +1,7 @@
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
@@ -33,7 +36,6 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
-import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 
 const {
   parentKey,
@@ -337,7 +339,7 @@ describe("queued collector session projection", () => {
     expect(isSubagentRunQueued(compact)).toBe(false);
     expect(isSubagentRunQueued(structuredClone(entry))).toBe(false);
 
-    registerSubagentRun(registration);
+    await registerSubagentRun(registration);
     const replacement = expectDefined(subagentRuns.get(entry.runId), "replacement record");
     expect(replacement).not.toBe(entry);
     expect(isSubagentRunQueued(entry)).toBe(false);
@@ -353,7 +355,7 @@ describe("queued collector session projection", () => {
       maxConcurrent: 1,
       activeRunIds: [],
     });
-    registerSubagentRun(registration);
+    await registerSubagentRun(registration);
     const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
     expect(isSubagentRunQueued(current)).toBe(true);
     expect((await exactChild())?.hasActiveSubagentRun).toBe(true);
@@ -420,7 +422,7 @@ describe("queued collector session projection", () => {
               maxConcurrent: 1,
               activeRunIds: [],
             });
-            registerSubagentRun(registration);
+            await registerSubagentRun(registration);
           }
           order.push(handoff);
           return result;
@@ -482,6 +484,7 @@ describe("queued collector session projection", () => {
     );
     let authorizationObserved = false;
     let accessRevoked = false;
+    const replacementWork: { completion?: Promise<void> } = {};
     const assertCurrent = () => {
       if (!authorizationObserved) {
         authorizationObserved = true;
@@ -505,7 +508,10 @@ describe("queued collector session projection", () => {
             removeQueuedSwarmRun(entry.runId);
           }
           if (failure === "registry replaced") {
-            registerSubagentRun(registration);
+            const completion = registerSubagentRun(registration);
+            if (completion) {
+              replacementWork.completion = completion;
+            }
           }
         });
       }
@@ -514,20 +520,26 @@ describe("queued collector session projection", () => {
       }
     };
     const respond = vi.fn();
-    await expectDefined(
-      sessionAbortHandlers["sessions.abort"],
-      "sessions.abort handler",
-    )({
-      req: { type: "req", id: "forbidden-queued-stop", method: "sessions.abort" },
-      params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-      client: operatorClient(
-        failure === "foreign requester" ? "other-requester" : "parent-requester",
-      ),
-      isWebchatConnect: () => false,
-      context,
-      respond,
-      sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-    });
+    try {
+      await expectDefined(
+        sessionAbortHandlers["sessions.abort"],
+        "sessions.abort handler",
+      )({
+        req: { type: "req", id: "forbidden-queued-stop", method: "sessions.abort" },
+        params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
+        client: operatorClient(
+          failure === "foreign requester" ? "other-requester" : "parent-requester",
+        ),
+        isWebchatConnect: () => false,
+        context,
+        respond,
+        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+      });
+    } finally {
+      if (replacementWork.completion) {
+        await replacementWork.completion;
+      }
+    }
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

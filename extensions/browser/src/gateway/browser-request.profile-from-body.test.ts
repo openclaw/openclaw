@@ -1,7 +1,7 @@
 // Browser tests cover browser request.profile from body plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayRequestHandlers } from "../core-api.js";
 
 const {
   loadConfigMock,
@@ -48,15 +48,15 @@ const uploadMocks = vi.hoisted(() => ({
   prepareBrowserProxyUploadRequest: vi.fn(),
 }));
 
-vi.mock("../core-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../core-api.js")>("../core-api.js");
-  return {
-    ...actual,
-    startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
-    createBrowserControlContext: createBrowserControlContextMock,
-    createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
-  };
-});
+vi.mock("../control-service.js", () => ({
+  startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
+}));
+vi.mock("../browser-control-state.js", () => ({
+  createBrowserControlContext: createBrowserControlContextMock,
+}));
+vi.mock("../browser/routes/dispatcher.js", () => ({
+  createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
+}));
 
 vi.mock("../browser-proxy-upload.js", () => uploadMocks);
 
@@ -71,9 +71,10 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   };
 });
 
-vi.mock("../sdk-node-runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/gateway-runtime")>(
+    "openclaw/plugin-sdk/gateway-runtime",
+  );
   return {
     ...actual,
     isNodeCommandAllowed: isNodeCommandAllowedMock,
@@ -651,7 +652,7 @@ describe("browser.request profile selection", () => {
     const [ok, payload, error] = firstRespondCall(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
-    expect(error?.message).toBe("browser control is disabled");
+    expect(error?.message).toContain("browser control disabled:");
   });
 
   it("uses profile from request body when query profile is missing", async () => {
@@ -791,7 +792,7 @@ describe("browser.request profile selection", () => {
       const [ok, payload, error] = firstRespondCall(respond);
       expect(ok).toBe(false);
       expect(payload).toBeUndefined();
-      expect(error?.message).toBe("browser control is disabled");
+      expect(error?.message).toContain("browser control disabled:");
     },
   );
 
@@ -822,7 +823,7 @@ describe("browser.request profile selection", () => {
 
     expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-    expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
+    expect(firstRespondCall(respond)[2]?.message).toContain("browser control disabled:");
   });
 
   it("sends Gateway-owned upload bytes without forwarding source paths", async () => {

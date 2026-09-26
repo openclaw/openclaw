@@ -415,19 +415,7 @@ function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   );
 }
 
-function widenedBinding(variable, scopes) {
-  const declarator = variableDeclarator(variable);
-  if (
-    declarator === null ||
-    declarator.parent.type !== "VariableDeclaration" ||
-    declarator.parent.kind !== "const" ||
-    declarator.id.type !== "Identifier" ||
-    declarator.init === null ||
-    variable.references.some((reference) => reference.isWrite() && !reference.init)
-  ) {
-    return null;
-  }
-
+function widenedBinding(variable, scopes, declarator) {
   const boundary = functionBoundary(declarator);
   const declaredType = declarator.id.typeAnnotation?.typeAnnotation;
   const initializerAssertion = assertionFromExpression(declarator.init);
@@ -456,21 +444,26 @@ function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
     }
     visitedVariables.add(current);
 
-    const widened = widenedBinding(current, scopes);
-    if (widened !== null) {
-      return widened;
-    }
-
     const declarator = variableDeclarator(current);
     if (
       declarator === null ||
       declarator.parent.type !== "VariableDeclaration" ||
       declarator.parent.kind !== "const" ||
       declarator.id.type !== "Identifier" ||
-      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
       declarator.init === null ||
+      current.references.some((reference) => reference.isWrite() && !reference.init)
+    ) {
+      return null;
+    }
+
+    const widened = widenedBinding(current, scopes, declarator);
+    if (widened !== null) {
+      return widened;
+    }
+
+    if (
+      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
       declarator.end >= assertedAt ||
-      current.references.some((reference) => reference.isWrite() && !reference.init) ||
       functionBoundary(declarator) !== boundary
     ) {
       return null;

@@ -1,7 +1,9 @@
-// Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
+import { parseDateStringTimestampMs, parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  ProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -28,6 +30,8 @@ import {
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asRecord,
+  asOptionalObjectRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -235,9 +239,7 @@ async function postFirecrawlJson<T>(
           try {
             const body = await readResponseText(jsonResponse, { maxBytes: 64_000 });
             const payload = JSON.parse(body.text) as unknown;
-            return payload && typeof payload === "object" && !Array.isArray(payload)
-              ? (payload as Record<string, unknown>)
-              : null;
+            return asOptionalRecord(payload) ?? null;
           } catch {
             return null;
           }
@@ -261,7 +263,10 @@ async function postFirecrawlJson<T>(
           truncateSanitizedExternalContent(detail, 1_000).text,
           "web_fetch",
         );
-        throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
+        throw new ProviderHttpError(
+          `${params.errorLabel} API error (${response.status}): ${safeDetail}`,
+          { status: response.status },
+        );
       }
       return await parse(response);
     },
@@ -287,6 +292,15 @@ function normalizeFirecrawlResultUrl(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isValidFirecrawlPublishedDate(value: string): boolean {
+  if (!FIRECRAWL_PUBLISHED_DATE_RE.test(value)) {
+    return false;
+  }
+  const calendarDate = value.slice(0, 10);
+  const timestamp = parseDateStringTimestampMs(calendarDate);
+  return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate);
 }
 
 const optionalFirecrawlStringSchema = z.string().optional().catch(undefined);
@@ -361,7 +375,7 @@ function resolveSearchItems(
       metadata?.publishedDate ||
       undefined;
     const published =
-      rawPublished && FIRECRAWL_PUBLISHED_DATE_RE.test(rawPublished) ? rawPublished : undefined;
+      rawPublished && isValidFirecrawlPublishedDate(rawPublished) ? rawPublished : undefined;
     items.push({
       title,
       url,
@@ -549,25 +563,14 @@ export async function runFirecrawlSearch(
   return result;
 }
 
-function resolveScrapeData(payload: Record<string, unknown>): Record<string, unknown> {
-  const data = payload.data;
-  if (data && typeof data === "object") {
-    return data as Record<string, unknown>;
-  }
-  return {};
-}
-
 export function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
   extractMode: "markdown" | "text";
   maxChars: number;
 }): Record<string, unknown> {
-  const data = resolveScrapeData(params.payload);
-  const metadata =
-    data.metadata && typeof data.metadata === "object"
-      ? (data.metadata as Record<string, unknown>)
-      : undefined;
+  const data = asRecord(params.payload.data);
+  const metadata = asOptionalObjectRecord(data.metadata);
   const rawStatus = parseFiniteNumber(metadata?.statusCode) ?? parseFiniteNumber(data.statusCode);
   const status = rawStatus === undefined ? undefined : Math.floor(rawStatus);
   if (status !== undefined && (status < 200 || status >= 300)) {

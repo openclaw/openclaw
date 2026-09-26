@@ -176,6 +176,12 @@ describe("global session lookup ownership", () => {
 
   it("keeps a child-relative parent distinct from qualified parent owners", async () => {
     await withGlobalSessions("main", async (cfg) => {
+      for (const agentId of ["main", "research"]) {
+        await replaceSessionEntry(
+          { agentId, sessionKey: `agent:${agentId}:main` },
+          { sessionId: `${agentId}-literal-main`, updatedAt: 1 },
+        );
+      }
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "unknown" },
         { sessionId: "main-unknown", updatedAt: 1 },
@@ -194,9 +200,15 @@ describe("global session lookup ownership", () => {
       ).toEqual([
         "main-global",
         "main-unknown",
-        "research-global",
+        "research-literal-main",
         "research-agent:research:global",
       ]);
+      const readRetiredParent = createGatewaySessionEntryReader({
+        cfg: { ...cfg, agents: { ownership: "explicit", entries: { research: {} } } },
+        agentId: "research",
+        store: {},
+      });
+      expect(readRetiredParent("agent:main:main")?.sessionId).toBe("main-literal-main");
     });
   });
 
@@ -253,6 +265,11 @@ describe("global session lookup ownership", () => {
               exactRead: true,
             }),
           ).toThrow(failure);
+          failingSingleRead.mockClear();
+          const readParent = createGatewaySessionEntryReader({ cfg, agentId: "main", store: {} });
+          expect(() => readParent("agent:research:main")).toThrow(failure);
+          // A failed exact read must not become absence followed by an alias lookup.
+          expect(failingSingleRead).toHaveBeenCalledOnce();
         } finally {
           failingSingleRead.mockRestore();
         }
@@ -337,11 +354,13 @@ describe("global session lookup ownership", () => {
       await withGlobalSessions("work", async (cfg) => {
         // Revisit Research after Main so shared sentinels cannot adopt the previous owner.
         const requests = ["research", "main", "research"].flatMap((agentId) =>
-          ["main", "work", "global"].map((suffix) => ({
-            key: `agent:${agentId}:${suffix}`,
-            agentId,
-            canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
-          })),
+          ["main", "work", "global"].flatMap((suffix) =>
+            ["", " "].map((padding) => ({
+              key: `${padding}agent:${agentId}:${suffix}${padding}`,
+              agentId,
+              canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
+            })),
+          ),
         );
         const targets =
           mode === "batch"

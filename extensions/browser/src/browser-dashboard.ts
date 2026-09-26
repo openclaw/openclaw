@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   readBrowserDashboardDefinition,
@@ -40,7 +41,6 @@ import {
   withoutBrowserSessionTabCleanup,
   type BrowserSessionTabRecord,
 } from "./browser/session-tab-store.js";
-import { getRuntimeConfig } from "./config/config.js";
 
 type DashboardTab = BrowserSessionTabRecord & { storageKey: string };
 const logger = createSubsystemLogger("browser");
@@ -658,7 +658,11 @@ async function stopMaterializedDashboard(
 
 /** Existing cleanup cycle reconciles dashboard removal, replacement, and explicit stop. */
 export async function reconcileBrowserDashboards(
-  params: { sessionKeys?: Array<string | undefined>; onWarn?: (message: string) => void } = {},
+  params: {
+    sessionKeys?: Array<string | undefined>;
+    isCurrent?: () => boolean;
+    onWarn?: (message: string) => void;
+  } = {},
 ): Promise<number> {
   if (!getOptionalBrowserStateRuntime()?.gateway) {
     return 0;
@@ -675,6 +679,9 @@ export async function reconcileBrowserDashboards(
       const definition = await readBrowserDashboardDefinition({
         ...tab.dashboard,
       });
+      if (params.isCurrent?.() === false) {
+        return closed;
+      }
       if (!definitionOwnsTab(definition, tab) || tab.dashboard.state === "released") {
         closed += (await releaseTab(tab, params)).closed;
       } else if (definition && tab.dashboard.state === "stopping") {
@@ -701,6 +708,9 @@ export async function reconcileBrowserDashboards(
     }
     try {
       const definition = await readBrowserDashboardDefinition(intent);
+      if (params.isCurrent?.() === false) {
+        return closed;
+      }
       if (
         !sameBrowserDashboardDefinition(intent, definition) ||
         (definition &&

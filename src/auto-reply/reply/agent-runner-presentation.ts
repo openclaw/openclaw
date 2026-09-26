@@ -19,27 +19,13 @@ import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./rep
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
 
-type AgentTurnPresentation = {
-  classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  sanitizeStreamingText: (
-    text: string | undefined,
-    errorContext: boolean,
-  ) => { text?: string; skip: boolean };
-  normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  presentWithTyping: (
-    typingPromise: Promise<void>,
-    startPresentation: () => boolean | void | Promise<boolean | void>,
-  ) => Promise<boolean | void>;
-  blockReplyHandler: ReturnType<typeof createBlockReplyDeliveryHandler> | undefined;
-};
-
 /** Builds the channel-presentation callbacks shared by CLI and embedded runs. */
 export function createAgentTurnPresentation(params: {
   turn: AgentTurnParams;
   replyMediaContext: ReplyMediaContext;
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
-}): AgentTurnPresentation {
+}) {
   const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });

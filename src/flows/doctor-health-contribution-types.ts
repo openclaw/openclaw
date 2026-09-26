@@ -1,6 +1,7 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
+import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
 import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
 import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,13 +21,14 @@ import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
-  /** Source before the first write; later writes use cfgForPersistence. */
-  sourceConfigForWrite?: OpenClawConfig;
+  warnings?: string[];
+  /** Original authored/resolved pair; retained across every committed Doctor write. */
+  referenceSource?: DoctorConfigReferenceSource;
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
-  /** Source of the ordinary confirmed proposal, consumed by its initial write. */
-  confirmedConfigSource?: { path: string; hash: string };
+  /** Active planning revision, advanced on success and cleared after partial publication. */
+  confirmedConfigSource?: { path: string; hash: string | null };
   /** Repair panels held back until the atomic config write commits. */
   pendingChangePanels?: readonly string[];
   /** Billing changes reported once after the model migration is durable. */
@@ -100,6 +102,8 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly lintConfigSnapshot?: Pick<ConfigFileSnapshot, "exists" | "issues" | "warnings">;
   readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   readonly agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
+  /** The isolated lint worker retains its private state until these disposers settle. */
+  readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
 export type DoctorHealthContribution = FlowContribution & {

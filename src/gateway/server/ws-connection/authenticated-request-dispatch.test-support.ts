@@ -2,6 +2,7 @@
 import { vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
+import { GatewayClientRegistry } from "../client-registry.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
@@ -50,6 +51,7 @@ export function createDispatchTestHarness(
     getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   } = {},
 ) {
+  const clients = new GatewayClientRegistry();
   const sentResponses: GatewayTestResponseFrame[] = [];
   const responseWaiters: { id: string; deferred: Deferred<GatewayTestResponseFrame> }[] = [];
   const send = vi.fn<GatewayWsMessageHandlerParams["send"]>(() => ({ kind: "sent" }));
@@ -74,6 +76,7 @@ export function createDispatchTestHarness(
   const logGateway = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const dispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: {
+      clients,
       connId: options.connId ?? "dispatch-test-connection",
       extraHandlers: options.extraHandlers ?? {},
       buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
@@ -98,6 +101,7 @@ export function createDispatchTestHarness(
     return deferred.promise;
   };
   return {
+    clients,
     awaitResponseFrame,
     close,
     dispatcher: {

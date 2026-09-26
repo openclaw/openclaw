@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { ControlUiPluginFrameGrantAck } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
@@ -11,7 +12,6 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -28,6 +28,8 @@ import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
+import type { renderLogbook } from "./logbook-view.ts";
+import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
 import { pluginTabKey } from "./route.ts";
 
 registerLoginEnglish();
@@ -37,24 +39,7 @@ registerLoginEnglish();
  * mount through the contribution runtime; descriptor paths use sandboxed frames.
  */
 type BundledPluginTabView = {
-  render: (props: {
-    host: object;
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-    embed?: {
-      embedSandboxMode: ApplicationContext["config"]["current"]["embedSandboxMode"];
-      allowExternalEmbedUrls: boolean;
-    };
-    onRequestUpdate: () => void;
-    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
-    // key (prompt dispatch). Bundled views that don't use them ignore these.
-    basePath?: string;
-    sessionKey?: string;
-    /** Canonical sessions.list publication revision, used by session-backed widgets. */
-    sessionListRevision?: number;
-    /** Whether this connection can decide pending custom-widget code. */
-    canApproveWidgets?: boolean;
-  }) => unknown;
+  render: (props: Parameters<typeof renderLogbook>[0]) => unknown;
   stop: (host: object) => void;
 };
 
@@ -115,6 +100,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private gatewaySource?: ApplicationContext["gateway"];
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private gatewayHello: ApplicationContext["gateway"]["snapshot"]["hello"] = null;
+  private gatewayConnectionRevision = 0;
+  // Retired auth epochs must retire the WindowProxy even when Lit coalesces the
+  // intervening unmount; event.source alone cannot distinguish iframe documents.
+  private pluginFrameGeneration: object = {};
   private externalAuthTargetKey: string | null = null;
   private externalAuthRefreshMarker: object | null = null;
   private externalAuthRefreshAbortController: AbortController | null = null;
@@ -134,10 +124,6 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       (gateway) => this.updateGatewaySource(gateway),
     )
     .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
-    )
-    .watch(
       () => this.context?.plugins,
       (plugins, notify) => plugins.subscribe(notify),
     );
@@ -151,6 +137,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       // until the parent refreshes its route-bound cookie on resume.
       this.externalAuthReadyKey = null;
       this.externalAuthRefreshedAt = 0;
+      this.pluginFrameGeneration = {};
       this.requestExternalTabAuthRestart(this.externalAuthTargetKey);
       return;
     }
@@ -160,10 +147,12 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("message", this.handlePluginSessionOpen);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    window.removeEventListener("message", this.handlePluginSessionOpen);
     this.syncPluginThemeFrame(null);
     this.clearExternalTabAuth();
     this.subscriptions.clear();
@@ -260,6 +249,32 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       return;
     }
     postWidgetTheme(frame);
+  };
+
+  private readonly handlePluginSessionOpen = (event: MessageEvent<unknown>) => {
+    const context = this.context;
+    const descriptor = this.tabInfo();
+    if (
+      !this.isConnected ||
+      !context ||
+      this.gatewaySource !== context.gateway ||
+      this.gatewayClient !== context.gateway.snapshot.client ||
+      this.gatewayHello !== context.gateway.snapshot.hello ||
+      this.gatewayConnectionRevision !== context.gateway.connectionRevision ||
+      this.externalAuthTargetKey !== this.externalTabAuthKey(descriptor, false)
+    ) {
+      return;
+    }
+    openPluginFrameSession(event, {
+      context,
+      element: this,
+      frame: this.pluginThemeFrame,
+      descriptor,
+      authenticated:
+        this.externalAuthReadyKey !== null &&
+        this.externalAuthReadyKey === this.externalAuthTargetKey,
+      authenticatedAt: this.externalAuthRefreshedAt,
+    });
   };
 
   private externalTabAuthKey(
@@ -505,6 +520,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       // abandon any hung refresh, and obtain a fresh grant before remounting.
       this.externalAuthReadyKey = null;
       this.externalAuthRefreshedAt = 0;
+      this.pluginFrameGeneration = {};
       if (this.externalAuthRefreshTimer) {
         clearTimeout(this.externalAuthRefreshTimer);
         this.externalAuthRefreshTimer = null;
@@ -525,6 +541,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private clearExternalTabAuth() {
+    this.pluginFrameGeneration = {};
     if (this.externalAuthRefreshTimer) {
       clearTimeout(this.externalAuthRefreshTimer);
     }
@@ -549,6 +566,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private resetExternalTabAuthForGatewayChange(targetKey: string, connected: boolean) {
+    this.pluginFrameGeneration = {};
     if (this.externalAuthRefreshTimer) {
       clearTimeout(this.externalAuthRefreshTimer);
       this.externalAuthRefreshTimer = null;
@@ -585,11 +603,13 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private updateGatewaySource(gateway: ApplicationContext["gateway"]) {
-    const { client } = gateway.snapshot;
+    const { client, hello } = gateway.snapshot;
     const connected = gateway.snapshot.phase === "connected";
     if (
       this.gatewaySource === gateway &&
       this.gatewayClient === client &&
+      this.gatewayHello === hello &&
+      this.gatewayConnectionRevision === gateway.connectionRevision &&
       this.gatewayConnected === connected
     ) {
       return;
@@ -598,6 +618,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     this.replaceBundledViewHost();
     this.gatewaySource = gateway;
     this.gatewayClient = client;
+    this.gatewayHello = hello;
+    this.gatewayConnectionRevision = gateway.connectionRevision;
     this.gatewayConnected = connected;
     if (externalAuthTargetKey) {
       this.resetExternalTabAuthForGatewayChange(externalAuthTargetKey, connected);
@@ -638,22 +660,11 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
-      const config = context.config?.current;
       return viewState.view.render({
         host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.phase === "connected",
-        embed: config
-          ? {
-              embedSandboxMode: config.embedSandboxMode,
-              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
-            }
-          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
-        basePath: context.basePath,
-        sessionKey: snapshot.sessionKey,
-        sessionListRevision: context.sessions?.canonicalListRevision,
-        canApproveWidgets: hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       });
     }
     if (info?.path) {
@@ -682,13 +693,16 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       }
       return html`
         <section class="plugin-tab-embed">
-          <iframe
-            class="plugin-tab-embed__frame"
-            src=${info.path}
-            title=${info.label}
-            sandbox=${resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-            @load=${this.handlePluginThemeLoad}
-          ></iframe>
+          ${keyed(
+            this.pluginFrameGeneration,
+            html`<iframe
+              class="plugin-tab-embed__frame"
+              src=${info.path}
+              title=${info.label}
+              sandbox=${resolveEmbedSandbox(context.config.current.embedSandboxMode)}
+              @load=${this.handlePluginThemeLoad}
+            ></iframe>`,
+          )}
         </section>
       `;
     }

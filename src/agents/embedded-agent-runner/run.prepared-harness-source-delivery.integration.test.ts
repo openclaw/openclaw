@@ -500,7 +500,6 @@ describe("prepared harness source delivery", () => {
         shouldEmitToolResult: () => true,
         shouldEmitToolOutput: () => false,
         pendingToolTasks: new Set(),
-        resetSessionAfterRoleOrderingConflict: async () => false,
         isHeartbeat: false,
         sessionKey: "main",
         getActiveSessionEntry: () => undefined,

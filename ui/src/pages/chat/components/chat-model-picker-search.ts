@@ -1,6 +1,6 @@
 import { generateUUID } from "../../../lib/uuid.ts";
 
-export function pickerMenu(target: EventTarget | null): HTMLElement | null {
+function pickerMenu(target: EventTarget | null): HTMLElement | null {
   return target instanceof Element
     ? target.closest<HTMLElement>(".chat-controls__model-menu")
     : null;
@@ -47,7 +47,7 @@ function ensureModelPickerIds(menu: HTMLElement): void {
   input.setAttribute("aria-expanded", details.open ? "true" : "false");
 }
 
-export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
+function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
     candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
   });
@@ -56,6 +56,14 @@ export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | un
     input?.setAttribute("aria-activedescendant", row.id);
   } else {
     input?.removeAttribute("aria-activedescendant");
+  }
+}
+
+export function handleModelOptionMouseEnter(event: MouseEvent): void {
+  const row = event.currentTarget;
+  const menu = pickerMenu(row);
+  if (row instanceof HTMLButtonElement && menu) {
+    highlightModelRow(menu, row);
   }
 }
 
@@ -95,7 +103,11 @@ function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   if (provider.startsWith(query)) {
     return 3;
   }
-  return provider.includes(query) ? 4 : null;
+  if (provider.includes(query)) {
+    return 4;
+  }
+  const reference = row.dataset.chatModelTarget ?? row.dataset.chatModelOption ?? "";
+  return reference.toLocaleLowerCase().includes(query) ? 5 : null;
 }
 
 export function updateModelSearch(input: HTMLInputElement, preserveHighlight = false): void {
@@ -245,12 +257,26 @@ export function syncChatModelSearch(details: Element | undefined): void {
   if (!(details instanceof HTMLDetailsElement) || !details.open) {
     return;
   }
+  const active = details.ownerDocument.activeElement;
+  const focusedRefresh =
+    active?.closest("[data-chat-model-refresh]") && details.contains(active) ? active : undefined;
   // Keyed catalog rows commit after the details binding; project the retained
   // query onto the new DOM without resetting a still-valid keyboard selection.
+  // A settled refresh can remove its focused control during that same commit.
   queueMicrotask(() => {
     const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
     if (input) {
       updateModelSearch(input, true);
+    }
+    if (
+      focusedRefresh &&
+      !focusedRefresh.isConnected &&
+      details.isConnected &&
+      details.open &&
+      details.ownerDocument.activeElement === details.ownerDocument.body
+    ) {
+      const target = input && !input.disabled ? input : details.querySelector("summary");
+      target?.focus({ preventScroll: true });
     }
   });
 }

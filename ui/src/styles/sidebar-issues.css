@@ -137,7 +137,9 @@
 }
 
 .shell--mobile-nav .sidebar-issues-panel__dismiss {
-  min-height: 40px;
+  width: 40px;
+  height: 40px;
+  flex-basis: 40px;
 }
 
 .shell--mobile-nav .sidebar-issues-panel__dismiss-shown {
@@ -298,15 +300,6 @@
   font-size: var(--control-ui-text-xs);
   line-height: 1.4;
   overflow-wrap: anywhere;
-}
-
-.sidebar-issues-panel__dismiss-help {
-  flex: none;
-  margin: 0;
-  padding: 8px 12px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
 }
 
 footer.sidebar-issues-panel__mentions-note {
@@ -519,20 +512,24 @@ footer.sidebar-issues-panel__mentions-note {
   position: relative;
   z-index: 1;
   display: inline-grid;
-  min-height: 28px;
-  flex: 0 0 auto;
-  padding: 4px 8px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
   place-items: center;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: var(--control-ui-text-xs);
   cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+.sidebar-issues-panel__dismiss svg {
+  width: 14px;
+  height: 14px;
 }
 
 @media (hover: hover) {
@@ -609,28 +606,11 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--accent-foreground);
 }
 
-.sidebar-mention-row__summary {
-  align-items: flex-start;
+.sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {
+  flex: 0 1 auto;
 }
 
-.sidebar-mention-row__avatar {
-  flex: none;
-  margin-block-start: 2px;
-}
-
-.sidebar-mention-row__header {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.sidebar-mention-row__header .sidebar-issues-panel__entity {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.sidebar-mention-row__age {
+.sidebar-issues-panel__age {
   flex: none;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);

@@ -1,4 +1,3 @@
-// Codex plugin module implements command handlers behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
@@ -15,6 +14,7 @@ import {
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
   CODEX_NATIVE_EXECUTION_AUTH_ERROR,
@@ -164,7 +164,11 @@ export async function handleCodexSubcommand(
           options.pluginConfig,
           CODEX_CONTROL_METHODS.installPlugin,
           requestParams,
-          { ...scope, config: ctx.config },
+          {
+            ...scope,
+            config: ctx.config,
+            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
+          },
         )) as v2.PluginInstallResponse;
       },
       refresh: async (workspaceDir) => {

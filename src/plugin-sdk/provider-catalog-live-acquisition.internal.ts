@@ -289,21 +289,8 @@ function resolveLiveModelCatalogNextPage(
     if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
-    // The provider advertised a next URL but it is malformed or cross-origin.
-    // Attempt cursor-based pagination as a fallback before giving up.
-    const cursor = readLiveModelCatalogCursor(body);
-    if (cursor) {
-      const cursorUrl = tryParseUrl(currentUrl);
-      if (cursorUrl) {
-        cursorUrl.searchParams.set(cursor.name, cursor.value);
-        return { status: "next", url: cursorUrl.toString() };
-      }
-    }
-    // No usable fallback: the provider explicitly advertised a next page we
-    // cannot follow. Return incomplete so the caller surfaces a controlled
-    // error instead of silently returning a truncated catalog.
-    return { status: "incomplete" };
   }
+  // Malformed or cross-origin next URLs may still have a usable same-origin cursor.
   const cursor = readLiveModelCatalogCursor(body);
   if (cursor) {
     const nextUrl = tryParseUrl(currentUrl);
@@ -312,7 +299,7 @@ function resolveLiveModelCatalogNextPage(
       return { status: "next", url: nextUrl.toString() };
     }
   }
-  return bodyAdvertisesMoreLiveModelCatalogPages(body)
+  return rawNextUrl || bodyAdvertisesMoreLiveModelCatalogPages(body)
     ? { status: "incomplete" }
     : { status: "complete" };
 }
@@ -364,7 +351,7 @@ export async function fetchLiveProviderModelRows(
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const rows: unknown[] = [];
   const seenPageUrls = new Set<string>();
   let pageUrl: string | undefined = params.endpoint;
@@ -373,7 +360,7 @@ export async function fetchLiveProviderModelRows(
     if (seenPageUrls.has(pageUrl)) {
       break;
     }
-    const remainingTimeoutMs = timeoutMs - (Date.now() - startedAt);
+    const remainingTimeoutMs = Math.floor(timeoutMs - (performance.now() - startedAt));
     if (remainingTimeoutMs <= 0) {
       throw new Error(
         `${params.providerId} model discovery exceeded ${timeoutMs}ms before the catalog completed`,

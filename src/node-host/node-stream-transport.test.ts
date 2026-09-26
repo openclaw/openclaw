@@ -40,10 +40,11 @@ afterAll(async () => logPaths.cleanup());
 
 describe.each([false, true])("node stream TLS (managed proxy: %s)", (managed) => {
   it.each([
+    // Teardown shares one splice; vary close modes once and retain both target/TLS routes.
     ...["desktop", "portal"].flatMap((streamName) =>
-      (["target-eof", "gateway-close", "gateway-terminate", "owner-abort"] as const).map(
-        (closeMode) => ({ streamName, closeMode, correctPin: true, tls: true }),
-      ),
+      (["target-eof", "gateway-close", "gateway-terminate", "owner-abort"] as const)
+        .filter((closeMode) => closeMode === "target-eof" || (!managed && streamName === "desktop"))
+        .map((closeMode) => ({ streamName, closeMode, correctPin: true, tls: true })),
     ),
     { streamName: "desktop", correctPin: false, tls: true, closeMode: "target-eof" },
     { streamName: "portal", correctPin: false, tls: true, closeMode: "target-eof" },
@@ -276,72 +277,70 @@ describe("node stream startup ownership", () => {
 });
 
 describe("node stream EOF with inbound backpressure", () => {
-  it.each(["desktop", "portal"])(
-    "settles %s after the target closes before drain",
-    async (streamName) => {
-      const wrote = createDeferred();
-      let writes = 0;
-      const target = new Duplex({
-        highWaterMark: 1,
-        read() {},
-        write(_chunk, _encoding, _callback) {
-          // The target closes with a write pending, so it will never emit drain.
-          writes++;
-          wrote.resolve();
-        },
+  it("settles after the target closes before drain", async () => {
+    const streamName = "desktop";
+    const wrote = createDeferred();
+    let writes = 0;
+    const target = new Duplex({
+      highWaterMark: 1,
+      read() {},
+      write(_chunk, _encoding, _callback) {
+        // The target closes with a write pending, so it will never emit drain.
+        writes++;
+        wrote.resolve();
+      },
+    });
+    target.once("end", () => target.destroy());
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    const frames: string[] = [];
+    wss.on("connection", (ws) => {
+      ws.on("message", (data) => {
+        frames.push(rawDataToString(data));
+        if (frames.length === 1) {
+          ws.send(Buffer.from("pending-target-write"));
+        } else {
+          ws.send(Buffer.from("late-target-write"));
+        }
       });
-      target.once("end", () => target.destroy());
-      const gateway = createHttpServer();
-      const wss = new WebSocketServer({ server: gateway });
-      const frames: string[] = [];
-      wss.on("connection", (ws) => {
-        ws.on("message", (data) => {
-          frames.push(rawDataToString(data));
-          if (frames.length === 1) {
-            ws.send(Buffer.from("pending-target-write"));
-          } else {
-            ws.send(Buffer.from("late-target-write"));
-          }
-        });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const controller = new AbortController();
+    let settled = false;
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      attachPath: `/node-${streamName}/attach`,
+      expectedAttachPath: `/node-${streamName}/attach`,
+      target: { stream: target },
+      metadata: { ok: true },
+      streamName,
+      signal: controller.signal,
+    }).then(() => {
+      settled = true;
+    });
+    try {
+      await wrote.promise;
+      target.push(Buffer.from("terminal-response"));
+      target.push(null);
+      await expect.poll(() => settled).toBe(true);
+      await running;
+      expect(frames).toEqual([JSON.stringify({ ok: true }), "terminal-response"]);
+      expect(writes).toBe(1);
+      expect(target.listenerCount("drain")).toBe(0);
+    } finally {
+      controller.abort();
+      await running;
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
       });
       await new Promise<void>((resolve) => {
-        gateway.listen(0, "127.0.0.1", resolve);
+        gateway.close(() => resolve());
       });
-      const controller = new AbortController();
-      let settled = false;
-      const running = runNodeStreamTransport({
-        gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
-        attachPath: `/node-${streamName}/attach`,
-        expectedAttachPath: `/node-${streamName}/attach`,
-        target: { stream: target },
-        metadata: { ok: true },
-        streamName,
-        signal: controller.signal,
-      }).then(() => {
-        settled = true;
-      });
-      try {
-        await wrote.promise;
-        target.push(Buffer.from("terminal-response"));
-        target.push(null);
-        await expect.poll(() => settled).toBe(true);
-        await running;
-        expect(frames).toEqual([JSON.stringify({ ok: true }), "terminal-response"]);
-        expect(writes).toBe(1);
-        expect(target.listenerCount("drain")).toBe(0);
-      } finally {
-        controller.abort();
-        await running;
-        for (const client of wss.clients) {
-          client.terminate();
-        }
-        await new Promise<void>((resolve) => {
-          wss.close(() => resolve());
-        });
-        await new Promise<void>((resolve) => {
-          gateway.close(() => resolve());
-        });
-      }
-    },
-  );
+    }
+  });
 });

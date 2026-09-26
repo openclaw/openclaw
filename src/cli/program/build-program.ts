@@ -1,11 +1,12 @@
 // Builds the root Commander program, context, help, hooks, and command registry.
 import process from "node:process";
-import { registerProgramCommands } from "./command-registry.js";
+import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext, type ProgramContext } from "./context.js";
 import { configureProgramHelp } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { setProgramContext } from "./program-context.js";
+import { registerSubCliCommands } from "./register.subclis.js";
 
 export function buildProgram(
   prepared?: Pick<ProgramContext, "doctorDatabasePreflight" | "runtimeRecoveryEnv">,
@@ -26,7 +27,8 @@ export function buildProgram(
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);
 
-  registerProgramCommands(program, ctx, argv);
+  registerCoreCliCommands(program, ctx, argv);
+  registerSubCliCommands(program, argv);
 
   return program;
 }

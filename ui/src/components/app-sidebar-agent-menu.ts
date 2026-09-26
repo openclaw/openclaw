@@ -1,6 +1,3 @@
-// Sidebar agent menu and the menu focus/typeahead helpers shared with the
-// footer identity menu, split out of app-sidebar.ts to keep that hot
-// component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult } from "../api/types.ts";
@@ -14,6 +11,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
+import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
   consumeDropdownKeyboardDismissal,
@@ -148,18 +146,6 @@ function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
   return true;
 }
 
-function focusActiveAgentMenuItem(dropdown: HTMLElement) {
-  const items = sidebarMenuItems(dropdown);
-  const target =
-    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch--active")) ??
-    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch")) ??
-    items[0];
-  if (!target) {
-    return;
-  }
-  focusSidebarMenuItem(items, target);
-}
-
 type AgentMenuAgent = {
   id: string;
   name?: string;
@@ -196,12 +182,7 @@ function sidebarAgentMenuRows(params: {
   pinnedAgentIds: readonly string[];
 }) {
   const { agents } = params;
-  const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
-  const pinnedIds = new Set(
-    params.pinnedAgentIds
-      .map((agentId) => normalizeAgentId(agentId))
-      .filter((agentId) => availableIds.has(agentId)),
-  );
+  const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
   return agents.toSorted((a, b) => {
     const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
     const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
@@ -209,7 +190,7 @@ function sidebarAgentMenuRows(params: {
   });
 }
 
-function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
+function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams, autofocus: boolean) {
   const agentId = normalizeAgentId(agent.id);
   const identity = params.identities.get(agentId) ?? null;
   const label = normalizeAgentLabel(agent, identity);
@@ -227,6 +208,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
       type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
+      ?autofocus=${autofocus}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
       <span class="sidebar-agent-menu__agent-tile">
@@ -301,6 +283,11 @@ export function renderSidebarHelpMenu() {
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
   const { activeId, activeName, agents } = params;
+  const agentRows = !params.rosterMode && agents.length > 1 ? sidebarAgentMenuRows(params) : [];
+  const autofocusAgent =
+    params.openMode === "click"
+      ? (agentRows.find((agent) => normalizeAgentId(agent.id) === activeId) ?? agentRows[0])
+      : undefined;
   const menuLabel = t(params.rosterMode ? "agentChip.workspaceMenuLabel" : "agentChip.menuLabel");
   return html`
     <wa-dropdown
@@ -353,16 +340,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             break;
         }
       }}
-      @wa-after-show=${(event: Event) => {
-        if (!(event.currentTarget instanceof HTMLElement)) {
-          return;
-        }
-        params.onAfterShow();
-        if (params.openMode === "hover") {
-          return;
-        }
-        focusActiveAgentMenuItem(event.currentTarget);
-      }}
+      @wa-after-show=${params.onAfterShow}
       @keydown=${(event: KeyboardEvent) => {
         if (moveSidebarMenuFocus(event)) {
           return;
@@ -386,20 +364,13 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${menuLabel}
-        style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
       ${
-        !params.rosterMode && agents.length > 1
+        agentRows.length > 0
           ? html`
               <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
               <div class="sidebar-agent-menu__agent-grid">
-                ${sidebarAgentMenuRows(params).map((entry) => renderAgentRow(entry, params))}
+                ${agentRows.map((entry) => renderAgentRow(entry, params, entry === autofocusAgent))}
               </div>
               <div class="sidebar-customize-menu__separator" role="separator"></div>
             `

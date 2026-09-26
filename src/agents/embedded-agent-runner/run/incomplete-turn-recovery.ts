@@ -83,7 +83,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
+  if (content.every((block) => block.type === "text" && !block.text.trim())) {
     // Rejected arguments can consume tokens without output; the preceding guards own replay safety.
     return (
       !hasPositiveOutputTokenUsage(assistant) ||
@@ -159,14 +159,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !shouldApplyNonVisibleTurnRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      executionContract: params.executionContract,
-    })
-  ) {
+  if (!shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
 
@@ -364,14 +357,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   if (attempt.hasToolMediaBlockReply || resolveSourceReplyDelivery(attempt) !== "missing") {
     return null;
   }
-  if (
-    !shouldApplyNonVisibleTurnRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      executionContract: params.executionContract,
-    })
-  ) {
+  if (!shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
   return allToolsProvenSettled && failedToolNames.size > 0
@@ -412,12 +398,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   if (
-    shouldApplyNonVisibleTurnRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      executionContract: params.executionContract,
-    }) ||
+    shouldApplyNonVisibleTurnRetryGuard(params) ||
     // Keep the generic zero-usage stop retry for providers that expose a
     // provider-neutral "nothing was generated" signal, even outside the
     // provider allowlist above.

@@ -9,6 +9,7 @@ import {
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   estimateAggregateUsageCost,
@@ -20,7 +21,6 @@ import {
   createSessionRowModelCacheKey,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
 
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
@@ -31,32 +31,17 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  const label = normalizeOptionalString(entry.label);
-  if (label) {
-    return label;
-  }
-
-  const displayName =
-    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
-  if (displayName) {
-    return displayName;
-  }
-
-  const subject = normalizeOptionalString(entry.subject);
-  if (subject) {
-    return subject;
-  }
-
   // When no model label was persisted, prefer a task-bearing sentence over a
   // raw first-bubble truncation so Control UI and gateway clients stay readable.
-  const goalTitle = deriveGoalSessionTitle(firstUserMessage);
-  if (goalTitle) {
-    return goalTitle;
-  }
-
   // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
   // which an id prefix here would mask.
-  return undefined;
+  return (
+    normalizeOptionalString(entry.label) ??
+    normalizeOptionalString(externalDisplayName) ??
+    normalizeOptionalString(entry.displayName) ??
+    normalizeOptionalString(entry.subject) ??
+    (deriveGoalSessionTitle(firstUserMessage) || undefined)
+  );
 }
 
 export function prepareSessionTitleRead(
@@ -75,60 +60,6 @@ export function prepareSessionTitleRead(
   return {
     derivedTitle,
     needsTranscript: opts.includeLastMessage || !derivedTitle,
-  };
-}
-
-export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
-  return asPositiveFiniteNumber(value);
-}
-
-type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
-
-export function resolveSessionCompactionSummary(
-  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
-): Pick<GatewaySessionRow, "compactionCheckpointCount" | "latestCompactionCheckpoint"> {
-  const checkpoints = entry?.compactionCheckpoints;
-  if (!Array.isArray(checkpoints)) {
-    return {};
-  }
-  let compactionCheckpointCount = 0;
-  let latest: SessionCompactionCheckpointEntry | undefined;
-  for (const value of checkpoints) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      continue;
-    }
-    const checkpoint = value as {
-      checkpointId?: unknown;
-      createdAt?: unknown;
-      reason?: unknown;
-    };
-    const checkpointId = normalizeOptionalString(checkpoint.checkpointId);
-    const { createdAt, reason } = checkpoint;
-    if (
-      !checkpointId ||
-      typeof createdAt !== "number" ||
-      !Number.isFinite(createdAt) ||
-      (reason !== "manual" &&
-        reason !== "auto-threshold" &&
-        reason !== "overflow-retry" &&
-        reason !== "timeout-retry")
-    ) {
-      continue;
-    }
-    compactionCheckpointCount += 1;
-    if (!latest || createdAt > latest.createdAt) {
-      latest = value;
-    }
-  }
-  return {
-    compactionCheckpointCount,
-    latestCompactionCheckpoint: latest
-      ? {
-          checkpointId: latest.checkpointId.trim(),
-          createdAt: latest.createdAt,
-          reason: latest.reason,
-        }
-      : undefined,
   };
 }
 
@@ -167,10 +98,10 @@ export function resolveEstimatedSessionCostUsd(params: {
   if (explicitCostUsd !== undefined) {
     return explicitCostUsd;
   }
-  const input = resolvePositiveNumber(params.entry?.inputTokens);
-  const output = resolvePositiveNumber(params.entry?.outputTokens);
-  const cacheRead = resolvePositiveNumber(params.entry?.cacheRead);
-  const cacheWrite = resolvePositiveNumber(params.entry?.cacheWrite);
+  const input = asPositiveFiniteNumber(params.entry?.inputTokens);
+  const output = asPositiveFiniteNumber(params.entry?.outputTokens);
+  const cacheRead = asPositiveFiniteNumber(params.entry?.cacheRead);
+  const cacheWrite = asPositiveFiniteNumber(params.entry?.cacheWrite);
   if (
     input === undefined &&
     output === undefined &&
@@ -240,15 +171,18 @@ export function resolveSessionChildOwners(params: {
           now,
         })
       : shouldKeepStoreOnlyChildLink(entry, now));
-  if (!keep) {
-    return [];
-  }
-  // Runtime control replaces spawnedBy, but explicit navigation lineage survives moves.
-  const controller = latest
-    ? normalizeOptionalString(latest.controllerSessionKey) ||
-      normalizeOptionalString(latest.requesterSessionKey)
-    : normalizeOptionalString(entry.spawnedBy);
-  const parent = normalizeOptionalString(entry.parentSessionKey);
+  // Runtime control replaces spawnedBy, but only retained runs own controller links.
+  const controller = keep
+    ? latest
+      ? normalizeOptionalString(latest.controllerSessionKey) ||
+        normalizeOptionalString(latest.requesterSessionKey)
+      : normalizeOptionalString(entry.spawnedBy)
+    : undefined;
+  // Persistent dashboard navigation outlives the individual run, including forks.
+  const parent =
+    keep || parseAgentSessionKey(key)?.rest.startsWith("dashboard:")
+      ? normalizeOptionalString(entry.parentSessionKey)
+      : undefined;
   return [...new Set([controller, parent])].filter(
     (owner): owner is string => owner !== undefined && owner !== key,
   );

@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -12,32 +13,15 @@ import { formatUiError } from "../format-error.ts";
 import type { CronState } from "./types.ts";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
+export type CronRunsViewState = "idle" | "pending" | "failed" | "ready";
 
-function normalizeCronRunsPageMeta(params: {
-  totalRaw: unknown;
-  offsetRaw: unknown;
-  nextOffsetRaw: unknown;
-  hasMoreRaw: unknown;
-  pageCount: number;
-}) {
-  const total =
-    typeof params.totalRaw === "number" && Number.isFinite(params.totalRaw)
-      ? Math.max(0, Math.floor(params.totalRaw))
-      : params.pageCount;
-  const offset =
-    typeof params.offsetRaw === "number" && Number.isFinite(params.offsetRaw)
-      ? Math.max(0, Math.floor(params.offsetRaw))
-      : 0;
-  const hasMore =
-    typeof params.hasMoreRaw === "boolean"
-      ? params.hasMoreRaw
-      : offset + params.pageCount < Math.max(total, offset + params.pageCount);
+function normalizeCronRunsPageMeta(page: CronRunsResult, pageCount: number) {
+  const total = Math.max(0, Math.floor(asFiniteNumber(page.total) ?? pageCount));
+  const offset = Math.max(0, Math.floor(asFiniteNumber(page.offset) ?? 0));
+  const hasMore = typeof page.hasMore === "boolean" ? page.hasMore : offset + pageCount < total;
+  const next = asFiniteNumber(page.nextOffset);
   const nextOffset =
-    typeof params.nextOffsetRaw === "number" && Number.isFinite(params.nextOffsetRaw)
-      ? Math.max(0, Math.floor(params.nextOffsetRaw))
-      : hasMore
-        ? offset + params.pageCount
-        : null;
+    next !== undefined ? Math.max(0, Math.floor(next)) : hasMore ? offset + pageCount : null;
   return { total, hasMore, nextOffset };
 }
 
@@ -102,6 +86,18 @@ function ownsCronRunsRequest(state: CronState, request: CronRunsRequestIdentity)
   );
 }
 
+export function getCronRunsViewState(state: CronState): CronRunsViewState {
+  const active = activeCronRunsRequests.get(state);
+  if (active && ownsCronRunsRequest(state, active)) {
+    return "pending";
+  }
+  const view = cronRunsViews.get(state);
+  if (!view || !matchesCronRunsView(state, view)) {
+    return "idle";
+  }
+  return state.cronRunsError === null ? "ready" : "failed";
+}
+
 export async function loadCronRuns(
   state: CronState,
   opts?: { append?: boolean; coalesce?: boolean },
@@ -151,7 +147,6 @@ export async function loadCronRuns(
     append,
   };
   activeCronRunsRequests.set(state, request);
-  cronRunsViews.set(state, request);
   // Retained rows cannot authorize an append until their replacement page arrives.
   if (!append) {
     state.cronRunsHasMore = false;
@@ -175,16 +170,11 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
+    cronRunsViews.set(state, request);
     state.cronRunsError = null;
     const entries = Array.isArray(res.entries) ? res.entries : [];
     state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
-    const meta = normalizeCronRunsPageMeta({
-      totalRaw: res.total,
-      offsetRaw: res.offset,
-      nextOffsetRaw: res.nextOffset,
-      hasMoreRaw: res.hasMore,
-      pageCount: entries.length,
-    });
+    const meta = normalizeCronRunsPageMeta(res, entries.length);
     state.cronRunsTotal = Math.max(meta.total, state.cronRuns.length);
     state.cronRunsHasMore = meta.hasMore;
     state.cronRunsNextOffset = meta.nextOffset;
@@ -193,6 +183,7 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request) || request.queued) {
       return "skipped";
     }
+    cronRunsViews.set(state, request);
     state.cronRunsError = formatUiError(err);
     return "error";
   } finally {

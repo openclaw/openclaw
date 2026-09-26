@@ -1,0 +1,26 @@
+diff --git a/lib/Utils/messages-media.js b/lib/Utils/messages-media.js
+index a3d2fa6bae6af021a4a50b4270584fed08623f34..436162b2a11406663c6ade8e55bb2e0ce9998634 100644
+--- a/lib/Utils/messages-media.js
++++ b/lib/Utils/messages-media.js
+@@ -209,7 +209,7 @@ export async function getAudioWaveform(buffer, logger) {
+             audioData = await toBuffer(buffer);
+         }
+         const audioBuffer = await decoder(audioData);
+-        const rawData = audioBuffer.getChannelData(0); // We only need to work with one channel of data
++        const rawData = audioBuffer.channelData[0]; // We only need to work with one channel of data
+         const samples = 64; // Number of samples we want to have in our final data set
+         const blockSize = Math.floor(rawData.length / samples); // the number of samples in each subdivision
+         const filteredData = [];
+diff --git a/package.json b/package.json
+index 473e37b3af1221f4b3813ada01f9ff00e01f9da7..0162a53d0285e361e1f7d4f59ce8466eef7b6e50 100644
+--- a/package.json
++++ b/package.json
+@@ -87,7 +87,7 @@
+     "typescript": "^5.8.2"
+   },
+   "peerDependencies": {
+-    "audio-decode": "^2.1.3",
++    "audio-decode": "^3.12.0",
+     "jimp": "^1.6.1",
+     "link-preview-js": "^3.0.0",
+     "sharp": "*"

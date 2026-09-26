@@ -1,16 +1,9 @@
 // Picker reads consume the Gateway publication; only an explicit retry starts discovery.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { ModelProvidersData } from "./load.ts";
-
-type DiscoveryGateway = {
-  connected: boolean;
-  client: GatewayBrowserClient | null;
-  epoch: number;
-  isCurrent: (params: { client: GatewayBrowserClient; epoch: number }) => boolean;
-};
 
 export type CatalogDiscoveryController = {
   /** Latest explicit Retry, including one that has already settled. */
@@ -26,7 +19,7 @@ export type CatalogDiscoveryController = {
 };
 
 type CreateOptions = {
-  getGateway: () => DiscoveryGateway;
+  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
   getAgentId: () => string;
   getAgentEpoch: () => number;
   getData: () => ModelProvidersData | null;

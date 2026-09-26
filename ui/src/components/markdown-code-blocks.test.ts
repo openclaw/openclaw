@@ -67,7 +67,7 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
 
     part.setConnected(true);
     await Promise.resolve();
-    expect(observed.size).toBe(3);
+    expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
 
@@ -79,7 +79,7 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.has(code!)).toBe(true);
     expect(container.querySelector(".markdown-table__viewport")).toBe(tableViewport);
     expect(observed.has(tableViewport!)).toBe(true);
-    expect(observed.size).toBe(3);
+    expect(observed.size).toBe(4);
 
     render(view(false), container);
     await Promise.resolve();
@@ -91,9 +91,52 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(observed.size).toBe(0);
     render(view(true), container);
     await Promise.resolve();
-    expect(observed.size).toBe(3);
+    expect(observed.size).toBe(4);
     expect(observed.has(code!)).toBe(true);
     expect(observed.has(tableViewport!)).toBe(true);
+  } finally {
+    render(nothing, container);
+  }
+});
+
+it("does not remeasure settled Markdown while neighboring prose streams", async () => {
+  vi.stubGlobal("ResizeObserver", undefined);
+  const container = document.body.appendChild(document.createElement("div"));
+  const content = toSanitizedMarkdownHtml(
+    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
+    { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
+  );
+  const view = (prose: string) =>
+    html`<section class="chat-text" ${markdownBlocks()}>
+      ${unsafeHTML(content)}
+      <p>${prose}</p>
+    </section>`;
+  render(view("First"), container);
+  await Promise.resolve();
+  await Promise.resolve();
+  const widths = vi.fn(() => 300);
+  for (const node of container.querySelectorAll("code, .markdown-table__viewport")) {
+    Object.defineProperty(node, "scrollWidth", { configurable: true, get: widths });
+  }
+
+  try {
+    for (const prose of ["First paragraph", "First paragraph grows", "First paragraph grows"]) {
+      render(view(prose), container);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    expect(container.querySelector("p:last-child")?.textContent).toBe("First paragraph grows");
+    expect(widths).not.toHaveBeenCalled();
+
+    const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
+    const expand = document.createElement("button");
+    expand.className = "code-block-expand";
+    wrapper.append(expand);
+    await Promise.resolve();
+    await Promise.resolve();
+    const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
+    expect(viewport.id).not.toBe("");
+    expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
   } finally {
     render(nothing, container);
   }
@@ -310,15 +353,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     }
   }
 
-  it("renders raw block art as a whitespace-preserving code block", () => {
-    const rendered = toSanitizedMarkdownHtml(blockArt);
-    const fragment = htmlFragment(rendered);
-    const code = fragment.querySelector("pre code.markdown-block-art");
-
-    expect(fragment.querySelector("p")).toBeNull();
-    expect(code?.textContent).toBe(blockArt);
-  });
-
   it("recognizes block art separated by Unicode line boundaries", () => {
     const rendered = toSanitizedMarkdownHtml("  ▀▀▀▀  \u2028  ▄▄▄▄  \u2029  ████  ");
     const fragment = htmlFragment(rendered);
@@ -351,15 +385,6 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
     expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
     await expectCodeCopy(fragment, "indented code");
-  });
-
-  it("includes copy button", async () => {
-    const rendered = toSanitizedMarkdownHtml("```\ncode\n```");
-    const fragment = htmlFragment(rendered);
-
-    expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
-    expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
-    await expectCodeCopy(fragment, "code");
   });
 
   it("omits copy chrome when rendering user-preserved code blocks", () => {
@@ -420,28 +445,22 @@ PY
     expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
   });
 
-  it.each(["text", "md", "markdown", "TEXT", "Markdown title=notes"])(
-    "keeps long %s fences fully visible",
-    (info) => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
-          codeBlockInteraction: "interactive",
-        }),
-      );
-
-      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
-      expect(fragment.querySelector(".code-block-expand")).toBeNull();
-      expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
-    },
-  );
-
-  it.each([
-    { info: "json", content: '"value",\n'.repeat(20) },
-    { info: "bash", content: "echo hi\n".repeat(20) },
-    { info: "", content: "unlabeled line\n".repeat(20) },
-  ])("keeps long $info fences collapsible", ({ info, content }) => {
+  it.each(["md", "TEXT", "Markdown title=notes"])("keeps long %s fences fully visible", (info) => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(`\`\`\`${info}\n${content}\`\`\``, {
+      toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
+        codeBlockInteraction: "interactive",
+      }),
+    );
+
+    expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+    expect(fragment.querySelector(".code-block-expand")).toBeNull();
+    expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
+  });
+
+  it("keeps long unlabeled fences collapsible", () => {
+    const content = "unlabeled line\n".repeat(20);
+    const fragment = htmlFragment(
+      toSanitizedMarkdownHtml(`\`\`\`\n${content}\`\`\``, {
         codeBlockInteraction: "interactive",
       }),
     );

@@ -19,7 +19,6 @@ const {
   createPageViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
-  retirePlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } = pwAi;
 
@@ -272,23 +271,35 @@ describe("pw-session connection scoping", () => {
   });
 
   it("releases every managed-proxy bypass after failed CDP connection attempts", async () => {
-    const releases: Array<ReturnType<typeof vi.fn>> = [];
-    registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
-      const release = vi.fn();
-      releases.push(release);
-      return release;
-    });
-    connectOverCdpSpy.mockRejectedValue(new Error("CDP socket hang up"));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const discoveryStarted = createDeferred<void>();
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
+        const release = vi.fn();
+        releases.push(release);
+        return release;
+      });
+      connectOverCdpSpy.mockRejectedValue(new Error("CDP socket hang up"));
+      getChromeWebSocketUrlSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
-      "CDP socket hang up",
-    );
+      await Promise.all([
+        expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).rejects.toThrow(
+          "CDP socket hang up",
+        ),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
 
-    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledTimes(3);
-    expect(releases).toHaveLength(3);
-    for (const release of releases) {
-      expect(release).toHaveBeenCalledOnce();
+      expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledTimes(3);
+      expect(releases).toHaveLength(3);
+      for (const release of releases) {
+        expect(release).toHaveBeenCalledOnce();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -320,76 +331,110 @@ describe("pw-session connection scoping", () => {
   });
 
   it("keeps URL credentials out of Playwright and escaped connection errors", async () => {
-    const username = "browser-user";
-    const password = "browser-password";
-    const token = "browser-token";
-    const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
-    connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    let message = "";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      await listPagesViaPlaywright({ cdpUrl });
-    } catch (err) {
-      message = String(err);
-    }
+      const discoveryStarted = createDeferred<void>();
+      const username = "browser-user";
+      const password = "browser-password";
+      const token = "browser-token";
+      const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
+      connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
+      getChromeWebSocketUrlSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
-    expect(connectOverCdpSpy).toHaveBeenCalledWith(
-      "wss://browserless.example/devtools/browser/id?token=browser-token",
-      {
-        timeout: expect.any(Number),
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
-        },
-      },
-    );
-    expect(message).toContain("browserless.example/devtools/browser/id");
-    expect(message).not.toContain(username);
-    expect(message).not.toContain(password);
-    expect(message).not.toContain(token);
+      const message = listPagesViaPlaywright({ cdpUrl }).then(
+        () => "",
+        (err: unknown) => String(err),
+      );
+      await Promise.all([
+        message.then((text) => {
+          expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+          expect(connectOverCdpSpy).toHaveBeenCalledWith(
+            "wss://browserless.example/devtools/browser/id?token=browser-token",
+            {
+              timeout: expect.any(Number),
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+              },
+            },
+          );
+          expect(text).toContain("browserless.example/devtools/browser/id");
+          expect(text).not.toContain(username);
+          expect(text).not.toContain(password);
+          expect(text).not.toContain(token);
+        }),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps credentialed HTTP discovery out of Playwright's redirect path", async () => {
     const cdpUrl = "https://browser-user:browser-password@browserless.example/cdp";
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const discoveryStarted = createDeferred<void>();
+      getChromeWebSocketUrlSpy.mockImplementation(async () => {
+        discoveryStarted.resolve();
+        return null;
+      });
 
-    await expect(listPagesViaPlaywright({ cdpUrl })).rejects.toThrow(
-      "Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.",
-    );
+      await Promise.all([
+        expect(listPagesViaPlaywright({ cdpUrl })).rejects.toThrow(
+          "Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.",
+        ),
+        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+      ]);
 
-    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+      expect(connectOverCdpSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("does not fall back to Playwright discovery for guarded non-loopback CDP hosts", async () => {
-    getChromeWebSocketEndpointSpy.mockRejectedValue(new Error("discovery unavailable"));
-
-    const connection = listPagesViaPlaywright({
+  it.each([
+    {
+      host: "non-loopback CDP hosts",
       cdpUrl: "http://93.184.216.34:9222",
       ssrfPolicy: { allowPrivateNetwork: true },
-    });
-    await expect(connection).rejects.toThrow(
-      "Guarded CDP endpoint did not expose a usable WebSocket URL.",
-    );
-    await expect(connection).rejects.toThrow("discovery unavailable");
-
-    expect(connectOverCdpSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back to Playwright discovery for guarded loopback HTTP CDP hosts", async () => {
-    getChromeWebSocketEndpointSpy.mockRejectedValue(new Error("loopback discovery blocked"));
-
-    const connection = listPagesViaPlaywright({
+      error: "discovery unavailable",
+    },
+    {
+      host: "loopback HTTP CDP hosts",
       cdpUrl: "http://127.0.0.1:9222",
       ssrfPolicy: {},
-    });
-    await expect(connection).rejects.toThrow(
-      "Guarded CDP endpoint did not expose a usable WebSocket URL.",
-    );
-    await expect(connection).rejects.toThrow("loopback discovery blocked");
+      error: "loopback discovery blocked",
+    },
+  ])(
+    "does not fall back to Playwright discovery for guarded $host",
+    async ({ cdpUrl, ssrfPolicy, error }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const discoveryStarted = createDeferred<void>();
+        const discoveryError = new Error(error);
+        getChromeWebSocketEndpointSpy.mockImplementation(async () => {
+          discoveryStarted.resolve();
+          throw discoveryError;
+        });
 
-    expect(connectOverCdpSpy).not.toHaveBeenCalled();
-  });
+        const connection = listPagesViaPlaywright({ cdpUrl, ssrfPolicy });
+        await Promise.all([
+          expect(connection).rejects.toThrow(
+            "Guarded CDP endpoint did not expose a usable WebSocket URL.",
+          ),
+          expect(connection).rejects.toThrow(error),
+          discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+        ]);
+
+        expect(connectOverCdpSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("allows loopback CDP control without widening the navigation allowlist", async () => {
     const browser = makeBrowser("A", "https://example.com");
@@ -540,7 +585,9 @@ describe("pw-session connection scoping", () => {
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
-    expect(retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" })).toBe(true);
+    expect(
+      retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" }).retired,
+    ).toBe(true);
     await expect(listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" })).resolves.toEqual([
       expect.objectContaining({ targetId: "B" }),
     ]);
@@ -695,7 +742,7 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
-    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+    retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" });
 
     await vi.waitFor(() => expect(stuck.browserClose).toHaveBeenCalledTimes(1));
 
@@ -732,7 +779,7 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
-    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+    retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" });
 
     const successor = listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
@@ -772,7 +819,7 @@ describe("pw-session connection scoping", () => {
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
     ).rejects.toThrow(/Playwright page enumeration timed out after 20ms/);
 
-    retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
+    retirePlaywrightBrowserConnectionExact({ cdpUrl: "http://127.0.0.1:9222" });
 
     const recovered = await listPagesViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",

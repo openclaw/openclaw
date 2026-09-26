@@ -70,6 +70,12 @@ export type WorkspaceManifestValueInputs = {
     paths: string[];
     hashes?: WorkspaceComputationHashes;
   };
+  "workspace.manifest.tree-input": {
+    inputPath: string;
+    ref: string;
+    entries: readonly WorkerWorkspaceManifestEntry[];
+    source: { root: string; tree?: never } | { root: string; tree: string };
+  };
   "workspace.manifest.serialize": { manifest: WorkerWorkspaceManifest };
   "workspace.manifest.overlay": {
     source: WorkerWorkspaceManifest;
@@ -86,7 +92,33 @@ export type WorkspaceManifestValueInputs = {
 
 type WorkspaceManifestValueInput = { payload: Uint8Array<ArrayBuffer> };
 
+export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
+  | {
+      baseManifestRef: string;
+      currentManifestRef: string;
+      baseManifestRaw: Raw;
+      currentManifestRaw: Raw;
+    }
+  | {
+      publication: {
+        metadata: Raw;
+        publicationDigest: string;
+        currentManifestRef: string;
+        baseCommit: string;
+      };
+    };
+
+export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageInputSource<Raw> & {
+  inputPath: string;
+  stagingRoot: string;
+  stagedResultRef: string;
+};
+
 export type WorkspaceManifestComputationOperations = {
+  "workspace.manifest.tree-input": {
+    input: WorkspaceManifestValueInput;
+    output: null;
+  };
   "workspace.manifest.nodes": {
     input: WorkspaceManifestValueInput;
     output: WorkspaceComputationHashResult<Array<[string, WorkspaceNode]>>;
@@ -140,15 +172,7 @@ export type WorkspaceManifestComputationOperations = {
     output: Uint8Array;
   };
   "workspace.manifest.stage-input": {
-    input: {
-      inputPath: string;
-      stagingRoot: string;
-      stagedResultRef: string;
-      baseManifestRef: string;
-      currentManifestRef: string;
-      baseManifestRaw: Uint8Array<ArrayBuffer>;
-      currentManifestRaw: Uint8Array<ArrayBuffer>;
-    };
+    input: WorkspaceStageInput;
     output: null;
   };
 };

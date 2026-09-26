@@ -39,10 +39,9 @@ and managed-service handoff runs do not prompt or collect automatic diagnostics.
 
 For failures without a verified rollback, updates using `--yes`, `--json`, or a
 non-interactive session (including piped input or output) collect diagnostics
-and print handoff commands without starting an external coding agent. The updater's
-earlier
-[unattended repair slot](/install/updating#unattended-repair-on-your-own-inference)
-can still run on configured inference. With `--json`, triage output goes to stderr so stdout retains
+and print handoff commands without starting an external coding agent. Eligible
+failures can start [post-failure triage](/install/updating#unattended-repair-on-your-own-inference)
+on configured inference after update ownership and service compensation settle. With `--json`, triage output goes to stderr so stdout retains
 the original update result. Diagnostic collection failures never hide the update
 failure.
 
@@ -78,6 +77,44 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+### Retained updater runtime
+
+An update can retain its running code in an `openclaw-update-runtime-*` directory
+beside the installation or in the system temporary directory. The updater settles
+its workers and removes that directory after success, failure, an exception, or
+`SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
+cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
+and leaves cleanup available to Doctor. A cleanup warning does not replace the
+original update outcome.
+
+Retention copies plugin manifests and files inspected by plugin safety checks,
+so retaining the updater does not make the checkout's plugins fail hardlink
+validation. Other runtime files remain hardlinked when supported.
+
+These lifecycle and copying changes apply when the installed updater supports
+them; installing a newer candidate cannot change the updater already running.
+After that updater exits, run the newer `openclaw doctor --fix` from the original
+checkout to locate its sibling runtime directories. Doctor also checks known
+temporary directories, including the managed service's `TMPDIR`. Recognized
+runtime projections are disposable; Doctor removes them when no worker still
+uses them. If ownership or process liveness cannot be verified, Doctor preserves
+the directory and reports the reason.
+
+## Candidate Doctor stack overflow
+
+Chat-triggered updates to 2026.9.6 can fail with `authority-check-failed: Maximum
+call stack size exceeded`, sometimes preceded by `Update history reconciliation
+could not complete`. This is a candidate Doctor authority-check defect; it can
+happen on the first update, without migrated state or earlier failed runs.
+The corrective candidate can run through the installed updater with retained
+history intact. Running the older installation's standalone Doctor cannot fix
+code in the candidate package.
+
+There is no supported command to reset retained update history. `update repair`
+finishes interrupted finalization, and `update cleanup` retires eligible recovery
+originals; neither clears the run ledger. Keep history and backups rather than
+deleting database rows to work around this failure.
+
 ## `update repair`
 
 Rerun update finalization after the core package already changed but later
@@ -93,6 +130,11 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
+When repair runs under Bun, its fresh Doctor, config validation, readiness,
+completion, and non-interactive failure-diagnostic commands use that same Bun
+executable. Node and command-shim invocations keep their existing Node selection
+policy. Managed-service runtime selection remains owned by the service configuration.
+
 If an older updater publishes the new core but then reports
 `update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,
 wait for that updater to exit and run `openclaw update repair --yes --json` from
@@ -100,6 +142,13 @@ the updated installation, preserving its profile and state/config overrides.
 This finishes Doctor and post-core convergence through a fresh owner. Check the
 repair result before restarting an already stopped Gateway through its service
 owner. Updating the candidate cannot change the older updater already in memory.
+
+When a managed Gateway was already stopped before standalone repair, repair leaves
+it offline and warns that you must run `openclaw gateway start` to bring it online.
+If its service definition points to a different installation, repair instead reports
+the installation repair command. These maintenance warnings also appear in
+`postUpdate.doctor.warnings`; otherwise successful finalization reports
+`status: "warning"` and exits successfully.
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -150,6 +199,13 @@ because the updater owns service changes. They preserve an operator's
 coordinators and agent-database lease checks. An external deployment owner still
 owns stopping and restarting its Gateway.
 
+Automatic repair finishes its embedded agent turn and releases that turn's database
+and process resources before asking the update owner to run Doctor or update repair.
+This prevents the repair agent's own credential writes from blocking maintenance.
+Other live agent leases still block repair. Maintenance preserves the original
+Gateway activation intent, including `--no-restart` and intentional stops. A
+successful maintenance command alone does not verify the original symptom.
+
 Repair invoked within the owning update can continue when its inherited run ID
 and live process identity match that owner. Standalone repair records the same
 continuation for its new run and passes that run ID to its Doctor children.
@@ -161,6 +217,15 @@ An already stopped service stays stopped. Service ownership and the invoking
 run are revalidated before every native operation. A restoration failure names
 the cause and the commands to inspect and restart the Gateway. Normal update
 finalization continues to leave activation with its outer updater.
+
+If Doctor reports that the update parent must stop the managed Gateway, wait
+for that update to exit, then run `openclaw gateway stop` and retry
+`openclaw update repair` from an independent shell with the same profile and
+state/config overrides. On macOS, stop unloads the LaunchAgent and verifies that
+its process exited. A still-loaded service or surviving PID after a successful
+stop is a service shutdown failure. If stop cannot unload the service, use the
+exact `launchctl bootout` command printed in the refusal from the owning user's
+logged-in macOS GUI session.
 
 An unrelated update whose driver is live or cannot be inspected still blocks
 repair, even after a long period without activity. Manual `doctor --fix` also
@@ -192,7 +257,8 @@ Failed convergence leaves the selected rows intact. If any selected run resumes
 before reconciliation, the whole selection is preserved. Full finalization JSON
 includes `reconciledRuns` when rows were selected for recovery, listing the IDs
 newly acknowledged by that invocation, including already-terminal abandoned rows.
-Successful completion with nonfatal warnings also acknowledges those rows.
+Successful convergence with nonfatal warnings also acknowledges those rows.
+Deferred maintenance preserves the selected history and pending migration obligations.
 
 For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
 install records, syncs tracked plugins for the active update channel, updates
@@ -229,9 +295,26 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
 availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
-successfully when required checks pass. Failed required Doctor execution,
-invalid configuration or state, ownership errors, and failed required readiness
-checks still exit nonzero.
+successfully when required checks pass. Doctor maintenance admission refusals
+also finish with a warning when no data is at risk. Repair restores any service
+it stopped, leaves migrations pending, and names the next repair action. Errors
+after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
+cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
+
+Recorded pending-migration warnings stop appearing after the migration owner
+records completion. Unrelated warnings and later or reintroduced obligations
+remain visible; the original update history is preserved.
+
+After post-update or finalization work fails and its child processes settle,
+OpenClaw probes the installed Gateway using the normal startup and readiness
+budget. Update history and failure reports record the observed serving version
+and readiness, including for a foreground Gateway. A failed finalization step
+can therefore report **verified serving** while retaining its original failure
+and repair guidance. The observation does not restart the Gateway or grant
+maintenance authority. Failed probes retain their specific diagnostic; a
+Gateway that is still starting keeps that outcome instead of being restarted.
+If command cleanup remains uncertain, the run stays open and retains its recovery
+artifacts instead of publishing completion or starting another repair.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,

@@ -13,7 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   captureConfigHealthStateStore,
   readConfigHealthStateFromStore,

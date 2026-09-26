@@ -116,11 +116,7 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       signal: params.signal,
       ...navigationPolicy,
     });
-    if (currentUrl === lastObservedUrl) {
-      sawStableAllowedUrl = true;
-    } else {
-      sawStableAllowedUrl = false;
-    }
+    sawStableAllowedUrl = currentUrl === lastObservedUrl;
     lastObservedUrl = currentUrl;
   }
 
@@ -151,7 +147,6 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       }
     } catch {
       params.signal?.throwIfAborted();
-      // Probe failed — fall through to throw
     }
   }
 
@@ -233,7 +228,7 @@ export async function waitForExistingSessionCondition(
             deadline.throwIfAborted();
             const url = await document.evaluate(`(root) => {
             const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
-            return boundDocument === globalThis.document ? globalThis.location.href : null;
+            return boundDocument === document ? location.href : null;
           }`);
             deadline.throwIfAborted();
             if (typeof url !== "string" || !url.trim()) {
@@ -261,7 +256,9 @@ export async function waitForExistingSessionCondition(
           deadline.throwIfAborted();
           const outcome = await document.evaluate(`async (root) => {
           const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
-          if (boundDocument !== globalThis.document) return { kind: "navigation" };
+          if (boundDocument !== document || location.href !== ${JSON.stringify(currentUrl)}) {
+            return { kind: "navigation" };
+          }
           try {
             return { kind: "result", ready: Boolean(await (${predicate})) };
           } catch (error) {

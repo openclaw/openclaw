@@ -30,7 +30,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
-import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
 import { sleep } from "../../src/utils.js";
 import { decodeUtf8Tail } from "./bounded-child-output.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
@@ -63,6 +64,23 @@ type OpenClawTestInstanceCommandResult = {
 };
 
 type OpenClawTestProcess = ChildProcessByStdio<null, Readable, Readable>;
+
+export class GatewayStartupRefusedError extends Error {
+  readonly reason = "legacy-migration-required";
+  readonly exitCode = 78;
+  readonly signalCode = null;
+  readonly legacyStorePath: string;
+  readonly stderr: string;
+
+  constructor(legacyStorePath: string, stderr: string, cause: unknown) {
+    super(`gateway refused startup: legacy migration required (code=78 signal=null)\n${stderr}`, {
+      cause,
+    });
+    this.name = "GatewayStartupRefusedError";
+    this.legacyStorePath = legacyStorePath;
+    this.stderr = stderr;
+  }
+}
 
 export type OpenClawTestInstance = {
   name: string;
@@ -753,11 +771,15 @@ export async function createOpenClawTestInstance(
     if (options.port !== undefined) {
       port = options.port;
     } else {
-      const claimed = await acquireTestPortBlock({ offsets: [0, 1], signal });
-      port = claimed.port;
-      releasePortClaims = claimed.release;
-      signal?.throwIfAborted();
-      reservation = await reserveGatewayPort(port, options.verifyCleanup);
+      const reserved = await reserveTestPortListener({
+        offsets: [0, 1],
+        signal,
+        createListener: () => net.createServer((socket) => socket.destroy()),
+        verifyCleanup: options.verifyCleanup,
+      });
+      port = reserved.claim.port;
+      releasePortClaims = reserved.claim.release;
+      reservation = { release: reserved.releaseListener };
     }
     signal?.throwIfAborted();
     state = await createOpenClawTestState({
@@ -844,7 +866,7 @@ export async function createOpenClawTestInstance(
     args: string[],
     attemptStderr: string[],
   ): OpenClawTestProcess => {
-    const [command = "node", ...prefixArgs] = options.gatewayCommandPrefix ?? [];
+    const [command = process.execPath, ...prefixArgs] = options.gatewayCommandPrefix ?? [];
     signal?.throwIfAborted();
     const next = spawnManagedChild(command, [...prefixArgs, ...args], {
       cwd,
@@ -925,7 +947,7 @@ export async function createOpenClawTestInstance(
         const commandEntrypoint = await entrypoint();
         signal?.throwIfAborted();
         return await runCommand({
-          args: [commandOptions.execPath ?? "node", ...commandEntrypoint, ...args],
+          args: [commandOptions.execPath ?? process.execPath, ...commandEntrypoint, ...args],
           cwd,
           env,
           timeoutMs: commandOptions.timeoutMs ?? COMMAND_TIMEOUT_MS,
@@ -969,6 +991,8 @@ export async function createOpenClawTestInstance(
           ...(options.gatewayArgs ?? []),
         ];
         await stopGatewayChild({ forceWindowsTree: true });
+        // Parent-side seeds retain leases that the child's startup maintenance must acquire.
+        await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
         signal?.throwIfAborted();
         const deadline = Date.now() + (options.startTimeoutMs ?? GATEWAY_START_TIMEOUT_MS);
         let restarts = 0;
@@ -1045,14 +1069,27 @@ export async function createOpenClawTestInstance(
                 },
               );
             }
+            // Exit can precede stderr delivery. Classify only this completed
+            // attempt, never the readiness error's snapshot or earlier starts.
+            const completedStderr = readLogBuffer(attemptStderr);
+            if (closed && !signal?.aborted && exitCode === 78 && signalCode === null) {
+              // Admission after a checkpoint and a refused migration step have
+              // different reports; both must name the source and its repair.
+              const legacyStorePath =
+                completedStderr.match(
+                  /^(?:Gateway failed to start: )?Legacy session store requires migration: (.+)\. Run "openclaw doctor --fix" against the same state\/config before starting OpenClaw\.\r?$/mu,
+                )?.[1] ??
+                completedStderr.match(
+                  /^OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready\.\r?\n- Legacy sessions store unreadable; left in place at ([^\r\n]+)\r?\n(?:- [^\r\n]+\r?\n)*Run "openclaw doctor --fix" against the same state\/config, then restart the gateway\.\r?$/mu,
+                )?.[1];
+              if (legacyStorePath) {
+                throw new GatewayStartupRefusedError(legacyStorePath, completedStderr, err);
+              }
+            }
             const shouldRestart =
               !signal?.aborted &&
               restarts < GATEWAY_MIGRATION_CONVERGENCE_MAX_RESTARTS &&
-              isGatewayMigrationConvergenceRefusal(
-                exitCode,
-                signalCode,
-                readLogBuffer(attemptStderr),
-              );
+              isGatewayMigrationConvergenceRefusal(exitCode, signalCode, completedStderr);
             if (shouldRestart && closed && Date.now() < deadline) {
               restarts += 1;
               appendLogChunk(stderr, GATEWAY_MIGRATION_CONVERGENCE_RESTART_MARKER);

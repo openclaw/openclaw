@@ -16,7 +16,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -38,6 +37,7 @@ import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -76,19 +76,6 @@ type GatewayRecoveryState =
       abortController: AbortController;
     }
   | { kind: "settled"; result: GatewayRecoveryResult };
-
-type LogSourceIdentity = {
-  file?: string;
-  source?: string;
-  sourceKind?: LogsTailPayload["sourceKind"];
-  servicePid?: number;
-  serviceUnit?: string;
-  localFallback?: boolean;
-};
-
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return await import("./logs-cli.runtime.js");
-}
 
 type LogsCliOptions = GatewayRpcOpts & {
   limit?: string;
@@ -136,15 +123,14 @@ function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
   if (!sourceKind && !payload.file && !payload.source) {
     return undefined;
   }
-  const identity: LogSourceIdentity = {
+  return JSON.stringify({
     file: payload.file,
     source: payload.source,
     sourceKind,
     servicePid: payload.service?.pid,
     serviceUnit: payload.service?.unit,
     localFallback: payload.localFallback === true ? true : undefined,
-  };
-  return JSON.stringify(identity);
+  });
 }
 
 function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
@@ -278,7 +264,7 @@ async function readSystemdJournalFallback(params: {
   if (process.platform !== "linux") {
     return null;
   }
-  const runtime = await loadLogsCliRuntime();
+  const runtime = await import("./logs-cli.runtime.js");
   const service = await runtime.readSystemdServiceRuntime(process.env);
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
@@ -522,11 +508,7 @@ export function registerLogsCli(program: Command) {
     .option("--no-color", "Disable ANSI colors")
     .option("--local-time", "Display timestamps in local timezone (default)", false)
     .option("--utc", "Display timestamps in UTC", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.openclaw.ai/cli/logs")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/logs"));
 
   addGatewayClientOptions(logs);
 
@@ -568,6 +550,8 @@ export function registerLogsCli(program: Command) {
     let first = true;
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
+    const emitNotice = (message: string) =>
+      jsonMode ? emitJsonLine({ type: "notice", message }) : errorLine(message);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
@@ -706,31 +690,7 @@ export function registerLogsCli(program: Command) {
         }
         for (const line of lines) {
           const parsed = parseLogLine(line);
-          if (parsed) {
-            if (!emitJsonLine({ type: "log", ...parsed })) {
-              return;
-            }
-          } else if (!emitJsonLine({ type: "raw", raw: line })) {
-            return;
-          }
-        }
-        if (payload.truncated) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: "Log tail truncated (increase --limit or --max-bytes).",
-            })
-          ) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: formatLogResetNotice(payload.skippedBytes),
-            })
-          ) {
+          if (!emitJsonLine(parsed ? { type: "log", ...parsed } : { type: "raw", raw: line })) {
             return;
           }
         }
@@ -777,16 +737,15 @@ export function registerLogsCli(program: Command) {
             return;
           }
         }
-        if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
-            return;
-          }
-        }
+      }
+      if (
+        payload.truncated &&
+        !emitNotice("Log tail truncated (increase --limit or --max-bytes).")
+      ) {
+        return;
+      }
+      if (payload.reset && !emitNotice(formatLogResetNotice(payload.skippedBytes))) {
+        return;
       }
       if (payload.sourceKind === "journal") {
         // The journal is an at-least-once bridge: retain its cursor, leave the

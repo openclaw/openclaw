@@ -2,6 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
@@ -14,7 +18,11 @@ const definitionsSql = `SELECT name, sql FROM main.sqlite_schema
     ))`;
 const validatedSchemas = resolveGlobalSingleton(
   Symbol.for("openclaw.agentCanonicalValidationSchemas"),
-  () => new WeakMap<DatabaseSync, { cookie: number; unregister: () => void }>(),
+  () =>
+    new WeakMap<
+      DatabaseSync,
+      { cookie: number; schema?: SqliteSchemaFacts; unregister: () => void }
+    >(),
 );
 
 function readDefinitions(database: DatabaseSync): Map<string, string | null> {
@@ -59,12 +67,13 @@ function expectedDefinitions(): Map<string, string | null> {
 
 /** Require the exact invalidation group before an empty pending set can certify readiness. */
 export function assertCanonicalSessionValidationSchema(database: DatabaseSync): void {
-  const cookie = readSqliteSchemaCookie(database);
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  const cookie = schema?.schemaVersion ?? readSqliteSchemaCookie(database);
   if (typeof cookie !== "number") {
     throw new Error("Session canonical validation schema version is unavailable");
   }
   const cached = validatedSchemas.get(database);
-  if (cached?.cookie === cookie) {
+  if (cached && (schema ? cached.schema === schema : !cached.schema && cached.cookie === cookie)) {
     return;
   }
   cached?.unregister();
@@ -81,16 +90,16 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
       );
     }
   }
-  if (readSqliteSchemaCookie(database) !== cookie) {
+  if (!schema && readSqliteSchemaCookie(database) !== cookie) {
     throw new Error("Session canonical validation schema changed during admission; retry the read");
   }
-  // Transactional DDL can roll back and reuse its cookie for another schema.
-  if (!database.isTransaction) {
+  // Admitted handles own DDL/rollback invalidation; unmanaged readers only retain committed cookies.
+  if (schema || !database.isTransaction) {
     const unregister = registerNodeSqliteDisposeCallback(database, () => {
       validatedSchemas.delete(database);
       unregister();
     });
-    validatedSchemas.set(database, { cookie, unregister });
+    validatedSchemas.set(database, { cookie, schema, unregister });
   }
 }
 

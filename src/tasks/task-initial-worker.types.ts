@@ -1,4 +1,8 @@
-import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract.js";
+import type {
+  CreatedDetachedTaskRun,
+  DetachedTaskTerminalState,
+} from "./detached-task-runtime-contract.js";
+import type { CronTaskMaintenanceInput } from "./task-cron-maintenance-policy.js";
 import type {
   InitialTaskFlowCreateInput,
   InitialTaskFlowCreateResult,
@@ -8,20 +12,60 @@ import type {
   InitialTaskFlowLinkResult,
   InitialTaskManagedCancellationResult,
 } from "./task-initial-flow.kernel.js";
+import type {
+  TaskStateNotificationAcknowledgement,
+  TaskNotificationDeliveryUpdate,
+} from "./task-notification.operation.js";
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
-import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
-import type { TaskPersistenceReceipt, TaskRuntime } from "./task-registry.types.js";
+import type { TaskRetentionWriteResult } from "./task-registry-retention-receipt.js";
+import type { TaskRetentionInput } from "./task-registry-retention.operation.js";
+import type {
+  TaskRecordTransitionReceipt,
+  TaskWorkerTransitionInput,
+} from "./task-registry-transition.kernel.js";
+import type {
+  TaskExecutionOwner,
+  TaskPersistenceReceipt,
+  TaskRuntime,
+} from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
+  "tasks.maintainCron": {
+    input: CronTaskMaintenanceInput;
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.applyRetention": { input: TaskRetentionInput; output: TaskRetentionWriteResult };
+  "tasks.transitionRunRow": {
+    input: Extract<TaskWorkerTransitionInput, { kind: "state" | "delivery" }>;
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.bindRunOwner": {
+    input: {
+      taskId: string;
+      expectedTask: TaskPersistenceReceipt;
+      params: { runId: string; executionOwner?: TaskExecutionOwner; clearLastToolName?: true };
+      now: number;
+    };
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.updateNotificationDelivery": {
+    input: TaskNotificationDeliveryUpdate;
+    output: TaskRecordTransitionReceipt | null;
+  };
+  "tasks.acknowledgeStateChange": {
+    input: TaskStateNotificationAcknowledgement;
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.createRecord": { input: TaskCreateInput; output: TaskCreateResult };
   "tasks.finalizeActive": {
     input: {
       taskId: string;
       expectedTask: TaskPersistenceReceipt;
-      params: { runId: string; runtime: TaskRuntime; sessionKey?: string } & Pick<
-        DetachedTaskTerminalState,
-        "status" | "endedAt" | "error" | "terminalSummary"
-      >;
+      params: {
+        runId: string;
+        runtime: TaskRuntime;
+        sessionKey?: string;
+      } & Parameters<CreatedDetachedTaskRun["finalizeActive"]>[0];
       now: number;
     };
     output: TaskRecordTransitionReceipt | null;

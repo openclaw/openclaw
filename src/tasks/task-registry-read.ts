@@ -1,14 +1,24 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import {
   captureTaskRegistryReadFence,
   hasPendingTaskRegistryEvents,
+  listPendingTaskRegistryEventTaskIds,
 } from "./task-registry-listener-state.js";
-import { cloneTaskRecord, selectTaskRecordsForOwnerTree } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  compareTasksNewestFirst,
+  listTasksFromIndex,
+  selectTaskRecordsForOwnerTree,
+  selectTaskRecordsWithAncestors,
+} from "./task-registry-records.js";
 import {
   assertTaskRegistryOwnerCurrent,
   ensureTaskRegistryReadyAsync,
+  isTaskRegistryResidentReady,
   prepareTaskRegistryProjectionAsync,
   tasks,
   taskIdsByOwnerKey,
@@ -16,12 +26,15 @@ import {
 } from "./task-registry-state.js";
 import {
   getTaskRegistryProcessState,
+  getTasksByRunId,
   matchesScope,
+  taskIdsInScope,
   type PendingTaskRegistryMutation,
 } from "./task-registry.process-state.js";
 import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRegistryMutationScope } from "./task-registry.store.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { taskMatchesRelatedSession } from "./task-session-identity.js";
 
 export type TaskRegistryRead = {
   assertOwnerCurrent: () => void;
@@ -29,10 +42,17 @@ export type TaskRegistryRead = {
   isTaskCurrent: (taskId: string) => boolean;
   isTaskSettled: (taskId: string) => boolean;
   isChildSessionCurrent: (childSessionKey: string) => boolean;
+  hasPendingTasksForFlow: (flowId: string) => boolean;
   getTaskById: (taskId: string) => TaskRecord | undefined;
   getTasksByRunId: (runId: string) => TaskRecord[];
   listTaskRecordsForChildSessionKey: (childSessionKey: string) => TaskRecord[];
   listTaskRecordsForOwnerTree: (rootOwnerKeys: ReadonlySet<string>) => TaskRecord[];
+  listTaskRecordsWithAncestors: (
+    taskIds: readonly string[],
+    isRootTask: (task: Readonly<TaskRecord>) => boolean,
+  ) => TaskRecord[];
+  listTasksForRelatedSessionKey: (sessionKey: string, sessionAgentId?: string) => TaskRecord[];
+  listTasksForAgentId: (agentId: string) => TaskRecord[];
 };
 
 function isTaskRegistryReadScopeCurrent(
@@ -46,6 +66,7 @@ function isTaskRegistryReadScopeCurrent(
       tasks.get(scope.taskId),
       ...(pending?.published.values() ?? []),
       ...(pending?.publication?.records.values() ?? []),
+      ...(pending?.publication?.deletions.values() ?? []),
       pending?.readEventTarget?.(),
     ];
     return (
@@ -69,26 +90,98 @@ function isTaskRegistryReadCurrent(taskId: string, mode: "identity" | "settled")
     return true;
   }
   const task = tasks.get(taskId);
-  const preserved = new Set<TaskRegistryMutationScope>();
+  const currentScopes = new Set<TaskRegistryMutationScope>();
   for (const pending of projection.pending) {
     if (mode === "identity" && pending.readIdentity === "preserved") {
-      preserved.add(pending.scope);
-    } else if (
-      pending.scope.taskId === taskId ||
-      pending.published.has(taskId) ||
+      currentScopes.add(pending.scope);
+      continue;
+    }
+    const creation =
+      mode === "identity" &&
+      typeof pending.readIdentity === "object" &&
+      pending.readIdentity.kind === "creation"
+        ? pending.readIdentity
+        : undefined;
+    const changesIdentity = creation
+      ? creation.taskId === taskId ||
+        Boolean(
+          creation.runId &&
+          (task?.runId?.trim() === creation.runId ||
+            pending.published.get(taskId)?.runId?.trim() === creation.runId),
+        )
+      : pending.scope.taskId === taskId ||
+        pending.published.has(taskId) ||
+        (task && matchesScope(task, pending.scope));
+    if (
+      changesIdentity ||
       pending.publication?.records.has(taskId) ||
-      (task && matchesScope(task, pending.scope))
+      pending.publication?.deletions.has(taskId)
     ) {
       return false;
+    }
+    if (creation) {
+      // Its broad readback includes sibling session rows that creation cannot rewrite.
+      currentScopes.add(pending.scope);
     }
   }
   // Failed publication can leave a dirty scope after its mutation owner retires.
   for (const scope of projection.dirtyScopes) {
-    if (!preserved.has(scope) && (scope.taskId === taskId || (task && matchesScope(task, scope)))) {
+    if (
+      !currentScopes.has(scope) &&
+      (scope.taskId === taskId || (task && matchesScope(task, scope)))
+    ) {
       return false;
     }
   }
   return true;
+}
+
+/** Inspect resident settlement inside an already admitted synchronous read batch. */
+export function isTaskRegistryTaskSettled(taskId: string): boolean {
+  return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+}
+
+/** Pin known identity before yielding; cold or uncertain projections use normal preparation. */
+function captureResidentTaskRegistryRunCandidates(runId: string): TaskRecord[] | undefined {
+  const normalized = runId.trim();
+  if (
+    !isTaskRegistryResidentReady() ||
+    getTaskRegistryProcessState().projection.dirty ||
+    !isTaskRegistryReadScopeCurrent("runId", normalized)
+  ) {
+    return undefined;
+  }
+  const candidates = getTasksByRunId(normalized);
+  return candidates.every((task) => isTaskRegistryReadCurrent(task.taskId, "identity"))
+    ? candidates.map(cloneTaskRecord)
+    : undefined;
+}
+
+/**
+ * Retain the first usable run selection before joining the external read fence.
+ * Cold state linearizes at its first SQL snapshot. A receipt-free call cannot
+ * identify an assignment replaced before that read; producer receipts can.
+ */
+export async function captureTaskRegistryRunSelection(
+  runId: string,
+  matches: (task: Readonly<TaskRecord>) => boolean,
+): Promise<TaskRecord[]> {
+  const normalized = runId.trim();
+  const resident = captureResidentTaskRegistryRunCandidates(normalized);
+  if (resident) {
+    return resident.filter(matches);
+  }
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const snapshot = await store.loadMutationSnapshotAsync(
+    context,
+    { taskId: "", runId: normalized },
+    { missingDatabase: "empty" },
+  );
+  assertTaskRegistryOwnerCurrent(context, store);
+  return [...snapshot.tasks.values()]
+    .filter((task) => task.runId?.trim() === normalized && matches(task))
+    .map(cloneTaskRecord);
 }
 
 type TaskRegistryReadOwner = {
@@ -97,12 +190,39 @@ type TaskRegistryReadOwner = {
   assertCurrent: () => void;
 };
 
+function canReadResidentTaskMetadata(): boolean {
+  const { projection } = getTaskRegistryProcessState();
+  if (projection.dirty || !hasPendingTaskRegistryEvents()) {
+    return false;
+  }
+  const preserved = new Set<TaskRegistryMutationScope>();
+  for (const pending of projection.pending) {
+    if (pending.readIdentity !== "preserved") {
+      return false;
+    }
+    preserved.add(pending.scope);
+  }
+  return [...projection.dirtyScopes].every((scope) => preserved.has(scope));
+}
+
 /** External readers join a fixed accepted prefix; persistence preparation must never use this fence. */
-export async function prepareTaskRegistryReadOwner(): Promise<TaskRegistryReadOwner> {
-  const context = captureOpenClawStateWorkerContext();
-  const store = getTaskRegistryStore();
+export async function prepareTaskRegistryReadOwner(
+  context = captureOpenClawStateWorkerContext(),
+  store = getTaskRegistryStore(),
+  pendingMutations: readonly PendingTaskRegistryMutation[] = [],
+): Promise<TaskRegistryReadOwner> {
   const fence = captureTaskRegistryReadFence(context.admission);
-  const settled = await Promise.allSettled([ensureTaskRegistryReadyAsync(context), fence]);
+  const mutations = pendingMutations.flatMap((pending) => {
+    const settlement = pending.readSettlement;
+    return settlement?.store === store && settlement.databaseKey === context.admission.identity.key
+      ? [settlement.promise]
+      : [];
+  });
+  const settled = await Promise.allSettled([
+    ensureTaskRegistryReadyAsync(context),
+    fence,
+    ...mutations,
+  ]);
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length === 1) {
     throw errors[0];
@@ -115,6 +235,28 @@ export async function prepareTaskRegistryReadOwner(): Promise<TaskRegistryReadOw
   return { context, store, assertCurrent };
 }
 
+/** Page requests join their initial mutation cohort and accepted events while retries refresh rows. */
+export function createTaskRegistryReadPreparation() {
+  let owner: TaskRegistryReadOwner | undefined;
+  return async (): Promise<TaskRegistryRead | undefined> => {
+    if (owner) {
+      const store = getTaskRegistryStore();
+      assertTaskRegistryOwnerCurrent(owner.context, store);
+      // A replacement store starts its own fence; an invalid database cannot be reopened here.
+      if (store !== owner.store) {
+        owner = undefined;
+      }
+    }
+    if (!owner) {
+      const context = captureOpenClawStateWorkerContext();
+      owner = await prepareTaskRegistryReadOwner(context, getTaskRegistryStore(), [
+        ...getTaskRegistryProcessState().projection.pending,
+      ]);
+    }
+    return prepareTaskRegistryRead(owner);
+  };
+}
+
 export async function prepareTaskRegistryRead(
   owner?: TaskRegistryReadOwner,
 ): Promise<TaskRegistryRead | undefined> {
@@ -123,7 +265,14 @@ export async function prepareTaskRegistryRead(
     store,
     assertCurrent: assertOwnerCurrent,
   } = owner ?? (await prepareTaskRegistryReadOwner());
-  if (!(await prepareTaskRegistryProjectionAsync(context, store, 3))) {
+  assertOwnerCurrent();
+  await ensureTaskRegistryReadyAsync(context);
+  assertOwnerCurrent();
+  // Later metadata preserves routing and access; its live owners still owe publication.
+  if (
+    !canReadResidentTaskMetadata() &&
+    !(await prepareTaskRegistryProjectionAsync(context, store, 3))
+  ) {
     return undefined;
   }
   const assertCurrent = () => {
@@ -156,11 +305,65 @@ export async function prepareTaskRegistryRead(
     isTaskCurrent,
     isTaskSettled(taskId) {
       assertCurrent();
-      return !hasPendingTaskRegistryEvents(taskId) && isTaskRegistryReadCurrent(taskId, "settled");
+      return isTaskRegistryTaskSettled(taskId);
     },
     isChildSessionCurrent(childSessionKey) {
       assertCurrent();
       return isTaskRegistryReadScopeCurrent("childSessionKey", childSessionKey.trim());
+    },
+    hasPendingTasksForFlow(flowId) {
+      assertCurrent();
+      const { projection, taskIdsByParentFlowId } = getTaskRegistryProcessState();
+      const intersects = (
+        scope: TaskRegistryMutationScope,
+        pending?: PendingTaskRegistryMutation,
+      ) => {
+        const targetId = pending?.readEventTarget?.()?.taskId ?? scope.taskId;
+        const records = [...new Set([...taskIdsInScope(scope), targetId])].flatMap((taskId) => {
+          const task = tasks.get(taskId);
+          return task ? [task] : [];
+        });
+        const facts = [
+          ...records,
+          ...[...(pending?.published.values() ?? [])].flatMap((task) => (task ? [task] : [])),
+          ...(pending?.publication?.records.values() ?? []),
+          ...(pending?.publication?.deletions.values() ?? []),
+        ];
+        if (scope.flowId === flowId || facts.some((task) => task.parentFlowId?.trim() === flowId)) {
+          return true;
+        }
+        // A known target can belong to another flow or no flow. Only missing ownership is global.
+        return !scope.flowId && !facts.some((task) => task.taskId === targetId);
+      };
+      const pendingScopes = new Set<TaskRegistryMutationScope>();
+      for (const pending of projection.pending) {
+        pendingScopes.add(pending.scope);
+        if (intersects(pending.scope, pending)) {
+          return true;
+        }
+      }
+      for (const scope of projection.dirtyScopes) {
+        if (!pendingScopes.has(scope) && intersects(scope)) {
+          return true;
+        }
+      }
+      for (const taskId of listPendingTaskRegistryEventTaskIds()) {
+        const facts = [
+          tasks.get(taskId),
+          ...[...projection.pending].flatMap((pending) => [
+            pending.published.get(taskId),
+            pending.publication?.records.get(taskId),
+            pending.publication?.deletions.get(taskId),
+          ]),
+        ].filter((task) => task !== undefined);
+        if (facts.length === 0 || facts.some((task) => task.parentFlowId?.trim() === flowId)) {
+          return true;
+        }
+      }
+      return [...(taskIdsByParentFlowId.get(flowId) ?? [])].some((taskId) => {
+        const task = tasks.get(taskId);
+        return task !== undefined && isTaskFlowCancellationPending(task);
+      });
     },
     getTaskById(taskId) {
       if (!isTaskCurrent(taskId)) {
@@ -185,6 +388,20 @@ export async function prepareTaskRegistryRead(
         taskIdsByRelatedSessionKey.get(normalized) ?? [],
       );
     },
+    listTaskRecordsWithAncestors(taskIds, isRootTask) {
+      assertCurrent();
+      return selectTaskRecordsWithAncestors(
+        tasks,
+        getTaskRegistryProcessState().taskIdsByChildSessionKey,
+        taskIds,
+        isRootTask,
+      ).map((task) => {
+        if (!isTaskCurrent(task.taskId)) {
+          throw new Error("Task registry read identity requires preparation");
+        }
+        return cloneTaskRecord(task);
+      });
+    },
     listTaskRecordsForOwnerTree(rootOwnerKeys) {
       assertCurrent();
       const selected = selectTaskRecordsForOwnerTree(tasks, taskIdsByOwnerKey, rootOwnerKeys);
@@ -194,6 +411,35 @@ export async function prepareTaskRegistryRead(
         }
         return cloneTaskRecord(task);
       });
+    },
+    listTasksForRelatedSessionKey(sessionKey, sessionAgentId) {
+      assertCurrent();
+      const key = normalizeOptionalString(sessionKey);
+      if (!key) {
+        return [];
+      }
+      return listTasksFromIndex(tasks, taskIdsByRelatedSessionKey, key).filter((task) => {
+        if (!isTaskCurrent(task.taskId)) {
+          throw new Error("Task registry read identity requires preparation");
+        }
+        return taskMatchesRelatedSession(task, key, sessionAgentId);
+      });
+    },
+    listTasksForAgentId(agentId) {
+      assertCurrent();
+      const lookup = agentId.trim();
+      if (!lookup) {
+        return [];
+      }
+      return [...tasks.values()]
+        .filter((task) => task.agentId?.trim() === lookup)
+        .map((task) => {
+          if (!isTaskCurrent(task.taskId)) {
+            throw new Error("Task registry read identity requires preparation");
+          }
+          return cloneTaskRecord(task);
+        })
+        .toSorted(compareTasksNewestFirst);
     },
   };
 }

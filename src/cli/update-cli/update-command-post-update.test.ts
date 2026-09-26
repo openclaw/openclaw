@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -19,9 +20,11 @@ import {
   expectFailureReport,
   expectUpdateFailure,
   managedServiceState,
+  mockVerifiedGatewayRun,
   programArguments,
   registerForegroundFinalizationTests,
   registerManagedInstallEnvironmentTest,
+  recordVerifiedGatewayRun,
   successfulPluginUpdate,
   taskRecovery,
   validConfigSnapshot,
@@ -36,7 +39,6 @@ const mocks = vi.hoisted(() => ({
   leaseActive: false,
   loadPluginRecords: vi.fn(),
   markSentinelFailure: vi.fn(async () => undefined),
-  prepareRestartScript: vi.fn(async () => null),
   printResult: vi.fn(),
   readConfig: vi.fn(),
   createServiceConfigIO: vi.fn(),
@@ -112,9 +114,6 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
 vi.mock("./update-command-plugins.js", () => ({
   updatePluginsAfterCoreUpdate: mocks.updatePlugins,
 }));
-vi.mock("./restart-helper.js", () => ({
-  prepareRestartScript: mocks.prepareRestartScript,
-}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restartService,
@@ -131,7 +130,6 @@ import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
-import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
@@ -151,11 +149,14 @@ afterEach(() => {
 describe("successful update finalization ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // These roots are package fixtures; separate process tests cover Git discovery.
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
     mocks.readServiceState.mockReset();
     mocks.restartService.mockReset().mockResolvedValue("ok");
     mocks.stopService.mockReset();
     mocks.leaseActive = false;
     mocks.loadPluginRecords.mockResolvedValue({});
+    mocks.revalidateService.mockReset();
     mocks.revalidateService.mockImplementation(async ({ root, preManagedServiceStop }) => ({
       kind: "owned",
       root,
@@ -167,8 +168,8 @@ describe("successful update finalization ordering", () => {
     }));
     mocks.readConfig.mockResolvedValue(validConfigSnapshot);
     mocks.createServiceConfigIO.mockReturnValue({ readBestEffortConfig: async () => ({}) });
-    mocks.updatePlugins.mockResolvedValue(successfulPluginUpdate);
-    mocks.completePluginUpdate.mockResolvedValue({
+    mocks.updatePlugins.mockReset().mockResolvedValue(successfulPluginUpdate);
+    mocks.completePluginUpdate.mockReset().mockResolvedValue({
       pluginUpdate: successfulPluginUpdate,
       configSnapshot: validConfigSnapshot,
     });
@@ -179,6 +180,59 @@ describe("successful update finalization ordering", () => {
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
+
+  it("keeps an absent service out of already-current maintenance steps", async () => {
+    const message = "Gateway restart skipped: no Gateway service or listener is running.";
+    await finishSuccessfulPackageSwitch(
+      {},
+      {
+        coreAlreadyCurrent: true,
+        mutationStarted: false,
+        result: {
+          status: "skipped",
+          reason: "already-current",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        preManagedServiceStop: {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          serviceMutationAllowed: false,
+          serviceMutationSkipMessage: message,
+          serviceUpdateVerdict: { kind: "absent" },
+        },
+      },
+    );
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(mocks.stopService).not.toHaveBeenCalled();
+    expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+      status: "skipped",
+      reason: "already-current",
+      steps: [],
+    });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(message);
+  });
+
+  it("refuses same-schema finalization after requester revocation", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("finalizer-revoked-requester-") };
+    const record = createUpdateRun({ trigger: "cli" }, { env });
+    await expect(
+      finishSuccessfulPackageSwitch({
+        run: {
+          runId: record.runId,
+          env,
+          executorFence: { assertCurrent() {} },
+          requesterAuthority: { requester: {}, isCurrent: () => false },
+        },
+      }),
+    ).rejects.toThrow("requester-revoked");
+    expect(mocks.updatePlugins).not.toHaveBeenCalled();
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+  });
 
   it("does not finalize or clean an active durable run without its live executor", async () => {
     const home = tempDirs.make("finalizer-pending-recovery-");
@@ -209,25 +263,6 @@ describe("successful update finalization ordering", () => {
   });
 
   registerBoundaryFinalizationControls({ makeTempDir: (prefix) => tempDirs.make(prefix), mocks });
-
-  it("retains pending staged service load without legacy rollback or completion", async () => {
-    const refusal = new UpdateServiceLoadBoundaryError("checkpoint seal refused");
-    mocks.restartService.mockRejectedValueOnce(refusal);
-    const rollback = vi
-      .spyOn(rollbackModule, "rollbackFailedUpdate")
-      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
-    const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
-      async () => undefined,
-    );
-    const finishing = finishSuccessfulPackageSwitch(undefined, {
-      packageTransaction: { backupRoot: "/tmp/retained-previous", rollback: vi.fn(), complete },
-    });
-    await expect(finishing).rejects.toBe(refusal);
-    expect(rollback).not.toHaveBeenCalled();
-    expect(complete).not.toHaveBeenCalled();
-    expect(mocks.printResult).not.toHaveBeenCalled();
-    expect(mocks.restartService).toHaveBeenCalledOnce();
-  });
 
   it.each(["local", "fresh"] as const)(
     "keeps service activation behind awaited %s convergence and Doctor",
@@ -274,10 +309,15 @@ describe("successful update finalization ordering", () => {
         events.push("start");
         return "ok";
       });
-      const finishing = finishSuccessfulPackageSwitch({
-        restartEnvironment: process.env,
-        windowsTaskAutoStartRecovery: recovery,
-      });
+      const onGatewayStartAttempted = vi.fn(() => events.push("activation-attempt"));
+      const finishing = finishSuccessfulPackageSwitch(
+        {
+          restartEnvironment: process.env,
+          windowsTaskAutoStartRecovery: recovery,
+        },
+        {},
+        { onGatewayStartAttempted },
+      );
       try {
         try {
           await Promise.race([
@@ -288,6 +328,7 @@ describe("successful update finalization ordering", () => {
           ]);
           expect.soft(mocks.restartService).not.toHaveBeenCalled();
           expect.soft(recovery.restore).not.toHaveBeenCalled();
+          expect.soft(onGatewayStartAttempted).not.toHaveBeenCalled();
         } finally {
           release.resolve();
         }
@@ -297,6 +338,9 @@ describe("successful update finalization ordering", () => {
       }
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("start"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
+      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
     },
@@ -635,6 +679,11 @@ describe("successful update finalization ordering", () => {
       async ({ outcome, stoppedAtMs, downtimeMs }) => {
         const changed = outcome !== "unchanged";
         const restartFailed = outcome === "rolled-back" || outcome === "unverified";
+        const packageRoot = tempDirs.make("update-downtime-installed-runtime-");
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ version: "2026.4.24" }),
+        );
         const serviceEnv = {
           ...process.env,
           HOME: identity.home,
@@ -656,20 +705,6 @@ describe("successful update finalization ordering", () => {
         mocks.readServiceState.mockResolvedValue(
           managedServiceState(serviceEnv, { environment: serviceEnv }),
         );
-        const recordVerified = () => {
-          recordUpdateRunVerification(
-            run.runId,
-            {
-              serviceRunning: true,
-              versionMatch: true,
-              settled: true,
-              readyz: true,
-              channelsReady: true,
-              pluginErrors: [],
-            },
-            { env: serviceEnv },
-          );
-        };
         mocks.restartService.mockImplementation(async (params) => {
           events.push("start");
           clock.elapsed += events.length === 1 ? 500 : 200;
@@ -677,7 +712,7 @@ describe("successful update finalization ordering", () => {
             recordUpdateRunVerification(run.runId, { serviceRunning: false }, { env: serviceEnv });
             return "restart-health-failed";
           }
-          recordVerified();
+          recordVerifiedGatewayRun(run);
           params.onVerified?.(Date.now());
           return "ok";
         });
@@ -700,11 +735,16 @@ describe("successful update finalization ordering", () => {
         );
         vi.spyOn(rollbackModule, "rollbackFailedUpdate").mockImplementationOnce(
           async ({ result }): ReturnType<typeof rollbackModule.rollbackFailedUpdate> => {
+            expect(result.reason, JSON.stringify(result.steps)).toBe("restart-unhealthy");
             events.push("rollback");
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
             if (outcome === "rolled-back") {
-              recordVerified();
+              await fs.writeFile(
+                path.join(packageRoot, "package.json"),
+                JSON.stringify({ version: "2026.4.23" }),
+              );
+              mockVerifiedGatewayRun(run);
             }
             return {
               result: {
@@ -731,6 +771,7 @@ describe("successful update finalization ordering", () => {
         );
         const finishing = finishSuccessfulPackageSwitch(
           {
+            packageRoot,
             restartEnvironment: serviceEnv,
             sealed: true,
             stoppedAtMs: stoppedAtMs === 0 ? 0 : clock.origin + stoppedAtMs,
@@ -841,11 +882,6 @@ describe("successful update finalization ordering", () => {
         refresh: !sealed,
       });
       if (!sealed) {
-        expect(mocks.prepareRestartScript).toHaveBeenCalledWith(
-          serviceEnv,
-          expected,
-          expect.any(Array),
-        );
         expect(mocks.createServiceConfigIO).not.toHaveBeenCalled();
       }
     });
@@ -875,7 +911,6 @@ describe("successful update finalization ordering", () => {
         );
 
         expect(mocks.restartService).not.toHaveBeenCalled();
-        expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
         );
@@ -930,7 +965,6 @@ describe("successful update finalization ordering", () => {
       }
 
       expect(mocks.restartService).toHaveBeenCalledOnce();
-      expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
       expect(mocks.restartService).toHaveBeenCalledWith(
         expect.objectContaining({
           refreshServiceEnv: false,

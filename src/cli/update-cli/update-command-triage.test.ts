@@ -7,7 +7,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -479,26 +479,7 @@ describe("update failure triage boundary", () => {
     expect(attemptIds[0]).not.toBe(attemptIds[1]);
   });
 
-  it("passes the admitted run identity to interactive reporting", async () => {
-    const target = await createInstalledTriage();
-    const runId = "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3";
-    const opts = { json: false, run: { runId, env: target.env } };
-    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
-
-    await withTriageTerminal(true, async () => {
-      await expect(
-        withUpdateFailureTriage(opts, target, async () => {
-          throw new UpdateCommandFailure(failedUpdate);
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-    });
-
-    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ attemptId: runId }),
-    );
-  });
-
-  it("keeps reporting in the admitted run's state scope", async () => {
+  it("keeps reporting in the admitted run's identity and state scope", async () => {
     const target = await createInstalledTriage();
     const env = { ...target.env, OPENCLAW_STATE_DIR: path.join(target.root, "admitted-state") };
     const opts = { run: { runId: "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3", env } };
@@ -513,7 +494,7 @@ describe("update failure triage boundary", () => {
     });
 
     expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ env }),
+      expect.objectContaining({ attemptId: opts.run.runId, env }),
     );
   });
 

@@ -14,6 +14,7 @@ import { WebSocket, type RawData } from "../../packages/gateway-client/src/webso
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { resetPreparedGatewayModelCatalogForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   getRuntimeConfig,
   parseConfigJson5,
@@ -37,19 +38,12 @@ import {
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
-import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
-import {
-  resetGatewayRestartStateForInProcessRestart,
-  setGatewayRestartPolicy,
-  setPreRestartDeferralCheck,
-} from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -59,24 +53,20 @@ import {
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
+import type { TestPortClaim } from "../test-utils/port-claims.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerOptions } from "./server.js";
+import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -92,27 +82,10 @@ import {
   testState,
   testTailnetIPv4,
 } from "./test-helpers.runtime-state.js";
+import { resetGatewayLifecycleTestState } from "./test-helpers.server-lifecycle.js";
+import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
 
 const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
-
-const GATEWAY_TEST_ENV_KEYS = [
-  "HOME",
-  "USERPROFILE",
-  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-] as const;
 
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
@@ -141,17 +114,10 @@ function resolveGatewayTestMainSessionKeys(): string[] {
   return [...keys];
 }
 
-function serializeGatewayTestSessionConfig(): string | undefined {
-  if (!testState.sessionConfig) {
-    return undefined;
-  }
-  return JSON.stringify(testState.sessionConfig);
-}
-
 function hasUnsyncedGatewayTestSessionConfig(): boolean {
   return (
     testState.sessionStorePath !== lastSyncedSessionStorePath ||
-    serializeGatewayTestSessionConfig() !== lastSyncedSessionConfigJson
+    JSON.stringify(testState.sessionConfig) !== lastSyncedSessionConfigJson
   );
 }
 
@@ -228,7 +194,7 @@ async function persistTestSessionConfig(): Promise<void> {
   }
   publishGatewayTestConfig();
   lastSyncedSessionStorePath = testState.sessionStorePath;
-  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
+  lastSyncedSessionConfigJson = JSON.stringify(testState.sessionConfig);
 }
 
 export async function writeSessionStore(params: {
@@ -367,18 +333,6 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
-function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: boolean }): void {
-  // Resume held scheduling and cancel pending restart work before clearing
-  // admission. Live suite servers keep their policy and active-work binding.
-  resetGatewaySuspendCoordinatorForLifecycleRestart();
-  resetGatewayRestartStateForInProcessRestart();
-  if (!options.preserveRuntimeBindings) {
-    setGatewayRestartPolicy({ allowExternal: false });
-    setPreRestartDeferralCheck(() => 0);
-  }
-  resetGatewayWorkAdmission();
-}
-
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
@@ -405,7 +359,7 @@ function resetGatewayMutableTestFixtures(): void {
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
   lastSyncedSessionStorePath = testState.sessionStorePath;
-  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
+  lastSyncedSessionConfigJson = undefined;
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
@@ -442,7 +396,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
-  resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
@@ -503,27 +457,23 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetGatewayMutableTestFixtures();
   resetSystemEventsForTest();
   resetAgentEventsForTest();
-  const mod = await getServerModule();
-  await mod.resetPreparedModelCatalogForTest();
+  await resetPreparedGatewayModelCatalogForTest();
   gatewayReplyRuntimePrepared = false;
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   vi.useRealTimers();
-  resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+  // Direct handler projections outlive replies and must release reads before registry closure.
+  await disposeSessionReadContexts();
+  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
   resetLogger();
+  if (tempHome) {
+    // Join native borrowers before registry reset attempts its synchronous close.
+    await closeGatewayTestHomeDatabases(tempHome, options);
+  }
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  if (tempHome) {
-    // Release leases before deleting their store, and revoke trust in recreated paths.
-    await closeOpenClawAgentDatabasesAsync(tempHome);
-    closeOpenClawAgentDatabasesForTest(tempHome);
-    // External agent stores can retain workers whose lease coordinator belongs to this home.
-    await closeOpenClawStateDatabaseByPathAsync(
-      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempHome, ".openclaw") }),
-    );
-  }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;
@@ -547,7 +497,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
 async function resetGatewayTestRuntimeOnly() {
   gatewayFixtureLifetime.assertAdmission();
   vi.useRealTimers();
-  resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
+  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -752,33 +702,38 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   });
 }
 
-export async function startTestGatewayServer(port: number, opts?: GatewayServerOptions) {
-  gatewayFixtureLifetime.assertAdmission();
-  // Tests mutate testState-backed config before server startup; discard earlier
-  // helper reads so startup observes the current fixture state.
-  resetConfigRuntimeState();
-  clearSessionStoreCacheForTest();
-  const mod = await getServerModule();
-  gatewayFixtureLifetime.assertAdmission();
-  const resolvedOpts = {
-    ...opts,
-    controlUiEnabled: opts?.controlUiEnabled ?? false,
-  };
-  if (
-    resolvedOpts.controlUiEnabled &&
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
-    tempControlUiRoot &&
-    typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
-  ) {
-    testState.gatewayControlUi = {
-      ...testState.gatewayControlUi,
-      root: tempControlUiRoot,
+export async function startTestGatewayServer(
+  port: number | TestPortClaim,
+  opts?: GatewayServerOptions,
+) {
+  return await startClaimedGateway(port, async () => {
+    gatewayFixtureLifetime.assertAdmission();
+    // Tests mutate testState-backed config before server startup; discard earlier
+    // helper reads so startup observes the current fixture state.
+    resetConfigRuntimeState();
+    clearSessionStoreCacheForTest();
+    const mod = await getServerModule();
+    gatewayFixtureLifetime.assertAdmission();
+    const resolvedOpts = {
+      ...opts,
+      controlUiEnabled: opts?.controlUiEnabled ?? false,
     };
-  }
-  return await gatewayFixtureLifetime.ownServer(
-    () => startClaimedGateway(port, () => mod.startGatewayServer(port, resolvedOpts)),
-    tempHome,
-  );
+    if (
+      resolvedOpts.controlUiEnabled &&
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
+      tempControlUiRoot &&
+      typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
+    ) {
+      testState.gatewayControlUi = {
+        ...testState.gatewayControlUi,
+        root: tempControlUiRoot,
+      };
+    }
+    return await gatewayFixtureLifetime.ownServer(
+      () => mod.startGatewayServer(typeof port === "number" ? port : port.port, resolvedOpts),
+      tempHome,
+    );
+  });
 }
 
 export async function startGatewayServerWithRetries(params: {

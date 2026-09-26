@@ -10,9 +10,11 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
+import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type {
@@ -92,12 +94,6 @@ export type StreamBlockState = {
   pendingTagFragment?: string;
 };
 
-/** Raw offsets for literal directives whose Markdown code ownership is settled. */
-export type StreamDirectiveCodePrefix = {
-  end: number;
-  checkedRawLength: number;
-};
-
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
@@ -110,6 +106,8 @@ export type EmbeddedAgentSubscribeState = {
   toolMetas: Array<{
     toolName?: string;
     toolCallId?: string;
+    parentToolCallId?: string;
+    activity?: AgentItemEventData;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
@@ -325,6 +323,7 @@ export type EmbeddedAgentSubscribeContext = {
       assistantMessageIndex?: number;
       consumePendingToolMedia?: boolean;
       blockSourceText?: string;
+      blockSourceRange?: readonly [start: number, end: number];
     },
   ) => void;
   flushAssistantStream: () => void;
@@ -409,22 +408,20 @@ type ToolHandlerState = Pick<
   | "assistantMessageIndex"
 >;
 
-export type ToolHandlerContext = {
+export type ToolHandlerContext = Pick<
+  EmbeddedAgentSubscribeContext,
+  | "log"
+  | "hookRunner"
+  | "builtinToolNames"
+  | "trustedLocalMediaToolNames"
+  | "flushBlockReplyBuffer"
+  | "shouldEmitToolResult"
+  | "shouldEmitToolOutput"
+  | "emitToolSummary"
+  | "emitToolOutput"
+  | "trimMessagingToolSent"
+> & {
   params: ToolHandlerParams;
   state: ToolHandlerState;
-  log: EmbeddedSubscribeLogger;
-  hookRunner?: HookRunner;
-  builtinToolNames?: ReadonlySet<string>;
-  trustedLocalMediaToolNames?: ReadonlySet<string>;
-  flushBlockReplyBuffer: () => void | Promise<void>;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (
-    toolName: string | undefined,
-    meta: string | undefined,
-    commandBearing: boolean,
-  ) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
-  trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

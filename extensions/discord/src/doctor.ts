@@ -1,6 +1,5 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord plugin module implements doctor behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asObjectRecord,
@@ -30,6 +29,7 @@ function sanitizeForLog(value: string): string {
 function collectDiscordIdLists(
   prefix: string,
   account: Record<string, unknown>,
+  userAllowlistsOnly = false,
 ): DiscordIdListRef[] {
   const refs: DiscordIdListRef[] = [
     { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
@@ -37,10 +37,12 @@ function collectDiscordIdLists(
   const dm = asObjectRecord(account.dm);
   if (dm) {
     refs.push({ pathLabel: `${prefix}.dm.allowFrom`, holder: dm, key: "allowFrom" });
-    refs.push({ pathLabel: `${prefix}.dm.groupChannels`, holder: dm, key: "groupChannels" });
+    if (!userAllowlistsOnly) {
+      refs.push({ pathLabel: `${prefix}.dm.groupChannels`, holder: dm, key: "groupChannels" });
+    }
   }
   const execApprovals = asObjectRecord(account.execApprovals);
-  if (execApprovals) {
+  if (execApprovals && !userAllowlistsOnly) {
     refs.push({
       pathLabel: `${prefix}.execApprovals.approvers`,
       holder: execApprovals,
@@ -57,7 +59,9 @@ function collectDiscordIdLists(
       continue;
     }
     refs.push({ pathLabel: `${prefix}.guilds.${guildId}.users`, holder: guild, key: "users" });
-    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.roles`, holder: guild, key: "roles" });
+    if (!userAllowlistsOnly) {
+      refs.push({ pathLabel: `${prefix}.guilds.${guildId}.roles`, holder: guild, key: "roles" });
+    }
     const channels = asObjectRecord(guild.channels);
     if (!channels) {
       continue;
@@ -72,11 +76,13 @@ function collectDiscordIdLists(
         holder: channel,
         key: "users",
       });
-      refs.push({
-        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.roles`,
-        holder: channel,
-        key: "roles",
-      });
+      if (!userAllowlistsOnly) {
+        refs.push({
+          pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.roles`,
+          holder: channel,
+          key: "roles",
+        });
+      }
     }
   }
   return refs;
@@ -286,31 +292,8 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
     }
-    addHits(`${scope.prefix}.allowFrom`, scope.account.allowFrom);
-    const dm = asObjectRecord(scope.account.dm);
-    if (dm) {
-      addHits(`${scope.prefix}.dm.allowFrom`, dm.allowFrom);
-    }
-    const guilds = asObjectRecord(scope.account.guilds);
-    if (!guilds) {
-      continue;
-    }
-    for (const [guildId, guildRaw] of Object.entries(guilds)) {
-      const guild = asObjectRecord(guildRaw);
-      if (!guild) {
-        continue;
-      }
-      addHits(`${scope.prefix}.guilds.${guildId}.users`, guild.users);
-      const channels = asObjectRecord(guild.channels);
-      if (!channels) {
-        continue;
-      }
-      for (const [channelId, channelRaw] of Object.entries(channels)) {
-        const channel = asObjectRecord(channelRaw);
-        if (channel) {
-          addHits(`${scope.prefix}.guilds.${guildId}.channels.${channelId}.users`, channel.users);
-        }
-      }
+    for (const ref of collectDiscordIdLists(scope.prefix, scope.account, true)) {
+      addHits(ref.pathLabel, ref.holder[ref.key]);
     }
   }
 

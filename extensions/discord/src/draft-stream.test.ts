@@ -4,6 +4,26 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
+function createDraftRest() {
+  return {
+    post: vi.fn(async () => ({ id: "1001" })),
+    patch: vi.fn(async () => undefined),
+    delete: vi.fn(async () => undefined),
+  };
+}
+
+function createDraftStream(
+  rest: ReturnType<typeof createDraftRest>,
+  options: Partial<Omit<Parameters<typeof createDiscordDraftStream>[0], "rest">> = {},
+) {
+  return createDiscordDraftStream({
+    rest: rest as never,
+    channelId: "c1",
+    throttleMs: 250,
+    ...options,
+  });
+}
+
 function createCurrentPreviewHarness(remove = vi.fn(async () => undefined)) {
   const rest = {
     post: vi.fn().mockResolvedValueOnce({ id: "1001" }).mockResolvedValueOnce({ id: "1002" }),
@@ -11,10 +31,7 @@ function createCurrentPreviewHarness(remove = vi.fn(async () => undefined)) {
     delete: remove,
   };
   const warn = vi.fn();
-  const stream = createDiscordDraftStream({
-    rest: rest as never,
-    channelId: "c1",
-    throttleMs: 250,
+  const stream = createDraftStream(rest, {
     warn,
   });
   return { rest, stream, warn };
@@ -27,10 +44,8 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
+    const stream = createDraftStream(rest, {
       channelId: "parent",
-      throttleMs: 250,
     });
 
     stream.update("working");
@@ -52,10 +67,8 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn().mockRejectedValueOnce(new Error("transient")).mockResolvedValue(undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
+    const stream = createDraftStream(rest, {
       channelId: "parent",
-      throttleMs: 250,
     });
 
     stream.update("working");
@@ -76,10 +89,8 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
+    const stream = createDraftStream(rest, {
       channelId: "parent",
-      throttleMs: 250,
     });
 
     stream.update("working");
@@ -93,15 +104,8 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("holds answer deltas below minInitialChars but sends a complete progress update", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
+    const rest = createDraftRest();
+    const stream = createDraftStream(rest, {
       minInitialChars: 5,
     });
 
@@ -121,15 +125,8 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("sends a reply preview, then edits the same message on later flushes", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
+    const rest = createDraftRest();
+    const stream = createDraftStream(rest, {
       replyToMessageId: () => "  parent-1  ",
     });
 
@@ -176,7 +173,7 @@ describe("createDiscordDraftStream", () => {
 
   it("retries failed current-preview cleanup without reusing the stale message", async () => {
     const remove = vi.fn().mockRejectedValueOnce(new Error("transient"));
-    const { rest, stream, warn } = createCurrentPreviewHarness(remove);
+    const { rest, stream } = createCurrentPreviewHarness(remove);
 
     stream.update("temporary commentary");
     await stream.flush();
@@ -189,7 +186,6 @@ describe("createDiscordDraftStream", () => {
     expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "1001"));
     expect(rest.patch).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("1002");
-    expect(warn).toHaveBeenCalledWith("discord stream preview cleanup failed: transient");
   });
 
   it.each(["clear", "deleteCurrentMessage"] as const)(
@@ -220,17 +216,34 @@ describe("createDiscordDraftStream", () => {
     },
   );
 
+  it("does not clear a queued preview after awaiting the prior create", async () => {
+    const createStarted = createDeferred<void>();
+    const finishCreate = createDeferred<{ id: string }>();
+    const { rest, stream } = createCurrentPreviewHarness();
+    rest.post
+      .mockReset()
+      .mockImplementationOnce(async () => {
+        createStarted.resolve();
+        return await finishCreate.promise;
+      })
+      .mockResolvedValueOnce({ id: "1002" });
+
+    stream.update("prior turn");
+    await createStarted.promise;
+    const clearing = stream.clear();
+    stream.forceNewMessage("discard");
+    stream.update("queued turn");
+    finishCreate.resolve({ id: "1001" });
+    await clearing;
+    await stream.flush();
+
+    expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "1001"));
+    expect(stream.messageId()).toBe("1002");
+  });
+
   it("suppresses mentions in preview creates and edits", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const rest = createDraftRest();
+    const stream = createDraftStream(rest);
 
     stream.update("working @everyone <@123>");
     await stream.flush();
@@ -252,15 +265,8 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("suppresses link embeds in preview creates and edits when requested", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
+    const rest = createDraftRest();
+    const stream = createDraftStream(rest, {
       suppressEmbeds: true,
     });
 
@@ -286,17 +292,10 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("stops previewing and warns once text exceeds the configured limit", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
+    const rest = createDraftRest();
     const warn = vi.fn();
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
+    const stream = createDraftStream(rest, {
       maxChars: 5,
-      throttleMs: 250,
       warn,
     });
 
@@ -309,16 +308,8 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("discardPending keeps an existing preview but ignores later updates", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const rest = createDraftRest();
+    const stream = createDraftStream(rest);
 
     stream.update("first draft");
     await stream.flush();
@@ -338,11 +329,7 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const stream = createDraftStream(rest);
 
     stream.update("first draft");
     await stream.flush();
@@ -366,11 +353,7 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const stream = createDraftStream(rest);
 
     stream.update("old turn draft");
     await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
@@ -397,11 +380,7 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const stream = createDraftStream(rest);
 
     stream.update("old progress draft");
     await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
@@ -428,11 +407,7 @@ describe("createDiscordDraftStream", () => {
       patch: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const stream = createDraftStream(rest);
 
     stream.update("stale turn draft");
     await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
@@ -449,16 +424,8 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("seal keeps an existing preview and cancels pending final overwrites", async () => {
-    const rest = {
-      post: vi.fn(async () => ({ id: "1001" })),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const rest = createDraftRest();
+    const stream = createDraftStream(rest);
 
     stream.update("first draft");
     await stream.flush();

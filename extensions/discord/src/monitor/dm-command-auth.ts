@@ -1,15 +1,15 @@
-import {
-  type AccessGroupMembershipFact,
-  type ChannelIngressEventInput,
-  type ChannelIngressContextBinding,
-  type IdentifierAuthentication,
-  createChannelIngressResolver,
-  type ChannelIngressIdentitySubjectInput,
-  type ResolveChannelMessageIngressParams,
+import type {
+  AccessGroupMembershipFact,
+  ChannelIngressEventInput,
+  ChannelIngressContextBinding,
+  IdentifierAuthentication,
+  ChannelIngressIdentitySubjectInput,
+  ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RequestClient } from "../internal/discord.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { discordIngressIdentity } from "./ingress-identity.js";
 
@@ -84,7 +84,7 @@ function createDiscordIngressResolver(params: {
   readStoreAllowFrom?: ResolveChannelMessageIngressParams["readStoreAllowFrom"];
   useDefaultPairingStore?: boolean;
 }) {
-  return createChannelIngressResolver({
+  return getDiscordRuntime().channel.inbound.ingress.createResolver({
     channelId: DISCORD_CHANNEL_ID,
     accountId: params.accountId,
     identity: discordIngressIdentity,

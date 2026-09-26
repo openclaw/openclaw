@@ -60,6 +60,7 @@ import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-l
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
+  preserveCreationStamp,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
@@ -109,13 +110,13 @@ import {
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type * as SessionLifecycle from "./session-create-service.types.js";
 import {
-  type PreparedGatewaySessionLifecycle,
-  type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { invalidSessionRequest } from "./session-request-error.js";
 import {
   buildPendingAcpMeta,
   closeAcpRuntimeForSession,
@@ -664,7 +665,7 @@ export async function performGatewaySessionReset(params: {
   /** Existing-row changes stay admin-gated across reset preparation and commit. */
   fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
   /** Prepares session-owned resources while the target lifecycle fence is held. */
-  prepareLifecycle?: PrepareGatewaySessionLifecycle;
+  prepareLifecycle?: SessionLifecycle.PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
   /** Bind session exec to host=node with this node id; caller scope-checks. */
   execNode?: string;
@@ -724,20 +725,14 @@ export async function performGatewaySessionReset(params: {
         : undefined;
     const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
     if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
-      };
+      return invalidSessionRequest(`Unknown agent id: ${requestedAgentId}`);
     }
     if (
       explicitAgentId &&
       parsedKey?.agentId &&
       normalizeAgentId(parsedKey.agentId) !== explicitAgentId
     ) {
-      return {
-        ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
+      return invalidSessionRequest("session key agent does not match agentId");
     }
     const target = resolveGatewaySessionStoreTarget({
       cfg,
@@ -749,6 +744,14 @@ export async function performGatewaySessionReset(params: {
   if (!resetTarget.ok) {
     return resetTarget;
   }
+  const authorizeResetCreation = () =>
+    authorizeGatewaySessionCreation({
+      cfg: resetTarget.cfg,
+      agentId: resetTarget.target.agentId,
+      ...(params.operatorRoleActor
+        ? { actor: params.operatorRoleActor }
+        : { profileId: params.requestingOperatorProfileId }),
+    });
   const reportLifecycleCleanupError = (error: unknown) => {
     if (params.onLifecycleCleanupError) {
       params.onLifecycleCleanupError(error);
@@ -770,13 +773,7 @@ export async function performGatewaySessionReset(params: {
     return { ok: false, error: sessionChangedError() };
   }
   if (!initialResetEntry) {
-    const creationError = authorizeGatewaySessionCreation({
-      cfg: resetTarget.cfg,
-      agentId: resetTarget.target.agentId,
-      ...(params.operatorRoleActor
-        ? { actor: params.operatorRoleActor }
-        : { profileId: params.requestingOperatorProfileId }),
-    });
+    const creationError = authorizeResetCreation();
     if (creationError) {
       return { ok: false, error: creationError };
     }
@@ -808,22 +805,43 @@ export async function performGatewaySessionReset(params: {
     initialResetEntry,
   );
   if (missingHarnessSessionError) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError),
-    };
+    return invalidSessionRequest(missingHarnessSessionError);
   }
   // Reject before interrupting admitted work or firing reset hooks. The model lock is
   // session-id scoped, so rotating first would silently detach native harness ownership.
   if (isModelSelectionLocked(initialResetEntry)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
-    };
+    return invalidSessionRequest(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const workerPlacementContext =
     params.workerPlacementContext ??
     (await import("./session-worker-placement-context.js")).resolveSessionWorkerPlacementContext();
+  const resolveResetEntryStateError = (entry: SessionEntry | undefined, canonicalKey: string) => {
+    const placementError = resolveSessionWorkerPlacementMutationError({
+      action: "reset",
+      context: workerPlacementContext,
+      key: params.key,
+      sessionId: normalizeOptionalString(entry?.sessionId),
+    });
+    if (placementError) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
+    }
+    // Reset drains pending preparation before replacing the session.
+    const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+      allowPendingWorkspace: true,
+      allowRestartTombstoneReplacement:
+        entry !== undefined && entry.archivedAt === undefined && isRestartRecoveryTombstone(entry),
+    });
+    if (archivedSessionError) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
+    }
+    if (isModelSelectionLocked(entry)) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+    }
+    if (!entry && isIncognitoSessionKey(resetTarget.target.canonicalKey)) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`);
+    }
+    return undefined;
+  };
   const initialPlacementError = resolveSessionWorkerPlacementMutationError({
     action: "reset",
     context: workerPlacementContext,
@@ -831,10 +849,7 @@ export async function performGatewaySessionReset(params: {
     sessionId: normalizeOptionalString(initialResetEntry?.sessionId),
   });
   if (initialPlacementError) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementError.message),
-    };
+    return invalidSessionRequest(initialPlacementError.message);
   }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
@@ -862,7 +877,7 @@ export async function performGatewaySessionReset(params: {
   let admittedWorkReleased = true;
   let resetPreparationError: ReturnType<typeof errorShape> | undefined;
   let preparedResetSessionId: string | undefined;
-  let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
+  let preparedLifecycle: SessionLifecycle.PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
@@ -881,13 +896,7 @@ export async function performGatewaySessionReset(params: {
         return;
       }
       if (!currentEntry) {
-        resetPreparationError = authorizeGatewaySessionCreation({
-          cfg: resetTarget.cfg,
-          agentId: resetTarget.target.agentId,
-          ...(params.operatorRoleActor
-            ? { actor: params.operatorRoleActor }
-            : { profileId: params.requestingOperatorProfileId }),
-        });
+        resetPreparationError = authorizeResetCreation();
         if (resetPreparationError) {
           return;
         }
@@ -918,42 +927,8 @@ export async function performGatewaySessionReset(params: {
         );
         return;
       }
-      const placementError = resolveSessionWorkerPlacementMutationError({
-        action: "reset",
-        context: workerPlacementContext,
-        key: params.key,
-        sessionId: normalizeOptionalString(currentEntry?.sessionId),
-      });
-      if (placementError) {
-        resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
-        return;
-      }
-      // Reset drains pending preparation before replacing the session.
-      const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry, {
-        allowPendingWorkspace: true,
-        allowRestartTombstoneReplacement:
-          currentEntry !== undefined &&
-          currentEntry.archivedAt === undefined &&
-          isRestartRecoveryTombstone(currentEntry),
-      });
-      if (archivedSessionError) {
-        resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
-        return;
-      }
-      if (isModelSelectionLocked(currentEntry)) {
-        resetPreparationError = errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          MODEL_SELECTION_LOCKED_RESET_MESSAGE,
-        );
-        return;
-      }
-      const incognito =
-        currentEntry?.incognito === true || isIncognitoSessionKey(resetTarget.target.canonicalKey);
-      if (incognito && !currentEntry) {
-        resetPreparationError = errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unknown session: ${params.key}`,
-        );
+      resetPreparationError = resolveResetEntryStateError(currentEntry, currentCanonicalKey);
+      if (resetPreparationError) {
         return;
       }
       preparedResetSessionId = normalizeOptionalString(currentEntry?.sessionId);
@@ -1023,44 +998,11 @@ export async function performGatewaySessionReset(params: {
       if (currentOwnershipError) {
         return { ok: false, error: currentOwnershipError };
       }
-      const placementError = resolveSessionWorkerPlacementMutationError({
-        action: "reset",
-        context: workerPlacementContext,
-        key: params.key,
-        sessionId: normalizeOptionalString(entry?.sessionId),
-      });
-      if (placementError) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, placementError.message),
-        };
-      }
-      const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
-        allowPendingWorkspace: true,
-        allowRestartTombstoneReplacement:
-          entry !== undefined &&
-          entry.archivedAt === undefined &&
-          isRestartRecoveryTombstone(entry),
-      });
-      if (archivedSessionError) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError),
-        };
-      }
-      if (isModelSelectionLocked(entry)) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
-        };
+      const entryStateError = resolveResetEntryStateError(entry, canonicalKey);
+      if (entryStateError) {
+        return { ok: false, error: entryStateError };
       }
       const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
-      if (incognito && !entry) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
-        };
-      }
       // Drain first so a legitimate local turn can release its claim. Retire only
       // after every non-destructive guard is rechecked; a placement race must abort
       // before hooks, runtime cleanup, or session mutation begins.
@@ -1071,10 +1013,7 @@ export async function performGatewaySessionReset(params: {
         sessionId: normalizeOptionalString(entry?.sessionId),
       });
       if (placementRetirementError) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, placementRetirementError.message),
-        };
+        return invalidSessionRequest(placementRetirementError.message);
       }
       if (entry?.worktree?.id) {
         const record = managedWorktrees.findLiveById(entry.worktree.id);
@@ -1214,10 +1153,7 @@ export async function performGatewaySessionReset(params: {
 
       if (incognito) {
         if (!entry) {
-          return {
-            ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
-          };
+          return invalidSessionRequest(`unknown session: ${params.key}`);
         }
         await emitGatewayBeforeResetPluginHook({
           cfg,
@@ -1314,13 +1250,7 @@ export async function performGatewaySessionReset(params: {
         buildNextEntry: ({ currentEntry, primaryKey }) => {
           assertCompletionAuthorized?.();
           if (!currentEntry) {
-            creationAuthorizationError = authorizeGatewaySessionCreation({
-              cfg,
-              agentId: target.agentId,
-              ...(params.operatorRoleActor
-                ? { actor: params.operatorRoleActor }
-                : { profileId: params.requestingOperatorProfileId }),
-            });
+            creationAuthorizationError = authorizeResetCreation();
             if (creationAuthorizationError) {
               throw new Error(creationAuthorizationError.message);
             }
@@ -1357,11 +1287,8 @@ export async function performGatewaySessionReset(params: {
               : currentEntry?.execNode;
           const creationStamp = currentEntry
             ? {
-                createdVia: currentEntry.createdVia,
-                createdActor: currentEntry.createdActor,
-                createdAt: currentEntry.createdAt,
+                ...preserveCreationStamp({}, currentEntry),
                 projectId: currentEntry.projectId,
-                ...(currentEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
               }
             : params.creation
               ? {

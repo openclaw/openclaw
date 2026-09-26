@@ -2,11 +2,14 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
   formatUpdateActivationTimeoutGuidance,
+  isVerifiedUpdateRollback,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
+  UPDATE_FOREIGN_DESTINATION_REASON,
   UPDATE_INSTALL_SKIP_GUIDANCE,
 } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
+import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   formatUpdateFailureFact,
@@ -23,6 +26,14 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
+
+const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
+
+/** Recognizes pending projections written by this renderer, including shipped reports. */
+export function isUpdateRunReportInProgress(markdown: string): boolean {
+  return markdown.startsWith(IN_PROGRESS_REPORT_PREFIX);
+}
+
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
@@ -86,6 +97,53 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
     : "Current health unavailable; saved verification describes the update attempt only.";
 }
 
+/** Public-report callers redact identifiers before using this shared formatter. */
+export function formatUpdateRunRecovery(
+  verification: UpdateRunRecord["verification"],
+  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+  reason = verification.recovery?.reason ?? "not-recorded",
+): string | undefined {
+  const { recovery } = verification;
+  if (!observation) {
+    if (!recovery) {
+      return undefined;
+    }
+    const restored = recovery.packageRollbackVerified;
+    if (!recovery.serviceRestartSafe) {
+      return `${restored ? "package rollback verified; service restart not verified" : "not verified"} (${reason})`;
+    }
+    const version = bounded(recovery.version, 120);
+    if (recovery.service === "healthy") {
+      return `${restored ? "package rollback verified; " : ""}Gateway serving ${version}; health verified`;
+    }
+    if (recovery.service !== "failed" && !restored) {
+      return "verified safe to restart";
+    }
+    const packageOutcome = restored
+      ? `package rollback verified (${version})`
+      : "runtime files verified";
+    return `${packageOutcome}; Gateway health ${recovery.service === "failed" ? "failed" : "unverified"} (${reason}). Run \`openclaw gateway status --deep\` to check the serving version and readiness.`;
+  }
+  const version =
+    recovery?.serviceRestartSafe && recovery.service === "healthy"
+      ? recovery.version
+      : verification.versionMatch && verification.readyz && verification.settled
+        ? verification.runningVersion
+        : undefined;
+  if (observation.exitCode === 0 && version && !observation.failureFacts?.length) {
+    const constraint =
+      recovery?.serviceRestartSafe === false ? `; restart remains unsafe (${reason})` : "";
+    return `${recovery?.packageRollbackVerified ? "package rollback verified; " : ""}verified serving ${bounded(version, 120)}${constraint}`;
+  }
+  const code = observation.failureFacts?.[0]?.code;
+  if (!code) {
+    return "Gateway readiness is pending; recovery probe completed without verified readiness";
+  }
+  return code === "gateway-probe-failed"
+    ? `recovery probe failed (${code})`
+    : `not serving (${code})`;
+}
+
 /** The four conversation milestones share the run's recorded versions and final report. */
 export function renderUpdateRunNotice(
   run: UpdateRunRecord,
@@ -131,6 +189,9 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   }
   if (run.reason === UPDATE_ACTIVATION_TIMEOUT_REASON) {
     return nextAction ? [] : [formatUpdateActivationTimeoutGuidance()];
+  }
+  if (run.reason === UPDATE_FOREIGN_DESTINATION_REASON) {
+    return nextAction ? [] : [`Next step: ${UPDATE_DESTINATION_RECOVERY}`];
   }
   const hints: string[] = [];
   if (run.reason === "preflight-insufficient-space") {
@@ -216,7 +277,7 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `⬆️ OpenClaw update in progress: ${run.phase}.`;
+      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
@@ -224,9 +285,37 @@ export function renderUpdateRunReport(
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
+  const admission = run.origin.admission;
+  if (admission) {
+    const candidateVersion = admission.candidateVersion
+      ? ` (${bounded(admission.candidateVersion, 120)})`
+      : "";
+    lines.push(`Admission: ${admission.owner}${candidateVersion}.`);
+    if (admission.checks?.length) {
+      lines.push(
+        `Admission checks: ${admission.checks.map((check) => `${bounded(check.name, 120)}: ${check.status}`).join(", ")}.`,
+      );
+    }
+    if (admission.fallbackReason) {
+      lines.push(`Admission fallback: ${bounded(admission.fallbackReason, 500)}`);
+    }
+  }
   for (const step of run.steps) {
+    if (run.status === "running" && step.status === "in_progress" && step.detail) {
+      lines.push(
+        `Waiting: ${step.step}${step.startedAtMs !== undefined ? ` (started ${new Date(step.startedAtMs).toISOString()})` : ""} — ${step.detail}`,
+      );
+    }
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
+    }
+    if (
+      step.detail &&
+      (step.step.startsWith("diagnostic:database snapshot") ||
+        step.step.startsWith("diagnostic:database migration writes") ||
+        step.step.startsWith("diagnostic:database rollback"))
+    ) {
+      lines.push(step.detail);
     }
     if (step.configWriteRefusal) {
       lines.push(formatUpdateDoctorConfigWriteRefusal(step.configWriteRefusal));
@@ -259,14 +348,30 @@ export function renderUpdateRunReport(
   for (const step of selectUpdateFailureReportSteps(
     run.steps.filter((item) => item.status === "failed"),
   )) {
-    lines.push(bounded(`Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`, 300));
-    lines.push(...(step.failureFacts ?? []).slice(0, 5).map(formatUpdateFailureFact));
+    const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
+    lines.push(bounded(failure, 300));
+    lines.push(
+      ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
+        formatUpdateFailureFact({
+          ...fact,
+          message:
+            failure.length <= 300 && fact.message && step.detail?.includes(fact.message)
+              ? undefined
+              : fact.message,
+        }),
+      ),
+    );
   }
-  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+  for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
   const verification: string[] = [];
   const facts = run.verification;
+  const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
+  const recovery = observation && formatUpdateRunRecovery(facts, observation);
+  if (recovery) {
+    lines.push(`Recovery: ${recovery}.`);
+  }
   if (facts.booted) {
     verification.push("gateway booted");
   }
@@ -338,7 +443,9 @@ export function renderUpdateRunReport(
   const hints = reconciled
     ? []
     : run.status === "running"
-      ? recoveryHints(run)
+      ? opts.nextAction
+        ? [opts.nextAction]
+        : recoveryHints(run)
       : repairHint
         ? [repairHint, ...(nextAction ? [nextAction] : [])]
         : [
@@ -361,18 +468,54 @@ export function renderUpdateRunReport(
 }
 
 /** Old CLI finalization paths still return runner results; all wording stays in the report. */
-export function updateRunReportInputFromResult(result: UpdateRunResult): ReportInput {
+export function updateRunReportInputFromResult(
+  result: UpdateRunResult,
+  recorded?: Partial<ReportInput>,
+): ReportInput {
+  const steps = result.steps.flatMap(updateRunStepsFromResultStep);
+  const observationStep = (name: string) =>
+    name === "gateway verification" || name === "gateway recovery verification";
+  const observations = steps.filter((entry) => observationStep(entry.step));
+  const preserveRecorded = result.status === "ok" && result.verification === undefined;
+  const { booted, noticeDelivered, doctorHint, recovery, rollbackOutcome } =
+    recorded?.verification ?? {};
+  const resultStatus =
+    result.status === "ok" ? "succeeded" : result.status === "error" ? "failed" : "skipped";
+  // Failed diagnostics may not have reached the ledger yet.
+  const recordedOutcome = result.status === "error" ? undefined : recorded;
   return {
-    status: result.status === "ok" ? "succeeded" : result.status === "error" ? "failed" : "skipped",
-    phase: "finished",
-    reason: result.reason ?? null,
-    origin: {},
-    before: result.before ?? {},
-    after: result.after ?? {},
-    verification: {},
-    repair: [],
-    downtimeMs: null,
-    steps: result.steps.flatMap(updateRunStepsFromResultStep),
+    status:
+      recordedOutcome?.status ??
+      (recorded?.status === "rolled-back" && isVerifiedUpdateRollback(result)
+        ? "rolled-back"
+        : resultStatus),
+    phase: recordedOutcome?.phase ?? "finished",
+    reason:
+      recordedOutcome?.reason !== undefined
+        ? recordedOutcome.reason
+        : (result.reason ?? recorded?.reason ?? null),
+    origin: recorded?.origin ?? {},
+    before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
+    after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
+    repair: recorded?.repair ?? [],
+    downtimeMs: recorded?.downtimeMs ?? null,
+    verification:
+      preserveRecorded && recorded?.verification
+        ? recorded.verification
+        : {
+            ...(result.verification ?? recorded?.verification),
+            ...(recorded?.verification ? { booted, noticeDelivered, doctorHint } : {}),
+            recovery:
+              recovery?.serviceRestartSafe === false
+                ? recovery
+                : (result.recovery ?? (result.verification === undefined ? recovery : undefined)),
+            rollbackOutcome: result.rollbackOutcome ?? rollbackOutcome,
+          },
+    steps: !recorded?.steps
+      ? steps
+      : !preserveRecorded && (result.verification !== undefined || observations.length)
+        ? [...recorded.steps.filter((entry) => !observationStep(entry.step)), ...observations]
+        : recorded.steps,
   };
 }
 

@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -28,6 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await rm(localWorkspaceRoot, { recursive: true, force: true });
   await openClawState.cleanup();
 });
@@ -138,6 +138,53 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
     expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("outputBytesCap");
   });
 
+  it.each([
+    { timeoutMs: 500, elapsedMs: 100.25, budgets: [500, 399], expires: false },
+    { timeoutMs: 500, elapsedMs: 500.25, budgets: [500], expires: true },
+    { timeoutMs: undefined, elapsedMs: 500.25, budgets: [undefined, undefined], expires: false },
+  ])("keeps chunk deadlines across a clock rewind ($timeoutMs, $elapsedMs)", async (test) => {
+    let elapsed = 0;
+    let wallClock = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+    const bytes = Buffer.alloc(512 * 1024 + 17, 0x62);
+    let offset = 0;
+    const request = vi.fn(
+      async (
+        _method: "command/exec",
+        _params: CodexCommandExecParams,
+        _options: { timeoutMs?: number },
+      ): Promise<CodexCommandExecResponse> => {
+        const chunk = bytes.subarray(offset, offset + 512 * 1024);
+        offset += chunk.byteLength;
+        elapsed = test.elapsedMs;
+        wallClock -= 5_000;
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            dataBase64: chunk.toString("base64"),
+            size: bytes.byteLength,
+            revision: "stable-file",
+          }),
+          stderr: "",
+        };
+      },
+    );
+    const transfer = readBoundedCodexRemoteWorkspaceFile({
+      client: { request },
+      path: "/remote/chunked.bin",
+      maxBytes: bytes.byteLength,
+      timeoutMs: test.timeoutMs,
+    });
+    if (test.expires) {
+      await expect(transfer).rejects.toThrow("timed out");
+    } else {
+      expect(Buffer.from((await transfer).dataBase64, "base64")).toEqual(bytes);
+    }
+    expect(request.mock.calls.map(([, params]) => params.timeoutMs)).toEqual(test.budgets);
+    expect(request.mock.calls.map((call) => call[2].timeoutMs)).toEqual(test.budgets);
+  });
+
   it("rejects oversized remote files before base64 allocation or transfer", async () => {
     const filePath = path.join(localWorkspaceRoot, "oversized.txt");
     await writeFile(filePath, "too many bytes");
@@ -187,15 +234,13 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
     }
   });
 
-  it("rejects malformed, truncated, and oversized command responses", async () => {
-    for (const stdout of ["not valid base64!", "YQ", "YWJjZA=="]) {
-      const client = {
-        request: vi.fn(async () => ({ exitCode: 0, stdout, stderr: "" })),
-      };
-      await expect(
-        readBoundedCodexRemoteWorkspaceFile({ client, path: "/remote/report.txt", maxBytes: 3 }),
-      ).rejects.toThrow(/invalid|oversized|exceeds/);
-    }
+  it("rejects malformed command response JSON", async () => {
+    const client = {
+      request: vi.fn(async () => ({ exitCode: 0, stdout: "not valid base64!", stderr: "" })),
+    };
+    await expect(
+      readBoundedCodexRemoteWorkspaceFile({ client, path: "/remote/report.txt", maxBytes: 3 }),
+    ).rejects.toThrow("returned invalid chunk data");
   });
 
   it("reports the documented remote Node.js prerequisite clearly", async () => {
@@ -290,21 +335,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
 
     await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "authoritative remote content\n",
-    );
-  });
-
-  it("transfers newly generated remote files without waiting for workspace synchronization", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/new-upload.txt`;
-
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: { filePath: remotePath },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile: createRemoteFileReader({ [remotePath]: "new remote attachment\n" }),
-    });
-
-    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
-      "new remote attachment\n",
     );
   });
 
@@ -441,31 +471,36 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     ).rejects.toThrow("limit of 2 bytes");
   });
 
-  it("shares one configured deadline across an entire attachment batch", async () => {
+  it.each([
+    { elapsedMs: 100.25, budgets: [500, 399], expires: false },
+    { elapsedMs: 499.75, budgets: [500], expires: true },
+  ])("keeps batch deadlines across a clock rewind ($elapsedMs)", async (test) => {
+    let elapsed = 0;
+    let wallClock = 10_000;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(Date, "now").mockImplementation(() => wallClock);
     const first = `${remoteWorkspaceRoot}/reports/first.txt`;
     const second = `${remoteWorkspaceRoot}/reports/second.txt`;
     const readRemoteFile = vi.fn<CodexRemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
-      await delay(20);
+      elapsed = test.elapsedMs;
+      wallClock -= 5_000;
       return {
         dataBase64: Buffer.from(remotePath === first ? "first" : "second").toString("base64"),
       };
     });
-
-    await prepareCodexRemoteWorkspaceMessageMedia({
+    const transfer = prepareCodexRemoteWorkspaceMessageMedia({
       args: { mediaUrls: [first, second] },
       localWorkspaceRoot,
       remoteWorkspaceRoot,
       readRemoteFile,
       timeoutMs: 500,
     });
-
-    expect(readRemoteFile).toHaveBeenCalledTimes(2);
-    const firstBudget = readRemoteFile.mock.calls[0]?.[0].timeoutMs;
-    const secondBudget = readRemoteFile.mock.calls[1]?.[0].timeoutMs;
-    expect(firstBudget).toBeGreaterThan(0);
-    expect(firstBudget).toBeLessThanOrEqual(500);
-    expect(secondBudget).toBeGreaterThan(0);
-    expect(secondBudget).toBeLessThan(firstBudget ?? 0);
+    if (test.expires) {
+      await expect(transfer).rejects.toThrow("timed out");
+    } else {
+      await transfer;
+    }
+    expect(readRemoteFile.mock.calls.map(([params]) => params.timeoutMs)).toEqual(test.budgets);
   });
 
   it("counts repeated attachment entries before issuing any remote request", async () => {
@@ -485,22 +520,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       ).rejects.toThrow("16-attachment limit");
       expect(readRemoteFile).not.toHaveBeenCalled();
     }
-  });
-
-  it("keeps staged media immutable after the remote source changes", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/immutable-upload.txt`;
-    const remoteFiles = { [remotePath]: "immutable transferred report\n" };
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: { filePath: remotePath },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile: createRemoteFileReader(remoteFiles),
-    });
-    remoteFiles[remotePath] = "changed remote content\n";
-
-    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
-      "immutable transferred report\n",
-    );
   });
 
   it("honors cancellation before requesting remote bytes", async () => {

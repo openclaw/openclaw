@@ -1,0 +1,15 @@
+{
+  "id": "agentsapi",
+  "name": "OpenAI Agents API",
+  "description": "OpenAI Agents API harness and hosted sessions.",
+  "categories": ["agent-runtimes"],
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["agentsapi"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

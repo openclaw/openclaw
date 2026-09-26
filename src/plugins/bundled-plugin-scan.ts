@@ -247,12 +247,8 @@ export function resolveBundledPluginGeneratedPath(
   return null;
 }
 
-function normalizeRelativePluginEntryPath(entryPath: string): string {
-  return entryPath.replace(/^\.\//u, "");
-}
-
 function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string): string | null {
-  const normalizedEntryPath = normalizeRelativePluginEntryPath(entryPath);
+  const normalizedEntryPath = entryPath.replace(/^\.\//u, "");
   const candidate = path.isAbsolute(normalizedEntryPath)
     ? path.normalize(normalizedEntryPath)
     : path.resolve(baseDir, normalizedEntryPath);

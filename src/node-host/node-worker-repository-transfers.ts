@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "../gateway/github-repository-publication-snapshot.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceReconciliationJournal,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../gateway/worker-environments/workspace-reconcile.js";
-import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import {
   NODE_WORKSPACE_EMPTY_MANIFEST,
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
@@ -83,33 +83,33 @@ export async function withNodeRepositoryPublication<T>(
   if (params.baseManifestRef !== NODE_WORKSPACE_EMPTY_MANIFEST_REF) {
     throw new Error("Publication transfer baseline is invalid");
   }
-  const publication = await tempWorkspace({
-    rootDir: path.join(params.manifestHome, ".openclaw-worker", "publication"),
-    prefix: "worker-publication-",
-  });
-  try {
-    await runWorkspaceCommand({
-      workspaceDir: params.workspaceDir,
-      homeDir: params.manifestHome,
-      argv: [
-        "node",
-        "-e",
-        REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
-        params.workspaceDir,
-        params.baseCommit,
-        publication.dir,
-      ],
-      signal: params.signal,
-    });
-    const manifests = path.join(params.manifestHome, ".openclaw-worker", "manifests");
-    await fs.mkdir(manifests, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(manifests, `${NODE_WORKSPACE_EMPTY_MANIFEST_REF.slice("sha256:".length)}.json`),
-      NODE_WORKSPACE_EMPTY_MANIFEST,
-      { mode: 0o600 },
-    );
-    return await upload(publication.dir);
-  } finally {
-    await publication.cleanup();
-  }
+  return await withTempWorkspace(
+    {
+      rootDir: path.join(params.manifestHome, ".openclaw-worker", "publication"),
+      prefix: "worker-publication-",
+    },
+    async (publication) => {
+      await runWorkspaceCommand({
+        workspaceDir: params.workspaceDir,
+        homeDir: params.manifestHome,
+        argv: [
+          "node",
+          "-e",
+          REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
+          params.workspaceDir,
+          params.baseCommit,
+          publication.dir,
+        ],
+        signal: params.signal,
+      });
+      const manifests = path.join(params.manifestHome, ".openclaw-worker", "manifests");
+      await fs.mkdir(manifests, { recursive: true, mode: 0o700 });
+      await fs.writeFile(
+        path.join(manifests, `${NODE_WORKSPACE_EMPTY_MANIFEST_REF.slice("sha256:".length)}.json`),
+        NODE_WORKSPACE_EMPTY_MANIFEST,
+        { mode: 0o600 },
+      );
+      return await upload(publication.dir);
+    },
+  );
 }

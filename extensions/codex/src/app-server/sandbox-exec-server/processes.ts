@@ -1,7 +1,3 @@
-/**
- * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
- * termination for Codex sandbox exec-server process RPCs.
- */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -9,6 +5,7 @@ import {
   prepareSandboxProcessCleanup,
   sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
+import type { CodexNativeProcessClient } from "../native-process-authority.js";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { resolveFsSandboxPolicy } from "./fs-policy.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
@@ -20,12 +17,12 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RETAINED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const CLOSED_PROCESS_EVICTION_MS = 60_000;
 
-/** Starts a sandbox-backed process and registers it in the connection-local process table. */
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
   notify: ManagedProcess["emitNotification"],
   params: JsonValue | undefined,
+  processAuthority?: CodexNativeProcessClient,
 ): Promise<JsonObject> {
   const record = requireObject(params, "process/start params");
   const processId = requireString(record.processId, "processId");
@@ -66,9 +63,32 @@ export async function startProcess(
       managed.evictionTimer.unref?.();
     },
   };
+  const source = processAuthority?.claim(record.metadata, async () => {
+    await terminateManagedProcess(managed);
+  });
   processes.set(processId, managed);
-  const startPromise = runProcess(execServer, managed, { argv, cwd, env });
+  const startPromise = runProcess(execServer, managed, { argv, cwd, env, source });
   managed.startPromise = startPromise;
+  // Keep original-source custody through backend settlement, independently of
+  // native item receipts or reuse of the transport's string process handle.
+  void startPromise
+    .catch(() => undefined)
+    .then(async () => {
+      await managed.child?.settled;
+      if (managed.terminationRequested) {
+        // Transport close can precede a failed remote termination receipt.
+        // Join the exact cleanup operation before releasing its custody.
+        await managed.child?.terminate();
+      }
+      source?.settle();
+    })
+    .catch((error: unknown) => {
+      source?.fail(error);
+      embeddedAgentLog.warn("codex sandbox process settlement failed", {
+        processId,
+        error: coerceErrorMessage(error),
+      });
+    });
   try {
     await startPromise;
   } catch (error) {
@@ -127,9 +147,15 @@ function assertSupportedProcessSandbox(execServer: OpenClawExecServer, record: J
 async function runProcess(
   execServer: OpenClawExecServer,
   managed: ManagedProcess,
-  params: { argv: string[]; cwd: string; env: Record<string, string> },
+  params: {
+    argv: string[];
+    cwd: string;
+    env: Record<string, string>;
+    source?: ReturnType<CodexNativeProcessClient["claim"]>;
+  },
 ): Promise<void> {
   const backend = execServer.backend;
+  params.source?.assertAdmission();
   throwIfProcessStartCancelled(managed);
   const remoteExec = prepareSandboxProcessCleanup(backend, params.env);
   const execSpec = await backend.buildExecSpec({
@@ -148,12 +174,18 @@ async function runProcess(
     });
     throw new Error("process start cancelled");
   }
+  let spawned = false;
   const owner = await spawnSandboxChild({
     argv: execSpec.argv,
     env: execSpec.env,
     cwd: execSpec.cwd,
     usePty: managed.tty,
     assertCurrent: () => {
+      if (spawned) {
+        params.source?.assertCurrent();
+      } else {
+        params.source?.assertAdmission();
+      }
       execSpec.assertCurrent?.();
       throwIfProcessStartCancelled(managed);
     },
@@ -172,6 +204,7 @@ async function runProcess(
     terminateRemote: remoteExec.terminate,
     interruptRemote: remoteExec.interrupt,
   });
+  spawned = true;
   managed.child = owner;
   void owner.exited.then(({ exitCode }) => emitProcessExited(managed, exitCode));
   void owner.closed.then(({ exitCode }) => emitProcessClosed(managed, exitCode));
@@ -293,7 +326,6 @@ function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined
   return retained;
 }
 
-/** Reads buffered process output, optionally waiting for new output or process close. */
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -321,7 +353,6 @@ export async function readProcess(
   };
 }
 
-/** Writes base64 stdin data to a running process when stdin is still open. */
 export function writeProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -361,6 +392,7 @@ export async function signalProcess(
   const managed = processes.get(processId);
   if (managed && !managed.exited) {
     await managed.startPromise;
+    managed.child?.assertCurrent();
     await managed.child?.interrupt();
   }
   return {};
@@ -377,6 +409,10 @@ export async function terminateProcess(
   if (!managed) {
     return { running: false };
   }
+  return await terminateManagedProcess(managed);
+}
+
+async function terminateManagedProcess(managed: ManagedProcess): Promise<JsonObject> {
   const running = !managed.exited;
   managed.terminationRequested = true;
   await managed.startPromise?.catch(() => undefined);
@@ -458,26 +494,14 @@ function buildEnvFromPolicy(value: unknown): Record<string, string> {
   const inheritedEnv = readEnv(policy.set);
   const includeOnly = readStringList(policy.includeOnly);
   if (includeOnly.length > 0) {
-    filterEnvKeys(inheritedEnv, includeOnly, true);
-  }
-  return inheritedEnv;
-}
-
-function filterEnvKeys(
-  env: Record<string, string>,
-  patterns: string[],
-  keepMatches: boolean,
-): void {
-  if (patterns.length === 0) {
-    return;
-  }
-  const regexes = patterns.map((pattern) => wildcardPatternToRegex(pattern));
-  for (const key of Object.keys(env)) {
-    const matches = regexes.some((regex) => regex.test(key));
-    if (matches !== keepMatches) {
-      delete env[key];
+    const regexes = includeOnly.map(wildcardPatternToRegex);
+    for (const key of Object.keys(inheritedEnv)) {
+      if (!regexes.some((regex) => regex.test(key))) {
+        delete inheritedEnv[key];
+      }
     }
   }
+  return inheritedEnv;
 }
 
 function wildcardPatternToRegex(pattern: string): RegExp {

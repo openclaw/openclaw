@@ -16,7 +16,7 @@ export type OneTimeTicketStore<T> = {
 export function createOneTimeTicketStore<T>(opts: {
   ttlMs: number;
   now?: () => number;
-  /** Called when an unconsumed ticket expires through its timer or clear(). */
+  /** Called when an unconsumed ticket expires through its timer, consume() or clear(). */
   onExpire?: (payload: T, token: string) => void;
 }): OneTimeTicketStore<T> {
   const now = opts.now ?? (() => Date.now());
@@ -80,7 +80,11 @@ export function createOneTimeTicketStore<T>(opts: {
         }
       }
       const entry = remove(normalized);
-      return entry && entry.expiresAtMs > currentTimeMs ? entry.payload : undefined;
+      if (entry && entry.expiresAtMs <= currentTimeMs) {
+        opts.onExpire?.(entry.payload, normalized);
+        return undefined;
+      }
+      return entry?.payload;
     },
     delete(token) {
       return remove(token) !== undefined;

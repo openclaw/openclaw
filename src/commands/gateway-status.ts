@@ -7,7 +7,7 @@ import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
 import { buildNetworkHints, resolveTargets, sanitizeSshTarget } from "./gateway-status/helpers.js";
 import {
@@ -18,21 +18,9 @@ import {
 } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
-const sshConfigModuleLoader = createLazyImportLoader(() => import("../infra/ssh-config.js"));
-const sshTunnelModuleLoader = createLazyImportLoader(() => import("../infra/ssh-tunnel.js"));
-const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../infra/tls/gateway.js"));
-
-function loadSshConfigModule() {
-  return sshConfigModuleLoader.load();
-}
-
-function loadSshTunnelModule() {
-  return sshTunnelModuleLoader.load();
-}
-
-function loadGatewayTlsModule() {
-  return gatewayTlsModuleLoader.load();
-}
+const loadSshConfigModule = createLazyPromise(() => import("../infra/ssh-config.js"));
+const loadSshTunnelModule = createLazyPromise(() => import("../infra/ssh-tunnel.js"));
+const loadGatewayTlsModule = createLazyPromise(() => import("../infra/tls/gateway.js"));
 
 /** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(

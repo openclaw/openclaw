@@ -9,7 +9,6 @@ import {
 } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import { logVoiceVerbose, type VoiceOperationResult, type VoiceSessionEntry } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -53,28 +52,20 @@ export function normalizeVoiceChannelResidencies(
   return normalized;
 }
 
-function normalizeDiscordUserId(value: string): string | undefined {
-  const trimmed = value.trim();
-  const withoutDiscordPrefix = trimmed.startsWith("discord:") ? trimmed.slice(8) : trimmed;
-  const withoutUserPrefix = withoutDiscordPrefix.startsWith("user:")
-    ? withoutDiscordPrefix.slice(5)
-    : withoutDiscordPrefix;
-  return withoutUserPrefix.trim() || undefined;
-}
-
 function normalizeDiscordUserIds(entries: string[] | undefined): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries ?? []) {
-    const id = normalizeDiscordUserId(entry);
+    const trimmed = entry.trim();
+    const withoutDiscordPrefix = trimmed.startsWith("discord:") ? trimmed.slice(8) : trimmed;
+    const withoutUserPrefix = withoutDiscordPrefix.startsWith("user:")
+      ? withoutDiscordPrefix.slice(5)
+      : withoutDiscordPrefix;
+    const id = withoutUserPrefix.trim();
     if (id) {
       ids.add(id);
     }
   }
   return ids;
-}
-
-function resolveFollowUsersEnabled(voiceConfig: DiscordAccountConfig["voice"]): boolean {
-  return voiceConfig?.followUsersEnabled !== false;
 }
 
 function logFollowUserReconcileVerbose(reason: string, message: string): void {
@@ -83,10 +74,6 @@ function logFollowUserReconcileVerbose(reason: string, message: string): void {
     return;
   }
   logVoiceVerbose(message);
-}
-
-function resolveVoiceConnectionGroup(accountId: string): string {
-  return `openclaw:${accountId}`;
 }
 
 export class DiscordVoiceFollowing {
@@ -102,7 +89,6 @@ export class DiscordVoiceFollowing {
 
   constructor(
     private readonly params: {
-      accountId: string;
       allowedChannels: VoiceChannelResidency[] | null;
       autoJoinChannels: VoiceChannelResidency[];
       botUserId: () => string | undefined;
@@ -110,11 +96,7 @@ export class DiscordVoiceFollowing {
       deleteRecoveryAttempt: (guildId: string) => void;
       destroyed: () => boolean;
       discordConfig: DiscordAccountConfig;
-      destroyVoiceConnection: (params: {
-        connection: ReturnType<ReturnType<typeof loadDiscordVoiceSdk>["joinVoiceChannel"]>;
-        voiceSdk: ReturnType<typeof loadDiscordVoiceSdk>;
-        reason: string;
-      }) => void;
+      stopTransport: (guildId: string) => Promise<void>;
       getRecoveryAttempt: (guildId: string) => number | undefined;
       getSession: (guildId: string) => VoiceSessionEntry | undefined;
       hasVoiceLifecycle: (guildId: string) => boolean;
@@ -131,9 +113,10 @@ export class DiscordVoiceFollowing {
       voiceEnabled: boolean;
     },
   ) {
-    this.followUserIds = resolveFollowUsersEnabled(params.discordConfig.voice)
-      ? normalizeDiscordUserIds(params.discordConfig.voice?.followUsers)
-      : new Set();
+    this.followUserIds =
+      params.discordConfig.voice?.followUsersEnabled !== false
+        ? normalizeDiscordUserIds(params.discordConfig.voice?.followUsers)
+        : new Set();
   }
 
   isFollowedUser(userId: string): boolean {
@@ -173,18 +156,7 @@ export class DiscordVoiceFollowing {
     if (existing) {
       await this.params.leave({ guildId });
     } else {
-      const voiceSdk = loadDiscordVoiceSdk();
-      const connection = voiceSdk.getVoiceConnection(
-        guildId,
-        resolveVoiceConnectionGroup(this.params.accountId),
-      );
-      if (connection) {
-        this.params.destroyVoiceConnection({
-          connection,
-          voiceSdk,
-          reason: `non-allowed voice state guild ${guildId} channel ${channelId}`,
-        });
-      }
+      await this.params.stopTransport(guildId);
     }
 
     const target = this.resolveVoiceResidencyTarget(guildId);
@@ -205,7 +177,7 @@ export class DiscordVoiceFollowing {
       return;
     }
     const { guildId, channelId, userId } = params;
-    const followKey = this.formatFollowedUserKey({ guildId, userId });
+    const followKey = `${guildId}:${userId}`;
     const eventGeneration = (this.followEventGenerations.get(followKey) ?? 0) + 1;
     this.followEventGenerations.set(followKey, eventGeneration);
     const isCurrentEvent = () => this.followEventGenerations.get(followKey) === eventGeneration;
@@ -525,10 +497,6 @@ export class DiscordVoiceFollowing {
     return { userIds: selected, completedCycle };
   }
 
-  private formatFollowedUserKey(params: { guildId: string; userId: string }): string {
-    return `${params.guildId}:${params.userId}`;
-  }
-
   private hasFollowedUserInChannel(entry: VoiceChannelResidency): boolean {
     return Array.from(this.followedUserChannels.values()).some(
       (candidate) => candidate.guildId === entry.guildId && candidate.channelId === entry.channelId,
@@ -650,9 +618,9 @@ export class DiscordVoiceFollowing {
   }
 
   private resolveVoiceResidencyTarget(guildId: string): VoiceChannelResidency | null {
-    const autoJoinTarget = this.params.autoJoinChannels
-      .toReversed()
-      .find((entry) => entry.guildId === guildId);
+    const autoJoinTarget = this.params.autoJoinChannels.findLast(
+      (entry) => entry.guildId === guildId,
+    );
     if (autoJoinTarget?.whenOccupied) {
       return null;
     }

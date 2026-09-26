@@ -3,5 +3,5 @@ export {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
   shouldSuppressReasoningPayload,
-} from "./reply-payloads-base.js";
+} from "../reply-payload.js";
 export { filterMessagingToolReplyPayload } from "./reply-payloads-dedupe.js";

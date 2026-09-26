@@ -1,28 +1,18 @@
 // Dead-letter queue tests cover retained diagnostics, replay, and health counts.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { describe, expect, it } from "vitest";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { countFailedChannelIngressQueueEntries } from "./ingress-queue-health.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ingress-dead-letters-"));
-  try {
-    return await run(stateDir);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-ingress-dead-letters-", applyEnv: false },
+    ({ stateDir }) => run(stateDir),
+  );
 }
 
 describe("channel ingress dead letters", () => {
-  afterEach(() => closeOpenClawStateDatabaseForTest());
-
   it("retains failed payload, metadata, and attempt history", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }, { source: string }>({
@@ -185,7 +175,7 @@ describe("channel ingress dead letters", () => {
         "UPDATE channel_ingress_events SET failed_at = NULL WHERE channel_id = 'line'",
       ).run();
 
-      expect(countFailedChannelIngressQueueEntries(stateDir)).toEqual([
+      expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([
         { channelId: "line", accountId: "default", count: 1 },
         { channelId: "telegram", accountId: "ops", count: 2, oldestFailedAt: 20 },
       ]);

@@ -57,6 +57,7 @@ import {
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
+import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
 import { runCommand } from "./invoke-run-command.js";
 import { buildSystemRunPrepareCoverageEnv } from "./invoke-system-run-plan.js";
 import {
@@ -623,36 +624,9 @@ async function dispatchInvoke(
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
-    const acquireManagedWorkspace = context?.acquireManagedWorkspace;
-    let pluginInvocationActive = true;
-    const invokeContext =
-      context && (frame.sessionKey || runtime.signal || acquireManagedWorkspace)
-        ? {
-            ...context,
-            ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
-            ...(runtime.signal ? { signal: runtime.signal } : {}),
-            ...(acquireManagedWorkspace
-              ? {
-                  acquireManagedWorkspace: (
-                    request: Parameters<typeof acquireManagedWorkspace>[0],
-                  ) => {
-                    if (
-                      !pluginInvocationActive ||
-                      runtime.signal?.aborted ||
-                      !frame.sessionKey ||
-                      request.sessionKey !== frame.sessionKey
-                    ) {
-                      throw new Error("node placement workspace invocation authority is closed");
-                    }
-                    return acquireManagedWorkspace(request);
-                  },
-                }
-              : {}),
-          }
-        : context;
-    let pluginResult: string | null;
-    try {
-      pluginResult =
+    const pluginResult = await withNodeHostPluginInvocation(
+      { context, sessionKey: frame.sessionKey, signal: runtime.signal },
+      async (invokeContext) =>
         command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND
           ? await invokeNodeWorkerComputerCommand({
               paramsJSON: frame.paramsJSON,
@@ -660,10 +634,8 @@ async function dispatchInvoke(
               invoke: (innerCommand, paramsJSON) =>
                 invokePlugin(innerCommand, paramsJSON, undefined, invokeContext),
             })
-          : await invokePlugin(command, frame.paramsJSON, io, invokeContext);
-    } finally {
-      pluginInvocationActive = false;
-    }
+          : await invokePlugin(command, frame.paramsJSON, io, invokeContext),
+    );
     if (pluginResult !== null) {
       await runtime.flushPluginCommandIo?.();
       await response.send({ ok: true, payloadJSON: pluginResult });

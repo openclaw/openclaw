@@ -5,6 +5,8 @@ import {
   loadSessionEntryByIdReadOnly,
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SessionRowProjectionBinding } from "../../../gateway/session-row-projection-binding.js";
+import { getInProcessGatewayRequestContext } from "../../../plugins/runtime/gateway-request-scope.js";
 
 type PersistedSessionCapabilityEntry = Pick<
   SessionEntry,
@@ -24,6 +26,8 @@ export type SessionCapabilityEntry = {
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {
+  /** Cross-agent owner projection: missing rows are authoritative, never a database fallback. */
+  authoritative?: true;
   /** Reuse this memo when depth fallback revisits the same logical store. */
   scope?: { storePath: string; agentId: string };
   get: (sessionKey: string) => SessionCapabilityEntry | undefined;
@@ -78,18 +82,26 @@ export function createSubagentSessionStore(
     scope: { storePath, agentId },
     get: (sessionKey) => {
       if (!entries.has(sessionKey)) {
-        let entry: SessionCapabilityEntry | undefined;
-        try {
-          if (!isInternalSessionEffectsKey(sessionKey)) {
+        if (isInternalSessionEffectsKey(sessionKey)) {
+          entries.set(sessionKey, undefined);
+          return undefined;
+        }
+        const owner = getInProcessGatewayRequestContext()?.sessionRowProjectionOwner;
+        let entry: SessionCapabilityEntry | undefined =
+          owner instanceof SessionRowProjectionBinding
+            ? owner.readCommittedEntry({ agentId, key: sessionKey, storePath })
+            : undefined;
+        if (!entry) {
+          try {
             entry = loadExactSessionEntryReadOnly({
               storePath,
               agentId,
               sessionKey,
               projection: "list",
             })?.entry;
+          } catch {
+            // Preserve the depth/key fallback for missing or unavailable stores.
           }
-        } catch {
-          // Preserve the depth/key fallback for missing or unavailable stores.
         }
         entries.set(sessionKey, entry);
       }

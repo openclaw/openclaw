@@ -22,6 +22,7 @@ import {
   readClawHubSkillsLockfile,
   readClawHubSkillsLockfileStatusSync,
   type ClawHubSkillsLockfileStatusRead,
+  resolveWorkspaceClawHubSkills,
 } from "./clawhub-store.js";
 import {
   normalizeTrackedSkillSlug,
@@ -282,6 +283,14 @@ export async function resolveClawHubSkillVerificationTarget(
   params: Parameters<WorkspaceSkillLifecycle["resolveClawHubSkillVerificationTarget"]>[0],
 ): Promise<ClawHubSkillVerificationTargetResult> {
   try {
+    const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
+    if (tracking) {
+      return await tracking.resolveClawHubSkillVerificationTarget({
+        ...params,
+        // Keep Gateway registry configuration when the skill has no installed origin.
+        baseUrl: resolveClawHubBaseUrl(params.baseUrl),
+      });
+    }
     const version = normalizeOptionalSelector(params.version);
     const tag = normalizeOptionalSelector(params.tag);
     if (version && tag) {

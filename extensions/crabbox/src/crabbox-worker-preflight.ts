@@ -1,8 +1,10 @@
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { type CrabboxCommandRunner, runCrabboxCommand } from "./crabbox-worker-command.js";
-import { nonEmptyString } from "./crabbox-worker-profile.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 async function loadCrabboxConfigShow(params: {

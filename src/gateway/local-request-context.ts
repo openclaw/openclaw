@@ -130,8 +130,7 @@ function createLocalGatewayRequestContext(
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
     logHealth: { error: (message) => logGateway.error(message) },
     logGateway,
-    incrementPresenceVersion: () => 0,
-    getHealthVersion: () => 0,
+    publishPresence: () => {},
     broadcast: () => {},
     broadcastToConnIds: () => {},
     nodeSendToSession: () => {},
@@ -195,6 +194,7 @@ function createLocalGatewayRequestContext(
         release: async () => {
           await initializing?.catch(() => {});
           projection?.dispose();
+          await projection?.ensureMaterialized();
         },
       });
       initializing = import("./session-row-projection.js").then(

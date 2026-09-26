@@ -4,7 +4,9 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
 import {
   isBuiltinThemeId,
-  parseThemeDefinition,
+  normalizeThemeDefinition,
+  resolveThemeBranding,
+  type ThemeBranding,
   type ThemeColorMode,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -20,6 +22,7 @@ export type ThemeCatalogSnapshot = {
 };
 
 export type CatalogTheme = {
+  branding: ThemeBranding;
   mode?: ThemeColorMode;
   palette: Pick<ImportedCustomTheme, "light" | "dark">;
 };
@@ -45,7 +48,16 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     gateway.snapshot.selfUser?.id === ownerProfile;
 
   const rememberDefinition = (result: ThemesGetResult) => {
-    const definition = parseThemeDefinition(result.definition);
+    let definition;
+    const artwork = result.theme.source === "plugin" ? result.theme.artwork : undefined;
+    try {
+      definition = normalizeThemeDefinition(result.definition, {
+        hatIds: Object.keys(artwork?.hats ?? {}),
+        critterIds: Object.keys(artwork?.critters ?? {}),
+      });
+    } catch {
+      return;
+    }
     const light = definition?.light ?? definition?.dark;
     const dark = definition?.dark ?? definition?.light;
     if (definition && light && dark) {
@@ -53,6 +65,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
       definitions.set(result.theme.id, {
         generation,
         theme: {
+          branding: { ...resolveThemeBranding(definition), ...(artwork ? { artwork } : {}) },
           mode: !definition.light ? "dark" : !definition.dark ? "light" : undefined,
           palette: {
             light: normalizeThemePalette("light", light, undefined),

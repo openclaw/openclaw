@@ -4,8 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { finished, pipeline } from "node:stream/promises";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { valid } from "semver";
 import * as tar from "tar";
+import {
+  collectPatchedMcpArtifactErrors,
+  PATCHED_MCP_NAME,
+} from "../../../scripts/lib/package-bundled-mcp.mjs";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
@@ -18,6 +23,7 @@ import {
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sha256File } from "../../infra/directory-durability.js";
+import { walkDirectory } from "../../infra/fs-safe.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -55,6 +61,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-host-launcher.mjs",
+  "node-compile-cache.mjs",
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
@@ -150,11 +157,42 @@ type BootstrapImportScope = {
   prefix: string;
   files: string[];
   imports: PackageDistImport[];
+  patchedMcp?: { manifest: NodePackageManifest; hashes: Map<string, string> };
 };
 
 type BootstrapEntry = {
   scope: BootstrapImportScope;
 } & ({ source: { root: string; relative: string } } | { contents: Buffer });
+
+async function collectInstalledBundledFiles(root: string): Promise<string[]> {
+  const included = ({ name }: { name: string }) => name !== "node_modules" && !name.startsWith(".");
+  const { entries, failedDirs, truncated } = await walkDirectory(root, {
+    maxEntries: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxEntries,
+    symlinks: "include",
+    include: included,
+    descend: (entry) => {
+      if (entry.depth >= 64) {
+        throw new Error("Node bootstrap dependency exceeds its directory depth limit");
+      }
+      return included(entry);
+    },
+  });
+  if (failedDirs.length > 0) {
+    throw failedDirs[0]!.error;
+  }
+  if (truncated) {
+    throw new Error("Node bootstrap distribution exceeds its artifact limits");
+  }
+  return entries.flatMap((entry) => {
+    if (entry.kind === "directory" || entry.relativePath === "package.json") {
+      return [];
+    }
+    if (entry.kind !== "file") {
+      throw new Error(`Unsafe bundled node distribution path: ${entry.relativePath}`);
+    }
+    return [entry.relativePath.split(path.sep).join("/")];
+  });
+}
 
 async function resolvePlugins(options: ArtifactOptions, packageRoot: string) {
   const ids = new Set<string>();
@@ -271,14 +309,10 @@ async function prepareNodeBootstrapArtifact(
         throw new Error(`Invalid node distribution file: ${relative}`);
       }
       reserveFile(destination, before.size);
-      const contents = await handle.readFile();
-      const after = await handle.stat();
+      const contents = await readFileHandleBounded(handle, before.size);
       const current = await fs.lstat(source);
       if (
         contents.byteLength !== before.size ||
-        before.size !== after.size ||
-        before.mtimeMs !== after.mtimeMs ||
-        before.ctimeMs !== after.ctimeMs ||
         current.isSymbolicLink() ||
         current.dev !== before.dev ||
         current.ino !== before.ino ||
@@ -376,7 +410,14 @@ async function prepareNodeBootstrapArtifact(
     for (const [dependency, version] of dependencies) {
       packageJson.dependencies![dependency] = version;
     }
-    const bundledFiles = await collectPackageDistInventory(root);
+    // Linked workspaces can carry source and private files; installed npm bundles already
+    // own their published layout, including compiled directories and non-JavaScript assets.
+    const workspace =
+      sourcePackage.dependencies?.[name]?.startsWith("workspace:") ||
+      !root.endsWith(`${path.sep}node_modules${path.sep}${name.split("/").join(path.sep)}`);
+    const bundledFiles = workspace
+      ? await collectPackageDistInventory(root)
+      : await collectInstalledBundledFiles(root);
     if (bundledFiles.length === 0) {
       throw new Error(
         `Bundled node dependency ${name} needs its compiled distribution; rebuild the Gateway`,
@@ -387,6 +428,9 @@ async function prepareNodeBootstrapArtifact(
       prefix: `node_modules/${name}/`,
       files: [],
       imports: [],
+      ...(name === PATCHED_MCP_NAME
+        ? { patchedMcp: { manifest: bundled, hashes: new Map<string, string>() } }
+        : {}),
     };
     scopes.push(scope);
     addFiles(root, bundledFiles, scope.prefix, scope);
@@ -477,13 +521,17 @@ async function prepareNodeBootstrapArtifact(
         if (inspected && identity.sha256 !== inspected.sha256) {
           throw new Error(`Node distribution changed after import inspection: ${relative}`);
         }
-        entry.scope.imports.push(
-          ...(inspected?.imports ??
-            collectPackageDistImports({
-              files: [importerPath],
-              readText: () => contents.toString("utf8"),
-            })),
-        );
+        if (entry.scope.patchedMcp) {
+          entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
+        } else {
+          entry.scope.imports.push(
+            ...(inspected?.imports ??
+              collectPackageDistImports({
+                files: [importerPath],
+                readText: () => contents.toString("utf8"),
+              })),
+          );
+        }
         manifest.push(identity);
         if (!pack) {
           continue;
@@ -503,10 +551,16 @@ async function prepareNodeBootstrapArtifact(
       }
     }
     for (const scope of [...scopes, mainScope]) {
-      const errors = collectPackageDistImportErrors(scope);
+      const errors = scope.patchedMcp
+        ? collectPatchedMcpArtifactErrors({
+            manifest: scope.patchedMcp.manifest,
+            files: new Set(scope.files),
+            sha256: (file) => scope.patchedMcp?.hashes.get(file),
+          })
+        : collectPackageDistImportErrors(scope);
       if (errors.length > 0) {
         throw new Error(
-          `Node distribution ${scope.label} has an incomplete built import closure; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
+          `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
         );
       }
     }

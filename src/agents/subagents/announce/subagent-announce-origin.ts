@@ -20,8 +20,8 @@ import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
@@ -190,7 +190,7 @@ export async function resolveSubagentCompletionOrigin(params: {
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
   const router = createBoundDeliveryRouter();
   for (const targetSessionKey of [params.requesterSessionKey, params.childSessionKey]) {
-    const route = router.resolveDestination({
+    const route = await router.resolveDestination({
       eventKind: "task_completion",
       targetSessionKey,
       requester: requesterConversation,

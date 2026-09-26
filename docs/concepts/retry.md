@@ -76,7 +76,9 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 ### Telegram
 
-- Retries on transient errors (429, timeout, connect/reset/closed, temporarily unavailable).
+- With the built-in transport, new text messages and rich-text messages use fresh HTTP connections, avoiding stale keep-alive sockets for initial previews, replies, and terminal errors. Polling, edits, and control requests retain connection pooling. This adds a connection handshake to each new text message.
+- These non-idempotent text sends retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
+- Idempotent operations, such as editing an existing message, can retry transient network failures.
 - Uses `retry_after` when available, otherwise exponential backoff.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
 

@@ -25,10 +25,13 @@ import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
-import "../../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import {
+  buildPendingInputQueueItems,
+  getChatPendingInputs,
+  loadChatPendingInputs,
+} from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -91,13 +94,19 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
-    onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
+    asyncQuestionStorage?:
+      | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
+      | null;
+    onAsyncQuestionSubmit?: (
+      message: string,
+      itemId?: string,
+      sourceMessageId?: string,
+    ) => Promise<boolean>;
     presented?: boolean;
     historyState?: ChatState;
-    onSessionKeyChange: (next: string) => void;
-    thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
     providerPolicyNotice?: ProviderPolicyNotice | null;
+    providerReviewNotice?: TemplateResult | typeof nothing;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     inlineApproval?: ExecApprovalRequest | null;
@@ -118,7 +127,6 @@ export type ChatProps = Omit<
     onRefresh: () => void;
     onToggleFocusMode?: () => void;
     onDismissError?: () => void;
-    onClearHistory?: () => void;
     agentsList: {
       agents: Array<{
         id: string;
@@ -127,8 +135,6 @@ export type ChatProps = Omit<
       }>;
       defaultId?: string;
     } | null;
-    onAgentChange: (agentId: string) => void;
-    onNavigateToAgent?: () => void;
     onSessionSelect?: (sessionKey: string) => void;
     onRevealWorkspaceFile?: (path: string) => void;
     header?: TemplateResult | typeof nothing;
@@ -159,10 +165,20 @@ export function renderChat(props: ChatProps) {
       )
     : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
+  const displayedPendingInputs = pendingInputs
+    ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
+    : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
-  const asyncQuestions = createAsyncQuestionPresentation(questionState, props);
+  const asyncQuestions = createAsyncQuestionPresentation(questionState, {
+    ...props,
+    onReopen: (itemId, scope) => {
+      const composerState = getChatComposerState(props.paneId);
+      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
+      composerState.questionCollapsed = false;
+    },
+  });
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) =>
         requestVersion === undefined
@@ -197,7 +213,7 @@ export function renderChat(props: ChatProps) {
         streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
         queue,
         initialTurnId: props.placementStartup?.initialTurn?.id,
-        pendingInputs: pendingInputs?.page.items,
+        pendingInputs: displayedPendingInputs,
         runActive: props.runActive === true,
         runWorking,
         startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
@@ -360,14 +376,19 @@ export function renderChat(props: ChatProps) {
   const notices = renderChatComposerNotices(props);
   // Transcript invalidation replaces its render context; bind submission afterward.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
+  questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
+  const inputDisplay = selectChatInputDisplay(
+    props.messages,
+    props.queue,
+    displayedPendingInputs ?? [],
+  );
   const defaultComposer = renderChatComposer({
     ...props,
     asyncQuestions,
-    displayQueue: selectChatInputDisplay(
-      props.messages,
-      props.queue,
-      pendingInputs?.page.items ?? [],
-    ).queue,
+    displayQueue: [
+      ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+      ...inputDisplay.queue,
+    ],
     footerContent,
     notices,
     onRequestUpdate: requestUpdate,
@@ -535,17 +556,17 @@ export function renderChat(props: ChatProps) {
                   .presented=${props.presented ?? true}
                 ></openclaw-plugin-contributions>
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
-                <div
-                  class="chat-main__conversation"
-                  @wheel=${{
-                    handleEvent: (event: WheelEvent) =>
-                      forwardChatWheelToTranscript(event, props.transcript.scrollElement),
-                    passive: false,
-                  }}
-                >
-                  ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
-                  ${scrollToBottomButton} ${gutterStack}
-                  <div class="chat-footer">${chatColumnFooter}</div>
+                <div class="chat-main__conversation-frame">
+                  <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
+                  <div
+                    class="chat-main__conversation"
+                    .onwheel=${(event: WheelEvent) =>
+                      forwardChatWheelToTranscript(event, props.transcript.scrollElement)}
+                  >
+                    ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
+                    ${scrollToBottomButton} ${gutterStack}
+                    <div class="chat-footer">${chatColumnFooter}</div>
+                  </div>
                 </div>
               </div>
             </div>

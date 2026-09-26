@@ -11,7 +11,10 @@ import type {
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
-import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
+import type {
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorIdentity,
+} from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
@@ -22,7 +25,9 @@ export type NodeWorkerPendingAdmission = {
   binding: NodeWorkerEnvironmentBinding;
   launchId: string;
   planHash: string;
+  identity: NodeWorkerSupervisorIdentity;
   abort: AbortController;
+  signal: AbortSignal;
   done: Promise<NodeWorkerLaunchReceipt>;
 };
 
@@ -67,12 +72,38 @@ export function nodeWorkerEnvironmentMatches(
   );
 }
 
-export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim) {
+type NodeWorkerActiveTurn = {
+  claim: NodeWorkerLaunchClaim;
+  done: Promise<void>;
+  settle: () => void;
+  cancelled: boolean;
+  settling?: Promise<void>;
+};
+
+/** Retain prepared workspace custody until the admitted launch settles. */
+export async function launchWithNodeWorkerPreparedWorkspace(params: {
+  workspace: Pick<NodeWorkerWorkspaceRuntime, "acquirePreparedWorkspace">;
+  request: Parameters<NodeWorkerWorkspaceRuntime["acquirePreparedWorkspace"]>[0];
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+  launch: (homeDir?: string) => Promise<NodeWorkerLaunchReceipt>;
+}): Promise<NodeWorkerLaunchReceipt> {
+  const workspace = await params.workspace.acquirePreparedWorkspace(params.request);
+  try {
+    params.signal.throwIfAborted();
+    if (!params.isCurrent()) {
+      throw new Error("node worker environment is stopping");
+    }
+    return await params.launch(workspace?.homeDir);
+  } finally {
+    workspace?.release();
+  }
+}
+
+export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim): NodeWorkerActiveTurn {
   const { promise, resolve } = createDeferredCore();
   return { claim, done: promise, settle: resolve, cancelled: false };
 }
-
-type NodeWorkerActiveTurn = ReturnType<typeof createNodeWorkerActiveTurn>;
 
 type NodeWorkerActiveBase = {
   binding: NodeWorkerEnvironmentBinding;
@@ -101,7 +132,9 @@ export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
 export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   state: "observed";
   outcome: NodeWorkerTerminalOutcome;
+  turn?: NodeWorkerActiveTurn;
   cancelledTurn?: NodeWorkerLaunchClaim;
+  reconciliation?: Promise<NodeWorkerLaunchReceipt>;
 };
 
 export function createNodeWorkerObservedTerminal(
@@ -118,6 +151,7 @@ export function createNodeWorkerObservedTerminal(
     worker: active.worker,
     ...(active.container ? { container: active.container } : {}),
     outcome,
+    ...(active.turn ? { turn: active.turn } : {}),
     ...(!active.stopState && active.turn?.cancelled ? { cancelledTurn: active.turn.claim } : {}),
   };
 }

@@ -29,12 +29,14 @@ describe("repository prepared worker reserves", () => {
           },
         },
       };
-      fixture.teardown(
-        fixture.attach(
-          fixture.ready(fixture.seed("repository-source", { repository, runSetupScript })),
+      await fixture.teardown(
+        await fixture.attach(
+          await fixture.ready(
+            await fixture.seed("repository-source", { repository, runSetupScript }),
+          ),
         ),
       );
-      fixture.reopenStore();
+      await fixture.reopenStore();
       let accessible = true;
       const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async (_profileId, options) => {
         expect(options).toEqual({
@@ -60,12 +62,12 @@ describe("repository prepared worker reserves", () => {
         };
       });
       await fixture.schedule(fixture.pool({ prepareIntent }));
-      const reserve = fixture.ready(fixture.reserves()[0]!);
+      const reserve = await fixture.ready(fixture.reserves()[0]!);
       expect(reserve.profileSnapshot.project).toMatchObject(repository);
       expect(reserve.preparation).toMatchObject({ demandAtMs: 1_000, expiresAtMs: 2_000 });
       expect(prepareIntent).toHaveBeenCalledTimes(1);
 
-      fixture.reopenStore();
+      await fixture.reopenStore();
       accessible = false;
       fixture.nowMs = 1_100;
       const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
@@ -75,7 +77,7 @@ describe("repository prepared worker reserves", () => {
       expect(reconcile.mock.lastCall?.[0]).toMatchObject({ environmentId: reserve.environmentId });
       // Provider cleanup frees capacity without granting a session access to
       // retained private contents. Replacement still requires fresh admission.
-      fixture.destroy(fixture.store.get(reserve.environmentId)!);
+      await fixture.destroy(fixture.store.get(reserve.environmentId)!);
       await fixture.schedule(fixture.pool({ prepareIntent, reconcile }));
       expect(prepareIntent).toHaveBeenCalledTimes(2);
       expect(fixture.reserves()).toHaveLength(1);

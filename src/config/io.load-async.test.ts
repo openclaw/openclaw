@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   readDeferredPluginMigrations,
@@ -21,13 +20,16 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
 import * as pluginMetadata from "./io.plugin-metadata.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
+import { readCurrentConfigForPolicyCheckAsync } from "./io.runtime.js";
 import * as snapshotPreparation from "./io.snapshot-preparation.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { registerManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "./types.js";
@@ -37,6 +39,16 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/shell-env.js")>()),
   loadShellEnvFallback: shell.load,
 }));
+
+const workerRoots = createSuiteTempRootTracker({ prefix: "openclaw-config-load-workers-" });
+const workers = createConfigIoWorkerFixture();
+beforeAll(async () => {
+  await workers.setup(await workerRoots.setup());
+});
+afterAll(async () => {
+  await workers.close();
+  await workerRoots.cleanup();
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -112,53 +124,44 @@ it.each(["sync", "async"] as const)(
       mode === "sync"
         ? context.resolveDeferredPluginMigrations()
         : context.resolveDeferredPluginMigrationsAsync();
-    const allocations: string[] = [];
     const coldStagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
     fs.mkdirSync(path.dirname(coldStagingRoot), { recursive: true });
     const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
-    // Linux recursive watches rescan after synchronous snapshots have already been removed.
-    // Watch the staging root directly so their creation and removal remain observable.
-    const watcher = fs.watch(stagingRoot, (_event, filename) => {
-      if (filename?.includes("openclaw-sqlite-readonly-")) {
-        allocations.push(filename);
-      }
+    // The isolated root retains create/remove evidence even when fs.watch drops transient events.
+    const sentinel = new Date("2000-01-01T00:00:00.000Z");
+    fs.utimesSync(stagingRoot, sentinel, sentinel);
+    const stagingMtime = fs.statSync(stagingRoot).mtimeMs;
+    expect(await read()).toEqual([pending]);
+    const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
+    expect(loaded.gateway?.mode).toBe("local");
+    recordDeferredPluginMigrations({
+      env: options.env,
+      pending: [{ ...pending, reason: "Changed obligation" }],
     });
-    try {
-      expect(await read()).toEqual([pending]);
-      const loaded = mode === "sync" ? options.io.loadConfig() : await options.io.loadConfigAsync();
-      expect(loaded.gateway?.mode).toBe("local");
-      recordDeferredPluginMigrations({
-        env: options.env,
-        pending: [{ ...pending, reason: "Changed obligation" }],
-      });
-      await closeOpenClawStateDatabaseAsync();
-      expect(await read()).toEqual([{ ...pending, reason: "Changed obligation" }]);
-      await nextTurn();
+    await closeOpenClawStateDatabaseAsync();
+    expect(await read()).toEqual([{ ...pending, reason: "Changed obligation" }]);
+    expect(synchronousSnapshot).not.toHaveBeenCalled();
+    expect(fs.statSync(stagingRoot).mtimeMs).toBe(stagingMtime);
+    expect(
+      await withArtifactPreservingStateReads(() =>
+        mode === "sync"
+          ? withSynchronousArtifactPreservingStateSnapshot(() =>
+              context.resolveDeferredPluginMigrations(),
+            )
+          : context.resolveDeferredPluginMigrationsAsync(),
+      ),
+    ).toEqual([{ ...pending, reason: "Changed obligation" }]);
+    if (mode === "sync") {
+      expect(synchronousSnapshot).toHaveBeenCalledTimes(1);
+      expect(path.dirname(synchronousSnapshot.mock.calls[0]?.[1] ?? "")).toBe(stagingRoot);
+    } else {
       expect(synchronousSnapshot).not.toHaveBeenCalled();
-      expect(allocations).toEqual([]);
-      expect(
-        await withArtifactPreservingStateReads(() =>
-          mode === "sync"
-            ? withSynchronousArtifactPreservingStateSnapshot(() =>
-                context.resolveDeferredPluginMigrations(),
-              )
-            : context.resolveDeferredPluginMigrationsAsync(),
-        ),
-      ).toEqual([{ ...pending, reason: "Changed obligation" }]);
-      if (mode === "sync") {
-        expect(synchronousSnapshot).toHaveBeenCalledTimes(1);
-        expect(path.dirname(synchronousSnapshot.mock.calls[0]?.[1] ?? "")).toBe(stagingRoot);
-      } else {
-        expect(synchronousSnapshot).not.toHaveBeenCalled();
-      }
-      await vi.waitFor(() => expect(allocations.length).toBeGreaterThan(0));
-    } finally {
-      watcher.close();
     }
+    expect(fs.statSync(stagingRoot).mtimeMs).not.toBe(stagingMtime);
   },
 );
 
-it.each(["load", "snapshot"] as const)(
+it.each(["load", "snapshot", "policy"] as const)(
   "%s reads retained migration inputs without synchronous SQLite work or artifact changes",
   async (method) => {
     const raw = JSON.stringify({
@@ -191,6 +194,9 @@ it.each(["load", "snapshot"] as const)(
     try {
       const config = await withArtifactPreservingStateReads(() =>
         withPluginCache(createPluginCache(), async () => {
+          if (method === "policy") {
+            return await readCurrentConfigForPolicyCheckAsync(options);
+          }
           const io = createConfigIO({ ...options, observe: false });
           if (method === "load") {
             return await io.loadConfigAsync();
@@ -213,6 +219,17 @@ it.each(["load", "snapshot"] as const)(
       familyBefore,
     );
     expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
+    if (method === "policy") {
+      recordDeferredPluginMigrations({
+        env: options.env,
+        pending: [],
+        resolvedPluginIds: [pending.pluginId],
+      });
+      await expect(readCurrentConfigForPolicyCheckAsync(options)).resolves.toHaveProperty(
+        "session.store",
+        "/srv/synthetic-session-state/sessions.json",
+      );
+    }
   },
 );
 

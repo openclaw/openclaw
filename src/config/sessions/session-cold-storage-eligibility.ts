@@ -10,6 +10,7 @@ import {
   hasSessionPendingInputsSchema,
   hasPendingInputConsumptionColumn,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
 import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
@@ -66,10 +67,16 @@ export function readSessionColdStorageProtection(
         protectedIds.add(id);
       }
     }
-    for (const checkpoint of entry.compactionCheckpoints ?? []) {
-      protectedIds.add(checkpoint.sessionId);
-      protectedIds.add(checkpoint.preCompaction.sessionId);
-      protectedIds.add(checkpoint.postCompaction.sessionId);
+    for (const checkpoint of readLegacyCompactionHistory(entry)) {
+      if (checkpoint.sessionId) {
+        protectedIds.add(checkpoint.sessionId);
+      }
+      if (checkpoint.preCompaction.sessionId) {
+        protectedIds.add(checkpoint.preCompaction.sessionId);
+      }
+      if (checkpoint.postCompaction.sessionId) {
+        protectedIds.add(checkpoint.postCompaction.sessionId);
+      }
     }
   }
   for (const row of iterateSqliteQuerySync(

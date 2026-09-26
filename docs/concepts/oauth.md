@@ -44,6 +44,8 @@ Model Setup opens the same picker and connection flow. Choose **Test & use** whe
 you want to verify a model and select it. Plugins that only support full setup
 keep their separate setup action.
 
+OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal or Control UI reports when sign-in is complete.
+
 ## The token sink (why it exists)
 
 OAuth providers commonly mint a new refresh token on every login/refresh.
@@ -87,13 +89,17 @@ writes back to that person's account record rather than a shared or agent-local
 credential.
 
 Older installations may still contain `auth-profiles.json`, `auth-state.json`,
-per-agent `auth.json`, or shared `credentials/oauth.json`. Run
+or per-agent `auth.json`. Run
 `openclaw doctor --fix` once after upgrading. Doctor imports verified values,
 records a migration receipt, and renames the original file to a timestamped
 archive.
 
+The older shared `credentials/oauth.json` importer has retired. Doctor leaves
+that file untouched and reports the [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+needed to import it before installing the latest release.
+
 Runtime never uses credentials from these retired files. What happens when one
-is still present depends on whether SQLite can already serve credentials for
+of the supported import files is still present depends on whether SQLite can already serve credentials for
 that agent:
 
 - The store holds profiles: the retired file is leftover bytes. Runtime logs a
@@ -277,6 +283,7 @@ Related docs:
 
 ## Related
 
+- [OpenAI authentication](/providers/openai/authentication) - login methods, identity, and capabilities
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
 - [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys

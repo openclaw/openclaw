@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
@@ -143,6 +144,7 @@ export const telegramMediaHarnessSendMessageSpy = apiStub.sendMessage;
 const throttlerSpy = vi.fn(() => "throttler");
 const defaultRuntimeConfig = (() =>
   ({
+    messages: { inbound: { debounceMs: 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
@@ -155,7 +157,7 @@ function installTopicNameRuntimeForTest(): void {
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
     },
-    channel: {},
+    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as TelegramRuntime);
 }
 
@@ -181,45 +183,13 @@ const mediaHarnessReplySpy = vi.hoisted(() =>
 );
 export { mediaHarnessReplySpy };
 
-const LEGACY_MEDIA_KEYS = [
-  "MediaPath",
-  "MediaUrl",
-  "MediaType",
-  "MediaPaths",
-  "MediaUrls",
-  "MediaTypes",
-  "MediaDir",
-  "MediaWorkspaceDir",
-  "MediaTranscribedIndexes",
-  "MediaStaged",
-] as const;
-
 const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(async (params: DispatchReplyHarnessParams) => {
     await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
-    const input = params.ctx as MsgContext & Record<string, unknown>;
-    const legacyMedia = Object.fromEntries(
-      LEGACY_MEDIA_KEYS.flatMap((key) => (key in input ? [[key, input[key]]] : [])),
-    );
-    // Preserve SDK aliases while projecting canonical media compactly, as the mocked
-    // agent boundary did before routed core acquired its own internal dispatcher.
-    const finalized = Object.assign(finalizeInboundContext(params.ctx), legacyMedia);
+    const finalized = finalizeInboundContext(params.ctx);
     const mediaPaths = (finalized.media ?? []).flatMap((fact) => (fact.path ? [fact.path] : []));
-    const mediaUrls = (finalized.media ?? []).flatMap((fact) => {
-      const value = fact.url ?? fact.path;
-      return value ? [value] : [];
-    });
-    const mediaTypes = (finalized.media ?? []).flatMap((fact) => {
-      const value = fact.contentType ?? fact.kind;
-      return value ? [value] : [];
-    });
     Object.assign(finalized, {
-      MediaPath: mediaPaths[0],
       MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-      MediaUrl: mediaUrls[0],
-      MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-      MediaType: mediaTypes[0],
-      MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
     });
     const reply = await mediaHarnessReplySpy(finalized, params.replyOptions);
     const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
@@ -333,7 +303,8 @@ vi.mock("undici/index.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./telegram-media.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   readRemoteMediaBuffer: (...args: Parameters<typeof readRemoteMediaBufferSpy>) =>
     readRemoteMediaBufferSpy(...args),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),

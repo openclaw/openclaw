@@ -142,7 +142,7 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         await gateway.waitForRequest("config.get");
 
-        const row = settingsRow(page, "Collapse task progress by default");
+        const row = settingsRow(page, "Collapse task progress by default on desktop");
         const toggle = row.locator("wa-switch");
         await row.scrollIntoViewIfNeeded();
         await expect
@@ -702,9 +702,9 @@ suite.define(() => {
       await expect
         .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
         .toContain("Stored in this browser only");
-      const tasks = customizeMenu.getByRole("menuitemcheckbox", { name: "Tasks" });
-      await tasks.click();
-      await expect.poll(() => tasks.getAttribute("aria-checked")).toBe("true");
+      const usage = customizeMenu.getByRole("menuitemcheckbox", { name: "Usage" });
+      await usage.click();
+      await expect.poll(() => usage.getAttribute("aria-checked")).toBe("true");
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -733,7 +733,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           customizeMenu
-            .getByRole("menuitemcheckbox", { name: "Tasks" })
+            .getByRole("menuitemcheckbox", { name: "Usage" })
             .getAttribute("aria-checked"),
         )
         .toBe("true");

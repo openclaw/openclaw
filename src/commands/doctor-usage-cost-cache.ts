@@ -6,6 +6,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { deleteSessionCostUsageRollupsExcept } from "../infra/session-cost-usage-cache.sqlite.js";
+import { openUsageCostRefreshFailures } from "../infra/session-cost-usage-refresh-health.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
@@ -138,8 +139,7 @@ async function maybeRemoveLegacySkillUploadTree(params: {
 }): Promise<void> {
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir);
   const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
-  const stats = await fs.lstat(uploadRoot).catch(() => null);
-  if (!stats) {
+  if (!(await fs.lstat(uploadRoot).catch(() => null))) {
     return;
   }
   if (!params.shouldRepair) {
@@ -150,12 +150,7 @@ async function maybeRemoveLegacySkillUploadTree(params: {
     return;
   }
   try {
-    // Removing a symlink removes only the fixed legacy entry, never its target.
-    if (stats.isSymbolicLink()) {
-      await fs.unlink(uploadRoot);
-    } else {
-      await fs.rm(uploadRoot, { recursive: true, force: true });
-    }
+    await fs.rm(uploadRoot, { recursive: true, force: true });
   } catch (error) {
     note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
     return;
@@ -170,6 +165,23 @@ export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const failures = await openUsageCostRefreshFailures(env)
+    .entries()
+    .catch((error: unknown) => {
+      note(
+        `Could not read usage refresh failure history: ${formatErrorMessage(error)}`,
+        "Usage cost cache",
+      );
+      return [];
+    });
+  if (failures.length > 0) {
+    note(
+      failures
+        .map(({ value }) => `- ${value.agentId}: ${value.sessionFile}: ${value.reason}`)
+        .join("\n"),
+      "Usage cost cache",
+    );
+  }
   await maybeScrubConfigAuditLog({ shouldRepair, env });
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
   if (shouldRepair) {
@@ -184,7 +196,7 @@ export async function maybeRepairLegacyRuntimeFiles(
               env,
               databasePath: entry.path,
               liveKeys: new Set(),
-              // Doctor retires old scopes only; current v2 rows are not prune candidates.
+              // Doctor retires old scopes only; current rows are not prune candidates.
               rows: [],
             }),
         });

@@ -7,8 +7,12 @@ import { searchSessionTranscripts } from "../../config/sessions/session-transcri
 import type { SessionStoreTarget } from "../../config/sessions/targets.js";
 import { runSynchronousWork } from "../../shared/synchronous-work.js";
 import { filterSessionEntries } from "../session-list-filters.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { prepareProjectedSessionList } from "../session-utils-list.js";
+import {
+  prepareProjectedSessionList,
+  prepareSessionSearchIdentityNames,
+} from "../session-utils-list.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 /** Search all selected resident metadata; only matching rows cross the wire. */
@@ -24,82 +28,163 @@ export async function searchProjectedSessionTranscripts(params: {
   if (!projection) {
     throw new Error("Session projection is unavailable before Gateway startup completes");
   }
-  do {
-    await projection.ensureMaterialized();
-  } while (projection.needsMaterialization);
-  // Caller identity and federation are prepared after the final readiness wait.
-  // Keep authorization, FTS selection, row presentation, and reply synchronous.
-  const { prepared, presentation, filters } = prepareProjectedSessionList({
-    projection,
-    opts: params.scope,
-    context: params.context,
-    client: params.client,
-    now: Date.now(),
-  });
-  const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
-    runSynchronousWork(filterSessionEntries(filters)),
-  );
-  type SelectedRow = NonNullable<ReturnType<typeof prepared.getTarget>>;
-  const stores = new Map<string, { target: SessionStoreTarget; rows: Map<string, SelectedRow> }>();
-  for (const [key] of entries) {
-    const row = prepared.getTarget(key);
-    if (!row) {
+  let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
+  const select = () => {
+    const { prepared, presentation, filters } = prepareProjectedSessionList({
+      projection,
+      opts: params.scope,
+      context: params.context,
+      client: params.client,
+      now: Date.now(),
+      searchIdentities,
+    });
+    const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
+      runSynchronousWork(filterSessionEntries(filters)),
+    );
+    type SelectedRow = NonNullable<ReturnType<typeof prepared.getTarget>>;
+    const stores = new Map<
+      string,
+      { target: SessionStoreTarget; rows: Map<string, SelectedRow> }
+    >();
+    for (const [key] of entries) {
+      const row = prepared.getTarget(key);
+      if (!row) {
+        continue;
+      }
+      const store = stores.get(row.storeTarget.storePath) ?? {
+        target: row.storeTarget,
+        rows: new Map<string, SelectedRow>(),
+      };
+      store.rows.set(row.key, row);
+      stores.set(row.storeTarget.storePath, store);
+    }
+    return { stores, presentation };
+  };
+  const limit = params.limit ?? 10;
+  const sameSelection = (previous: ReturnType<typeof select>, current: ReturnType<typeof select>) =>
+    previous.stores.size === current.stores.size &&
+    [...previous.stores].every(([path, store]) => {
+      const next = current.stores.get(path);
+      return (
+        next !== undefined &&
+        store.target.agentId === next.target.agentId &&
+        store.rows.size === next.rows.size &&
+        [...store.rows].every(([key, row]) => next.rows.get(key)?.generation === row.generation)
+      );
+    });
+  const matchingHits = (
+    selected: ReturnType<typeof select>,
+    pages: Array<{ path: string; page: Awaited<ReturnType<typeof searchSessionTranscripts>> }>,
+  ) =>
+    pages
+      .flatMap(({ path, page }) =>
+        page.hits.flatMap((hit) => {
+          const row = selected.stores.get(path)?.rows.get(hit.sessionKey);
+          return row ? [{ hit, row }] : [];
+        }),
+      )
+      .toSorted(
+        (left, right) =>
+          right.hit.score - left.hit.score ||
+          right.hit.timestamp - left.hit.timestamp ||
+          left.hit.messageId.localeCompare(right.hit.messageId),
+      );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    do {
+      await projection.ensureMaterialized();
+      if (params.scope.search?.trim()) {
+        searchIdentities = await prepareSessionSearchIdentityNames(projection, params.scope);
+      }
+    } while (
+      projection.needsMaterialization ||
+      (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+    );
+    const selected = select();
+    // Filter every physical store before LIMIT. Never dispatch an empty key set.
+    const pages = await Promise.all(
+      [...selected.stores].map(async ([path, { target, rows }]) => ({
+        path,
+        page: await searchSessionTranscripts(
+          {
+            ...target,
+            sessionKeys: [...rows.keys()],
+            query: params.query,
+            limit,
+          },
+          { agentId: target.agentId, path: target.storePath },
+        ),
+      })),
+    );
+    if (getSessionRowProjection(params.context) !== projection) {
+      throw new Error("Session search owner changed while reading; retry the request");
+    }
+    if (
+      projection.needsMaterialization ||
+      (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+    ) {
       continue;
     }
-    const store = stores.get(row.storeTarget.storePath) ?? {
-      target: row.storeTarget,
-      rows: new Map<string, SelectedRow>(),
-    };
-    store.rows.set(row.key, row);
-    stores.set(row.storeTarget.storePath, store);
-  }
-  const limit = params.limit ?? 10;
-  // Each physical store gets its entire authorized key set before LIMIT. The
-  // existing SQLite set binding has no per-key bind limit; empty sets never run.
-  const pages = [...stores.values()].map(({ target, rows }) => {
-    const page = searchSessionTranscripts({
-      ...target,
-      sessionKeys: [...rows.keys()],
-      query: params.query,
-      limit,
-    });
-    return {
-      indexing: page.indexing,
-      truncated: page.truncated,
-      archivedTranscriptsExcluded: page.archivedTranscriptsExcluded,
-      matches: page.hits.flatMap((hit) => {
-        // Sharing belongs to the current logical node, while hits can belong to
-        // retained pre-reset windows. Canonical commits invalidate this projection.
-        const row = rows.get(hit.sessionKey);
-        return row ? [{ hit, row }] : [];
-      }),
-    };
-  });
-  const hits = pages
-    .flatMap((page) => page.matches)
-    .toSorted(
-      (left, right) =>
-        right.hit.score - left.hit.score ||
-        right.hit.timestamp - left.hit.timestamp ||
-        left.hit.messageId.localeCompare(right.hit.messageId),
+    // Reacquire viewer identity, roles, sharing, and presentation after the await.
+    // A changed scope invalidates the entire page, including counts and truncation.
+    const current = select();
+    if (!sameSelection(selected, current)) {
+      continue;
+    }
+    const matchedRows = new Set(
+      matchingHits(current, pages)
+        .slice(0, limit)
+        .map(({ row }) => row),
     );
-  const matches = hits.slice(0, limit);
-  const rows = new Set(matches.map((match) => match.row));
-  projection.setArchivePageSize(rows.size);
-  const sessions = [...rows].flatMap((target) => {
-    const record = projection.describe({ ...target, storePath: target.storeTarget.storePath });
-    const row = record && presentation.present(record);
-    return row ? [row] : [];
-  });
-  const archivedTranscriptsExcluded = pages.reduce(
-    (count, page) => count + (page.archivedTranscriptsExcluded ?? 0),
-    0,
-  );
-  params.onResult({
-    results: matches.map((match) => match.hit),
-    sessions,
-    ...(pages.some((page) => page.indexing) ? { indexing: true } : {}),
-    ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
-    ...(hits.length > limit || pages.some((page) => page.truncated) ? { truncated: true } : {}),
-  });
+    projection.setArchivePageSize(matchedRows.size);
+    const published = await withReadySessionRows(
+      projection,
+      () =>
+        [...matchedRows].map((row) => ({
+          agentId: row.agentId,
+          key: row.key,
+          storePath: row.storeTarget.storePath,
+        })),
+      (read) => {
+        if (getSessionRowProjection(params.context) !== projection) {
+          throw new Error("Session search owner changed while reading; retry the request");
+        }
+        if (searchIdentities && searchIdentities.cfg !== projection.state.cfg) {
+          return false;
+        }
+        const refreshed = select();
+        if (!sameSelection(selected, refreshed)) {
+          return false;
+        }
+        const hits = matchingHits(refreshed, pages);
+        const matches = hits.slice(0, limit);
+        const rows = new Set(matches.map((match) => match.row));
+        const sessions = [...rows].flatMap((target) => {
+          const record = read.describe({
+            ...target,
+            storePath: target.storeTarget.storePath,
+          });
+          const row = record && refreshed.presentation.present(record);
+          return row ? [row] : [];
+        });
+        const archivedTranscriptsExcluded = pages.reduce(
+          (count, { page }) => count + (page.archivedTranscriptsExcluded ?? 0),
+          0,
+        );
+        params.onResult({
+          results: matches.map((match) => match.hit),
+          sessions,
+          ...(pages.some(({ page }) => page.indexing) ? { indexing: true } : {}),
+          ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
+          ...(hits.length > limit || pages.some(({ page }) => page.truncated)
+            ? { truncated: true }
+            : {}),
+        });
+        return true;
+      },
+    );
+    if (published) {
+      return;
+    }
+  }
+  throw new Error("Session search scope changed while reading; retry the request");
 }

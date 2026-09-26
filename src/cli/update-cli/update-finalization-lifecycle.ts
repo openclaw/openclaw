@@ -5,7 +5,10 @@ import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  UpdateDoctorError,
+} from "../../infra/update-doctor-result.js";
 import {
   createUpdateFailureFact,
   type UpdateFailureFact,
@@ -26,14 +29,19 @@ import {
   UPDATE_RUN_HEARTBEAT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { watchCliExitAfterOutput } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
-import { UpdateCommandFinalizedRecoveryFailure } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandFinalizedRecoveryFailure,
+} from "./update-command-result.js";
 import { UpdateFinalizationOutput } from "./update-finalization-output.js";
 import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
@@ -73,6 +81,7 @@ export class UpdateFinalizationLifecycle {
   private active?: { phase: Phase; step: string; startedAtMs: number };
   private stateBudgetMs: number | undefined;
   private reportTimeout?: () => void;
+  private failureObservation?: UpdateRunResult;
 
   constructor(
     private readonly json: boolean,
@@ -134,7 +143,7 @@ export class UpdateFinalizationLifecycle {
 
   private record(
     active: { phase: Phase; step: string },
-    status: "in_progress" | "completed" | "failed",
+    status: "in_progress" | "completed" | "failed" | "skipped",
     at: number,
     detail?: string,
     failureFacts?: UpdateFailureFact[],
@@ -252,7 +261,7 @@ export class UpdateFinalizationLifecycle {
       });
       this.record(
         active,
-        result === "failed" ? "failed" : "completed",
+        result === "failed" ? "failed" : result === "deferred" ? "skipped" : "completed",
         Date.now(),
         detail,
         failureFacts,
@@ -371,16 +380,20 @@ export class UpdateFinalizationLifecycle {
                 message: formatErrorMessage(error),
               }),
             ];
+      const deferred =
+        !failure &&
+        error instanceof DoctorMaintenanceRefusalError &&
+        error.refusal.kind === "deferred";
       end(
-        "failed",
+        deferred ? "deferred" : "failed",
         doctorOutput
           ? formatDoctorOutputDetail(doctorOutput)
           : redactSupportDiagnosticLine(formatErrorMessage(error), {
               env: process.env,
               stateDir: resolveStateDir(process.env),
             }),
-        facts,
-        error instanceof UpdateDoctorError ? error.exitCode : undefined,
+        deferred ? undefined : facts,
+        !deferred && error instanceof UpdateDoctorError ? error.exitCode : undefined,
       );
       throw error;
     } finally {
@@ -390,12 +403,47 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
+  async observeFailure(error: unknown): Promise<UpdateRunResult | undefined> {
+    if (!this.root || !this.runId || !this.ledgerOptions || hasCommandProcessCleanupError(error)) {
+      return undefined;
+    }
+    const { env } = this.ledgerOptions;
+    const { verifyUpdateFailureRecovery } = await import("./update-command-failure-recovery.js");
+    const result: UpdateRunResult =
+      error instanceof UpdateCommandFailure
+        ? error.result
+        : {
+            status: "error",
+            mode: "unknown",
+            root: this.root,
+            steps: [],
+            durationMs: Math.round(performance.now() - this.startedAt),
+          };
+    try {
+      this.failureObservation = await verifyUpdateFailureRecovery({
+        result,
+        root: this.root,
+        opts: { json: this.json, run: { runId: this.runId, env } },
+        env,
+        timeoutMs: this.timeoutMs,
+      });
+      return this.failureObservation;
+    } catch (recoveryError) {
+      if (hasCommandProcessCleanupError(recoveryError) && recoveryError !== error) {
+        throw new AggregateError([error, recoveryError], "Update failure recovery did not settle", {
+          cause: recoveryError,
+        });
+      }
+      throw recoveryError;
+    }
+  }
+
   private finishLedger(exitCode: number): void {
     if (this.runId && this.ownsRun) {
       try {
         finishUpdateRun(
           this.runId,
-          { status: exitCode ? "failed" : "succeeded" },
+          { status: exitCode ? "failed" : "succeeded", diagnostics: this.failureObservation },
           this.ledgerOptions,
         );
       } catch {

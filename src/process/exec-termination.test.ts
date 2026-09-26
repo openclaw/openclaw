@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
@@ -9,8 +9,16 @@ import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import * as adoptedChildren from "./scoped-child-reaper.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function mockTerminatingChild(exitCode: number | null = null) {
+  const child = Object.assign(new ChildProcess(), { pid: 4242, exitCode });
+  const kill = vi.spyOn(child, "kill").mockReturnValue(true);
+  vi.spyOn(adoptedChildren, "scheduleAdoptedChildZombieReapAfterExit").mockImplementation(() => {});
+  return { child, kill };
+}
 
 async function withOwnedTree(
   run: (tree: { parent: ReturnType<typeof spawn>; descendantPid: number }) => Promise<void>,
@@ -60,7 +68,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         }
         return true;
       });
-      const child = { pid: 4242, exitCode: 7, signalCode: null, kill: vi.fn(() => true) };
+      const { child, kill: killChild } = mockTerminatingChild(7);
       const cancelController = new AbortController();
       const controller = createCommandTerminationController({
         child,
@@ -102,7 +110,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         await vi.advanceTimersByTimeAsync(1);
         await expect(completion).resolves.toBe(needsGrace ? "uncertain" : "normal");
         expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
-        expect(child.kill).not.toHaveBeenCalled();
+        expect(killChild).not.toHaveBeenCalled();
         expect(cancelController.signal.aborted).toBe(false);
       } finally {
         vi.clearAllTimers();
@@ -120,11 +128,7 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         code: gone ? "ESRCH" : "EPERM",
       });
     });
-    const child: { pid: number; exitCode: number | null; signalCode: null } = {
-      pid: 4242,
-      exitCode: null,
-      signalCode: null,
-    };
+    const { child } = mockTerminatingChild();
     const owner = createCommandTerminationController({
       child,
       cancelController: new AbortController(),
@@ -215,6 +219,58 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
           ),
         ).toHaveLength(1);
       });
+    },
+  );
+
+  it.each([
+    { observation: "absent", probeError: "ESRCH", reused: false, expected: "forced" },
+    { observation: "live", probeError: undefined, reused: false, expected: "uncertain" },
+    { observation: "inaccessible", probeError: "EPERM", reused: false, expected: "uncertain" },
+    { observation: "reused then absent", probeError: "ESRCH", reused: true, expected: "uncertain" },
+  ] as const)(
+    "settles a group that becomes $observation during the final identity probe",
+    async ({ probeError, reused, expected }) => {
+      vi.useFakeTimers();
+      let forceSent = false;
+      let finalIdentityRead = false;
+      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation(() => {
+        if (!forceSent) {
+          return 123;
+        }
+        // A synchronous identity probe can consume the remaining observation budget.
+        vi.setSystemTime(Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+        finalIdentityRead = true;
+        return reused ? 124 : probeError === "ESRCH" ? null : 123;
+      });
+      const signals = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+        if (signal === "SIGKILL") {
+          forceSent = true;
+        }
+        if (signal === 0 && finalIdentityRead && probeError) {
+          throw Object.assign(new Error(probeError), { code: probeError });
+        }
+        return true;
+      });
+      const { child } = mockTerminatingChild();
+      const owner = createCommandTerminationController({
+        child,
+        cancelController: new AbortController(),
+        processTree: { mode: "force" },
+        killGraceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+        isChildExited: () => false,
+        isCommandSettled: () => false,
+      });
+      try {
+        owner.terminate();
+        await expect(owner.settle()).resolves.toBe(expected);
+        expect(signals.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toEqual([
+          [-child.pid, "SIGKILL"],
+        ]);
+        expect(signals.mock.calls.every(([pid]) => pid === -child.pid)).toBe(true);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
     },
   );
 

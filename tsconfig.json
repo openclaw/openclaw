@@ -106,6 +106,9 @@
         "./packages/gateway-protocol/src/frame-guards.ts"
       ],
       "@openclaw/gateway-protocol/schema": ["./packages/gateway-protocol/src/schema.ts"],
+      "@openclaw/gateway-protocol/restart-unavailable": [
+        "./packages/gateway-protocol/src/restart-unavailable.ts"
+      ],
       "@openclaw/gateway-protocol/startup-unavailable": [
         "./packages/gateway-protocol/src/startup-unavailable.ts"
       ],
@@ -237,6 +240,9 @@
       "@openclaw/mermaid-renderer": ["./packages/mermaid-renderer/src/renderer.ts"],
       "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
       "@openclaw/session-url-contract/parse": ["./packages/session-url-contract/src/parse.ts"],
+      "@openclaw/session-url-contract/session-key-normalization": [
+        "./packages/session-url-contract/src/session-key-normalization.ts"
+      ],
       "@openclaw/session-url-contract/share-build": [
         "./packages/session-url-contract/src/share-build.ts"
       ],
@@ -315,5 +321,5 @@
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*", "packages/**/*"],
-  "exclude": ["node_modules", "dist", "**/dist/**"]
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test-compat.d.ts"]
 }

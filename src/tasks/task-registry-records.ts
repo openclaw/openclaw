@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import {
   ensureDeliveryStatus,
   ensureNotifyPolicy,
@@ -88,6 +89,33 @@ export function selectTaskRecordsForOwnerTree(
   }
   // Preserve registry insertion order, including descendants inserted before their parents.
   return [...tasks.values()].filter((task) => selected.has(task.taskId));
+}
+
+/** Selected rows and every possible parent edge; callers still enforce identity and visibility. */
+export function selectTaskRecordsWithAncestors(
+  tasks: ReadonlyMap<string, TaskRecord>,
+  taskIdsByChildSessionKey: ReadonlyMap<string, ReadonlySet<string>>,
+  taskIds: readonly string[],
+  isRootTask: (task: Readonly<TaskRecord>) => boolean,
+): TaskRecord[] {
+  const selected = new Set(taskIds);
+  const owners = new Set<string>();
+  const records: TaskRecord[] = [];
+  for (const taskId of selected) {
+    const task = tasks.get(taskId);
+    if (!task || task.scopeKind !== "session") {
+      continue;
+    }
+    records.push(task);
+    if (isRootTask(task) || owners.has(task.ownerKey)) {
+      continue;
+    }
+    owners.add(task.ownerKey);
+    for (const parentId of taskIdsByChildSessionKey.get(task.ownerKey) ?? []) {
+      selected.add(parentId);
+    }
+  }
+  return records;
 }
 
 /** Build the derived flow index in snapshot order to retain the latest-task tie break. */
@@ -200,10 +228,6 @@ export function isEquivalentTaskRecord(current: TaskRecord, next: TaskRecord): b
   const fields = (record: TaskRecord) =>
     Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
   return isDeepStrictEqual(fields(current), fields(next));
-}
-
-export function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
-  return [...source.values()].map((record) => cloneTaskRecord(record));
 }
 
 /** Observer notifications need detached metadata, never runtime-owned detail. */
@@ -418,12 +442,22 @@ export function applyTaskRecordPatch(
   patch: Partial<TaskRecord>,
   now?: number,
 ): TaskRecord {
-  const updated = {
-    ...current,
-    ...patch,
-    ...(patch.executionOwner ? { executionOwner: { ...patch.executionOwner } } : {}),
-    ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
-  };
+  const updated = projectTaskContentForPersistence(
+    isIncognitoTask(current) || isIncognitoTask(patch),
+    {
+      ...current,
+      ...patch,
+      ...(patch.executionOwner ? { executionOwner: { ...patch.executionOwner } } : {}),
+      ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
+    },
+  );
+  // Transition inputs use null to clear summaries; materialized rows omit cleared content.
+  if (updated.progressSummary === null) {
+    delete updated.progressSummary;
+  }
+  if (updated.terminalSummary === null) {
+    delete updated.terminalSummary;
+  }
   if (Object.hasOwn(patch, "runId")) {
     updated.runId = normalizeOptionalString(patch.runId);
   }

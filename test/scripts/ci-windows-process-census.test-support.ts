@@ -249,7 +249,7 @@ fs.rmSync(root, { recursive: true });
         (root) => {
           writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
           const sampler = String.raw`
-import json, pathlib, runpy, sys
+import json, runpy, sys
 fault = sys.argv[3]
 if fault == "startup":
     raise RuntimeError("injected sampler startup failure")
@@ -259,11 +259,6 @@ for line in sys.stdin:
         raise RuntimeError("injected native query failure")
     request = json.loads(line)
     observations = runpy.run_path(sys.argv[2])["read_processes"](request["pids"])
-    # Retire atomically: an actor can exit as soon as it observes the replacement,
-    # so teardown must never race an open Python handle on the Windows lease.
-    replacement = pathlib.Path(sys.argv[1], "lease-replacement")
-    replacement.write_text("replacement")
-    replacement.replace(pathlib.Path(sys.argv[1], "lease"))
     print(json.dumps(dict(id=request["id"], observations=observations)), flush=True)
 `;
           return censusPreload(
@@ -272,8 +267,29 @@ for line in sys.stdin:
               ? 'if (process.argv[2] === "sentinel") throw new Error("injected sentinel startup failure");\n'
               : `if (process.argv[2] === "supervise") {
   const censusSpawn = cp.spawn;
-  cp.spawn = (command, args, options) => censusSpawn(command, command === "python"
-    ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
+  cp.spawn = (command, args, options) => {
+    const child = censusSpawn(command, command === "python"
+      ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
+    if (command === "python" && ${JSON.stringify(fault)} === "lease") {
+      let buffered = "", retired = false;
+      child.stdout.on("data", chunk => {
+        buffered += String(chunk);
+        for (;;) {
+          const newline = buffered.indexOf("\\n");
+          if (newline < 0) break;
+          const reply = JSON.parse(buffered.slice(0, newline));
+          buffered = buffered.slice(newline + 1);
+          if (!retired && reply.observations) {
+            retired = true;
+            // This listener precedes the broker's reply handler. The supervisor's
+            // synchronous writer closes before its teardown can unlink the lease.
+            fs.writeFileSync(path.join(root, "lease"), "replacement");
+          }
+        }
+      });
+    }
+    return child;
+  };
   syncFixtureBuiltinExports();
 }`,
           );

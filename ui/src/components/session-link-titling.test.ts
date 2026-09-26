@@ -220,6 +220,52 @@ describe("SessionLinkTitler", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("keeps unchanged session links free of mutations across roster refreshes", () => {
+    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const rows: GatewaySessionRow[] = [
+      { key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() },
+    ];
+    const { host, titler, request } = createTitler(rows);
+    host.innerHTML = toSanitizedMarkdownHtml(
+      "[First](/chat/main/d0effac9?view=details#first) " +
+        "[Second](/chat/main/d0effac9?view=details#second) " +
+        "[Unknown](/chat/main/aabbccdd)",
+      { sessionLinks: true },
+    );
+    titler.refresh();
+    const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(host, { attributes: true, childList: true, subtree: true });
+    try {
+      rows[0] = { ...rows[0]!, updatedAt: Date.now() + 1 };
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+      expect(links.map((link) => link.getAttribute("href"))).toEqual([
+        "/chat/main/d0effac9?view=details#first",
+        "/chat/main/d0effac9?view=details#second",
+        "/chat/main/aabbccdd",
+      ]);
+
+      rows.push({ key: key.replace("3211", "4322"), kind: "direct", updatedAt: Date.now() });
+      titler.refresh();
+      expect(links.map((link) => link.dataset.sessionKey)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      observer.takeRecords();
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+
+      rows.pop();
+      titler.refresh();
+      expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it("leaves remote links and code spans plain", () => {
     const { host, titler } = createTitler();
     host.innerHTML = toSanitizedMarkdownHtml(

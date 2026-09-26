@@ -6,8 +6,8 @@ import { finished } from "node:stream/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
@@ -73,7 +73,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await fs.rm(temp, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -524,9 +524,13 @@ describe("assistant image session policy", () => {
     },
   );
 
-  it.each(["metadata", "bytes"] as const)(
-    "revalidates named reader access after asynchronous %s file preparation",
-    async (operation) => {
+  it.each(
+    (["metadata", "bytes"] as const).flatMap((operation) =>
+      (["session", "gateway"] as const).map((authority) => ({ operation, authority })),
+    ),
+  )(
+    "revalidates $authority reader access after asynchronous $operation file preparation",
+    async ({ operation, authority }) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "profile-state") }, async () => {
         cfg.gateway = {
           roles: {
@@ -537,9 +541,11 @@ describe("assistant image session policy", () => {
           },
         };
         const profile = ensureProfileForEmail("yielding-media-reader@example.test");
+        let current = true;
         state.auth.mockResolvedValue({
           authMethod: "trusted-proxy",
           operatorScopes: ["operator.read"],
+          hasCurrentClientAuthority: () => current,
           ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
         });
         const source = path.join(project, "shared.png");
@@ -549,13 +555,20 @@ describe("assistant image session policy", () => {
         const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
           const file = await openFile(filePath, flags, mode);
           if (filePath === source) {
-            entry.visibility = "draft";
-            invalidateSessionSharingSnapshot(sessionKey);
+            if (authority === "session") {
+              entry.visibility = "draft";
+              invalidateSessionSharingSnapshot(sessionKey);
+            } else {
+              current = false;
+            }
           }
           return file;
         });
         try {
-          const denied = await request(source, { ticket, bytes: operation === "bytes" });
+          const denied = await request(source, {
+            ...(authority === "session" ? { ticket } : {}),
+            bytes: operation === "bytes",
+          });
           expect(denied.res.statusCode).toBe(404);
           expect(denied.bytes).not.toEqual(PNG);
         } finally {
@@ -589,7 +602,7 @@ describe("assistant image session policy", () => {
             dispatched = true;
             // Dispatch admission already withdraws Gateway-local access; activation needs an
             // attached environment and must not turn this file-open hook into a false 404.
-            placements.startDispatch({
+            await placements.startDispatch({
               sessionId: entry.sessionId,
               sessionKey,
               agentId: "main",

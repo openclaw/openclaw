@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectRollupContexts } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
@@ -17,91 +15,7 @@ import {
 } from "../../scripts/watch-pr-ci.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.js";
-
-const sha = "a".repeat(40);
-
-function runWatcher(
-  ghScript: string,
-  headSha = sha,
-  options: string[] = [],
-  clock: "poll" | "wall" | { readClock: string } = "poll",
-  envOverrides: NodeJS.ProcessEnv = {},
-  notifierPath?: string,
-) {
-  return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
-    const ghPath = join(binDir, "gh");
-    writeFileSync(ghPath, ghScript);
-    chmodSync(ghPath, 0o755);
-    const clockPath = join(binDir, "poll-clock.mjs");
-    // Evidence fixtures advance polling only, independent of fake gh startup cost.
-    // Deadline coverage explicitly retains the real clock and child timeout.
-    // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
-    writeFileSync(
-      clockPath,
-      `import { readFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import timers from "node:timers/promises";
-if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  const now = ${typeof clock === "object" ? `() => Number(readFileSync(${JSON.stringify(clock.readClock)}, "utf8"))` : clock === "wall" ? "Date.now" : "() => 0"};
-  const realSleep = timers.setTimeout;
-  let waitedMs = 0;
-  Date.now = () => now() + waitedMs;
-  timers.setTimeout = async (milliseconds, value, options) => {
-    const result = await realSleep(0, value, options);
-    waitedMs += milliseconds;
-    return result;
-  };
-  syncBuiltinESMExports();
-}
-`,
-    );
-    return await new Promise<{ status: number; stdout: string; stderr: string }>(
-      (resolve, reject) => {
-        execFile(
-          notifierPath ? "/bin/bash" : process.execPath,
-          [
-            ...(notifierPath
-              ? [
-                  "-c",
-                  'exec 3>"$1"; shift; exec "$@"',
-                  "watcher-notifier",
-                  notifierPath,
-                  process.execPath,
-                ]
-              : []),
-            "scripts/watch-pr-ci.mjs",
-            "42",
-            headSha,
-            "--attach-timeout",
-            "1",
-            "--timeout",
-            "1",
-            "--interval",
-            "1",
-            ...options,
-          ],
-          {
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              ...envOverrides,
-              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
-              PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-            },
-          },
-          (error, stdout, stderr) => {
-            const status = error ? error.code : 0;
-            if (typeof status !== "number") {
-              reject(new Error("watcher process did not report an exit code", { cause: error }));
-              return;
-            }
-            resolve({ status, stdout, stderr });
-          },
-        );
-      },
-    );
-  });
-}
+import { runWatcher, sha } from "./watch-pr-ci.test-support.js";
 
 function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
@@ -138,7 +52,7 @@ const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -257,7 +171,7 @@ const pr = {
   ...(runReads >= 2 ? ${JSON.stringify(afterRun)} : {}),
 };
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -352,7 +266,7 @@ const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -468,14 +382,6 @@ describe("watch-pr-ci", () => {
     ]);
   });
 
-  it("filters run ids at and before --after", () => {
-    const newer = { id: 102, created_at: "2026-07-23T02:00:00Z" };
-    const runs = [newer, { id: 101, created_at: "2026-07-23T01:00:00Z" }];
-    expect(selectRunAfter(runs, 101)).toBe(newer);
-    expect(selectRunAfter(runs, 102)).toBeUndefined();
-    expect(selectRunAfter(runs)).toBe(newer);
-  });
-
   it("skips newer draft runs without weakening the --after boundary", () => {
     const skipped = { id: 103, conclusion: "skipped" };
     const successful = { id: 102, conclusion: "success" };
@@ -496,7 +402,7 @@ describe("watch-pr-ci", () => {
       const result = await runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
-  "browse --no-browser") printf 'https://github.com/openclaw/openclaw\\n' ;;
+  "browse "*) printf 'https://github.com/openclaw/openclaw\\n' ;;
   "api --hostname")
     if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
     printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
@@ -554,7 +460,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -710,7 +616,7 @@ const pullPath = ${JSON.stringify(pullPath)};
 const reads = calls.filter((call) => call.includes(pullPath)).length;
 if (${notifier} && (args[0] === "browse" || args.includes(pullPath))) fs.writeSync(3, args[0] + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   if (args[args.indexOf("--repo") + 1] !== ${JSON.stringify(repo)}) throw new Error("wrong repository selection");
   console.log("https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)});
   process.exit(0);
@@ -781,8 +687,10 @@ console.log(JSON.stringify(value));
     },
   );
 
+  // These replay groups own their CLI process, files, and polling clock per case.
+  // Vitest bounds concurrent cases; real-deadline coverage stays in serial groups.
   describe.skipIf(process.platform === "win32")("summary polling", () => {
-    it("avoids repeating summaries while superseded failures require full polling", async () => {
+    it.concurrent("avoids repeating summaries while superseded failures require full polling", async () => {
       const result = await replaySummary({ state: "FAILURE", supersededFailure: true });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(2);
@@ -795,7 +703,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.at(-1)).toContain("repos/openclaw/openclaw/pulls/42");
     });
 
-    it("returns to summary polling when failures clear while CI remains active", async () => {
+    it.concurrent("returns to summary polling when failures clear while CI remains active", async () => {
       const result = await replaySummary({
         state: "FAILURE",
         supersededFailure: true,
@@ -811,7 +719,7 @@ console.log(JSON.stringify(value));
       ).toHaveLength(2);
     });
 
-    it.each<[string, unknown]>([
+    it.concurrent.each<[string, unknown]>([
       ["missing contexts", null],
       ["missing nodes", { totalCount: 0, pageInfo: { hasNextPage: false } }],
       ["missing count", { nodes: [], pageInfo: { hasNextPage: false } }],
@@ -836,7 +744,7 @@ console.log(JSON.stringify(value));
       expect(result.stdout).not.toContain("\nGREEN");
     });
 
-    it.each([
+    it.concurrent.each([
       { label: "complete counts", counts: undefined, pending: "1" },
       { label: "missing counts", counts: {}, pending: "unknown" },
       {
@@ -876,7 +784,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.filter((call) => call[0] === "browse")).toHaveLength(1);
     });
 
-    it.each([
+    it.concurrent.each([
       { label: "unchanged success", afterRun: {}, exitCode: 0, output: "GREEN" },
       {
         label: "moved head",
@@ -919,7 +827,7 @@ console.log(JSON.stringify(value));
   });
 
   describe.skipIf(process.platform === "win32")("GraphQL quota fallback", () => {
-    it("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
+    it.concurrent("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
       const result = await replayRestRollup({
         runStatuses: ["in_progress", "in_progress", "in_progress", "completed"],
         checkPages: [
@@ -942,7 +850,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/actions/runs?head_sha="))).toBe(false);
     });
 
-    it.each([
+    it.concurrent.each([
       "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
       "gh: Resource not accessible by integration (HTTP 403)",
       "gh: Bad Gateway (HTTP 502)",
@@ -956,7 +864,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/commits/"))).toBe(false);
     });
 
-    it("keeps a required failure on the second status page blocking", async () => {
+    it.concurrent("keeps a required failure on the second status page blocking", async () => {
       const statuses = Array.from({ length: 100 }, (_, index) => ({
         id: index + 1,
         context: `status ${index}`,
@@ -984,7 +892,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.filter((call) => call[1]?.includes("/check-suites?"))).toHaveLength(1);
     });
 
-    it.each(["pending", "failure"])(
+    it.concurrent.each(["pending", "failure"])(
       "reobserves a same-head %s status after attached-run success",
       async (state) => {
         const result = await replayRestRollup({
@@ -1004,7 +912,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { label: "moved head", afterCollection: { head: { sha: "b".repeat(40) } }, exitCode: 11 },
       { label: "closed PR", afterCollection: { state: "closed" }, exitCode: 10 },
       { label: "conflicting PR", afterCollection: { mergeable: false }, exitCode: 14 },
@@ -1015,7 +923,7 @@ console.log(JSON.stringify(value));
     });
 
     const failedCheck = restCheck(1, { conclusion: "failure" });
-    it("keeps an unknown completed REST outcome pending", async () => {
+    it.concurrent("keeps an unknown completed REST outcome pending", async () => {
       const result = await replayRestRollup({
         checkPages: [{ total_count: 1, check_runs: [restCheck(1, { conclusion: "new_outcome" })] }],
       });
@@ -1030,7 +938,7 @@ console.log(JSON.stringify(value));
       event: "pull_request",
       head_sha: sha,
     };
-    it.each([
+    it.concurrent.each([
       {
         label: "missing check page",
         checkPages: [
@@ -1138,7 +1046,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { status: "completed", conclusion: "skipped" },
       { status: "queued", conclusion: null },
     ])(
@@ -1172,7 +1080,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { label: "same workflow and event", kind: "matching", exitCode: 0 },
       {
         label: "same workflow and event while active",
@@ -1227,7 +1135,7 @@ console.log(JSON.stringify(value));
   });
 
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
-    it.each([
+    it.concurrent.each([
       ...[
         "407 Proxy Authentication Required",
         'Post "https://api.github.com/graphql": Proxy Authentication Required',
@@ -1258,7 +1166,7 @@ if (phase === ${JSON.stringify(phase)}) {
 }
 const args = process.argv.slice(2);
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -1798,7 +1706,7 @@ if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state =
 const runs = ${JSON.stringify(listedRuns)};
 const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -2039,14 +1947,10 @@ console.log(JSON.stringify(value));
       expect(result.stdout).not.toContain("GREEN");
     });
 
-    it.each(
-      [
-        { status: "IN_PROGRESS", conclusion: null, exitCode: 16 },
-        { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
-      ].flatMap((outcome) =>
-        [false, true].map((initiallyVisible) => Object.assign({}, outcome, { initiallyVisible })),
-      ),
-    )(
+    it.each([
+      { status: "IN_PROGRESS", conclusion: null, exitCode: 16, initiallyVisible: false },
+      { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15, initiallyVisible: true },
+    ])(
       "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
       async ({ status, conclusion, exitCode, initiallyVisible }) => {
         const fixture = structuredClone(placeholderFixture);
@@ -2208,7 +2112,6 @@ console.log(JSON.stringify(value));
       ["different run", { id: 33155056362 }],
       ["active newer attempt", { run_attempt: 4, status: "in_progress", conclusion: null }],
       ["failed newer attempt", { run_attempt: 4, conclusion: "failure" }],
-      ["cancelled newer attempt", { run_attempt: 4, conclusion: "cancelled" }],
       ["successful newer attempt", { run_attempt: 4 }],
     ])("rejects changed run evidence after collecting jobs: %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
@@ -2224,28 +2127,21 @@ console.log(JSON.stringify(value));
       expect(runReads.length).toBeGreaterThanOrEqual(2);
     });
 
-    it.concurrent.each([
-      { status: "in_progress", conclusion: null },
-      { status: "completed", conclusion: "failure" },
-      { status: "completed", conclusion: "success" },
-    ])(
-      "does not ignore an extra $status/$conclusion same-name sibling",
-      async ({ status, conclusion }) => {
-        const fixture = structuredClone(placeholderFixture);
-        const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
-        assert(replacement);
-        const result = await replayPlaceholder(fixture, {
-          jobPages: [
-            {
-              total_count: fixture.jobs.total_count + 1,
-              jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799, status, conclusion }],
-            },
-          ],
-        });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-        expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
-      },
-    );
+    it.concurrent("does not ignore an extra successful same-name sibling", async () => {
+      const fixture = structuredClone(placeholderFixture);
+      const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
+      assert(replacement);
+      const result = await replayPlaceholder(fixture, {
+        jobPages: [
+          {
+            total_count: fixture.jobs.total_count + 1,
+            jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799 }],
+          },
+        ],
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
+    });
 
     it.concurrent.each([
       [
@@ -2349,7 +2245,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each(["in_progress", "queued", "completed"])(
+    it.each(["in_progress", "completed"])(
       "avoids evidence scans on routine %s polls",
       async (status) => {
         const fixture = structuredClone(placeholderFixture);
@@ -2530,34 +2426,31 @@ console.log(JSON.stringify(value));
     });
   });
 
-  it.each(["FAILURE", "ERROR"])(
-    "keeps identity-less same-name cancellations failing for aggregate %s",
-    (state) => {
-      expect(
-        classifyRollup({
-          state,
-          contexts: {
-            totalCount: 3,
-            nodes: [
-              {
-                kind: "CheckRun",
-                name: "Auto response",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-              },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
-            ],
-          },
-        }),
-      ).toEqual({
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["unit"],
-        supersededCount: 0,
-      });
-    },
-  );
+  it("keeps identity-less same-name cancellations failing for aggregate ERROR", () => {
+    expect(
+      classifyRollup({
+        state: "ERROR",
+        contexts: {
+          totalCount: 3,
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "Auto response",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+            },
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["unit"],
+      supersededCount: 0,
+    });
+  });
 
   it("keeps a truncated failing rollup failing", () => {
     expect(

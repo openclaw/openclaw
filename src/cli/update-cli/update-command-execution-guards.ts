@@ -11,18 +11,26 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
   const runId = run?.runId;
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
-  const assertInvocation = () => {
+  let stateHandedOff = false;
+  const assertInvocation = (phase?: "restore") => {
+    const readStatePolicy = !stateHandedOff && phase !== "restore";
+    if (opts.recovery || readStatePolicy) {
+      assertUpdateCommandRecoveryState(opts);
+    }
     if (
       opts.run !== run ||
       run?.runId !== runId ||
       run?.executorFence !== executor ||
       run?.requesterAuthority !== requester ||
-      requester?.isCurrent() === false
+      (readStatePolicy && requester?.isCurrent() === false)
     ) {
       throw new UpdateRequesterRevokedError();
     }
   };
   return {
+    onStateHandoff: () => {
+      stateHandedOff = true;
+    },
     // Only the mutable-preparation owner calls this, immediately after enter().
     // Never infer admission from a newly observed mutable run.executorFence.
     admitExecutor: (acquired: UpdateRecoveryFence) => {
@@ -38,16 +46,14 @@ export function createUpdateCommandExecutionGuards(opts: UpdateCommandOptions, r
       run.executorFence = acquired;
       executor = acquired;
     },
-    assertCurrent: () => {
-      assertInvocation();
+    // Forward admission already checked policy. Compensation retains native
+    // custody in a separate lease database while the source family is excluded.
+    assertCurrent: (phase?: "restore") => {
+      assertInvocation(phase);
       executor?.assertCurrent();
-      assertUpdateCommandRecoveryState(opts);
     },
     // This is not native authority. The Doctor caller must first bind its child
     // through the real executor, which checks both retained and candidate owners.
-    assertBoundChildCurrent: () => {
-      assertInvocation();
-      assertUpdateCommandRecoveryState(opts);
-    },
+    assertBoundChildCurrent: () => assertInvocation(),
   };
 }

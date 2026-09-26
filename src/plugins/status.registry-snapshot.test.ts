@@ -13,7 +13,6 @@ import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
   withPluginDiagnosticsReport,
   buildPluginRegistrySnapshotReport,
@@ -362,16 +361,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
           });
         }
       }
-      if (consent === "current") {
-        expect(
-          collectPluginCapabilityConsentDiagnostics({ index, manifests: new Map() }),
-        ).toContainEqual(
-          expect.objectContaining({
-            level: "warn",
-            pluginId: fixture.pluginId,
-          }),
-        );
-      }
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },
   );
@@ -427,11 +416,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
   });
 
-  it.each(
-    (["missing", "stale-policy", "stale-source", "persisted"] as const).flatMap((state) =>
-      (["selected", "omitted"] as const).map((workspaceScope) => ({ state, workspaceScope })),
-    ),
-  )(
+  it.each([
+    { state: "missing", workspaceScope: "selected" },
+    { state: "stale-policy", workspaceScope: "selected" },
+    { state: "stale-source", workspaceScope: "selected" },
+    { state: "persisted", workspaceScope: "selected" },
+    { state: "persisted", workspaceScope: "omitted" },
+  ] as const)(
     "reuses prepared list metadata with $state registry and $workspaceScope workspace",
     ({ state, workspaceScope }) => {
       const tempRoot = fs.realpathSync(makeTempDir());
@@ -967,54 +958,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
         expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
       },
     );
-  });
-
-  it("replays persisted list metadata without importing plugin runtime", async () => {
-    const fixture = createColdPluginFixture({
-      rootDir: makeTempDir(),
-      pluginId: "persisted-demo",
-      packageName: "@example/openclaw-persisted-demo",
-      packageVersion: "2.0.0",
-      manifest: {
-        id: "persisted-demo",
-        name: "Persisted Demo",
-        description: "Persisted registry metadata",
-        providers: ["persisted-provider"],
-        commandAliases: [{ name: "persisted-demo" }],
-      },
-    });
-    const workspaceDir = makeTempDir();
-    const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
-    const env = createColdPluginHermeticEnv(workspaceDir, {
-      bundledPluginsDir: makeTempDir(),
-    });
-
-    await refreshPluginRegistry({
-      config,
-      workspaceDir,
-      env,
-      reason: "manual",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-
-    const report = buildPluginRegistrySnapshotReport({
-      config,
-      workspaceDir,
-      env,
-    });
-
-    expect(report.registrySource).toBe("persisted");
-    expectFields(requirePlugin(report.plugins, "persisted-demo"), {
-      id: "persisted-demo",
-      name: "Persisted Demo",
-      description: "Persisted registry metadata",
-      version: "2.0.0",
-      providerIds: ["persisted-provider"],
-      commands: ["persisted-demo"],
-      source: fs.realpathSync(fixture.runtimeSource),
-      status: "loaded",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 
   it("builds read-only plugin status snapshots without importing plugin runtime", () => {

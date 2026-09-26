@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 // Audits channel configuration for exposure, auth, and trust risks.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -156,7 +157,7 @@ export async function collectChannelSecurityFindingsCore(params: {
     let resolvedAccount = resolvedInspectedAccount;
     if (!resolvedAccount) {
       try {
-        resolvedAccount = plugin.config.resolveAccount(params.cfg, accountId);
+        resolvedAccount = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
       } catch (error) {
         diagnostics.push(
           `${plugin.id}:${accountId}: failed to resolve account (${formatErrorMessage(error)}).`,

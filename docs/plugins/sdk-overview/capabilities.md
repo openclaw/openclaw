@@ -62,6 +62,8 @@ An optional `options.signal` cancels the current provisioning attempt. Forward i
 
 Providers can implement `prepareProvision(profile, operationId, options?)`, returning an allocation function `() => Promise<WorkerLease>`. Preparation may validate local settings and read configuration, but must not allocate, renew, modify resources, enroll nodes, or call project preparation. Core keeps a fresh environment in `requested` during preparation and records `provisioning` immediately before invoking the returned function. Prepared facts remain in that invocation; do not reread configuration inside the allocation function. A fresh preparation failure needs no provider teardown. A replay preparation failure remains uncertain because a previous invocation may already have allocated. Cancellation or timeout discards the prepared function. Providers without this hook retain the existing `provision` contract; providers implementing it should delegate their direct `provision` entry point to the same preparation and allocation flow.
 
+For provider-owned SSH identity resolution, core supplies the optional `request.assertCurrent` callback. It checks the current lease and local identity invocation; initializing SSH callers also bind it to their preparation lifetime. Core rejects late identity results and closes retained callbacks after resolution or a caller-visible timeout. Legacy resolvers remain supported without a capability declaration; they may call the callback before further effects after an await, but core cannot prevent internal effects in a resolver that ignores it. This does not change provisioning, renewal, or cleanup authority.
+
 Every worker provider must implement `resolveAllocation(profile, operationId)`, returning `{ leaseId: string; sharedHost: boolean }` for the exact operation. Core passes the frozen settings snapshot, even after the named profile changes or is removed. The handle identifies the cleanup target; it does not prove a machine was created or a transport is ready. Resolution must not allocate, start, renew, run setup, read setup secrets, enroll nodes, or wait for availability. Throw if the identity cannot be resolved safely. When destruction is requested before a provision result is recorded, core persists this handle with the existing teardown state and calls `destroy`, without replaying `provision`. `destroy` still must prove release or authoritative absence. Both calls remain serialized behind any earlier provider operation until it actually settles, including after a caller-visible timeout.
 
 Providers that enroll cloud nodes set `requiresNodeEnrollment: true` and call `options.beginNodeEnrollment()` after allocating the machine. The returned `WorkerNodeEnrollment` supplies `displayName`, `openclawVersion`, an optional enrollment-lifetime `signal`, `waitForDeviceId()`, and either `mode: "connect"` with `setupCode` and `setupId`, or `mode: "resume"` with the bound `deviceId`. Its required `nodeBootstrap` contains the Gateway-prepared runtime archive's `url`, secret bearer `token`, `sha256`, `bytes`, `openclawVersion`, `enabledPluginIds`, and optional `tlsFingerprint`. Download that exact archive, verify its size and digest, install its target-platform dependencies, and enable the listed plugins in the node's isolated state before connecting. Do not substitute a global or registry package based only on a matching version. Keep download and enrollment credentials out of command arguments, logs, npm, and the launched node's environment; cancel work when `signal` aborts. Download authority belongs to the live enrollment attempt, not the URL or digest alone. After connection, return the device identity from `waitForDeviceId()` in the node lease. See [Bundle installation](/gateway/cloud-workers#bundle-installation) for source builds, artifact reuse, and proxy requirements. Bootstrap installation does not authorize node commands or replace invocation policy.
@@ -93,7 +95,7 @@ retaining its producer's actual generation receipt until confirmed source stop.
 Before capturing, call `options.prepareNodeRuntime()` to obtain artifact access without creating a node identity or enrollment code. The result includes `nodeBootstrap`, `workerBundle`, and the operation's cancellation `signal`. The worker archive descriptor supplies `url`, secret `token`, `sha256`, `bytes`, optional `tlsFingerprint`, and the core-owned `packageRelativePath` within the installed node package. Download and verify both archives, install the runtime, and publish the compressed worker archive at that exact contained location before capture. Keep one published worker archive per runtime package, exclude credentials and receipts, and never add the standalone payload to the slim runtime archive. The normal authenticated installer validates the prepared bytes and creates a fresh installation after enrollment; the raw archive grants no admission authority. Finish capture before calling `beginNodeEnrollment()`. Beginning enrollment, cancellation, replacement, or closure revokes both preparation grants. A native capture with an uncertain outcome must settle or be explicitly recovered before enrollment can introduce credentials into its source machine. Persist the original cold/checkpoint allocation decision before contacting the provider, retain checkpoint references until confirmed release, and never switch images when replaying the same operation.
 
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `dormant`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. For ordinary leases, omission retains the legacy dedicated-host behavior; prepared-workspace registration requires an explicit `sharedHost: false` in the provision result. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
-`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; username?: string; allowsResize?: boolean; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be an absolute path on the worker (POSIX or Windows). A managed macOS desktop can supply `username` with its password file for ARD account authentication over the node carrier; credentials remain between the node and Gateway, never in the browser. Setting `allowsResize: false` restricts a native desktop from provider-wide virtual-display resizing. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
+`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; username?: string; allowsResize?: boolean; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be an absolute path on the worker (POSIX or Windows). Setting `allowsResize: false` restricts a native desktop from provider-wide virtual-display resizing. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; args?: string[]; cdpPort: number }` or `{ id: "terminal"; executablePath: string; args?: string[] }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields. Optional `args` are fixed by the provider and travel with its admitted launcher, never supplied by the viewer. They run without a shell on the node; each argument is NUL-free and bounded to 4 KiB, with at most 32 arguments and 8 KiB total. Gateway validation accepts POSIX and Windows absolute paths independently of the Gateway OS; the node validates its native path syntax. An optional `username` identifies the lease-owned ARD account, with its password read from `passwordFilePath` and kept transient between the node and Gateway. Managed ARD account authentication requires the node carrier; credentials never enter the browser. Ordinary host desktops retain their existing viewer-supplied ARD credentials.
 Providers with renewable leases can also implement `renew(leaseId)`.
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core fences the environment and invokes canonical teardown; shared or unknown host isolation still requires acknowledgment that the exact worker stopped. A shared host must not be stopped or unpaired merely to release its logical lease.
 
@@ -129,7 +131,9 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Choices preserve
+timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+and arrays; custom prototypes, serialization hooks, and getters are rejected on
+both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
 and need not equal the largest rounded probability. Consumers choose whether to
 use that label or an explicit distribution policy. Ordered scores are fractional
@@ -153,9 +157,10 @@ sent to the selected provider may incur its normal usage charges. Plugin disable
 wins; installing a tool or credential alone does not select a provider. Vendor adapters
 own transport and model-specific translation; no vendor is a core dependency.
 
-The [ONNX plugin](/plugins/onnx) supplies local classifiers; the bundled
-[TypeSafe AI plugin](/plugins/typesafe) supplies a Jev adapter. Both require
-explicit setup and role selection.
+The [ONNX plugin](/plugins/onnx) supplies local classifiers; the
+[TypeSafe AI plugin](/plugins/typesafe) supplies hosted Jev and local System One
+adapters, including Kev. Both plugins require
+separate installation, explicit setup, and role selection.
 
 ### Calling from a third-party plugin
 
@@ -215,7 +220,7 @@ credential-refresh lifecycle; each plugin does not create its own provider clien
 No credential is returned to the consumer. Provider setup and refresh use the
 same prepared-secret path whether the caller is built-in or third-party.
 
-The host admits at most four requests, with no queue and a ten-second maximum.
+The host admits at most four requests, with no queue and a 30-second maximum.
 Consumers can request shorter deadlines and choose their own fallback policy.
 Three unhealthy responses open a ten-second circuit; recovery admits one trial.
 Retry-After is bounded to one minute. Auth errors latch until the prepared-secret
@@ -231,7 +236,12 @@ Manifest capability credentials use `configContracts.secretInputs` and authored
 SecretRefs. `getPreparedPluginSecretInput(pluginId, path)` from
 `openclaw/plugin-sdk/secret-input-runtime` reads only a prepared, available snapshot;
 it never resolves a cold reference or consults ambient environment credentials.
-Refresh with `secrets.reload`; capability failure does not retain an old key.
+Call it only from the plugin instance's active invocation. The helper is not a
+durable credential capability: quiescing or retiring that exact instance removes
+read authority immediately, even while already-admitted work is finishing. A
+provider must treat a missing value as unavailable and must not retain or reuse a
+previous value across reload. Refresh with `secrets.reload`; capability failure
+does not retain an old key.
 
 `plugins.inspect` reports configuration, credential readiness, current callability,
 last success, usage, latency, and bounded unavailable counts. Counts are
@@ -243,3 +253,10 @@ with `provider`, `id`, and `name`. Each provider must be owned by
 through a separate `models.list.decisionModels` projection; no provider runtime
 or credential probe runs to populate the picker. These entries never enter the
 chat, primary, fallback, or utility model catalogs.
+
+Optional model `capabilities` describe supported question types, input limits and
+their accounting scope, Boolean criteria requirements, and confidence semantics.
+The core `decision_evaluate` tool uses these same manifest facts for guidance;
+provider readiness does not change its definition. See the
+[manifest reference](/plugins/manifest/capabilities#decision-models-reference)
+for the bounded descriptor fields.

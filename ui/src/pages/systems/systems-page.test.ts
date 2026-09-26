@@ -8,6 +8,7 @@ import { DesktopClient } from "../../components/desktop/desktop-client.ts";
 import { createConnectionHandle } from "../../components/desktop/desktop-panel.test-support.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
@@ -20,7 +21,13 @@ import "./systems-page.ts";
 import "./systems-sidebar.ts";
 
 setupSidebarTest();
-afterEach(() => vi.restoreAllMocks());
+const runtimeConfigs: ReturnType<typeof createRuntimeConfigCapability>[] = [];
+afterEach(() => {
+  for (const config of runtimeConfigs.splice(0)) {
+    config.dispose();
+  }
+  vi.restoreAllMocks();
+});
 
 const host: EnvironmentSummary = {
   id: "gateway",
@@ -96,12 +103,21 @@ function harness(
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: gatewayHelloForMethods(
-      ["environments.list", "node.list", "system.info", "desktop.observe"],
+      [
+        "environments.list",
+        "node.list",
+        "system.info",
+        "desktop.observe",
+        "config.get",
+        "config.patch",
+      ],
       ["operator.admin"],
     ),
   });
   const context = createContext(gateway.gateway, createSessions("main", []));
-  Object.assign(context, { basePath: "", navigate: vi.fn() });
+  const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
+  runtimeConfigs.push(runtimeConfig);
+  Object.assign(context, { basePath: "", navigate: vi.fn(), runtimeConfig });
   const controller = new SystemsController(context);
   return { controller, gateway, context, request };
 }
@@ -119,6 +135,87 @@ async function mount(controller: SystemsController) {
 }
 
 describe("Systems workspace", () => {
+  it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const gatewayHost = { ...host, desktop: false };
+    let environments = [gatewayHost, worker, offline];
+    const { controller, gateway, request } = harness(async () => environments);
+    const page = document.createElement("openclaw-systems-page");
+    page.routeData = { controller };
+    document.body.append(page);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
+    expect(statusReads()).toHaveLength(0);
+    expect(controller.inventory).toBeNull();
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toHaveLength(1);
+    const inventory = controller.inventory;
+    expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
+    controller.toggleStats();
+    expect(controller.showStats || controller.showDetails).toBe(false);
+
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    environments = [gatewayHost, { ...worker, id: "worker-after-hidden", desktop: false }];
+    gateway.publishEvent("presence", {});
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(statusReads()).toHaveLength(1);
+    expect(controller.inventory).toBe(inventory);
+    expect(controller.inventory?.errors).toEqual({});
+    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
+
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toHaveLength(2);
+    expect(controller.inventory?.errors).toEqual({});
+    expect(controller.sampledAtMs).toBe(Date.now());
+    expect(controller.rows.map((row) => row.environment.id)).toEqual([
+      "gateway",
+      "worker-after-hidden",
+    ]);
+    expect(
+      controller.rows.find((row) => row.environment.id === "worker-after-hidden")?.environment
+        .desktop,
+    ).toBe(false);
+    expect(controller.needsInventoryRefresh).toBe(false);
+  });
+
+  it.each(["selection", "authority"])(
+    "cancels pending desktop enablement when %s changes",
+    async (change) => {
+      const loaded = createDeferred();
+      const { controller, context, gateway } = harness(async () => [
+        { ...host, desktopSetup: { state: "ready" } },
+        { ...worker, desktop: false },
+      ]);
+      vi.spyOn(context.runtimeConfig, "ensureLoaded").mockReturnValue(loaded.promise);
+      const patch = vi.spyOn(context.runtimeConfig, "patch");
+      const { page } = await mount(controller);
+      page.querySelector<HTMLButtonElement>(".systems-state button")!.click();
+      await vi.waitFor(() => expect(controller.desktopSetupBusy).toBe(true));
+      if (change === "selection") {
+        controller.select(worker.id);
+      } else {
+        gateway.publish({
+          hello: gatewayHelloForMethods(
+            ["environments.list", "node.list", "system.info", "config.get", "config.patch"],
+            ["operator.read"],
+          ),
+        });
+      }
+      loaded.resolve();
+      await vi.waitFor(() => expect(controller.desktopSetupBusy).toBe(false));
+      expect(patch).not.toHaveBeenCalled();
+    },
+  );
+
   it("sorts and filters the machine inventory without replacing the selected machine", async () => {
     const environments: EnvironmentSummary[] = [
       host,
@@ -279,7 +376,7 @@ describe("Systems workspace", () => {
       page.querySelector(".sparkline-tile__chart polyline")?.getAttribute("points")?.split(" ");
     expect(points()).toHaveLength(2);
     expect(page.querySelector('.systems-metrics[data-stale="false"]')).not.toBeNull();
-    clock.mockReturnValue(now + 20_000);
+    clock.mockReturnValue(now + 30_000);
     request.mockRejectedValueOnce(new Error("Telemetry unavailable"));
     await controller.refreshTelemetry();
     await page.updateComplete;

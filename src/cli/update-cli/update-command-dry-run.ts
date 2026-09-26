@@ -4,7 +4,7 @@ import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -25,7 +25,8 @@ export async function handleDryRunPreflightError(
   if (
     error.reason === "database-schema-preflight" ||
     error.reason === "target-metadata-preflight" ||
-    error.reason === "invalid-config"
+    error.reason === "invalid-config" ||
+    error.reason === "config-read-failed"
   ) {
     // A best-effort preview reports incomplete admission; it never authorizes mutation.
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));

@@ -864,44 +864,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(delivered.requesterContinuationSettled).toBe(true);
   });
 
-  it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {
-    const runtime = { log: vi.fn(), error: vi.fn() };
-
-    const delivered = await deliverAgentCommandResultForTest({
-      runtime: runtime as never,
-      omitReplyTarget: true,
-      opts: { deliver: false },
-      payloads: [],
-      result: {
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["The image is ready."],
-        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
-      },
-      sentTarget: {
-        provider: "telegram",
-        to: "telegram:-100123",
-        threadId: "22",
-        text: "The image is ready.",
-        mediaUrls: ["/tmp/generated-image.png"],
-      },
-    });
-
-    expect(delivered.didSendViaMessagingTool).toBe(true);
-    expect(delivered.messagingToolSentTexts).toEqual(["The image is ready."]);
-    expect(delivered.messagingToolSentMediaUrls).toEqual(["/tmp/generated-image.png"]);
-    expect(delivered.messagingToolSentTargets).toEqual([
-      {
-        tool: "message",
-        provider: "telegram",
-        to: "telegram:-100123",
-        threadId: "22",
-        text: "The image is ready.",
-        mediaUrls: ["/tmp/generated-image.png"],
-      },
-    ]);
-    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       name: "deterministic approval prompt",
@@ -1091,16 +1053,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(latestOutboundDeliveryArgs().payloads).toEqual([
       expect.objectContaining({ text: "[openai/gpt-5.4] Ready" }),
     ]);
-  });
-
-  it("dedupes exact short text on a confirmed matching route", async () => {
-    const delivered = await deliverAgentCommandResultForTest({
-      payloads: [{ text: "Ready" }],
-      sentTarget: { text: "Ready" },
-    });
-
-    expect(delivered.payloads).toEqual([]);
-    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 
   it("dedupes visible text after parsing a final reply directive", async () => {

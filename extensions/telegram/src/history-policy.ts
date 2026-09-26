@@ -1,11 +1,12 @@
 import type { Message } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { mergeTelegramAccountConfig } from "./account-config.js";
-import { firstDefined, normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import { getTelegramTextParts } from "./bot/helpers.js";
 import {
   evaluateTelegramGroupBaseAccess,

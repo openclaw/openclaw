@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   sealBackupResourceInventory,
@@ -22,7 +23,6 @@ import {
   backupManifestSizeError,
   type BackupManifest,
 } from "../commands/backup-verify-manifest.js";
-import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
@@ -47,6 +47,11 @@ import {
   removePreparedBackupArchive,
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
+import {
+  createBackupScratchDirectory,
+  finishBackupScratch,
+  maintainBackupScratch,
+} from "./backup-scratch.js";
 import {
   classifyBackupSqliteSource,
   createBackupSqliteSnapshotPlan,
@@ -124,7 +129,7 @@ async function resolveOutputPath(params: {
     const cwd = path.resolve(process.cwd());
     const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
     const cwdInsideSource = params.includedAssets.some((asset) =>
-      isPathWithin(canonicalCwd, asset.sourcePath),
+      isPathInside(asset.sourcePath, canonicalCwd),
     );
     const defaultDir = cwdInsideSource ? (resolveHomeDir() ?? path.dirname(params.stateDir)) : cwd;
     return path.resolve(defaultDir, basename);
@@ -162,7 +167,7 @@ function formatBackupOutputFailure(
   }
   if (ownedRoot) {
     const failedPath = filesystemError.path;
-    if (typeof failedPath !== "string" || !isPathWithin(path.resolve(failedPath), ownedRoot)) {
+    if (typeof failedPath !== "string" || !isPathInside(ownedRoot, path.resolve(failedPath))) {
       return error;
     }
   }
@@ -227,7 +232,7 @@ async function chooseBackupTempRoot(params: {
   const systemTmp = os.tmpdir();
   const canonicalSystemTmp = await canonicalizePathForContainment(systemTmp);
   const systemTmpInsideAsset = params.assets.some((asset) =>
-    isPathWithin(canonicalSystemTmp, asset.sourcePath),
+    isPathInside(asset.sourcePath, canonicalSystemTmp),
   );
   if (!systemTmpInsideAsset) {
     return systemTmp;
@@ -240,7 +245,7 @@ async function chooseBackupTempRoot(params: {
   const fallback = path.dirname(params.outputPath);
   const canonicalFallback = await canonicalizePathForContainment(fallback);
   const fallbackInsideAsset = params.assets.find((asset) =>
-    isPathWithin(canonicalFallback, asset.sourcePath),
+    isPathInside(asset.sourcePath, canonicalFallback),
   );
   if (fallbackInsideAsset) {
     throw new Error(
@@ -397,7 +402,7 @@ export async function createBackupArchive(
 
   const canonicalOutputPath = await canonicalizePathForContainment(outputPath);
   const overlappingAsset = plan.included.find((asset) =>
-    isPathWithin(canonicalOutputPath, asset.sourcePath),
+    isPathInside(asset.sourcePath, canonicalOutputPath),
   );
   if (overlappingAsset) {
     throw new Error(
@@ -440,12 +445,24 @@ export async function createBackupArchive(
   await prepareBackupOutputParent(outputPath);
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
-  const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
+  const maintenance = await maintainBackupScratch({
+    roots: [tempRoot],
+    repair: true,
+    log: opts.log,
+  });
+  if (maintenance.warnings.length) {
+    result.warnings = maintenance.warnings;
+  }
+  for (const directory of maintenance.reclaimed) {
+    opts.log?.(`Removed abandoned backup scratch: ${directory}`);
+  }
+  const scratch = await createBackupScratchDirectory(tempRoot);
+  const tempDir = scratch.directory;
   let publication: BackupArchivePublication;
   try {
     publication = await createBackupArchivePublication(outputPath);
   } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    await finishBackupScratch(scratch, opts.log);
     throw formatBackupOutputFailure(error, outputPath, "publication");
   }
   const tempArchivePath = publication.tempArchivePath;
@@ -470,13 +487,7 @@ export async function createBackupArchive(
       skippedStateSourcePaths.add(path.resolve(plan.configPath));
       skippedStateSourcePaths.add(await canonicalizePathForContainment(plan.configPath));
     }
-    for (const snapshot of stateSqliteBackup.snapshots) {
-      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
-      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
-        skippedStateSourcePaths.add(skippedSourcePath);
-      }
-    }
-    for (const snapshot of legacyAuditSnapshots) {
+    for (const snapshot of [...stateSqliteBackup.snapshots, ...legacyAuditSnapshots]) {
       sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
       for (const skippedSourcePath of snapshot.skippedSourcePaths) {
         skippedStateSourcePaths.add(skippedSourcePath);
@@ -505,13 +516,13 @@ export async function createBackupArchive(
       const isDirectory = entryStat.isDirectory();
       if (
         !onlyConfig &&
-        !(isDirectory
+        !(isDirectory || entryStat.isSymbolicLink()
           ? inventory.isTraversable(resolvedEntryPath)
           : inventory.isIncluded(resolvedEntryPath))
       ) {
         return false;
       }
-      if (isPathWithin(resolvedEntryPath, gatewayLockDir)) {
+      if (isPathInside(gatewayLockDir, resolvedEntryPath)) {
         return false;
       }
       if (
@@ -623,6 +634,11 @@ export async function createBackupArchive(
                 // Per-entry reports must not overflow the bounded restore manifest.
                 const manifest = buildManifest({ ...result, skipped: plan.skipped }, plan);
                 manifest.externalSymbolicLinks = externalSymbolicLinks;
+                manifest.sqliteSnapshots = snapshotFacts.map((snapshot) =>
+                  snapshot.role === "agent"
+                    ? { sourcePath: snapshot.sourcePath, role: "agent", agentId: snapshot.agentId }
+                    : { sourcePath: snapshot.sourcePath, role: "global" },
+                );
                 const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
                 const sizeError = backupManifestSizeError(contents.length);
                 if (sizeError) {
@@ -667,13 +683,16 @@ export async function createBackupArchive(
       .filter(([, reason]) => reason === "vanished")
       .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`);
     if (opaqueSqliteSourcePaths.size) {
-      result.warnings = [...opaqueSqliteSourcePaths]
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([sourcePath, action]) =>
-          action === "skipped"
-            ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
-            : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
-        );
+      result.warnings = [
+        ...(result.warnings ?? []),
+        ...[...opaqueSqliteSourcePaths]
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(([sourcePath, action]) =>
+            action === "skipped"
+              ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
+              : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
+          ),
+      ];
     }
     if (vanishedWarnings.length) {
       result.warnings = [...(result.warnings ?? []), ...vanishedWarnings];
@@ -698,8 +717,14 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "publication");
     }
   } finally {
-    await cleanupBackupArchivePublication(publication, opts.log);
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    try {
+      await cleanupBackupArchivePublication(publication, opts.log);
+    } finally {
+      const warning = await finishBackupScratch(scratch, opts.log);
+      if (warning) {
+        result.warnings = [...(result.warnings ?? []), warning];
+      }
+    }
   }
 
   opts.onSqliteSnapshots?.(snapshotFacts);

@@ -82,7 +82,7 @@ describe("worker computer connection lifetime", () => {
       if (!computer) {
         throw new Error("Expected session computer");
       }
-      computer.bind(h.run);
+      computer.bind(h.run, h.workerSource);
       const identity = {
         ...connectionIdentity(h),
         protocolFeatures: [...WORKER_PROTOCOL_FEATURES],

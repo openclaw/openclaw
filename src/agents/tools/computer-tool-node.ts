@@ -149,7 +149,7 @@ export class ComputerToolSession {
   private computerState: ComputerState = { kind: "unbound" };
   private heldButtonTarget: ComputerTarget | undefined;
   private readonly executionTargets = new Map<string, ComputerBinding>();
-  private readonly retiredGatewayBindings = new Set<ComputerBinding>();
+  private readonly cleanupBindings = new Set<ComputerBinding>();
   private disposePromise: Promise<void> | undefined;
 
   constructor(
@@ -377,7 +377,11 @@ export class ComputerToolSession {
           gatewayOpts: selectionGatewayOpts,
           signal: params.signal,
         });
-    this.assertOpen();
+    // Each attached preparation owns resources even when selection reuses an
+    // earlier binding. Retain it before selection or validation can reject it.
+    if (resolvedBinding.host.host === "node" && resolvedBinding.host.environmentId !== undefined) {
+      this.cleanupBindings.add(resolvedBinding);
+    }
     const targetKey = computerHostKey(resolvedBinding.host);
     const existingBinding = this.executionTargets.get(targetKey);
     const refreshNode =
@@ -394,9 +398,12 @@ export class ComputerToolSession {
       );
     }
     const binding = refreshNode ? resolvedBinding : (existingBinding ?? resolvedBinding);
+    // Cleanup drains the action queue before these bindings. Take custody before
+    // the closed-session fence can reject a newly resolved binding.
+    this.executionTargets.set(targetKey, binding);
+    this.assertOpen();
     const capabilities = binding.capabilities;
     this.bindCapabilities(binding, refreshNode);
-    this.executionTargets.set(targetKey, binding);
     const advertisedActions = this.options.availableActions(
       capabilities?.actions ?? this.options.defaultActions,
     );
@@ -512,7 +519,7 @@ export class ComputerToolSession {
           gatewayOpts: binding.gatewayOpts,
           signal,
         });
-        this.retiredGatewayBindings.add(binding);
+        this.cleanupBindings.add(binding);
         this.executionTargets.set(targetKey, refreshed);
         this.assertOpen();
         signal?.throwIfAborted();
@@ -632,17 +639,13 @@ export class ComputerToolSession {
       .getOperationQueue()
       .catch(() => {})
       .then(async () => {
-        const targets = [
-          ...this.executionTargets.entries(),
-          ...[...this.retiredGatewayBindings].map((binding): [string, ComputerBinding] => [
-            computerHostKey(binding.host),
-            binding,
-          ]),
-        ];
+        // Distinct preparations can share a host; only identical bindings share cleanup.
+        const targets = [...new Set([...this.executionTargets.values(), ...this.cleanupBindings])];
         this.executionTargets.clear();
-        this.retiredGatewayBindings.clear();
+        this.cleanupBindings.clear();
         const results = await Promise.allSettled(
-          targets.map(async ([targetKey, binding]) => {
+          targets.map(async (binding) => {
+            const targetKey = computerHostKey(binding.host);
             await binding.invoke({
               command: COMPUTER_ACT_COMMAND,
               commandParams: {
@@ -660,9 +663,9 @@ export class ComputerToolSession {
           this.options.transport ||
           binding?.host.host === "gateway" ||
           (binding?.host.host === "node" && binding.host.environmentId !== undefined);
-        if (targets.some(([, binding]) => ownsCleanup(binding))) {
+        if (targets.some(ownsCleanup)) {
           const failures = results.flatMap((result, index) =>
-            result.status === "rejected" && ownsCleanup(targets[index]?.[1]) ? [result.reason] : [],
+            result.status === "rejected" && ownsCleanup(targets[index]) ? [result.reason] : [],
           );
           if (failures.length > 0) {
             throw new AggregateError(failures, "computer: session desktop cleanup failed");

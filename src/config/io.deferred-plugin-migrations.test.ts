@@ -280,21 +280,21 @@ describe("config IO with deferred plugin migrations", () => {
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
       }),
-    ).rejects.toThrow('Plugin "sample" state migration is pending');
+    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
     await expect(
       io.writeConfigFile(replacement, {
         auditOrigin: "config-rpc",
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
       }),
-    ).rejects.toThrow('Plugin "sample" state migration is pending');
+    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
     await expect(
       io.writeConfigFile(snapshot.sourceConfig, {
         unsetPaths: [["plugins", "entries", "sample", "config"]],
         skipPluginValidation: true,
         skipRuntimeSnapshotRefresh: true,
       }),
-    ).rejects.toThrow('Plugin "sample" state migration is pending');
+    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
     expect(fs.readFileSync(configPath, "utf8")).toBe(JSON.stringify(source));
 
     await io.writeConfigFile(

@@ -20,7 +20,7 @@ import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-dis
 import {
   isLegacyToolOutputUnavailable,
   TOOL_OUTPUT_PREVIEW_CHARS,
-  toolOutputSourceNote,
+  formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
@@ -261,6 +261,17 @@ function renderToolCardModes(
   const id = `${messageKey}:${card.id}`;
   const active = isError || outcome === "skipped" ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
+  const modes = [
+    ["diff", "chat.toolCards.diff", renderDiffBlock(diff, outcome, undefined, file)],
+    [
+      "raw",
+      "chat.toolCards.raw",
+      renderToolDataBlock({
+        ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+        text: card.outputText!,
+      }),
+    ],
+  ] as const;
   return html`
     <wa-tab-group
       class="chat-tool-card__modes"
@@ -270,43 +281,27 @@ function renderToolCardModes(
       without-scroll-controls
       ${ref((element) => syncTabGroupLabel(element, modeLabel))}
     >
-      <wa-tab
-        slot="nav"
-        id=${`${id}-diff-tab`}
-        aria-controls=${`${id}-diff-panel`}
-        panel="diff"
-        ?active=${active === "diff"}
-      >
-        ${t("chat.toolCards.diff")}
-      </wa-tab>
-      <wa-tab
-        slot="nav"
-        id=${`${id}-raw-tab`}
-        aria-controls=${`${id}-raw-panel`}
-        panel="raw"
-        ?active=${active === "raw"}
-      >
-        ${t("chat.toolCards.raw")}
-      </wa-tab>
-      <wa-tab-panel
-        id=${`${id}-diff-panel`}
-        aria-labelledby=${`${id}-diff-tab`}
-        name="diff"
-        ?active=${active === "diff"}
-      >
-        ${renderDiffBlock(diff, outcome, undefined, file)}
-      </wa-tab-panel>
-      <wa-tab-panel
-        id=${`${id}-raw-panel`}
-        aria-labelledby=${`${id}-raw-tab`}
-        name="raw"
-        ?active=${active === "raw"}
-      >
-        ${renderToolDataBlock({
-          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-          text: card.outputText!,
-        })}
-      </wa-tab-panel>
+      ${modes.map(
+        ([mode, label]) => html`<wa-tab
+          slot="nav"
+          id=${`${id}-${mode}-tab`}
+          aria-controls=${`${id}-${mode}-panel`}
+          panel=${mode}
+          ?active=${active === mode}
+        >
+          ${t(label)}
+        </wa-tab>`,
+      )}
+      ${modes.map(
+        ([mode, , content]) => html`<wa-tab-panel
+          id=${`${id}-${mode}-panel`}
+          aria-labelledby=${`${id}-${mode}-tab`}
+          name=${mode}
+          ?active=${active === mode}
+        >
+          ${content}
+        </wa-tab-panel>`,
+      )}
     </wa-tab-group>
   `;
 }
@@ -346,17 +341,25 @@ export function renderExpandedToolCardContent(
     agentId,
   };
   const unavailable = isLegacyToolOutputUnavailable(originalCard);
-  const outputNote = toolOutputSourceNote(originalCard);
-  const outputIsLong = (originalCard.outputText?.length ?? 0) > TOOL_OUTPUT_PREVIEW_CHARS;
+  const outputText = formatToolOutput(originalCard);
+  const outputIsLong =
+    Math.max(outputText?.length ?? 0, originalCard.outputText?.length ?? 0) >
+    TOOL_OUTPUT_PREVIEW_CHARS;
   const card =
     outputIsLong && onOpenSidebar && !unavailable
       ? {
           ...originalCard,
-          outputText: truncateUtf16Safe(originalCard.outputText!, TOOL_OUTPUT_PREVIEW_CHARS),
+          outputText: truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS),
         }
-      : originalCard;
+      : { ...originalCard, outputText };
   const outputFooter = html`
-    ${outputNote ? html`<p class="muted">${outputNote}</p>` : nothing}
+    ${
+      outputText !== originalCard.outputText &&
+      originalCard.outputText !== undefined &&
+      !(outputIsLong && onOpenSidebar)
+        ? renderRawOutputToggle(originalCard.outputText)
+        : nothing
+    }
     ${
       unavailable
         ? html`<p role="status">${t("chat.toolCards.fullOutputUnavailable")}</p>`
@@ -412,7 +415,7 @@ export function renderExpandedToolCardContent(
   // rendered field leaves the remaining execution-context arguments.
   if (view.kind === "command" && (view.command || view.code) && !card.preview) {
     const argsRecord = asNullableRecord(card.args);
-    const sourceKey = view.code ? "code" : "command";
+    const sourceKey = view.code ? (argsRecord?.code === view.code ? "code" : "input") : "command";
     const extraArgs = Object.fromEntries(
       Object.entries(argsRecord ?? {}).filter(([key]) => key !== sourceKey),
     );
@@ -421,8 +424,14 @@ export function renderExpandedToolCardContent(
         <div class="chat-tool-card__actions">${sidebarAction}</div>
         ${
           view.code
-            ? html`${renderToolDataBlock({ label: t("chat.toolCards.toolInput"), text: view.code })}
-              ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
+            ? sourceKey === "input"
+              ? html`${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}
+                  <details class="chat-tool-card__input">
+                    <summary>${t("chat.toolCards.toolInput")}</summary>
+                    ${renderToolDataBlock({ text: view.code })}
+                  </details>`
+              : html`${renderToolDataBlock({ label: t("chat.toolCards.toolInput"), text: view.code })}
+                ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
             : renderTerminalBlock(view.command!, card.outputText)
         }
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}

@@ -1,48 +1,7 @@
 // Anthropic tests cover provider manifest model catalog behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-type AnthropicCatalogModel = {
-  id?: string;
-  name?: string;
-  reasoning?: boolean;
-  input?: string[];
-  mediaInput?: {
-    image?: {
-      maxSidePx?: number;
-      preferredSidePx?: number;
-      tokenMode?: string;
-    };
-  };
-  contextWindow?: number;
-  contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
-  contextWindowDefault?: string;
-  maxTokens?: number;
-  cost?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-  };
-  thinkingLevelMap?: Record<string, string | null>;
-  status?: string;
-  replacedBy?: string;
-  compat?: { codeMode?: string };
-};
-
-type AnthropicManifest = {
-  modelCatalog?: {
-    providers?: {
-      anthropic?: { models?: AnthropicCatalogModel[] };
-      "claude-cli"?: { models?: AnthropicCatalogModel[] };
-    };
-    discovery?: Record<string, string>;
-  };
-};
-
-const manifest = JSON.parse(
-  readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-) as AnthropicManifest;
 const selectableContextWindowMetadata = {
   contextWindows: [
     { id: "200k", label: "200K", contextWindow: 200_000 },
@@ -52,15 +11,23 @@ const selectableContextWindowMetadata = {
 };
 
 describe("Anthropic plugin manifest", () => {
-  it("flags every static Anthropic API model as code-mode preferred", () => {
+  it("keeps Haiku opt-in while preferring Code Mode for the other API models", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     expect(models.length).toBeGreaterThan(0);
     for (const model of models) {
-      expect(model.compat?.codeMode, model.id).toBe("preferred");
+      expect(model.compat?.codeMode, model.id).toBe(
+        model.id === "claude-haiku-4-5" ? "capable" : "preferred",
+      );
     }
   });
 
   it.each([
+    {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    },
     {
       id: "claude-opus-5",
       name: "Claude Opus 5",
@@ -156,7 +123,7 @@ describe("Anthropic plugin manifest", () => {
       },
       contextWindow: 200000,
       maxTokens: 64000,
-      compat: { codeMode: "preferred" },
+      compat: { codeMode: "capable" },
     });
     expect(models.find((model) => model.id === "claude-haiku-4-5-20251001")).toBeUndefined();
   });

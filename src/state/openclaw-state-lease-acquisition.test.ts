@@ -1,14 +1,22 @@
 import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as backoff from "../infra/backoff.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
 } from "../infra/state-database-coordinator.js";
+import { getTrackedWorkerCpuSources } from "../infra/worker-cpu.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -84,6 +92,43 @@ it.each([false, true])(
   },
 );
 
+it("rebinds the real shared-state lease worker and joins its retained generation", async () => {
+  await withOpenClawTestState({ label: "lease-retained-worker-generation" }, async (state) => {
+    const options = {
+      scope: "core:test",
+      key: "retained-generation",
+      database: { scope: "shared" as const, options: { env: state.env } },
+      leaseMs: 60_000,
+      waitMs: 0,
+    };
+    const initialWorkers = getTrackedWorkerCpuSources().workers.length;
+    await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+    const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore);
+    const retainedPath = path.join(
+      path.dirname(resolveOpenClawStateSqlitePath(state.env)),
+      "retained-state-worker.mts",
+    );
+    await fs.promises.writeFile(retainedPath, `export * from ${JSON.stringify(source.href)};\n`);
+    const retained = pathToFileURL(await fs.promises.realpath(retainedPath));
+    const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+    await withRuntimeWorkerGeneration(
+      async (bind) => {
+        bind((url) => (url.href === source.href ? retained : url));
+        await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+        expect(
+          dispatch.mock.calls.some(
+            ([request]) =>
+              isRecord(request) && request.type === "open" && request.moduleUrl === retained.href,
+          ),
+        ).toBe(true);
+      },
+      async () => {},
+    );
+    expect(getTrackedWorkerCpuSources().workers).toHaveLength(initialWorkers);
+    await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+  });
+});
+
 it.each([false, true])(
   "preserves authority refusal before native open (prepare: %s)",
   async (prepareDatabase) => {
@@ -129,8 +174,11 @@ it("preserves the caller's typed admission refusal through lease acquisition", a
     const capture = workerContext.captureOpenClawStateWorkerContext;
     vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation((options) => {
       const context = capture(options);
-      context.admission.assertCurrent = () => {
-        throw refusal;
+      context.admission = {
+        ...context.admission,
+        assertCurrent() {
+          throw refusal;
+        },
       };
       return context;
     });

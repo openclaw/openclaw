@@ -3,6 +3,7 @@ export { captureChannelReadAuthority } from "../shared/channel-read-authority.js
 
 export { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
 export {
+  createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "../infra/net/undici-runtime.js";

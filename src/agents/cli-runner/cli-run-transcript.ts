@@ -48,7 +48,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
-export function buildCliHookUserMessage(prompt: string): unknown {
+export function buildCliHookUserMessage(prompt: string): Extract<AgentMessage, { role: "user" }> {
   return {
     role: "user",
     content: prompt,
@@ -88,14 +88,6 @@ export function buildCliHookAssistantMessage(params: {
 
 function isAgentMessage(value: unknown): value is AgentMessage {
   return Boolean(value && typeof value === "object" && "role" in value);
-}
-
-function buildCliContextEngineUserMessage(prompt: string): AgentMessage {
-  return {
-    role: "user",
-    content: prompt,
-    timestamp: Date.now(),
-  } as AgentMessage;
 }
 
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
@@ -499,7 +491,7 @@ export async function finalizeCliContextEngineTurn(params: {
     const prePromptMessages = params.historyMessages.filter(isAgentMessage);
     const turnMessages: AgentMessage[] = [];
     if (context.contextEngineTurnPrompt) {
-      turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
+      turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));
     }
     if (params.assistantText) {
       turnMessages.push(

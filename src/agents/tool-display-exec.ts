@@ -583,41 +583,10 @@ function summarizeExecCommand(command: string): ExecSummary | undefined {
 }
 
 const KNOWN_SUMMARY_PREFIXES = [
-  "check git",
-  "view git",
-  "show git",
-  "list git",
-  "switch git",
-  "create git",
-  "pull git",
-  "push git",
-  "fetch git",
-  "merge git",
-  "rebase git",
-  "stage git",
-  "restore git",
-  "reset git",
-  "stash git",
-  "search ",
-  "find files",
-  "list files",
-  "show first",
-  "show last",
-  "print line",
-  "print text",
-  "copy ",
-  "move ",
-  "remove ",
-  "create folder",
-  "create file",
-  "fetch http",
-  "install dependencies",
   "run tests",
   "run build",
-  "start app",
   "run lint",
   "run openclaw",
-  "run node script",
   "run node ",
   "run python",
   "run ruby",
@@ -628,7 +597,6 @@ const KNOWN_SUMMARY_PREFIXES = [
   "run pnpm ",
   "run yarn ",
   "run bun ",
-  "check js syntax",
 ];
 
 function isGenericSummary(summary: string): boolean {
@@ -667,6 +635,17 @@ export function resolveExecTitle(args: unknown): string | undefined {
   return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
 }
 
+/** Native Codex cells retain their freeform source under input. */
+export function resolveExecCode(args: unknown): string | undefined {
+  const record = asRecord(args);
+  for (const value of [record?.code, record?.input]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -680,9 +659,10 @@ export function resolveExecDetail(
   if (title) {
     return title;
   }
-  if (typeof record.code === "string" && record.code.trim()) {
+  const code = resolveExecCode(record);
+  if (code) {
     return options?.detailMode === "raw"
-      ? compactRawCommand(record.code)
+      ? compactRawCommand(code)
       : record.language === "typescript"
         ? "run TypeScript"
         : "run JavaScript";

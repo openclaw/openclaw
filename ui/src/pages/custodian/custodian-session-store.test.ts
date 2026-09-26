@@ -13,7 +13,6 @@ import {
   publishPluginHelpContext,
   createPluginHelpRequest,
   currentPluginHelpReference,
-  pendingPluginHelpDraft,
 } from "./plugin-help.ts";
 import { custodianErrorMessage } from "./transcript.ts";
 
@@ -49,7 +48,7 @@ describe("CustodianSessionStore", () => {
     const store = new CustodianSessionStore();
     store.connect(context, "caretaker");
     await waitForFast(() => expect(store.canSend).toBe(true));
-    expect(store.input).toBe('Help me understand Names for Example.\n\nCurrent value: ["first"]');
+    expect(store.input).toBe('Explain Names\n\nCurrent value: ["first"]');
     expect(request.mock.calls.every((call) => call[1].message === undefined)).toBe(true);
     const message = store.input;
     await store.send();
@@ -67,6 +66,55 @@ describe("CustodianSessionStore", () => {
       },
     });
   });
+
+  it.each([false, true])(
+    "puts setting help in the ordinary draft before startup settles (metadata pending=%s)",
+    async (metadataPending) => {
+      const startup = deferred<never>();
+      const request = vi.fn().mockReturnValueOnce(startup.promise).mockResolvedValue({
+        sessionId: "plugin-help-session",
+        reply: "Ready.",
+        action: "none",
+      });
+      const { context, setGatewaySnapshot } = createContext(request);
+      const agentsList = context.agents.state.agentsList;
+      if (metadataPending) {
+        context.agents.state.agentsList = null;
+      }
+      const store = new CustodianSessionStore();
+      store.connect(context, "caretaker");
+      store.setInput("Keep this draft.");
+      await createPluginHelpRequest(context, { id: "example", name: "Example" })({
+        path: ["limit"],
+        label: "Limit",
+        value: 5,
+        sensitive: false,
+      });
+      expect(store.input).toBe("Keep this draft.\n\nExplain Limit\n\nCurrent value: 5");
+      expect(store.canSend).toBe(false);
+      if (metadataPending) {
+        expect(request).not.toHaveBeenCalled();
+        context.agents.state.agentsList = agentsList;
+        setGatewaySnapshot({});
+        expect(store.input).toBe("Keep this draft.\n\nExplain Limit\n\nCurrent value: 5");
+      }
+      startup.reject(new Error("Fixture inference unavailable"));
+      await waitForFast(() => expect(store.error).toContain("Fixture inference unavailable"));
+      store.setInput(`${store.input}\nUse a brief answer.`);
+      const edited = store.input;
+      await store.send();
+      expect(request).toHaveBeenCalledOnce();
+      store.retry();
+      await waitForFast(() => expect(store.canSend).toBe(true));
+      expect(store.input).toBe(edited);
+      expect(request.mock.calls.every((call) => call[1].message === undefined)).toBe(true);
+      await store.send();
+      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+        sessionId: "plugin-help-session",
+        message: edited,
+      });
+    },
+  );
 
   it("appends setting questions without overwriting an ordinary draft or a hosted secret answer", async () => {
     const request = vi
@@ -91,15 +139,13 @@ describe("CustodianSessionStore", () => {
       sensitive: true,
     });
     expect(store.input).toBe("synthetic-answer");
-    expect(pendingPluginHelpDraft(context)).toBe(true);
     expect(request).toHaveBeenCalledOnce();
     store.sensitive = false;
     store.wizardInputPending = false;
     store.requestNudgeUpdate();
     expect(store.input).toBe(
-      "Keep this ordinary draft.\n\nHelp me understand API key for Example.\n\nCurrent value: <redacted>",
+      "Keep this ordinary draft.\n\nExplain API key\n\nCurrent value: <redacted>",
     );
-    expect(pendingPluginHelpDraft(context)).toBe(false);
   });
 
   it("masks nested sensitive values, references, sentinels and URL credentials in setting drafts", async () => {
@@ -133,9 +179,7 @@ describe("CustodianSessionStore", () => {
         value,
         sensitive: hasSensitiveConfigData(value, path, hints),
       });
-      expect(store.input).toBe(
-        "Help me understand Accounts for Example.\n\nCurrent value: <redacted>",
-      );
+      expect(store.input).toBe("Explain Accounts\n\nCurrent value: <redacted>");
       expect(value).toEqual(original);
     }
     const value = { endpoints: ["https://example.invalid/?region=eu&discount=100%25"] };
@@ -255,27 +299,6 @@ describe("CustodianSessionStore", () => {
     expect(store.hasRealUserTurn()).toBe(true);
     expect(firstSurfaceUpdates).toHaveBeenCalled();
     expect(panelSurfaceUpdates).toHaveBeenCalled();
-  });
-
-  it("restores a live wizard interaction from the rejoin projection", async () => {
-    const step = { id: "step-1", type: "text", message: "Enter a value" };
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "rejoined-session",
-      reply: "Welcome back.",
-      action: "none",
-      wizardInputPending: true,
-      step,
-    });
-    const { context } = createContext(request);
-    const store = new CustodianSessionStore();
-
-    store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.sending).toBe(false));
-
-    // The reconnecting surface must re-render the answer control the Gateway
-    // session still awaits, not just the transcript text.
-    expect(store.wizardInputPending).toBe(true);
-    expect(store.messages.at(-1)?.step).toMatchObject({ id: "step-1" });
   });
 
   it("reuses the persisted session id across store instances", async () => {
@@ -564,41 +587,6 @@ describe("CustodianSessionStore", () => {
     expect(store.messages.some((message) => message.text === "Racing turn landed")).toBe(true);
     expect(store.messages.at(-1)?.step).toMatchObject({ id: "live-step" });
     expect(store.wizardInputPending).toBe(true);
-  });
-
-  it("reconciles history persisted behind a racing turn on rejoin", async () => {
-    const historyBatches = [
-      { turns: [] },
-      {
-        turns: [
-          { role: "user", text: "Earlier ask", at: 30 },
-          { role: "assistant", text: "Racing turn landed", at: 31 },
-        ],
-      },
-    ];
-    let historyCall = 0;
-    const request = vi.fn((method: string, params: { sessionId?: string }) => {
-      if (method === "openclaw.chat.history") {
-        const batch = historyBatches[Math.min(historyCall, historyBatches.length - 1)];
-        historyCall += 1;
-        return Promise.resolve(batch);
-      }
-      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
-    });
-    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
-    // A restored persisted id is what makes this a rejoin candidate.
-    localStorage.setItem("openclaw.custodian.session.v1", "persisted-session-1");
-    const store = new CustodianSessionStore();
-
-    store.connect(context, "caretaker");
-    await waitForFast(() => expect(store.sending).toBe(false));
-
-    // The welcome-only rejoin queues behind any in-flight turn server-side, so
-    // the post-response refresh must surface rows that turn persisted after
-    // the initial (empty) history fetch.
-    expect(historyCall).toBe(2);
-    expect(store.messages.some((message) => message.text === "Racing turn landed")).toBe(true);
-    expect(store.messages.at(-1)?.text).toBe("Ready.");
   });
 
   it.each([

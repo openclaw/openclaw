@@ -255,6 +255,8 @@ printf 'support=%s\\n' "$OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUP
 export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
 export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
 export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=clawhub:@example/consent-fixture
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=consent-fixture
 source scripts/e2e/lib/plugins/sweep.sh
 node() {
   case "$1" in
@@ -275,6 +277,25 @@ run_plugins_clawhub_scenario
     },
   );
 
+  it("requires an explicit package identity for live ClawHub E2E", () => {
+    const root = tempDirs.make("openclaw-clawhub-live-requirements-");
+    const result = runShell(
+      root,
+      writeCandidate(root),
+      `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+source scripts/e2e/lib/plugins/sweep.sh
+run_plugins_clawhub_scenario
+`,
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("the Kitchen Sink listing has been retired");
+  });
+
   it.each([
     {
       environment: `
@@ -284,15 +305,6 @@ unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
       expectedId: "openclaw-kitchen-sink-fixture",
       expectedSpec: "clawhub:@openclaw/plugin-e2e-fixture",
       name: "fixture default",
-    },
-    {
-      environment: `
-export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
-unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
-`,
-      expectedId: "openclaw-kitchen-sink-fixture",
-      expectedSpec: "clawhub:@openclaw/kitchen-sink",
-      name: "live default",
     },
     {
       environment: `
@@ -408,17 +420,5 @@ ${fixtureCommand} plugins install fixture`,
       ["plugins", "install", "--help"],
       ["plugins", "install", "fixture", consent],
     ]);
-  });
-
-  it.each([
-    ["2026.4.25", "1"],
-    ["2026.4.26", "0"],
-    ["2026.8.1", "0"],
-  ])("preserves legacy version CLI %s", (version, output) => {
-    const result = spawnSync(process.execPath, ["scripts/e2e/lib/package-compat.mjs", version], {
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(output);
   });
 });

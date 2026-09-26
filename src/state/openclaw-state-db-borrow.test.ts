@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
@@ -25,7 +26,11 @@ function fixture(inTransaction = false) {
   const database: OpenClawStateDatabase = {
     db: new DatabaseSync(":memory:"),
     path: "/fixture/state.sqlite",
-    walMaintenance: { close: () => true, checkpoint: () => true },
+    walMaintenance: {
+      close: () => true,
+      checkpoint: () => true,
+      reclaimFreePages: createSqliteWalReclamationResult,
+    },
   };
   const borrowers = new WeakMap<DatabaseSync, StateDatabaseBorrowers>();
   Object.defineProperty(database.db, "isTransaction", { value: inTransaction });

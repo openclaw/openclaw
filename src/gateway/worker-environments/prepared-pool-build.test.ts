@@ -13,12 +13,12 @@ describe("prepared worker builds", () => {
     "retains a %s admitted while another project's retention is pending",
     async (admission) => {
       fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };
-      fixture.attach(fixture.ready(fixture.seed("source-a")));
+      await fixture.attach(await fixture.ready(await fixture.seed("source-a")));
       const projectKey = "1".repeat(64);
       const preparationKey = "2".repeat(64);
       const reserve =
         admission === "promoted reserve"
-          ? fixture.seed("reserve-b", { reserve: true, projectKey, preparationKey })
+          ? await fixture.seed("reserve-b", { reserve: true, projectKey, preparationKey })
           : undefined;
       const entered = createDeferred();
       const release = createDeferred();
@@ -33,14 +33,14 @@ describe("prepared worker builds", () => {
             entered.resolve();
             await release.promise;
           }
-          return { assertCurrent: () => {} };
+          return { isCurrent: () => true };
         },
       });
       const running = fixture.schedule(owner);
       await Promise.race([entered.promise, running]);
       fixture.nowMs += 100;
       fixture.developmentProfile.readyWorkers = 0;
-      const build = fixture.store.ensurePreparedIntent({
+      const build = (await fixture.store.ensurePreparedIntent({
         intent: {
           environmentId: "build-b",
           providerId: fixture.provider.id,
@@ -58,7 +58,7 @@ describe("prepared worker builds", () => {
         target: 0,
         maxTotal: 1,
         assertCurrent: () => {},
-      })!;
+      }))!;
       expect(build).toBeDefined();
       const repeated = fixture.schedule(owner);
       release.resolve();
@@ -81,15 +81,15 @@ describe("prepared worker builds", () => {
 
   it("prefers a new build over an older commit activated in the same millisecond", async () => {
     fixture.developmentProfile.readyWorkers = 0;
-    fixture.attach(fixture.ready(fixture.seed("previous-source")));
-    const build = fixture.seed("build", { purpose: "build", preparationKey: "e".repeat(64) });
+    await fixture.attach(await fixture.ready(await fixture.seed("previous-source")));
+    const build = await fixture.seed("build", { purpose: "build", preparationKey: "e".repeat(64) });
     await fixture.schedule(fixture.pool());
     expect(fixture.store.get(build.environmentId)?.destroyRequestedAtMs).toBeNull();
   });
 
   it.each([0, 1])("finishes a build before applying the ready target %i", async (target) => {
     fixture.developmentProfile.readyWorkers = target;
-    const build = fixture.seed("build", { purpose: "build" });
+    const build = await fixture.seed("build", { purpose: "build" });
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
     const owner = fixture.pool({ reconcile });
     await fixture.schedule(owner);
@@ -100,7 +100,7 @@ describe("prepared worker builds", () => {
       preparation: { purpose: "build" },
     });
     expect(reconcile).toHaveBeenCalledTimes(2);
-    fixture.ready(build);
+    await fixture.ready(build);
     await fixture.schedule(owner);
     expect(fixture.store.get(build.environmentId)?.destroyRequestedAtMs).toBe(
       target === 0 ? fixture.nowMs : null,
@@ -110,10 +110,10 @@ describe("prepared worker builds", () => {
 
   it("records build demand for subsequent ordinary reserve refill", async () => {
     fixture.developmentProfile.readyWorkers = 0;
-    const build = fixture.ready(fixture.seed("build", { purpose: "build" }));
+    const build = await fixture.ready(await fixture.seed("build", { purpose: "build" }));
     const owner = fixture.pool();
     await fixture.schedule(owner);
-    fixture.destroy(build);
+    await fixture.destroy(build);
     fixture.developmentProfile.readyWorkers = 1;
     fixture.nowMs += 100;
     await fixture.schedule(owner);
@@ -129,7 +129,7 @@ describe("prepared worker builds", () => {
     "retires an unfinished build when its %s invalidates admission",
     async (invalidation) => {
       fixture.developmentProfile.readyWorkers = 0;
-      const build = fixture.seed("build", { purpose: "build" });
+      const build = await fixture.seed("build", { purpose: "build" });
       if (invalidation === "expiry") {
         fixture.nowMs += IDLE_TIMEOUT_MS;
       } else if (invalidation === "removed profile") {

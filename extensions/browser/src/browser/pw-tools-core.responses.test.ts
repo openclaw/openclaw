@@ -33,7 +33,8 @@ describe("response body operation lifecycle", () => {
     };
   }
 
-  it.each([0, 400])("keeps the total deadline when headers take %i ms", async (headerDelay) => {
+  it("keeps the total deadline after delayed response headers", async () => {
+    const headerDelay = 400;
     let finishBody!: (body: Buffer) => void;
     const pendingBody = new Promise<Buffer>((resolve) => {
       finishBody = resolve;

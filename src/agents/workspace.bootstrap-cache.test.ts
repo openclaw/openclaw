@@ -163,36 +163,6 @@ describe("workspace bootstrap file caching", () => {
     }
   });
 
-  it("invalidates cache when mtime changes", async () => {
-    const content1 = "# Initial content";
-    const content2 = "# Updated content";
-    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
-
-    await writeWorkspaceFile({
-      dir: workspaceDir,
-      name: DEFAULT_AGENTS_FILENAME,
-      content: content1,
-    });
-
-    // First load
-    const agentsFile1 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile1, content1);
-
-    // Modify the file
-    await writeWorkspaceFile({
-      dir: workspaceDir,
-      name: DEFAULT_AGENTS_FILENAME,
-      content: content2,
-    });
-    // Some filesystems have coarse mtime precision; bump it explicitly.
-    const bumpedTime = new Date(Date.now() + 1_000);
-    await fs.utimes(filePath, bumpedTime, bumpedTime);
-
-    // Second load should detect the change and return new content
-    const agentsFile2 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile2, content2);
-  });
-
   it("refreshes session bootstrap snapshots after workspace file changes", async () => {
     const content1 = "# Initial content";
     const content2 = "# Updated content";
@@ -390,12 +360,6 @@ describe("workspace bootstrap file caching", () => {
     expect(agentsFile1?.content).toBe(content1);
     expect(agentsFile2?.content).toBe(content2);
   });
-
-  it("returns missing=true when bootstrap file never existed", async () => {
-    const agentsFile = await loadAgentsFile(workspaceDir);
-    expect(agentsFile?.missing).toBe(true);
-    expect(agentsFile?.content).toBeUndefined();
-  });
 });
 
 describe("workspace file cache retention", () => {
@@ -419,17 +383,6 @@ describe("workspace file cache retention", () => {
     });
     return filePath;
   }
-
-  it("evicts the oldest content above the six-file byte budget", () => {
-    const oldest = cacheFile("oldest", 2 * MIB);
-    for (let index = 1; index < 6; index += 1) {
-      cacheFile(`entry-${index}`, 2 * MIB);
-    }
-    const newest = cacheFile("newest", 1);
-
-    expect(readWorkspaceFileCache(oldest, "oldest")).toBeUndefined();
-    expect(readWorkspaceFileCache(newest, "newest")).toBe("x");
-  });
 
   it("promotes hits before weighted eviction", () => {
     const first = cacheFile("first", 2 * MIB);

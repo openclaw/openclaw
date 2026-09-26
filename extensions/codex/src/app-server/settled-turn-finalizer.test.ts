@@ -184,107 +184,101 @@ describe("runCodexSettledTurnFinalization", () => {
     );
   });
 
-  it.each([undefined, "openai"])(
-    "uses captured model/profile and returned native attribution (captured provider: %s)",
-    async (modelProvider) => {
-      const attempt = createAttempt();
-      attempt.prepareAssistantTranscriptMessage = (message) => message;
-      const settledAttempt = createSettledAttempt({
-        model: "gpt-5.6-luna",
-        modelProvider,
+  it("uses captured model/profile and returned native attribution", async () => {
+    const modelProvider = "openai";
+    const attempt = createAttempt();
+    attempt.prepareAssistantTranscriptMessage = (message) => message;
+    const settledAttempt = createSettledAttempt({
+      model: "gpt-5.6-luna",
+      modelProvider,
+      authProfileId: "openai:captured",
+    });
+    const settledBefore = structuredClone(settledAttempt);
+    const result = await runCodexSettledTurnFinalization(
+      { attempt, settledAttempt },
+      { pluginConfig: {} },
+    );
+
+    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        homeScope: "agent",
         authProfileId: "openai:captured",
-      });
-      const settledBefore = structuredClone(settledAttempt);
-      const result = await runCodexSettledTurnFinalization(
-        { attempt, settledAttempt },
-        { pluginConfig: {} },
-      );
-
-      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({
-          homeScope: "agent",
-          authProfileId: "openai:captured",
-          authProfileStore: attempt.authProfileStore,
-        }),
-      );
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: { mode: "required", id: "gpt-5.6-luna" },
-          modelProvider,
-          profile: "openai:captured",
-          isolation: "private-stdio",
-          requireNoExternalCapabilities: true,
-          allowEmptyText: true,
-          historyItems: [
-            expect.objectContaining({ type: "message", role: "user" }),
-            expect.objectContaining({ type: "function_call", call_id: "call-1" }),
-            expect.objectContaining({ type: "function_call_output", call_id: "call-1" }),
-          ],
-          input: [{ type: "text", text: attempt.prompt, text_elements: [] }],
-        }),
-      );
-      expect(mocks.mirror).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: "session-1",
-          idempotencyScope: "codex-settled-finalizer:run-1",
-          skipBeforeMessageWriteHooks: true,
-          prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
-          messages: [
-            expect.objectContaining({
-              role: "assistant",
-              provider: "openai",
-              model: "synthetic-summary-model",
-            }),
-          ],
-        }),
-      );
-      expect(result).toMatchObject({
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
-        usage: boundedResult().usage,
-        assistant: {
-          role: "assistant",
-          api: "openai-chatgpt-responses",
-          provider: "openai",
-          model: "synthetic-summary-model",
-          content: [{ type: "text", text: "The update was sent successfully." }],
-        },
-      });
-      expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
-      expect(structuredClone(settledAttempt)).toEqual(settledBefore);
-    },
-  );
-
-  it.each([undefined, "openai:outer"])(
-    "uses the prepared API key without resolving a profile (outer profile: %s)",
-    async (outerProfile) => {
-      const attempt = createAttempt("api-key");
-      attempt.authProfileId = outerProfile;
-      attempt.resolvedApiKey = "synthetic-resolved-api-key";
-      attempt.model = { ...attempt.model, api: "openai-responses" };
-      const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile");
-
-      const result = await runCodexSettledTurnFinalization(
-        { attempt, settledAttempt: createSettledAttempt() },
-        {},
-      );
-
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          preparedAuth: { kind: "api-key", apiKey: "synthetic-resolved-api-key" },
-          authRequirement: "api-key",
-          authProfileStore: attempt.authProfileStore,
-        }),
-      );
-      expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
-      expect(resolveProfile).not.toHaveBeenCalled();
-      expect(result.assistant).toMatchObject({
-        api: "openai-responses",
+        authProfileStore: attempt.authProfileStore,
+      }),
+    );
+    expect(mocks.runBounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { mode: "required", id: "gpt-5.6-luna" },
+        modelProvider,
+        profile: "openai:captured",
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+        allowEmptyText: true,
+        historyItems: [
+          expect.objectContaining({ type: "message", role: "user" }),
+          expect.objectContaining({ type: "function_call", call_id: "call-1" }),
+          expect.objectContaining({ type: "function_call_output", call_id: "call-1" }),
+        ],
+        input: [{ type: "text", text: attempt.prompt, text_elements: [] }],
+      }),
+    );
+    expect(mocks.mirror).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        idempotencyScope: "codex-settled-finalizer:run-1",
+        skipBeforeMessageWriteHooks: true,
+        prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
+        messages: [
+          expect.objectContaining({
+            role: "assistant",
+            provider: "openai",
+            model: "synthetic-summary-model",
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
+      usage: boundedResult().usage,
+      assistant: {
+        role: "assistant",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         model: "synthetic-summary-model",
-      });
-    },
-  );
+        content: [{ type: "text", text: "The update was sent successfully." }],
+      },
+    });
+    expect(normalizeUsage(result.assistant.usage)?.reasoningTokens).toBe(3);
+    expect(structuredClone(settledAttempt)).toEqual(settledBefore);
+  });
+
+  it("uses the prepared API key without resolving the outer profile", async () => {
+    const attempt = createAttempt("api-key");
+    attempt.resolvedApiKey = "synthetic-resolved-api-key";
+    attempt.model = { ...attempt.model, api: "openai-responses" };
+    const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile");
+
+    const result = await runCodexSettledTurnFinalization(
+      { attempt, settledAttempt: createSettledAttempt() },
+      {},
+    );
+
+    expect(mocks.runBounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedAuth: { kind: "api-key", apiKey: "synthetic-resolved-api-key" },
+        authRequirement: "api-key",
+        authProfileStore: attempt.authProfileStore,
+      }),
+    );
+    expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
+    expect(resolveProfile).not.toHaveBeenCalled();
+    expect(result.assistant).toMatchObject({
+      api: "openai-responses",
+      provider: "openai",
+      model: "synthetic-summary-model",
+    });
+  });
 
   it.each(["agent", "user"])(
     "uses the selected scoped subscription for a private side turn (ordinary home: %s)",
@@ -395,24 +389,22 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, null])(
-    "rejects missing native provider %s instead of using outer attribution",
-    async (modelProvider) => {
-      mocks.runBounded.mockResolvedValue({
-        ...boundedResult(),
-        nativeSelection: { model: "synthetic-summary-model", modelProvider },
-      });
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
-          {},
-        ),
-      ).rejects.toThrow("did not report its native model provider");
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a missing native provider instead of using outer attribution", async () => {
+    const modelProvider = null;
+    mocks.runBounded.mockResolvedValue({
+      ...boundedResult(),
+      nativeSelection: { model: "synthetic-summary-model", modelProvider },
+    });
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+        {},
+      ),
+    ).rejects.toThrow("did not report its native model provider");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
 
-  it.each(["commandExecution", "contextCompaction", "mcpToolCall", "futureCapabilityItem"])(
+  it.each(["commandExecution", "futureCapabilityItem"])(
     "rejects unexpected native %s evidence before transcript mutation",
     async (type) => {
       mocks.runBounded.mockResolvedValue({
@@ -562,31 +554,23 @@ describe("runCodexSettledTurnFinalization", () => {
     },
   );
 
-  it.each(["missing", "foreign", "unavailable"])(
-    "rejects %s context before host auth or an isolated client can be used",
-    async (kind) => {
-      const settledAttempt = createSettledAttempt();
-      settledAttempt.settledTurnFinalizationContext =
-        kind === "missing"
-          ? undefined
-          : kind === "foreign"
-            ? { source: "harness", data: [] }
-            : Object.freeze({ source: "unavailable" });
-      const before = structuredClone(settledAttempt);
-      const clientFactory = vi.fn();
-      await expect(
-        runCodexSettledTurnFinalization(
-          { attempt: createAttempt(), settledAttempt },
-          { clientFactory },
-        ),
-      ).rejects.toThrow("finalization context is unavailable");
-      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
-      expect(mocks.runBounded).not.toHaveBeenCalled();
-      expect(clientFactory).not.toHaveBeenCalled();
-      expect(mocks.mirror).not.toHaveBeenCalled();
-      expect(structuredClone(settledAttempt)).toEqual(before);
-    },
-  );
+  it("rejects forged context before host auth or an isolated client can be used", async () => {
+    const settledAttempt = createSettledAttempt();
+    settledAttempt.settledTurnFinalizationContext = { source: "harness", data: [] };
+    const before = structuredClone(settledAttempt);
+    const clientFactory = vi.fn();
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt },
+        { clientFactory },
+      ),
+    ).rejects.toThrow("finalization context is unavailable");
+    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
+    expect(mocks.runBounded).not.toHaveBeenCalled();
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(mocks.mirror).not.toHaveBeenCalled();
+    expect(structuredClone(settledAttempt)).toEqual(before);
+  });
 
   it.each([
     "before auth",

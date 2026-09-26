@@ -1,4 +1,3 @@
-/** Agent-facing Canvas tool implementation for the macOS widget panel. */
 import { randomUUID } from "node:crypto";
 import { callGatewayTool, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
@@ -9,7 +8,7 @@ import {
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { CANVAS_PRESENT_COMMAND, resolveCanvasNodeFromList } from "./node-eligibility.js";
-import { CanvasToolSchema } from "./tool-schema.js";
+import { canvasToolDefinition } from "./tool-schema.js";
 
 type CanvasToolOptions = {
   agentSessionKey?: string;
@@ -26,18 +25,9 @@ function readGatewayCallOptions(params: Record<string, unknown>) {
   };
 }
 
-async function resolveCanvasNode(opts: ReturnType<typeof readGatewayCallOptions>, query?: string) {
-  return resolveCanvasNodeFromList(await listNodes(opts), query);
-}
-
-/** Creates the model-facing Canvas tool used to invoke paired node canvas commands. */
 export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
   return {
-    label: "Canvas",
-    name: "canvas",
-    resultContentSource: "network",
-    description: "Present, hide, or navigate the widget panel on a paired macOS node.",
-    parameters: CanvasToolSchema,
+    ...canvasToolDefinition,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
@@ -45,7 +35,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
       const nodeQuery = readStringParam(params, "node", { trim: true });
 
       const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
-        const nodeId = (await resolveCanvasNode(gatewayOpts, nodeQuery)).nodeId;
+        const nodeId = resolveCanvasNodeFromList(await listNodes(gatewayOpts), nodeQuery).nodeId;
         const timeoutMs =
           clampPositiveTimerTimeoutMs(
             gatewayOpts.timeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
@@ -83,12 +73,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (presentTarget) {
             invokeParams.url = presentTarget;
           }
-          if (
-            Number.isFinite(placement.x) ||
-            Number.isFinite(placement.y) ||
-            Number.isFinite(placement.width) ||
-            Number.isFinite(placement.height)
-          ) {
+          if (Object.values(placement).some(Number.isFinite)) {
             invokeParams.placement = placement;
           }
           const { node } = await invoke(CANVAS_PRESENT_COMMAND, invokeParams);

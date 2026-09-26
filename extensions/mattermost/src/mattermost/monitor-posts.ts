@@ -1,6 +1,6 @@
-// Mattermost plugin module normalizes accepted posts into inbound turns.
 import {
   formatInboundEnvelope,
+  formatInboundFromLabel,
   implicitMentionKindWhen,
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -8,6 +8,7 @@ import {
   resolveChannelGroups,
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
@@ -25,7 +26,6 @@ import {
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
-  formatInboundFromLabel,
   matchesMattermostBotMention,
   normalizeMention,
   shouldDropEmptyMattermostBody,
@@ -42,8 +42,8 @@ import { dispatchMattermostInboundTurn } from "./monitor-turn.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import {
-  createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
   logInboundDrop,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -60,11 +60,9 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   });
   const { resolveMattermostMedia, resolveUserInfo } = resources;
   const channelHistories = new Map<string, HistoryEntry[]>();
-  const historyLimit = Math.max(
-    0,
-    account.config.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    account.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
+    DEFAULT_GROUP_HISTORY_LIMIT,
   );
 
   const recoverThread = createMattermostThreadBackfill({ monitor, channelHistories, historyLimit });

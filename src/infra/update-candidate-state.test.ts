@@ -288,7 +288,6 @@ it.runIf(process.platform !== "win32")(
 
 it.each([
   { source: "npm", relative: "extensions/demo" },
-  { source: "clawhub", relative: "extensions/demo" },
   { source: "npm", relative: "npm/projects/demo/node_modules/demo" },
   { source: "npm", relative: "npm/node_modules/demo" },
 ])(

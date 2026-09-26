@@ -59,6 +59,8 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+Provider-scoped refreshes preserve explicit outcomes reported under a registered
+alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same
 successful-observation lifetime as nonempty results. After expiry, ordinary
 catalog reads return retained rows while the existing inventory owner refreshes
@@ -80,8 +82,14 @@ without the selected credential.
 The strict and advisory paths share the same guarded transport and cache, with
 separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
-to convert acquisition errors into outcomes. Keep metadata-feed fallback
-separate from account discovery; do not retry a rejected account request
+to report successful acquisition and convert acquisition errors into outcomes.
+Returning provider configuration alone does not establish a live discovery outcome.
+For compatibility, nonempty rows returned by a legacy catalog hook without an
+outcome survive provider-wide failures under the same credentials. This does not
+establish a successful discovery origin or retain unrelated configured and
+supplemental rows. Empty legacy catalogs and profile-specific failures do not
+use that fallback; a successful replacement clears the previous row provenance.
+Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
 
 Custom catalog hooks may receive optional `mode` metadata from

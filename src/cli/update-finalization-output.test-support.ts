@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
+import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 
@@ -40,6 +41,25 @@ const sourceUrl = (relative: string) =>
     import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
     import.meta.url,
   ).href;
+const recoveryClockOwners = new Set([
+  sourceUrl("./daemon-cli/restart-health.ts"),
+  sourceUrl("./daemon-cli/restart-health-probe.ts"),
+]);
+// Keep native/HTTP observations and their full budgets; only recovery polling advances time.
+const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
+const realMonotonicNow = performance.now.bind(performance);
+const realWallNow = Date.now;
+let elapsed = 0;
+Object.defineProperty(performance, 'now', { value: () => realMonotonicNow() + elapsed });
+Date.now = () => realWallNow() + Math.floor(elapsed);
+export async function sleep(ms, signal) {
+  signal?.throwIfAborted();
+  if (elapsed === 0) process.stderr.write('Fixture advanced recovery clock.\\n');
+  elapsed += ms;
+  await new Promise(resolve => setImmediate(resolve));
+  signal?.throwIfAborted();
+}
+`)}`;
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
 export async function doctorCommand() {
@@ -160,6 +180,7 @@ export const createUpdateConfigSnapshot = async () => {
     sourceUrl("./update-cli/update-command-config.ts"),
     `
 import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
+export const capturePreUpdateSourceConfig = ({sourceConfig, parsed}) => ({ sourceConfig, authoredConfig: parsed });
 export const readPostCorePreUpdateSourceConfig = async () => {
   ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
   return undefined;
@@ -225,8 +246,10 @@ if (scenario === "human-recovery-plugin-error") {
   stubs.set(
     sourceUrl("./update-cli/update-command-report.ts"),
     `
+import { mock } from 'node:test';
 export async function runInteractiveUpdateFailureAction({ runtime }) {
-  await new Promise(resolve => setTimeout(resolve, 11_000));
+  mock.timers.tick(11_000);
+  console.error('Fixture advanced watchdog clock.');
   runtime.log('Interactive recovery completed.');
   return 'handled';
 }`,
@@ -242,6 +265,12 @@ registerHooks({
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
       const resolved = new URL(specifier, context.parentURL).href;
       const url = import.meta.url.endsWith(".js") ? resolved : resolved.replace(/\.js$/u, ".ts");
+      if (
+        [sourceUrl("../utils.ts"), sourceUrl("../utils/sleep.ts")].includes(url) &&
+        recoveryClockOwners.has(context.parentURL ?? "")
+      ) {
+        return { url: recoveryClockUrl, shortCircuit: true };
+      }
       const source = stubs.get(url);
       if (source !== undefined) {
         return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
@@ -266,6 +295,9 @@ const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
+if (scenario === "human-recovery-plugin-error" || scenario === "borrowed-output") {
+  mock.timers.enable({ apis: ["setTimeout"] });
+}
 process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
 const run = () =>
@@ -298,9 +330,8 @@ const run = () =>
       }
       if (borrowed) {
         if (scenario === "borrowed-output") {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 11_000);
-          });
+          mock.timers.tick(11_000);
+          console.error("Fixture advanced watchdog clock.");
         }
         console.error("Borrowed caller completed.");
       }

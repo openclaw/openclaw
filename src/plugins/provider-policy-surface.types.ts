@@ -3,7 +3,10 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderFastModePolicyContext,
+  ProviderModelAuthPolicy,
+  ProviderModelAuthPolicyContext,
   ProviderModelRouteResolution,
+  ProviderNativeWebSearchPolicyContext,
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
@@ -60,6 +63,9 @@ export type InspectEmbeddingProviderSetup = (params: {
 
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  resolveModelAuthPolicy?: (
+    ctx: ProviderModelAuthPolicyContext,
+  ) => ProviderModelAuthPolicy | undefined;
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
@@ -70,6 +76,8 @@ export type ProviderPolicySurface = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Whether the provider supplies hosted web search instead of managed search. */
+  resolveNativeWebSearch?: (ctx: ProviderNativeWebSearchPolicyContext) => boolean;
   /** Prefer compact tool discovery, or veto a managed-service default for a hosted route. */
   resolveToolSearchMode?: (ctx: ProviderToolSearchPolicyContext) => "tools" | false | undefined;
   resolveModelRoutes?: (

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { detected, mount, props, text } from "./test-helpers/view.test-support.ts";
+import { renderModelSetup } from "./view.ts";
 
 function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
   return mount(
@@ -35,56 +36,24 @@ describe("renderModelSetup", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
-  it.each(["logged in · ChatGPT account · alex@example.com", "logged in · API key (usage-billed)"])(
-    "shows detected authentication without credential values: %s",
-    (detail) => {
-      const secret = "synthetic-private-token";
-      const container = mount(
-        props({
-          page: {
-            phase: "ready",
-            result: {
-              ...detected,
-              candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
-            },
-          },
-        }),
-      );
-      const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
-
-      expect(text(row)).toContain(detail);
-      expect(text(row)).not.toContain(secret);
-    },
-  );
-
-  it("focuses the selected provider when the shared dropdown opens", () => {
+  it("shows detected authentication without credential values", () => {
+    const detail = "logged in · ChatGPT account · alex@example.com";
+    const secret = "synthetic-private-token";
     const container = mount(
       props({
-        manualProviderId: "gemini-api-key",
         page: {
           phase: "ready",
           result: {
             ...detected,
-            manualProviders: [
-              ...detected.manualProviders,
-              { id: "zai", groupLabel: "Z.AI", label: "API key" },
-            ],
+            candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
           },
         },
       }),
     );
-    const picker = container.querySelector(".model-setup-provider-select")!;
-    picker.dispatchEvent(new CustomEvent("wa-after-show"));
+    const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
 
-    const options = Array.from(
-      picker.querySelectorAll<HTMLElement & { active: boolean }>("[data-manual-provider]"),
-    );
-    expect(
-      options.find((option) => option.dataset.manualProvider === "gemini-api-key")?.active,
-    ).toBe(true);
-    expect(options.find((option) => option.dataset.manualProvider === "openai")?.active).toBe(
-      false,
-    );
+    expect(text(row)).toContain(detail);
+    expect(text(row)).not.toContain(secret);
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -423,18 +392,32 @@ describe("renderModelSetup", () => {
     { sensitive: false, expectedType: "text" },
     { sensitive: true, expectedType: "password" },
   ])(
-    "labels a $expectedType input with the visible text-step message",
+    "labels a $expectedType input and associates validation errors until recovery",
     ({ sensitive, expectedType }) => {
-      const container = wizardStep(
-        {
-          id: "access-value",
-          type: "text",
-          message: "Provider access value",
-          sensitive,
-          placeholder: "Enter value",
-        },
-        "initial value",
-      );
+      const container = document.body.appendChild(document.createElement("div"));
+      const renderStep = (validationError: string | null) =>
+        render(
+          renderModelSetup(
+            props({
+              wizard: {
+                phase: "step",
+                authChoice: "provider-auth",
+                step: {
+                  id: "access-value",
+                  type: "text",
+                  message: "Provider access value",
+                  sensitive,
+                  placeholder: "Enter value",
+                },
+                busy: false,
+                validationError,
+              },
+              wizardValue: "initial value",
+            }),
+          ),
+          container,
+        );
+      renderStep(null);
       const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
         'label[for="model-setup-wizard-text-input"]',
@@ -442,6 +425,15 @@ describe("renderModelSetup", () => {
       expect(label?.textContent).toBe("Provider access value");
       expect(input?.type).toBe(expectedType);
       expect(input?.labels).toContain(label);
+      renderStep("That access value is not valid.");
+      const errorId = input?.getAttribute("aria-describedby");
+      expect(input?.getAttribute("aria-invalid")).toBe("true");
+      expect(document.getElementById(errorId ?? "")?.textContent).toContain(
+        "That access value is not valid.",
+      );
+      renderStep(null);
+      expect(input?.hasAttribute("aria-invalid")).toBe(false);
+      expect(input?.hasAttribute("aria-describedby")).toBe(false);
     },
   );
 

@@ -2,13 +2,45 @@ import type { DaemonRuntimePinUpdate } from "./runtime-pin-types.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 /** Shared daemon service argument, state, and command config contracts. */
-import type {
-  GatewayServiceDefinitionTransactionHooks,
-  GatewayServiceStagedFiles,
-} from "./service-stage.js";
+import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
 
 /** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
+
+/** Platform service adapter contract shared by inspection and lifecycle owners. */
+export type GatewayService = {
+  label: string;
+  loadedText: string;
+  notLoadedText: string;
+  /** Diagnostic guidance only; this does not establish service absence. */
+  unsupportedReason?: string;
+  stage: (args: GatewayServiceInstallArgs) => Promise<void>;
+  install: (args: GatewayServiceInstallArgs) => Promise<void>;
+  uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start: (args: GatewayServiceControlArgs) => Promise<void>;
+  stop: (args: GatewayServiceControlArgs) => Promise<void>;
+  restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isAbsent?: (args: GatewayServiceEnvArgs & { strictCommandAbsent?: true }) => Promise<boolean>;
+  readDefinitionMutationCapability?: (
+    args: GatewayServiceEnvArgs & {
+      environment?: GatewayServiceEnv;
+      requireLoaded?: boolean;
+      systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
+      systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
+    },
+  ) => Promise<ServiceDefinitionMutationCapability>;
+  readCommand: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceCommandConfig | null>;
+  readRuntime: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceRuntime>;
+};
 
 /** Arguments required to render/install a managed gateway service. */
 export type GatewayServiceInstallArgs = {
@@ -30,12 +62,8 @@ export type GatewayServiceInstallArgs = {
   // Verified before a config rewrite; Windows uses this to bridge a transient
   // listener gap while replacing a Startup-folder fallback.
   startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
-  /** Await durable caller sealing before native load; currently systemd only. */
-  beforeLoad?: (staged: GatewayServiceStagedFiles) => Promise<void>;
   definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
 };
-
-export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
 
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
@@ -43,7 +71,9 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
-  /** Update stop identity only; the native owner must revalidate the live handoff lease. */
+  /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
+  onRestartAttempted?: () => void;
+  /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
   updateHandoff?: { root: string; runId: string };
   /** Revalidate captured binding after native lock and config admission, before effects. */
   beforeMutation?: () => Promise<void>;
@@ -79,7 +109,6 @@ export type GatewayLifecycleMutationMode =
   | "kickstart"
   | "bootout"
   | "disable"
-  | "disable-stop"
   | "disable-bootout"
   | "handoff-kickstart"
   | "handoff-reload"
@@ -116,6 +145,12 @@ export type GatewayServiceEnvArgs = {
   // cannot hang status reads indefinitely. Only status read paths set this;
   // control/install paths leave it unset to preserve their existing behavior.
   timeoutMs?: number;
+  /** Strict observation must retain unavailable definition evidence as unknown. */
+  requireEffective?: boolean;
+};
+
+export type GatewayServiceLoadStateReader = {
+  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
 };
 
 /** Live recovery custody, never reconstructed from a saved record alone. Loading
@@ -256,7 +291,7 @@ export type GatewayServiceManagedOverrides = {
   environment?: true | { keys?: string[]; resetInline?: true; resetFiles?: true };
 };
 
-/** Effective platform service command and, when externally owned, its managed base definition. */
+/** Effective platform command with its authored base and inspected override metadata. */
 export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
   sourcePath?: string;
   definitionPaths?: string[];
@@ -269,6 +304,15 @@ export function resolveManagedGatewayServiceCommand(
   command: GatewayServiceCommandConfig | null | undefined,
 ): GatewayServiceCommandSnapshot | null {
   return command?.managedDefinition ?? command ?? null;
+}
+
+/** Empty inspected overrides are ordinary metadata; a base without inspection is unknown. */
+export function hasGatewayServiceDefinitionOverrides(
+  command: GatewayServiceCommandConfig | null | undefined,
+): boolean {
+  return command?.managedOverrides
+    ? Object.keys(command.managedOverrides).length > 0
+    : Boolean(command?.managedDefinition);
 }
 
 /** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */

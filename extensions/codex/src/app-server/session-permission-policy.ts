@@ -2,10 +2,8 @@ import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
-  CodexAppServerApprovalsReviewer,
   CodexAppServerManagedApprovalPolicy,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexPluginConfig,
   OpenClawExecMode,
 } from "./config-contracts.js";
@@ -19,6 +17,7 @@ import {
   selectUserApprovalsReviewer,
 } from "./config-requirements.js";
 import { resolveCodexAppServerNetworkProxy } from "./config-security.js";
+import type { CodexApprovalsReviewer, CodexSandboxMode } from "./protocol.js";
 
 type SessionPermissionMode = NonNullable<EmbeddedRunAttemptParamsV2["permissionMode"]>;
 
@@ -37,8 +36,8 @@ export const CODEX_SESSION_PERMISSION_EXEC_MODES = {
 
 type CodexSessionPermissionTuple = {
   approvalPolicy: CodexAppServerManagedApprovalPolicy;
-  approvalsReviewer: CodexAppServerApprovalsReviewer;
-  sandbox: CodexAppServerSandboxMode;
+  approvalsReviewer: CodexApprovalsReviewer;
+  sandbox: CodexSandboxMode;
 };
 
 function tupleForMode(
@@ -73,9 +72,9 @@ function tupleForMode(
 function requirementsAllowTuple(
   tuple: CodexSessionPermissionTuple,
   allowed: {
-    sandboxes: Set<CodexAppServerSandboxMode> | undefined;
+    sandboxes: Set<CodexSandboxMode> | undefined;
     approvalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined;
-    reviewers: Set<CodexAppServerApprovalsReviewer> | undefined;
+    reviewers: Set<CodexApprovalsReviewer> | undefined;
   },
 ): boolean {
   return (
@@ -145,7 +144,7 @@ function clampSessionPermissionTuple(params: {
     "read-only": 0,
     "workspace-write": 1,
     "danger-full-access": 2,
-  } satisfies Record<CodexAppServerSandboxMode, number>;
+  } satisfies Record<CodexSandboxMode, number>;
   const allowedSandboxes = new Set(
     (["read-only", "workspace-write", "danger-full-access"] as const).filter(
       (sandbox) =>

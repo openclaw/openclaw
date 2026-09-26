@@ -370,11 +370,12 @@ export async function prepareModelsListResult(
     config: cfg,
     snapshot: metadataSnapshot,
   });
+  const selectedModel = resolveSessionModelRef(cfg, scope?.sessionEntry, agentId, {
+    allowPluginNormalization: false,
+  });
   const retainedModel =
     params.includeManualSelection && view === "configured" && scope?.sessionEntry
-      ? resolveSessionModelRef(cfg, scope.sessionEntry, agentId, {
-          allowPluginNormalization: false,
-        })
+      ? selectedModel
       : undefined;
   const preparedCatalog = prepareModelCatalogView({
     cfg,
@@ -596,6 +597,7 @@ export async function prepareModelsListResult(
     view,
     policy: visibilityPolicy,
     retainedModel,
+    selectedModel,
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants,
     prepareEntry: async (entry, variants) => {

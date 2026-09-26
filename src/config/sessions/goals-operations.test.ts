@@ -256,6 +256,31 @@ describe("typed Goal operation persistence", () => {
     ).rejects.toMatchObject({ code: "operation-conflict" });
   });
 
+  it("replays by SID even when the old writer revision no longer owns the session", async () => {
+    const first = await admit();
+    const events = await loadTranscriptEvents(scope());
+    await upsertSessionEntryCore(scope(), {
+      ...loadSessionEntry(scope())!,
+      lifecycleRevision: "successor",
+    });
+    const replay = await persistSessionTranscriptTurn(scope(), {
+      expectedSessionId: sessionId,
+      expectedLifecycleRevision: "previous-writer",
+      sessionTurnMutation: { kind: "goal", operation: startOperation(), runId: "run-1" },
+      messages: [{ message: { role: "user", content: "must not append" } }],
+      updateMode: "none",
+    });
+    expect(replay).toMatchObject({
+      appendedCount: 0,
+      sessionTurnMutationResult: {
+        replayed: true,
+        result: first.sessionTurnMutationResult?.result,
+      },
+    });
+    expect(await loadTranscriptEvents(scope())).toEqual(events);
+    expect(loadSessionEntry(scope())?.lifecycleRevision).toBe("successor");
+  });
+
   it.each(["not json", JSON.stringify({ status: "started" })])(
     "rejects a corrupt receipt without reapplying the operation (%s)",
     async (corrupt) => {
@@ -265,7 +290,7 @@ describe("typed Goal operation persistence", () => {
         .db.prepare("UPDATE session_goal_operations SET result_json = ? WHERE operation_id = ?")
         .run(corrupt, "start-1");
       const eventsBefore = await loadTranscriptEvents(scope());
-      await expect(admit()).rejects.toThrow("Stored Goal operation receipt is invalid");
+      await expect(admit()).rejects.toMatchObject({ code: "receipt-invalid" });
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
     },

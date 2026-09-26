@@ -1,5 +1,6 @@
 // Discord tests cover provider.lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { GatewayCloseCodes, type GatewayPlugin } from "../internal/gateway.js";
@@ -211,19 +212,6 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(statusPatches(statusSink).some(predicate)).toBe(true);
   }
 
-  it("cleans up thread bindings when gateway wait fails before READY", async () => {
-    waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));
-    const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();
-
-    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow("startup failed");
-
-    expectLifecycleCleanup({
-      threadStop,
-      waitCalls: 1,
-      gatewaySupervisor,
-    });
-  });
-
   it("cleans up when gateway wait fails after startup", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
     const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();
@@ -239,11 +227,15 @@ describe("runDiscordGatewayLifecycle", () => {
     });
   });
 
-  it("owns and cleans up auto-join when READY preceded voice listener registration", async () => {
+  it.each([false, true])("joins bindings after voice cleanup fails=%s", async (fails) => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
-    const { lifecycleParams } = createLifecycleHarness();
+    const { lifecycleParams, threadStop } = createLifecycleHarness();
     const autoJoin = vi.fn(async () => undefined);
-    const destroy = vi.fn(async () => undefined);
+    const destroy = vi.fn(async () => {
+      if (fails) {
+        throw new Error("voice destroy failed");
+      }
+    });
     const voiceManager = {
       autoJoin,
       destroy,
@@ -251,13 +243,32 @@ describe("runDiscordGatewayLifecycle", () => {
     lifecycleParams.voiceManager = voiceManager;
     lifecycleParams.voiceManagerRef.current = voiceManager;
 
-    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
-      "gateway wait failed",
+    const entered = createDeferred<void>();
+    const ready = createDeferred<void>();
+    threadStop.mockImplementationOnce(async () => {
+      entered.resolve();
+      await ready.promise;
+    });
+    let settled = false;
+    const lifecycle = runDiscordGatewayLifecycle(lifecycleParams).finally(() => {
+      settled = true;
+    });
+    const outcome = expect(lifecycle).rejects.toThrow(
+      fails ? "voice destroy failed" : "gateway wait failed",
     );
+    try {
+      await entered.promise;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+    } finally {
+      ready.resolve();
+      await outcome;
+    }
 
+    expect(threadStop).toHaveBeenCalledOnce();
     expect(autoJoin).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(lifecycleParams.voiceManagerRef.current).toBeNull();
+    expect(lifecycleParams.voiceManagerRef.current).toBe(fails ? voiceManager : null);
   });
 
   it("pushes connected status when gateway is already connected at lifecycle start", async () => {

@@ -37,6 +37,26 @@ function requireFinding(
 }
 
 describe("security audit gateway exposure findings", () => {
+  it.each([{ allowedOrigins: undefined }, { allowedOrigins: [] }])(
+    "audits public-origin inheritance with allowedOrigins=%j",
+    ({ allowedOrigins }) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan",
+          publicOrigin: "https://gateway.example.com",
+          auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+          controlUi: { allowedOrigins },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(
+        findings.some(
+          (finding) => finding.checkId === "gateway.control_ui.allowed_origins_required",
+        ),
+      ).toBe(allowedOrigins !== undefined);
+    },
+  );
+
   it("warns when the MCP Apps bridge is enabled", () => {
     const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
     expect(collectGatewayConfigFindings(cfg, cfg, {})).toEqual(

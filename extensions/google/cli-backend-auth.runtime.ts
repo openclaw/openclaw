@@ -6,6 +6,7 @@ import {
   type CliBackendPreparedExecution,
   type CliBackendToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -132,10 +133,7 @@ function throwUnstageableSelectedGeminiProfile(
 function requireGeminiOAuthCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiOAuthCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "oauth") {
+  if (credential?.type !== "oauth") {
     return null;
   }
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
@@ -170,10 +168,7 @@ function requireGeminiOAuthCredential(
 function requireGeminiApiKeyCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiApiKeyCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "api_key") {
+  if (credential?.type !== "api_key") {
     return null;
   }
   if (
@@ -255,9 +250,7 @@ async function buildGeminiCliSystemSettings(
   if (selectedType) {
     const security = isRecord(settings.security) ? { ...settings.security } : {};
     const auth = isRecord(security.auth) ? { ...security.auth } : {};
-    const enforcedType = normalizeOptionalString(
-      typeof auth.enforcedType === "string" ? auth.enforcedType : undefined,
-    );
+    const enforcedType = normalizeOptionalString(auth.enforcedType);
     if (enforcedType && enforcedType !== selectedType) {
       throw new Error(
         `Gemini CLI system settings enforce ${enforcedType} auth, but the selected OpenClaw profile requires ${selectedType}.`,
@@ -431,17 +424,12 @@ async function writeGeminiCliJson(filePath: string, value: unknown): Promise<voi
 }
 
 async function writeGeminiCliPrivateFile(filePath: string, value: string): Promise<void> {
-  const tempPath = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.writeFile(tempPath, value, {
-    encoding: "utf8",
-    mode: 0o600,
+  // Resolve directory aliases for fs-safe's directory permission check.
+  const directory = await fs.realpath(path.dirname(filePath));
+  await replaceFileAtomic({
+    filePath: path.join(directory, path.basename(filePath)),
+    content: value,
   });
-  await fs.chmod(tempPath, 0o600);
-  await fs.rename(tempPath, filePath);
-  await fs.chmod(filePath, 0o600);
 }
 
 async function stageGeminiCliIsolatedCwd(ctx: GeminiCliAuthHomeContext): Promise<void> {

@@ -67,7 +67,7 @@ export function collectAutoEnableChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy,
 ): string[] {
   const configuredStateChannelIds = new Set(
     listBundledChannelIdsForPackageState("configuredState", discovery),

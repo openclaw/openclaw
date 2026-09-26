@@ -2,12 +2,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import type * as ts from "typescript/unstable/ast";
 import {
   addEnvVarNames,
   isCountedSourcePath,
   main as checkEnvVarCount,
 } from "./check-env-var-count.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   compareRatchetSets,
   listRatchetRenames,
@@ -50,21 +52,17 @@ export function isGovernedSourcePath(filePath: string) {
   );
 }
 
-export function collectLintDisableDirectives(source: string, filePath = "source.ts") {
+export function collectLintDisableDirectives(
+  source: string,
+  _filePath: string,
+  sourceFile: ts.SourceFile,
+) {
   if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
     return [];
   }
   const directive = /^(?:eslint|oxlint)-disable(?:-next-line|-line)?(?=$|\s)([\s\S]*)$/u;
-  const scriptKind = /\.[cm]?[jt]sx$/u.test(filePath) ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    scriptKind,
-  );
   const directives: string[][] = [];
-  for (const range of collectTypeScriptCommentRanges(ts, sourceFile)) {
+  for (const range of collectTypeScriptCommentRanges(sourceFile)) {
     const text = source.slice(range.pos, range.end);
     const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
     const match = directive.exec(comment.trim());
@@ -132,6 +130,7 @@ export function collectCurrentSuppressionState(
   root = process.cwd(),
   options: { staged?: boolean; envVarNames?: Map<string, ReadonlySet<string>> } = {},
 ) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
   const staged = options.staged === true;
   const filePaths = staged
     ? listStagedSuppressionCandidates(root)
@@ -158,7 +157,14 @@ export function collectCurrentSuppressionState(
       addEnvVarNames(source, names);
       options.envVarNames.set(filePath, names);
     }
-    const directives = collectLintDisableDirectives(source, filePath);
+    if (!source.includes("oxlint-disable") && !source.includes("eslint-disable")) {
+      continue;
+    }
+    const directives = collectLintDisableDirectives(
+      source,
+      filePath,
+      parser.parseSourceFile(filePath, source),
+    );
     if (directives.some((rules) => rules.length === 0)) {
       allRules.push(filePath);
     }
@@ -218,15 +224,27 @@ export function main(
 
     if (
       reportRatchetFailures([
-        { entries: added, title: "New max-lines suppressions are forbidden; split these files:" },
-        {
-          entries: expanded,
-          title: "The max-lines baseline may only shrink; remove these entries:",
-        },
         {
           entries: allRules,
           title: "All-rule lint disables are forbidden; name only the required rules:",
         },
+      ])
+    ) {
+      return 1;
+    }
+
+    if (
+      reportLimitViolations([
+        ...added.map((file) => ({
+          file,
+          title: "New max-lines suppressions are forbidden; split these files:",
+          message: "Remove the new max-lines suppression and split the file.",
+        })),
+        ...expanded.map((file) => ({
+          file: BASELINE_PATH,
+          title: "The max-lines baseline may only shrink; remove these entries:",
+          message: file,
+        })),
       ])
     ) {
       return 1;
@@ -243,19 +261,22 @@ export function main(
       return 0;
     }
     if (
-      reportRatchetFailures([
-        {
-          entries: stale,
+      reportLimitViolations(
+        stale.map((file) => ({
+          file: BASELINE_PATH,
           title: "Remove stale max-lines baseline entries (or run with --prune):",
-        },
-      ])
+          message: file,
+        })),
+      )
     ) {
       return 1;
     }
 
-    reportRatchetSuccess(
-      "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
-    );
+    if (added.length + expanded.length + stale.length === 0) {
+      reportRatchetSuccess(
+        "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
+      );
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

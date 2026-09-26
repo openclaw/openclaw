@@ -38,39 +38,55 @@ export function projectTranscriptMessageIndex(
     expandReplyTargetWork(replyNavigationId);
   }
   for (const item of transcriptItems) {
+    const parts = item.kind === "agent-run-frame" ? item.parts : [item];
     const groups =
       item.kind === "agent-run-frame"
         ? agentRunFrameGroups(item)
         : item.kind === "group"
           ? [item]
-          : item.kind === "work-group"
+          : item.kind === "work-group" || item.kind === "activity-run"
             ? item.groups
             : [];
     const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
-    if (!firstGroup) {
-      continue;
-    }
-    const senderLabel = resolveMessageGroupSenderLabel(firstGroup, {
-      assistantName: props.assistantName,
-      userId: props.userId,
-      userName: props.userName,
-    });
-    for (const group of groups) {
-      const rowKey =
-        item.kind === "work-group" && expandedToolCards.get(item.key)
-          ? `${item.key}:${group.key}`
-          : item.key;
-      for (const source of group.messages) {
-        transcriptMessageKeys.set(source.key, rowKey);
-        const sourceMessageId = persistedMessageEntryId(source.message);
-        // The preview resolves content lazily; indexing only needs persisted identities.
-        if (sourceMessageId) {
-          messageRowKeysById.set(sourceMessageId, rowKey);
-          loadedReplySources.set(sourceMessageId, {
-            message: source.message,
-            messageId: source.key,
-            senderLabel,
-          });
+    // The anchor owner uses the first key, so keep stream and persisted keys
+    // in their actual presentation order, including within a mixed run frame.
+    for (const part of parts) {
+      if (part.kind === "stream-run") {
+        for (const stream of part.parts) {
+          if (stream.kind === "stream") {
+            transcriptMessageKeys.set(stream.key, item.key);
+          }
+        }
+      } else if (part.kind === "stream") {
+        transcriptMessageKeys.set(part.key, item.key);
+      }
+      const partGroups =
+        part.kind === "group"
+          ? [part]
+          : part.kind === "work-group" || part.kind === "activity-run"
+            ? part.groups
+            : [];
+      for (const group of partGroups) {
+        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, {
+          assistantName: props.assistantName,
+          userId: props.userId,
+          userName: props.userName,
+        });
+        const rowKey =
+          item.kind === "work-group" && expandedToolCards.get(item.key)
+            ? item.key + ":" + group.key
+            : item.key;
+        for (const source of group.messages) {
+          transcriptMessageKeys.set(source.key, rowKey);
+          const sourceMessageId = persistedMessageEntryId(source.message);
+          if (sourceMessageId) {
+            messageRowKeysById.set(sourceMessageId, rowKey);
+            loadedReplySources.set(sourceMessageId, {
+              message: source.message,
+              messageId: source.key,
+              senderLabel,
+            });
+          }
         }
       }
     }

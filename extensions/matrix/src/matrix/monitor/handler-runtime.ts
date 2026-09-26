@@ -6,17 +6,6 @@ export type MatrixDraftStreamHandle = ReturnType<
   typeof import("../draft-stream.js").createMatrixDraftStream
 >;
 
-export async function redactMatrixDraftEvent(
-  client: MatrixClient,
-  roomId: string,
-  draftEventId: string,
-): Promise<boolean> {
-  return await client.redactEvent(roomId, draftEventId).then(
-    () => true,
-    () => false,
-  );
-}
-
 export function buildMatrixFinalizedPreviewContent(): Record<string, unknown> {
   return { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true };
 }

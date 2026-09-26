@@ -8,16 +8,27 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { listUserProfileGitHubLogins } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-list.js";
+import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
+import { selectStoredGitHubIdentities } from "./user-profile-github-identity.js";
+import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import {
+  executeUserProfileWrite,
+  isUserProfileWriteCommand,
+  type UserProfileWriteOperations,
+} from "./user-profile-writes.worker.js";
 import {
   selectProfileDisplayEntries,
+  inspectProfileAvatarInDatabase,
   selectResolvedUserProfileById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import type { ProfileDisplayRow, UserProfileAvatarMime } from "./user-profiles.types.js";
+import type {
+  ProfileDisplayRow,
+  UserProfileAvatarMime,
+  UserChannelIdentityWorkerOperations,
+} from "./user-profiles.types.js";
 
 type UserProfileReadWorkerOperations = {
   "userProfiles.list": { input: undefined; output: ReturnType<typeof listUserProfilesSync> };
@@ -39,14 +50,26 @@ function executeUserProfileReadCommand(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
-      const profiles = listUserProfilesSync(options).filter(
-        (profile) => profile.mergedInto === null,
+      const profiles = executeSqliteQuerySync(
+        database.db,
+        userProfilesDb(database.db)
+          .selectFrom("user_profiles")
+          .select("id")
+          .where("merged_into", "is", null)
+          .orderBy("created_at", "asc")
+          .orderBy("id", "asc")
+          .limit(command.input.limit + 1),
+      ).rows;
+      const selected = profiles.slice(0, command.input.limit);
+      const identities = selectStoredGitHubIdentities(
+        database.db,
+        selected.map(({ id }) => id),
       );
-      const logins = listUserProfileGitHubLogins(options);
       return {
-        profiles: profiles
-          .slice(0, command.input.limit)
-          .map(({ id }) => ({ id, logins: logins.get(id) ?? [] })),
+        profiles: selected.map(({ id }) => ({
+          id,
+          logins: identities.get(id)?.accounts.map((account) => account.login) ?? [],
+        })),
         truncated: profiles.length > command.input.limit,
       };
     },
@@ -57,7 +80,7 @@ function executeUserProfileReadCommand(
 type UserProfileAvatarWorkerOperations = {
   "userProfiles.avatar.inspect": {
     input: { profileId: string };
-    output: { profile: ReturnType<typeof toUserProfile> | undefined; hasAvatar: boolean };
+    output: ReturnType<typeof inspectProfileAvatarInDatabase>;
   };
   "userProfiles.avatar.adopt": {
     input: { profileId: string; bytes: Uint8Array; mime: UserProfileAvatarMime; now: number };
@@ -73,14 +96,10 @@ function executeUserProfileAvatarCommand(
   options: OpenClawStateDatabaseOptions,
 ): UserProfileAvatarWorkerOperations[keyof UserProfileAvatarWorkerOperations]["output"] {
   if (command.type === "userProfiles.avatar.inspect") {
-    const profile = selectResolvedUserProfileById(
+    return inspectProfileAvatarInDatabase(
       openOpenClawStateDatabase(options).db,
       command.input.profileId,
     );
-    return {
-      profile: profile && toUserProfile(profile),
-      hasAvatar: profile !== undefined && profile.avatar !== null,
-    };
   }
   const { input } = command;
   const sha256 = createHash("sha256").update(input.bytes).digest("hex");
@@ -122,12 +141,33 @@ function executeUserProfileAvatarCommand(
 }
 
 export type UserProfileWorkerOperations = UserProfileReadWorkerOperations &
-  UserProfileAvatarWorkerOperations;
+  UserProfileAvatarWorkerOperations &
+  UserProfileWriteOperations &
+  UserChannelIdentityWorkerOperations;
+
+export function isUserProfileCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<UserProfileWorkerOperations> {
+  return (
+    isUserProfileWriteCommand(command) ||
+    command.type === "userProfiles.list" ||
+    command.type === "userProfiles.directory" ||
+    command.type === "userProfiles.channelIdentity.change" ||
+    command.type === "userProfiles.avatar.inspect" ||
+    command.type === "userProfiles.avatar.adopt"
+  );
+}
 
 export function executeUserProfileCommand(
   command: SqliteWorkerCommand<UserProfileWorkerOperations>,
   options: OpenClawStateDatabaseOptions,
 ): UserProfileWorkerOperations[keyof UserProfileWorkerOperations]["output"] {
+  if (isUserProfileWriteCommand(command)) {
+    return executeUserProfileWrite(command, options);
+  }
+  if (command.type === "userProfiles.channelIdentity.change") {
+    return executeUserChannelIdentityChange(command.input, options);
+  }
   if (command.type === "userProfiles.list" || command.type === "userProfiles.directory") {
     return executeUserProfileReadCommand(command, options);
   }

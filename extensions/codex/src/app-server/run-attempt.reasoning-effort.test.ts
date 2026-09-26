@@ -1,5 +1,6 @@
-import { createHook } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { setImmediate } from "node:timers/promises";
+import type { Worker } from "node:worker_threads";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
@@ -18,30 +19,36 @@ import {
 } from "./run-attempt-test-harness.js";
 
 beforeAll(() => {
-  let allocatedWorkers = 0;
-  const pendingWorkers = new Map<number, string>();
-  const observer = createHook({
-    init(id, type) {
-      if (type === "WORKER") {
-        allocatedWorkers++;
-        pendingWorkers.set(id, new Error("WORKER allocated here").stack ?? "WORKER");
-      }
-    },
-    destroy(id) {
-      pendingWorkers.delete(id);
-    },
-  }).enable();
+  const workers = new Set<Worker>();
+  const allocationStacks = new Map<Worker, string>();
+  const workerCreations = channel("worker_threads");
+  const recordAllocation = (message: unknown) => {
+    // SAFETY: Node publishes { worker } synchronously from the Worker constructor.
+    const { worker } = message as { worker: Worker };
+    allocationStacks.set(worker, new Error("Worker allocated here").stack ?? "Stack unavailable");
+  };
+  workerCreations.subscribe(recordAllocation);
+  const trackWorker = (worker: Worker) => workers.add(worker);
+  process.on("worker", trackWorker);
   // The scan pool is shared across cases; verify its file owner after all fixture cleanup.
   return async () => {
     try {
+      // Node publishes Workers on nextTick; native exit precedes async_hooks.destroy.
       await setImmediate();
-      expect(allocatedWorkers).toBeGreaterThan(0);
+      expect(workers.size).toBeGreaterThan(0);
+      const liveThreadIds = [...workers].map((worker) => worker.threadId).filter((id) => id !== -1);
+      const liveWorkerStacks = [...workers]
+        .filter((worker) => worker.threadId !== -1)
+        .map(
+          (worker) => `${worker.threadId}: ${allocationStacks.get(worker) ?? "Stack unavailable"}`,
+        );
       expect(
-        pendingWorkers.size,
-        `WORKER resources surviving Codex fixture teardown:\n${[...pendingWorkers.values()].join("\n")}`,
-      ).toBe(0);
+        liveThreadIds,
+        `Worker threads surviving Codex fixture teardown: ${liveThreadIds.join(", ")}\n${liveWorkerStacks.join("\n")}`,
+      ).toEqual([]);
     } finally {
-      observer.disable();
+      process.off("worker", trackWorker);
+      workerCreations.unsubscribe(recordAllocation);
       await drainSessionDiskBudgetWorkers();
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();

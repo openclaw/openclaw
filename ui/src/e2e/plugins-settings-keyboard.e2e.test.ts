@@ -17,8 +17,10 @@ suite.define(() => {
         });
         const settingsUrl = `${suite.server.baseUrl}settings/plugins/workboard?view=settings`;
         await page.goto(settingsUrl);
-        const heading = page.getByRole("heading", { name: "Workboard settings", exact: true });
-        await heading.waitFor();
+        const search = page
+          .locator(".plugin-editor")
+          .getByRole("searchbox", { name: "Search settings", exact: true });
+        await search.waitFor();
         const trigger = page.getByRole("button", { name: "Actions for Workspace label" });
         await trigger.click();
         const item = page.getByRole("menuitem", { name: "Reset value", exact: true });
@@ -47,7 +49,7 @@ suite.define(() => {
         // to the installed list rather than exiting the entire Settings workspace.
         await page.keyboard.press("Escape");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
-        await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
+        await page.getByRole("heading", { level: 1, name: "Plugins", exact: true }).waitFor();
       });
     },
   );

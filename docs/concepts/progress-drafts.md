@@ -363,12 +363,14 @@ Limit how many lines stay visible (default 8):
 }
 ```
 
-With `toolProgress: true`, command exit rows use ordinary tool-log capacity,
-including exits with a code other than `0`. Older exits scroll out as newer
-activity arrives and do not reduce the plan's line budget. Approval requests
-and explicit `failed`, `error`, or `blocked` states still take priority. With
-the tool log hidden, tool failures and nonzero exits are hidden too; approval
-requests remain visible.
+With `toolProgress: true`, command exit rows and failed item rows from any named
+tool use ordinary tool-log capacity. This includes built-in, plugin, and custom
+tools without maintaining a name list. One rolling activity slot remains visible
+alongside a plan, so a failed row appears when it occurs, then scrolls out as
+newer activity arrives.
+Approval requests, blocked/error states, and unnamed failures still take
+priority. With the tool log hidden, tool failures and nonzero exits are hidden
+too; approval requests remain visible.
 
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits

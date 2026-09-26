@@ -92,6 +92,8 @@ export type WorkerSshIdentity =
 
 /** Durable context supplied when a worker provider resolves the identity it minted. */
 export type WorkerSshIdentityRequest = {
+  /** Optional live invocation guard; core supplies it for identity resolution. */
+  assertCurrent?: () => void;
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;
@@ -102,9 +104,11 @@ export type WorkerDesktopApp =
   | {
       id: "browser";
       executablePath: string;
+      /** Fixed provider-owned arguments, passed directly without a shell. */
+      args?: string[];
       cdpPort: number;
     }
-  | { id: "terminal"; executablePath: string };
+  | { id: "terminal"; executablePath: string; args?: string[] };
 
 /** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
 export type WorkerDesktopEndpoint = {

@@ -67,7 +67,6 @@ type ClawHubFetchedSubjectSecurity = {
   };
 };
 
-const CLAWHUB_RISK_MODERATION_STATES = new Set(["blocked", "quarantined", "revoked"]);
 const CLAWHUB_BLOCKING_MODERATION_STATES = new Set(["blocked", "quarantined", "revoked"]);
 const CLAWHUB_SAFE_MODERATION_STATES = new Set(["", "approved"]);
 const CLAWHUB_NON_RISK_SCAN_STATUSES = new Set(["pending", "scan_pending", "stale", "stale_scan"]);
@@ -144,10 +143,7 @@ function resolveClawHubRiskReasons(trust: ClawHubPackageSecurityTrust): string[]
     reasons.push(formatClawHubTrustStatus("security scan status", scanStatus));
   }
   const moderationState = normalizeClawHubTrustToken(trust.moderationState);
-  if (
-    CLAWHUB_RISK_MODERATION_STATES.has(moderationState) ||
-    !CLAWHUB_SAFE_MODERATION_STATES.has(moderationState)
-  ) {
+  if (!CLAWHUB_SAFE_MODERATION_STATES.has(moderationState)) {
     reasons.push(formatClawHubTrustStatus("moderation state", moderationState));
   }
   for (const reason of trust.reasons) {
@@ -255,16 +251,9 @@ function resolveClawHubSecurityLinks(params: {
     security?: string;
   };
 }): ClawHubSecurityLinks {
-  const subjectUrl = resolveClawHubSubjectUrl(params);
-  if (params.subject.kind === "skill") {
-    const resolvedSubjectUrl = normalizeOptionalString(params.links?.subject) ?? subjectUrl;
-    return {
-      subject: resolvedSubjectUrl,
-      security:
-        normalizeOptionalString(params.links?.security) ??
-        `${resolvedSubjectUrl}/security-audit?version=${encodeURIComponent(params.version)}`,
-    };
-  }
+  const subjectUrl =
+    (params.subject.kind === "skill" && normalizeOptionalString(params.links?.subject)) ||
+    resolveClawHubSubjectUrl(params);
   return {
     subject: subjectUrl,
     security:
@@ -659,16 +648,7 @@ export async function checkClawHubPackageTrust(params: {
     assessment,
     links: warningLinks,
   });
-  const audit = stripAnsi(
-    formatClawHubSecurityAudit({
-      baseUrl: params.baseUrl,
-      subject: params.subject,
-      version: params.version,
-      overview,
-      assessment,
-      links: warningLinks,
-    }),
-  );
+  const audit = stripAnsi(terminalAudit);
   if (assessment.disposition === "clean") {
     params.logger?.info?.(terminalAudit);
   } else {

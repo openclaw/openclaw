@@ -509,7 +509,7 @@ describe("browser plugin", () => {
     const { api, registerGatewayMethod } = createApi();
     registerBrowserPlugin(api);
 
-    expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+    expect(registerGatewayMethod).toHaveBeenCalledTimes(2);
     expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
     const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
       method: string;

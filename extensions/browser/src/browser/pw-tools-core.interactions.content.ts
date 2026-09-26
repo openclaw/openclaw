@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
-import { getImageMetadata } from "../media/media-services.js";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
@@ -155,7 +155,6 @@ export async function waitForViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const fn = normalizeOptionalString(opts.fn) ?? "";
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
@@ -213,7 +212,10 @@ export async function waitForViaPlaywright(
     }
     if (fn) {
       if (opts.assertCurrent) {
-        await assertInteractionCurrent(opts);
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
+        }
         throwIfInteractionAborted(opts.signal);
       }
       // Passing the live document handle makes Playwright fail instead of
@@ -221,7 +223,10 @@ export async function waitForViaPlaywright(
       const documentHandle = await page.evaluateHandle(() => globalThis.document);
       try {
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
@@ -594,7 +599,6 @@ export async function setInputFilesViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   if (!opts.paths.length) {
     throw new Error("paths are required");

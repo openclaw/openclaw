@@ -292,7 +292,7 @@ it("preserves stale wire responses without consuming sequences or replacing cano
 });
 
 it("keeps patch metadata and pin/archive timestamps coherent across reads", async ({ connect }) => {
-  const scenario = { sessionKey: notes.key, sessions: [notes] };
+  const scenario = { sessionKey: notes.key, sessions: [{ ...notes, updatedAt: 1 }] };
   const { request } = await connect(scenario);
   const readRow = async () => {
     const { payload } = await request("sessions.list", { archived: "all" });
@@ -309,8 +309,9 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
     return row;
   };
   const patch = (fields: Row) => request("sessions.patch", { key: notes.key, ...fields });
-  await patch({ color: "blue" });
-  expect((await readRow()).color).toBe("blue");
+  const committed = (await patch({ color: "blue" })).payload.entry as Row;
+  expect(committed.updatedAt).toBeGreaterThan(1);
+  expect(await readRow()).toMatchObject({ color: "blue", updatedAt: committed.updatedAt });
   await patch({ color: null });
   expect((await readRow()).color).toBeNull();
   await patch({ pinned: true });
@@ -323,9 +324,10 @@ it("keeps patch metadata and pin/archive timestamps coherent across reads", asyn
   expect(archived).toMatchObject({ archived: true, archivedAt: expect.any(Number), pinned: false });
   expect(archived).not.toHaveProperty("pinnedAt");
   await patch({ archived: true });
-  expect((await readRow()).archivedAt).toBe(archived.archivedAt);
+  const repeatedArchive = await readRow();
+  expect(repeatedArchive.archivedAt).toBe(archived.archivedAt);
   expect(await patch({ pinned: true })).toMatchObject({ ok: false });
-  expect(await readRow()).toEqual(archived);
+  expect(await readRow()).toEqual(repeatedArchive);
   await patch({ archived: false, pinned: true });
   expect(await readRow()).toMatchObject({
     archived: false,
@@ -432,7 +434,15 @@ it("replaces canonical rows and membership without retaining omitted fields", as
   controls.setSessionsListResponse({ sessions: [replacement] });
 
   const assertReplacement = async (currentRequest: typeof request) => {
-    expect((await currentRequest("sessions.list")).payload.sessions).toEqual([replacement]);
+    const list = (await currentRequest("sessions.list")).payload;
+    expect(list).toMatchObject({
+      count: 1,
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+      path: "",
+      ts: expect.any(Number),
+      sessions: [replacement],
+    });
+    expect(list.sessions).toEqual([replacement]);
     expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
       replacement,
     );
@@ -454,6 +464,45 @@ it("replaces canonical rows and membership without retaining omitted fields", as
   const reloaded = await connect(scenario);
   await assertReplacement(reloaded.request);
 });
+
+it.for([
+  {
+    name: "configured",
+    defaults: { model: "fixture-model", modelProvider: "fixture-provider", contextTokens: 4096 },
+  },
+  { name: "malformed", defaults: null },
+])(
+  "preserves canonical list envelopes and explicit overrides from $name defaults",
+  async ({ defaults }, { connect }) => {
+    const envelope = { path: "fixture-store", ts: 123, totalCount: 9, defaults, sessions: [notes] };
+    const scenario = { sessions: [notes], methodResponses: { "sessions.list": envelope } };
+    const { request, controls } = await connect(scenario);
+    controls.setSessionsListResponse({ sessions: [notes] });
+    expect((await request("sessions.list")).payload).toMatchObject({
+      path: envelope.path,
+      ts: envelope.ts,
+      totalCount: envelope.totalCount,
+      count: 1,
+      defaults: defaults ?? { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+    });
+    const overridden = {
+      path: "replacement-store",
+      ts: 456,
+      count: 3,
+      totalCount: 12,
+      defaults: {
+        model: "replacement-model",
+        modelProvider: "replacement-provider",
+        contextTokens: 8192,
+      },
+      sessions: [notes],
+    };
+    controls.setSessionsListResponse(overridden);
+    expect((await request("sessions.list")).payload).toMatchObject(overridden);
+    const reloaded = await connect(scenario);
+    expect((await reloaded.request("sessions.list")).payload).toMatchObject(overridden);
+  },
+);
 
 it("commits only successful patchMany targets", async ({ connect }) => {
   const other = { key: "agent:ops:other", sessionId: "other-generation" };

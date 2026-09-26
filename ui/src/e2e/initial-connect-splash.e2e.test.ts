@@ -161,6 +161,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
   it("shows the splash instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        `openclaw.control.settings.v1:ws://${location.hostname}:18789`,
+        JSON.stringify({ theme: "rose", themeMode: "dark" }),
+      );
+    });
     const loginGateMounted = await traceLoginGateMounts(page);
     const loginModuleRequests: string[] = [];
     page.on("request", (request) => {
@@ -187,9 +193,26 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const painted = await proofContentPainted(page, proof, skeleton);
     expect(painted, "connecting proof must contain the skeleton").toBe(true);
     const highlight = skeleton.locator(".loading-skeleton__composer");
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("rose");
+    const bounds = (await highlight.boundingBox())!;
+    const frames: number[][] = [];
+    for (const progress of [0, 0.5]) {
+      await highlight.evaluate((element, fraction) => {
+        const sweep = element.getAnimations({ subtree: true })[0]!;
+        sweep.pause();
+        sweep.currentTime = Number(sweep.effect!.getComputedTiming().duration) * fraction;
+      }, progress);
+      const frame = decodeProofPng(await page.screenshot());
+      const center =
+        (Math.floor(bounds.y + bounds.height / 2) * frame.width +
+          Math.floor(bounds.x + bounds.width / 2)) *
+        4;
+      frames.push([...frame.data.subarray(center, center + 3)]);
+    }
+    // An animation name alone passed even when highlight and fill were identical.
     expect(
-      await highlight.evaluate((element) => getComputedStyle(element, "::after").animationName),
-    ).toBe("shimmer");
+      Math.max(...frames[0]!.map((value, channel) => Math.abs(value - frames[1]![channel]!))),
+    ).toBeGreaterThan(12);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     expect(await splash.locator(".connect-splash__sidebar").isVisible()).toBe(false);
@@ -201,6 +224,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         Number.parseFloat(getComputedStyle(element, "::after").animationDuration),
       ),
     ).toBeLessThanOrEqual(0.00001);
+    expect(
+      await highlight.evaluate((element) => element.getAnimations({ subtree: true }).length),
+    ).toBe(0);
     await captureProof(page, "01-mobile-reduced-motion", [highlight]);
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "no-preference" });

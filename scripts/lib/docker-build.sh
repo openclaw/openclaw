@@ -34,7 +34,7 @@ docker_build_command() {
     fi
   fi
 
-  printf '%s\0' env DOCKER_BUILDKIT=1 "${build_cmd[@]}" "$@"
+  printf '%s\0' env DOCKER_BUILDKIT=1 "${build_cmd[@]}" --progress=plain --build-arg GITHUB_ACTIONS "$@"
 }
 
 docker_build_args_need_buildx() {
@@ -228,6 +228,12 @@ docker_build_run_logged() {
   return "$build_status"
 }
 
+docker_build_relay_limit_warnings() {
+  if grep -q '::warning file=.*col=0,title=' "$1"; then
+    node "$DOCKER_BUILD_LIB_DIR/../relay-build-limit-warnings.mts" "$1"
+  fi
+}
+
 docker_build_with_retries() {
   local label="$1"
   shift
@@ -247,11 +253,13 @@ docker_build_with_retries() {
   while true; do
     log_file="$(docker_e2e_run_log "$label")"
     if docker_build_run_logged "$label" "$timeout_value" "$log_file" "${command[@]}"; then
+      docker_build_relay_limit_warnings "$log_file"
       rm -f "$log_file"
       return 0
     else
       build_status="$?"
     fi
+    docker_build_relay_limit_warnings "$log_file"
 
     if docker_build_signal_exit_status "$build_status"; then
       rm -f "$log_file"
@@ -267,7 +275,7 @@ docker_build_with_retries() {
       return 1
     fi
 
-    echo "Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
+    echo "::warning::Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))

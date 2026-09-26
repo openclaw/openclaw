@@ -932,11 +932,11 @@ describe("meeting transcript library", () => {
         static override revokeObjectURL = vi.fn();
       },
     );
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        expect(this.download).toBe("complete-notes.md");
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      expect(this.download).toBe("complete-notes.md");
+    });
     const blob = vi.spyOn(globalThis, "Blob");
     const data = "# Synthetic notes\n\nComplete text and stored summary.\n";
     const request = vi.fn(async (method: string) =>

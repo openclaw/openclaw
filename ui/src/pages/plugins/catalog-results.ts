@@ -1,9 +1,11 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import "./install-action.ts";
 import { repeat } from "lit/directives/repeat.js";
+import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
-import { imageWithFallback } from "../../components/image-with-fallback.ts";
+import { renderPanelEmptyState } from "../../components/panel-empty-state.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -11,12 +13,17 @@ import type {
   PluginDiscoveryCategory,
   PluginDiscoveryEntry,
   PluginDiscoveryResult,
+  PluginInstallRequest,
 } from "../../lib/plugins/index.ts";
+import { renderArtTile } from "./consent-dialog.ts";
+import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCardIdentity,
   renderPluginCardSummary,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
+import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
+import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { resolvePluginCatalogIconUrl } from "./presentation.ts";
 
 export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" | "featured";
@@ -28,6 +35,9 @@ export type PluginCatalogResultsProps = {
   error: string | null;
   remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
+  categoriesLoading: boolean;
+  categoriesError: string | null;
+  onRetryCategories: () => void;
   featured: readonly PluginDiscoveryEntry[];
   featuredLoading: boolean;
   trending: readonly PluginDiscoveryEntry[];
@@ -39,7 +49,13 @@ export type PluginCatalogResultsProps = {
   query: string;
   iconUrls: Readonly<Record<string, string>>;
   pluginIconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (url: string) => boolean;
+  pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
+  busy?: Readonly<Record<string, PluginMutationAction>>;
+  installProgress?: ReadonlyMap<string, PluginInstallProgress>;
+  messages?: Readonly<Record<string, PluginRowMessage>>;
+  onContinueInstall?: (id: string, request: PluginInstallRequest) => void;
   entryHref: (id: string) => string;
   onIntentChange: (intent: PluginDiscoveryIntent) => void;
   onCategoryChange: (category: string | null) => void;
@@ -51,6 +67,9 @@ export type PluginCatalogResultsProps = {
 };
 
 const SECTION_SIZE = 8;
+// Estimate the current registry footprint without duplicating its taxonomy.
+// The actual labels, ordering, and count still come only from ClawHub.
+const CATEGORY_SKELETON_COUNT = 22;
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
@@ -65,6 +84,8 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
   globe: icons.globe,
   "message-circle": icons.messageSquare,
   "message-square": icons.messageSquare,
+  mic: icons.mic,
+  monitor: icons.monitor,
   package: icons.box,
   palette: icons.palette,
   shield: icons.shield,
@@ -128,18 +149,14 @@ function renderCatalogIcon(
     },
     props,
   );
-  return html`${imageWithFallback(iconUrl, (url, onError) =>
-    url
-      ? html`<img
-          class="plugins-icon"
-          src=${url}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          @error=${onError}
-        />`
-      : categoryIcon(plugin.catalog.icon),
-  )}`;
+  return renderArtTile(plugin.local.pluginId ?? plugin.id, plugin.catalog.name, {
+    iconUrl: iconUrl ?? undefined,
+    whiteBackground: plugin.catalog.official && Boolean(iconUrl),
+    loading: Boolean(
+      (plugin.local.pluginId && props.pluginIconLoading?.(plugin.local.pluginId)) ||
+      (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)),
+    ),
+  });
 }
 
 export function formatCompactCount(value: number): string {
@@ -159,8 +176,15 @@ function renderCatalogCard(
   props: PluginCatalogResultsProps,
 ): TemplateResult {
   const installedState = plugin.local.state === "not-installed" ? null : plugin.local.state;
-  const installed = plugin.local.installed && installedState !== null;
-  const canInstall = props.canInstall && plugin.local.action === "install";
+  const progress = props.installProgress?.get(`install:${plugin.id}`);
+  const installing = Boolean(progress && progress.finishedAt === undefined);
+  const installed = plugin.local.installed && installedState !== null && !installing;
+  const busy = Boolean(props.busy?.[`install:${plugin.id}`]);
+  const canInstall =
+    props.canInstall &&
+    plugin.local.action === "install" &&
+    !busy &&
+    !props.messages?.[`install:${plugin.id}`]?.savedInstall;
   return html`<article
     class="plugin-catalog-card oc-card oc-card-interactive"
     data-plugin-id=${plugin.id}
@@ -199,25 +223,25 @@ function renderCatalogCard(
         ${
           installed
             ? renderPluginStateStatus(installedState, "plugin-catalog-card__status")
-            : html`<button
-                type="button"
-                class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-                aria-label=${t("pluginsPage.installNamed", { name: plugin.catalog.name })}
-                ?disabled=${!canInstall}
-                @click=${(event: MouseEvent) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (canInstall) {
-                    props.onInstall(plugin.id);
-                  }
-                }}
-              >
-                ${t("pluginsPage.install")}
-              </button>`
+            : html`<openclaw-plugin-install-action
+                .buttonClass=${"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
+                .pluginName=${plugin.catalog.name}
+                .busy=${busy}
+                .disabled=${!canInstall}
+                .progress=${progress}
+                .onInstall=${() => props.onInstall(plugin.id)}
+              ></openclaw-plugin-install-action>`
         }
       </div>
     </div>
     ${renderPluginCardSummary(plugin.catalog.summary || t("pluginsPage.optionalCapability"))}
+    ${renderPluginRowMessage(props.messages?.[`install:${plugin.id}`], {
+      busy,
+      onContinue:
+        props.canInstall && props.onContinueInstall
+          ? (request) => props.onContinueInstall?.(plugin.id, request)
+          : undefined,
+    })}
   </article>`;
 }
 
@@ -319,7 +343,11 @@ function renderSection(params: {
 
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
   const activeAll = props.intent === "all" && props.category === null;
-  return html`<div class="plugin-catalog-chips" aria-label=${t("pluginsPage.categoriesLabel")}>
+  return html`<div
+    class="plugin-catalog-chips"
+    role="group"
+    aria-label=${t("pluginsPage.categoriesLabel")}
+  >
     <button
       type="button"
       class="plugin-catalog-chip ${activeAll ? "is-active" : ""}"
@@ -344,8 +372,22 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
     >
       <span aria-hidden="true">${icons.barChart}</span>${t("pluginsPage.intentTrending")}
     </button>
+    ${
+      props.categoriesLoading
+        ? html`<span class="sr-only" role="status">${t("pluginsPage.loadingCategories")}</span>
+            ${Array.from(
+              { length: CATEGORY_SKELETON_COUNT },
+              () => html`<span
+                class="skeleton plugin-catalog-chip--skeleton"
+                aria-hidden="true"
+              ></span>`,
+            )} `
+        : nothing
+    }
     ${repeat(
-      props.categories.toSorted((left, right) => left.order - right.order),
+      props.categories
+        .filter((category) => category.slug !== "other")
+        .toSorted((left, right) => left.order - right.order),
       (item) => item.slug,
       (item) => html`<button
         type="button"
@@ -374,9 +416,11 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
     return html`<p class="plugin-catalog-results__empty">${t("pluginsPage.discoveryOffline")}</p>`;
   }
   if (items.length === 0) {
-    return html`<p class="plugin-catalog-results__empty">
-      ${t("pluginsPage.noDiscoveryResults")}
-    </p>`;
+    return renderPanelEmptyState({
+      icon: icons.search,
+      heading: t("pluginsPage.noDiscoveryResults"),
+      description: t("pluginsPage.noDiscoveryResultsHint"),
+    });
   }
   const official = items.filter((plugin) => plugin.catalog.official);
   const community = items.filter((plugin) => !plugin.catalog.official);
@@ -425,12 +469,15 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
 
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
-  const categories = props.categories.toSorted((left, right) => left.order - right.order);
-  const categorySlugs = new Set(categories.map((category) => category.slug));
-  const uncategorized = items.filter(
-    (plugin) => !plugin.catalog.categories.some((category) => categorySlugs.has(category)),
-  );
-  const hasAnySection = props.featured.length > 0 || props.trending.length > 0 || items.length > 0;
+  const categories = props.categories
+    .filter((category) => category.slug !== "other")
+    .toSorted((left, right) => left.order - right.order);
+  const hasAnySection =
+    props.featured.length > 0 ||
+    props.trending.length > 0 ||
+    items.some((plugin) =>
+      categories.some((category) => plugin.catalog.categories.includes(category.slug)),
+    );
   if (
     !hasAnySection &&
     !props.loading &&
@@ -439,9 +486,11 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
     !props.error &&
     !props.remoteError
   ) {
-    return html`<p class="plugin-catalog-results__empty">
-      ${t("pluginsPage.noDiscoveryResults")}
-    </p>`;
+    return renderPanelEmptyState({
+      icon: icons.search,
+      heading: t("pluginsPage.noDiscoveryResults"),
+      description: t("pluginsPage.noDiscoveryResultsHint"),
+    });
   }
   return html`
     ${props.error ? renderError(props.error, props.onRetry) : nothing}
@@ -468,17 +517,13 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
         renderSection({
           id: category.slug,
           title: category.label,
-          items: items.filter((plugin) => plugin.catalog.categories.includes(category.slug)),
+          items: items
+            .filter((plugin) => plugin.catalog.categories.includes(category.slug))
+            .toSorted((left, right) => comparePluginCatalogEntries(left, right, category.slug)),
           onViewAll: () => props.onCategoryChange(category.slug),
           props,
         }),
     )}
-    ${renderSection({
-      id: "uncategorized",
-      title: t("pluginsPage.categoryUncategorized"),
-      items: uncategorized,
-      props,
-    })}
   `;
 }
 
@@ -516,6 +561,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): Te
       />
     </label>
     ${renderCategoryChips(props)}
+    ${props.categoriesError ? renderError(props.categoriesError, props.onRetryCategories) : nothing}
     ${
       props.remoteError
         ? html`<div class="callout warning oc-banner" role="status">

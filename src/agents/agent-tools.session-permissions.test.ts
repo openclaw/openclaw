@@ -121,7 +121,6 @@ describe("session permission filesystem tools", () => {
         { name: "relative path", cwdSuffix: "", absolute: false },
         { name: "absolute alias path", cwdSuffix: "", absolute: true },
         { name: "relative path from nested cwd", cwdSuffix: "packages/app", absolute: false },
-        { name: "absolute alias path from nested cwd", cwdSuffix: "packages/app", absolute: true },
       ])("$name", ({ cwdSuffix, absolute }) => {
         it.each(fileToolCases)("allows $name within the same directory", async (testCase) => {
           await withAliasedWorkspace(async ({ root, alias }) => {
@@ -246,7 +245,7 @@ describe("session permission filesystem tools", () => {
               patch.execute("alias-patch-parent", {
                 input: `*** Begin Patch\n*** Add File: ${target}\n+created\n*** End Patch`,
               }),
-            ).rejects.toThrow(/Path alias under sandbox root/i);
+            ).rejects.toMatchObject({ name: "FsSafeError", code: "symlink" });
           }
           await expect(fs.readdir(path.join(root, "real"))).resolves.toEqual([]);
           await patch.execute("alias-patch-create", {

@@ -2,9 +2,9 @@
 import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {
@@ -79,6 +79,8 @@ export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
   useCache?: boolean;
+  /** Identity-scoped files must not alias another profile through parent symlinks. */
+  rejectAliases?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
@@ -99,6 +101,9 @@ export async function readWorkspaceFileWithGuards(params: {
         },
       );
       assertCurrent();
+      if (params.rejectAliases && workspaceRelativePath !== filePath.replaceAll(path.sep, "/")) {
+        return { ok: false, reason: "validation" };
+      }
       if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
         throw new RangeError(`Workspace bootstrap file exceeds its read bound: ${filePath}`);
       }
@@ -133,7 +138,7 @@ export async function readWorkspaceFileWithGuards(params: {
           absolutePath: params.filePath,
           rootPath: params.workspaceDir,
           boundaryLabel: "workspace root",
-          symlinks: "follow-parents-within-root",
+          symlinks: params.rejectAliases ? "reject" : "follow-parents-within-root",
         });
         if (!opened.ok) {
           // Boundary resolution can report transient IO as "validation", while

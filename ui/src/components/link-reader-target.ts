@@ -3,7 +3,11 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { composedParent } from "../lib/navigation-click.ts";
-import { isGitHubHost, matchGitHubItemUrl } from "./github-link-eligibility.ts";
+import {
+  isGitHubHost,
+  isGitHubPublicPageUrl,
+  matchGitHubItemUrl,
+} from "./github-link-eligibility.ts";
 
 export const LINK_READER_HOVERCARD_OPEN_DELAY_MS = 250;
 export const LINK_READER_HOVERCARD_PROVIDER_TAG = "openclaw-link-reader-hovercard-provider";
@@ -49,13 +53,6 @@ export function linkReaderTargetKey(target: LinkReaderTarget): string {
   return target.reader.pluginId + ":" + target.reader.id + ":" + target.href.split("#", 1)[0];
 }
 
-/** Response identity includes the reader and query; an anchor only selects within that document. */
-export function linkReaderResponseMatchesTarget(target: LinkReaderTarget, value: unknown): boolean {
-  const returned =
-    typeof value === "string" ? resolveLinkReaderTarget(value, [target.reader]) : null;
-  return returned !== null && linkReaderTargetKey(returned) === linkReaderTargetKey(target);
-}
-
 export type PageHoverTarget = { kind: "page"; href: string; reader?: undefined };
 export type HoverPreviewTarget = LinkReaderTarget | PageHoverTarget;
 export type HoverPreviewOwner = {
@@ -67,9 +64,15 @@ export type HoverPreviewOwner = {
 
 export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
   const url = URL.parse(anchor.href);
-  // The generic page fallback must not turn GitHub login/profile/repository
-  // links into cards or fetch auth URLs. Hover, focus, and prefetch share this gate.
-  if (url && isGitHubHost(url.hostname) && !matchGitHubItemUrl(url)) {
+  // Repositories and public information pages use anonymous social metadata.
+  // Account/auth URLs stay unfetched.
+  // Hover, focus, and prefetch share this gate.
+  if (
+    url &&
+    isGitHubHost(url.hostname) &&
+    !matchGitHubItemUrl(url) &&
+    !isGitHubPublicPageUrl(url)
+  ) {
     return false;
   }
   if (
@@ -131,22 +134,4 @@ export function resolveHoverPreviewTarget(
     url.href.length <= 2048
     ? { kind: "page", href: url.href }
     : null;
-}
-
-/** Profile links stay with their source service and never execute authored schemes. */
-export function linkReaderAuthorHref(value: unknown, source: string): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value, source);
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.origin === new URL(source).origin
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }

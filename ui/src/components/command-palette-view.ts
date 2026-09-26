@@ -1,17 +1,30 @@
 import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
+import {
+  pathForAgentPanel,
+  pathForPluginCatalogEntry,
+  pathForPluginSettings,
+  type RouteId,
+} from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
+import type {
+  HumanMentionMenu,
+  HumanMentionMenuHost,
+} from "../pages/chat/components/chat-composer-mention-menu.ts";
+import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
@@ -31,13 +44,15 @@ import {
 
 registerCommandPaletteEnglish();
 
-type PaletteItem = CommandPaletteItem;
 export type PaletteFilter = "all" | "sessions" | "messages";
 
 type CommandPaletteProps = {
   basePath: string;
   open: boolean;
   query: string;
+  searchQuery: string;
+  searchDebouncing: boolean;
+  onFlushSearch: () => void;
   promptMode: boolean;
   activeId: string | null;
   filter: PaletteFilter;
@@ -45,8 +60,9 @@ type CommandPaletteProps = {
   agents: readonly GatewayAgentRow[];
   agentIdentity?: AgentIdentityCapability;
   defaultAgentId: string;
-  sessionItems: readonly PaletteItem[];
-  catalogItems: readonly PaletteItem[];
+  sessionItems: readonly CommandPaletteItem[];
+  catalogItems: readonly CommandPaletteItem[];
+  primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
   catalogSearchPending: boolean;
@@ -55,19 +71,29 @@ type CommandPaletteProps = {
   sessionSearchIndexing: boolean;
   archivedTranscriptsExcluded: number;
   onToggle: () => void;
-  onQueryChange: (query: string) => void;
+  onQueryChange: (query: string, event: InputEvent) => void;
+  onBeforeInput: (event: InputEvent) => void;
+  onSelectionChange: (event: Event) => void;
+  onCompositionStart: () => void;
+  onCompositionEnd: () => void;
+  composing: boolean;
+  mentionMenu: HumanMentionMenu;
+  mentionHost: HumanMentionMenuHost;
+  requestUpdate: () => void;
   onActiveIdChange: (id: string) => void;
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  pluginIconUrls: Readonly<Record<string, string>>;
+  onPluginIconError: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
   draft: PaletteSessionDraft;
 };
 
-function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
-  const map = new Map<string, PaletteItem[]>();
+function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
+  const map = new Map<string, CommandPaletteItem[]>();
   for (const item of items) {
     const group = map.get(item.category) ?? [];
     group.push(item);
@@ -79,8 +105,8 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 const paletteInputId = COMMAND_PALETTE_INPUT_ID;
 const paletteListboxId = "cmd-palette-listbox";
 
-function selectItem(item: PaletteItem, props: CommandPaletteProps) {
-  if (props.draft.submitting) {
+function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
+  if (props.draft.submitting || props.searchDebouncing) {
     return;
   }
   if (item.action.startsWith("nav:")) {
@@ -89,6 +115,14 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     if (item.agentId) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
+      });
+    } else if (item.catalogId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginCatalogEntry(item.catalogId, props.basePath),
+      });
+    } else if (item.pluginId && routeId === "plugin-settings") {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginSettings(item.pluginId, props.basePath),
       });
     } else if (item.search || item.hash) {
       props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
@@ -107,10 +141,6 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
   props.onToggle();
 }
 
-function closePalette(props: CommandPaletteProps) {
-  props.onToggle();
-}
-
 function scrollActiveIntoView() {
   requestAnimationFrame(() => {
     const el = document.querySelector(".cmd-palette__item--active");
@@ -118,16 +148,12 @@ function scrollActiveIntoView() {
   });
 }
 
-function handleKeydown(
-  event: KeyboardEvent,
-  props: CommandPaletteProps,
-  items: PaletteItem[],
-  activeIndex: number,
-) {
+function handleKeydown(event: KeyboardEvent, readProps: () => CommandPaletteProps) {
+  let props = readProps();
   if (event.defaultPrevented) {
     return;
   }
-  if (event.isComposing || event.keyCode === 229) {
+  if (props.composing || event.isComposing || event.keyCode === 229) {
     event.stopPropagation();
     return;
   }
@@ -138,6 +164,17 @@ function handleKeydown(
   }
   if (event.key === "Enter" && event.repeat) {
     event.preventDefault();
+    return;
+  }
+  if (
+    !props.draft.messageLocked &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    props.mentionMenu.handleKeydown(event, props.mentionHost, props.requestUpdate)
+  ) {
+    event.stopPropagation();
     return;
   }
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
@@ -152,12 +189,19 @@ function handleKeydown(
   if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
-    closePalette(props);
+    props.onToggle();
     return;
   }
   if (props.draft.submitting) {
     return;
   }
+  if (event.key === "Enter" && props.searchDebouncing) {
+    props.onFlushSearch();
+    // Read the applied query and retired rows, not the previous render snapshot.
+    props = readProps();
+  }
+  const { items: matches, activeIndex } = resolvePaletteResults(props);
+  const items = props.searchDebouncing ? [] : matches;
   if (event.key === "Enter") {
     // No matches never turns Enter into Send (or a hidden blank line).
     event.preventDefault();
@@ -184,19 +228,39 @@ function getOptionId(index: number): string {
   return `cmd-palette-option-${index}`;
 }
 
-export function renderCommandPalette(props: CommandPaletteProps) {
-  if (!props.open) {
-    return nothing;
-  }
-  const matches = props.promptMode
+function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
+  return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
+}
+
+function resolvePaletteResults(props: CommandPaletteProps) {
+  const hideSearch = props.promptMode || props.mentionMenu.open || props.draft.mentions.length > 0;
+  const matches = hideSearch
     ? []
     : filterCommandPaletteItems({
         ...props,
+        query: props.searchQuery,
         includeSlashCommands: Boolean(props.onSlashCommand),
       });
-  const matchesFilter = (item: PaletteItem, filter: PaletteFilter) =>
-    filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
   const grouped = groupItems(matches.filter((item) => matchesFilter(item, props.filter)));
+  const items = grouped.flatMap(([, entries]) => entries);
+  // Preserve explicit selection through transient result changes, but only
+  // highlight and execute current rows; an absent choice selects the first row.
+  const activeIndex = Math.max(
+    0,
+    items.findIndex((item) => item.id === props.activeId),
+  );
+  return { hideSearch, matches, grouped, items, activeIndex };
+}
+
+export function renderCommandPalette(readProps: () => CommandPaletteProps) {
+  const props = readProps();
+  if (!props.open) {
+    return nothing;
+  }
+  const mentionsOpen = props.mentionMenu.open;
+  const mentionListboxId = paneDomId(props.mentionHost.paneId, "mention-menu-listbox");
+  const mentionAnnouncementId = paneDomId(props.mentionHost.paneId, "mention-announcement");
+  const { hideSearch, matches, grouped, items, activeIndex } = resolvePaletteResults(props);
   const notices = [
     props.sessionSearchFailed
       ? t("palette.searchFailed")
@@ -211,22 +275,16 @@ export function renderCommandPalette(props: CommandPaletteProps) {
         })
       : null,
   ].filter((notice): notice is string => Boolean(notice));
-  const items = grouped.flatMap(([, entries]) => entries);
-  // Preserve explicit selection through transient result changes, but only
-  // highlight and execute current rows; an absent choice selects the first row.
-  const activeIndex = Math.max(
-    0,
-    items.findIndex((item) => item.id === props.activeId),
-  );
-  const activeOptionId = items[activeIndex] ? getOptionId(activeIndex) : undefined;
+  const activeOptionId =
+    !props.searchDebouncing && items[activeIndex] ? getOptionId(activeIndex) : undefined;
   const paletteLabel = t("palette.placeholder");
   const startLabel = t(props.draft.submitting ? "palette.startingSession" : "palette.startSession");
-  const startDisabled = !props.draft.canSubmit;
+  const startDisabled = props.composing || !props.draft.canSubmit;
   const startReason =
     props.draft.disabledReason ?? (props.draft.hasPrompt ? undefined : t("palette.promptRequired"));
   const startShortcut = formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter);
   const searchSettled =
-    Boolean(props.query.trim()) &&
+    Boolean(props.searchQuery.trim()) &&
     !props.sessionSearchPending &&
     !props.catalogSearchPending &&
     !props.modelSearchError &&
@@ -243,29 +301,49 @@ export function renderCommandPalette(props: CommandPaletteProps) {
       label=${paletteLabel}
       style=${COMMAND_PALETTE_DIALOG_STYLE}
       @modal-cancel=${(event: Event) => {
+        if (props.composing || props.mentionMenu.open) {
+          event.preventDefault();
+          if (!props.composing) {
+            props.mentionMenu.close();
+            props.requestUpdate();
+          }
+          return;
+        }
         if (props.draft.submitting) {
           event.preventDefault();
           return;
         }
-        closePalette(props);
+        props.onToggle();
       }}
     >
       <div
-        class="cmd-palette ${props.promptMode ? "cmd-palette--prompt" : ""}"
+        class="cmd-palette ${hideSearch ? "cmd-palette--prompt" : ""}"
         @click=${(e: Event) => e.stopPropagation()}
-        @keydown=${(e: KeyboardEvent) => handleKeydown(e, props, items, activeIndex)}
+        @keydown=${(e: KeyboardEvent) => handleKeydown(e, readProps)}
       >
         ${renderCommandPaletteInput({
           value: props.query,
           placeholder: paletteLabel,
           onInputRef: props.onInputRef,
           onValueChange: props.onQueryChange,
+          onBeforeInput: props.onBeforeInput,
+          onSelectionChange: props.onSelectionChange,
+          onCompositionStart: props.onCompositionStart,
+          onCompositionEnd: props.onCompositionEnd,
           onPaste: props.draft.pasteImages,
           disabled: props.draft.submitting,
           readOnly: props.draft.messageLocked,
-          controls: props.promptMode ? undefined : paletteListboxId,
-          activeDescendant: activeOptionId,
-          describedBy: props.promptMode ? undefined : "cmd-palette-keys",
+          controls: mentionsOpen ? mentionListboxId : hideSearch ? undefined : paletteListboxId,
+          activeDescendant: mentionsOpen
+            ? ((props.draft.mentions.length < MAX_HUMAN_MENTIONS
+                ? props.mentionMenu.activeId(props.mentionHost.paneId)
+                : null) ?? undefined)
+            : activeOptionId,
+          describedBy: mentionsOpen
+            ? mentionAnnouncementId
+            : hideSearch
+              ? undefined
+              : "cmd-palette-keys",
           actions: html`
             <openclaw-tooltip content=${startReason ?? t("palette.startSessionBackground")}>
               <button
@@ -274,7 +352,11 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                 aria-label=${t("palette.startSessionBackground")}
                 aria-busy=${String(props.draft.submitting)}
                 ?disabled=${startDisabled}
-                @click=${() => void props.draft.submit()}
+                @click=${() => {
+                  if (!props.composing) {
+                    void props.draft.submit();
+                  }
+                }}
               >
                 ${startLabel}<kbd>${startShortcut}</kbd>
               </button>
@@ -282,19 +364,45 @@ export function renderCommandPalette(props: CommandPaletteProps) {
             ${props.draft.renderControls()}
           `,
         })}
+        ${
+          props.draft.mentions.length
+            ? html`<div class="cmd-palette__mentions" ?inert=${props.draft.messageLocked}>
+                ${renderSelectedHumanMentions(
+                  props.query,
+                  props.draft.mentions,
+                  () => {
+                    props.draft.setMessage(props.query, []);
+                    // The unchanged text needs search resumed after recipient metadata is removed.
+                    props.requestUpdate();
+                    props.mentionHost.getTextarea()?.focus({ preventScroll: true });
+                  },
+                  props.mentionMenu.selectedAvatarUrls,
+                )}
+              </div>`
+            : nothing
+        }
         ${props.draft.renderAttachments()}
+        ${props.mentionMenu.render(props.mentionHost, props.requestUpdate)}
+        <span
+          id=${mentionAnnouncementId}
+          class="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          >${props.mentionMenu.activeLabel()}</span
+        >
         <div
           class="cmd-palette__search"
-          ?inert=${props.promptMode}
-          aria-hidden=${props.promptMode ? "true" : nothing}
+          ?inert=${hideSearch}
+          aria-hidden=${hideSearch ? "true" : nothing}
         >
           <div class="cmd-palette__search-content">
             ${
-              props.promptMode
+              hideSearch
                 ? noChange
                 : html`
                     ${
-                      props.query.trim() && props.onSelectSession
+                      props.searchQuery.trim() && props.onSelectSession
                         ? html`<div
                             class="cmd-palette__filters"
                             role="group"
@@ -316,7 +424,8 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                       class="cmd-palette__results"
                       ?hidden=${items.length === 0}
                       role="listbox"
-                      aria-busy=${props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
+                      aria-label=${paletteLabel}
+                      aria-busy=${props.searchDebouncing || props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
                     >
                       ${grouped.map(
                         ([category, groupedItems]) => html`
@@ -341,14 +450,14 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                                 class="cmd-palette__item ${item.session ? "cmd-palette__item--session" : ""} ${isActive ? "cmd-palette__item--active" : ""}"
                                 role="option"
                                 aria-selected=${isActive ? "true" : "false"}
-                                aria-disabled=${props.draft.submitting ? "true" : nothing}
+                                aria-disabled=${props.draft.submitting || props.searchDebouncing ? "true" : nothing}
                                 @click=${(e: Event) => {
                                   e.stopPropagation();
                                   selectItem(item, props);
                                 }}
                                 @mouseenter=${() => props.onActiveIdChange(item.id)}
                               >
-                                ${renderCommandPaletteResult(item, props.query, agent, props.agentIdentity?.get(agentId))}
+                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId), props.pluginIconUrls, props.onPluginIconError)}
                               </div>
                             `;
                           })}

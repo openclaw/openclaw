@@ -27,12 +27,16 @@ type PreparedShortSessionReference = {
   isCurrent: () => boolean;
 };
 
+type ResolvedShortSessionReference = SessionReferenceResolution & {
+  isCurrent: () => boolean;
+};
+
 export async function resolveShortSessionReference(
   context: ApplicationContext,
   target: Extract<SessionPathTarget, { kind: "short" }>,
   location: RouteLocation,
   signal: AbortSignal,
-): Promise<SessionReferenceResolution | PreparedShortSessionReference> {
+): Promise<ResolvedShortSessionReference | PreparedShortSessionReference> {
   const client = await waitForGatewayClient(context.gateway, signal);
   signal.throwIfAborted();
   const { gateway, sessions } = context;
@@ -40,26 +44,7 @@ export async function resolveShortSessionReference(
   const profileId = gateway.snapshot.selfUser?.id;
   const connectionRevision = gateway.connectionRevision;
   const lifecycleSignal = context.lifecycleAbortSignal;
-  // Subscribe before sending: an accepted connect publication can resolve the same short URL.
-  const resolution = Promise.resolve().then(async () => {
-    signal.throwIfAborted();
-    const result = await client.request<SessionsResolveResult>("sessions.resolve", {
-      shortId: target.shortId,
-      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
-      agentId: target.agentId,
-      allowMissing: true,
-    });
-    signal.throwIfAborted();
-    return sessionReferenceResolution(result);
-  });
-  if (target.namespace !== "chat" || location.search || location.hash || !hello) {
-    return resolution;
-  }
-  const prepared = createDeferredCore<PreparedShortSessionReference>();
   let retired = false;
-  let canonicalizationPending = false;
-  let stopEvents = () => {};
-  let stopGateway = () => {};
   const isCurrent = () =>
     !retired &&
     !signal.aborted &&
@@ -70,6 +55,25 @@ export async function resolveShortSessionReference(
     gateway.snapshot.client === client &&
     gateway.snapshot.hello === hello &&
     gateway.snapshot.selfUser?.id === profileId;
+  // Subscribe before sending: an accepted connect publication can resolve the same short URL.
+  const resolution = Promise.resolve().then(async () => {
+    signal.throwIfAborted();
+    const result = await client.request<SessionsResolveResult>("sessions.resolve", {
+      shortId: target.shortId,
+      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
+      agentId: target.agentId,
+      allowMissing: true,
+    });
+    signal.throwIfAborted();
+    return { ...sessionReferenceResolution(result), isCurrent };
+  });
+  if (target.namespace !== "chat" || location.search || location.hash || !hello) {
+    return resolution;
+  }
+  const prepared = createDeferredCore<PreparedShortSessionReference>();
+  let canonicalizationPending = false;
+  let stopEvents = () => {};
+  let stopGateway = () => {};
   const stop = () => {
     stopEvents();
     stopGateway();

@@ -4,6 +4,7 @@ import {
   type DeliveryQueueStateContext,
 } from "./delivery-queue-state-context.js";
 import type { DeliveryQueueWorkerOperations } from "./delivery-queue.worker-contract.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 
 export async function executeDeliveryQueueOperation<
@@ -11,13 +12,16 @@ export async function executeDeliveryQueueOperation<
 >(
   context: DeliveryQueueStateContext | undefined,
   stateDir: string | undefined,
-  command: { type: Key; input: DeliveryQueueWorkerOperations[Key]["input"] },
+  command: SqliteWorkerCommand<DeliveryQueueWorkerOperations> & {
+    type: Key;
+    input: DeliveryQueueWorkerOperations[Key]["input"];
+  },
   options?: { createAdmission: SqliteWorkerAdmissionFactory },
 ): Promise<DeliveryQueueWorkerOperations[Key]["output"]> {
   const captured = context ?? captureDeliveryQueueStateContext(stateDir);
   return await runOpenClawStateWorkerOperation(
     captured.workerContext,
-    (scope) => scope.execute(command),
+    (scope) => scope.execute<Key>(command),
     options,
   );
 }

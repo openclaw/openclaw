@@ -4,7 +4,10 @@ import {
   SESSION_NAVIGATION_INTENT_EVENT,
   type SessionNavigationIntent,
 } from "../../lib/sessions/navigation-handoff.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
@@ -23,10 +26,13 @@ type RetentionBindings = {
   layout: () => ChatSplitLayout;
   narrow: () => boolean;
   selectReplacement: (paneId: string, sourceSessionKey: string, sessionKey: string) => void;
+  adoptNavigation: (paneId: string, sessionKey: string, agentId?: string) => void;
 };
 
 export class ChatPageRetainedSessions {
   private readonly sessionsByPane = new Map<string, Map<string, number>>();
+  private readonly unbound = new Set<string>();
+  private pendingAtFocus = new WeakSet<AbortController>();
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
@@ -35,6 +41,49 @@ export class ChatPageRetainedSessions {
     private readonly host: RetentionHost,
     private readonly bindings: RetentionBindings,
   ) {}
+
+  get unboundPaneIds(): ReadonlySet<string> {
+    return this.unbound;
+  }
+
+  restore(panes: readonly ChatSplitPane[]): void {
+    this.unbound.clear();
+    this.pendingAtFocus = new WeakSet();
+    for (const pane of panes) {
+      if (isUiGlobalSessionKey(pane.sessionKey)) {
+        this.unbound.add(pane.id);
+      }
+    }
+    if (this.unbound.has(this.bindings.layout().activePaneId)) {
+      this.capturePendingNavigation();
+    }
+  }
+
+  bindPane(paneId: string): void {
+    this.unbound.delete(paneId);
+  }
+
+  capturePendingNavigation(): void {
+    const context = this.bindings.context();
+    if (!context) {
+      return;
+    }
+    const { matches, pendingMatches } = context.router.getState();
+    this.pendingAtFocus = new WeakSet(
+      [...matches, ...pendingMatches]
+        .filter((match) => match.isFetching || match.status === "pending")
+        .map((match) => match.abortController),
+    );
+  }
+
+  wasPendingAtFocus(): boolean {
+    return (
+      this.bindings
+        .context()
+        ?.router.getState()
+        .matches.some((match) => this.pendingAtFocus.has(match.abortController)) === true
+    );
+  }
 
   connect(): void {
     this.host.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
@@ -46,6 +95,8 @@ export class ChatPageRetainedSessions {
     // Pane disconnects stage their scoped composer packages for a later chat
     // remount. Only an explicit pane/session close is terminal.
     this.sessionsByPane.clear();
+    this.unbound.clear();
+    this.pendingAtFocus = new WeakSet();
     this.host.removeEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
     window.removeEventListener("popstate", this.cancelPreview);
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
@@ -67,13 +118,19 @@ export class ChatPageRetainedSessions {
   }
 
   retain(panes: readonly ChatSplitPane[]): ReadonlyMap<string, readonly (string | undefined)[]> {
-    const paneIds = new Set(panes.map((pane) => pane.id));
+    for (const paneId of this.unbound) {
+      if (!panes.some((pane) => pane.id === paneId && isUiGlobalSessionKey(pane.sessionKey))) {
+        this.unbound.delete(paneId);
+      }
+    }
+    const bound = panes.filter((pane) => !this.unbound.has(pane.id));
+    const paneIds = new Set(bound.map((pane) => pane.id));
     for (const paneId of this.sessionsByPane.keys()) {
       if (!paneIds.has(paneId)) {
         this.sessionsByPane.delete(paneId);
       }
     }
-    return new Map(panes.map((pane) => [pane.id, this.retainPane(pane)]));
+    return new Map(bound.map((pane) => [pane.id, this.retainPane(pane)]));
   }
 
   private retainPane(pane: ChatSplitPane): (string | undefined)[] {
@@ -136,6 +193,7 @@ export class ChatPageRetainedSessions {
   }
 
   discardPane(paneId: string): void {
+    this.unbound.delete(paneId);
     const context = this.bindings.context();
     if (context) {
       clearPaneSessionHandoffs(context, paneId);
@@ -182,7 +240,7 @@ export class ChatPageRetainedSessions {
     }
   };
 
-  private findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
+  findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
     return [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
       (pane) =>
         pane.paneId === paneId && areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey),
@@ -190,17 +248,36 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (
-      !this.bindings.presented() ||
-      window.location.href !== this.bindings.routeHref() ||
-      !(event instanceof CustomEvent)
-    ) {
+    if (!(event instanceof CustomEvent)) {
       return;
     }
+    // A committed preview can still be waiting for route data after history
+    // advances. New navigation retires it even when this page no longer owns
+    // the URL and cannot preview the replacement itself.
     this.cancelPreview();
+    if (!this.bindings.presented()) {
+      return;
+    }
     const intent = event.detail as SessionNavigationIntent;
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
+    if (
+      window.location.href !== this.bindings.routeHref() &&
+      (!activePane || !this.unbound.has(activePane.id))
+    ) {
+      return;
+    }
+    if (
+      activePane &&
+      this.unbound.has(activePane.id) &&
+      (!isUiGlobalSessionKey(intent.sessionKey) || intent.agentId)
+    ) {
+      event.preventDefault();
+      if (intent.commit() && this.bindings.presented() && this.bindings.layout() === layout) {
+        this.bindings.adoptNavigation(activePane.id, intent.sessionKey, intent.agentId);
+      }
+      return;
+    }
     const retainedKey = [...(this.sessionsByPane.get(activePane?.id ?? "")?.keys() ?? [])].find(
       (key) => areUiSessionKeysEquivalent(key, intent.sessionKey),
     );

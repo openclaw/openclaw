@@ -12,6 +12,19 @@ const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifec
 const updateExecutorModuleLoader = createLazyImportLoader(() => import("./update-executor.js"));
 const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
 
+async function runUpdateCommand(
+  mode: string | undefined,
+  action: "install" | "stop" | "restart",
+  operation: () => Promise<void>,
+): Promise<void> {
+  if (mode === undefined) {
+    await operation();
+    return;
+  }
+  const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
+  await runGatewayServiceUpdateCommand(mode, action, operation);
+}
+
 function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): boolean {
   const parentJson = inheritOptionFromParent<boolean>(command, "json", "cli");
   return Boolean(cmdOpts.json || parentJson);
@@ -93,7 +106,6 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("install")
     .description("Install and start the Gateway service (launchd/systemd/schtasks)")
-    .addOption(new Option("--defer-activation", "Updater service-load handoff").hideHelp())
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
@@ -108,16 +120,10 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         .hideHelp(),
     )
     .action(async (cmdOpts, command) => {
-      const invoke = async () => {
+      await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
         const { runDaemonInstall } = await daemonInstallModuleLoader.load();
         await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
-      };
-      if (cmdOpts.updateExecutor === undefined) {
-        await invoke();
-      } else {
-        const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
-        await runGatewayServiceUpdateCommand(cmdOpts.updateExecutor, "install", invoke);
-      }
+      });
     });
 
   parent
@@ -154,16 +160,10 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       false,
     )
     .action(async (cmdOpts, command) => {
-      const invoke = async () => {
+      await runUpdateCommand(cmdOpts.updateExecutor, "stop", async () => {
         const { runDaemonStop } = await daemonLifecycleModuleLoader.load();
         await runDaemonStop(resolveStopOptions(cmdOpts, command));
-      };
-      if (cmdOpts.updateExecutor === undefined) {
-        await invoke();
-      } else {
-        const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
-        await runGatewayServiceUpdateCommand(cmdOpts.updateExecutor, "stop", invoke);
-      }
+      });
     });
 
   parent
@@ -175,7 +175,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
     .option("--preserve-definition", "Keep the native service definition", false)
-    .option("--force", "Restart immediately without waiting for active gateway work", false)
+    .option("--force", "Begin restart now; drain admitted work within the shutdown budget", false)
     .option(
       "--safe",
       "Request an OpenClaw-aware restart after active work drains " +
@@ -194,15 +194,9 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
-      const invoke = async () => {
+      await runUpdateCommand(cmdOpts.updateExecutor, "restart", async () => {
         const { runDaemonRestart } = await daemonLifecycleModuleLoader.load();
         await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
-      };
-      if (cmdOpts.updateExecutor === undefined) {
-        await invoke();
-      } else {
-        const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
-        await runGatewayServiceUpdateCommand(cmdOpts.updateExecutor, "restart", invoke);
-      }
+      });
     });
 }

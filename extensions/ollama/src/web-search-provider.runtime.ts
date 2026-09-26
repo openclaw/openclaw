@@ -1,4 +1,3 @@
-// Ollama web-search runtime implements provider integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isNonSecretApiKeyMarker,
@@ -6,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  ProviderHttpError,
   readProviderJsonResponse,
   redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
@@ -59,10 +59,6 @@ type OllamaWebSearchAttempt = {
   path: string;
   apiKey?: string;
 };
-
-async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
-  return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
-}
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   try {
@@ -222,15 +218,17 @@ async function runOllamaWebSearch(params: {
 
     try {
       if (response.status === 401) {
-        throw new Error(
+        throw new ProviderHttpError(
           isOllamaCloudBaseUrl(attempt.baseUrl)
             ? OLLAMA_CLOUD_WEB_SEARCH_AUTH_ERROR
             : "Ollama web search authentication failed. Run `ollama signin`.",
+          { status: response.status },
         );
       }
       if (response.status === 403) {
-        throw new Error(
+        throw new ProviderHttpError(
           "Ollama web search is unavailable. Ensure cloud-backed web search is enabled on the Ollama host.",
+          { status: response.status },
         );
       }
       if (!response.ok) {
@@ -239,13 +237,17 @@ async function runOllamaWebSearch(params: {
           sourceTruncated: detail.truncated,
         });
         const message = `Ollama web search failed (${response.status}): ${detailText}`.trim();
+        const error = new ProviderHttpError(message, { status: response.status });
         if (response.status === 404) {
-          lastError = new Error(message);
+          lastError = error;
           continue;
         }
-        throw new Error(message);
+        throw error;
       }
-      payload = await readOllamaWebSearchResponse(response);
+      payload = await readProviderJsonResponse<OllamaWebSearchResponse>(
+        response,
+        "Ollama web search",
+      );
       params.signal?.throwIfAborted();
       break;
     } catch (error) {

@@ -7,7 +7,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import {
-  reconcileTaskFlowWorkerReceipts,
   runTaskFlowRegistryWorkerMutation,
   syncFlowFromTaskResult,
 } from "./task-flow-runtime-internal.js";
@@ -221,9 +220,6 @@ function scheduleTaskFlowSyncRetry(
           reason: outcome.result.reason,
         });
         scheduleTaskFlowSyncRetry(current, store, id, operation, retrySelection, attempt + 1);
-      }
-      if (outcome.flowId) {
-        await reconcileTaskFlowWorkerReceipts(current, [outcome.flowId]);
       }
     }, "tasks:mutation").catch((error: unknown) => {
       log.warn("Failed to admit parent flow sync retry from task", {

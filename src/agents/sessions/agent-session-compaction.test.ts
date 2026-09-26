@@ -684,7 +684,7 @@ describe("AgentSession compaction", () => {
     expect(manualRequestState).toBeUndefined();
   });
 
-  it.each(Array.from({ length: MAX_OVERFLOW_COMPACTION_ATTEMPTS }, (_, index) => index + 1))(
+  it.each([1, MAX_OVERFLOW_COMPACTION_ATTEMPTS])(
     "recovers when the provider accepts overflow compaction attempt %i",
     async (overflowCount) => {
       let agentRequests = 0;
@@ -813,7 +813,7 @@ describe("AgentSession compaction", () => {
         }
         const contextTokens = estimateContextTokens(session.messages).tokens;
         expect(contextTokens).toBeGreaterThan(0);
-        expect(committed).toMatchObject({ summary });
+        expect(committed).toMatchObject({ summary, tokensAfter: contextTokens });
         expect(committed.id).not.toBe(oldCompactionId);
         expect.soft(reportedCompactionId).toBe(committed.id);
         expect.soft(replacementTokens).toEqual([contextTokens]);

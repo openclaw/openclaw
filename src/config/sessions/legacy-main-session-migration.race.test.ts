@@ -85,7 +85,12 @@ function databasePath(stateDir: string, agentId: string): string {
   return path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
 }
 
-function seedClaim(databaseAgentId: string, databasePathname: string, key: string): void {
+function seedClaim(
+  databaseAgentId: string,
+  databasePathname: string,
+  key: string,
+  env: NodeJS.ProcessEnv,
+): void {
   runOpenClawAgentWriteTransaction(
     (database) => {
       const entry = {
@@ -110,11 +115,16 @@ function seedClaim(databaseAgentId: string, databasePathname: string, key: strin
         { allowStoredAlias: true },
       );
     },
-    { agentId: databaseAgentId, path: databasePathname },
+    { agentId: databaseAgentId, path: databasePathname, env },
   );
 }
 
-function readClaim(databaseAgentId: string, databasePathname: string, key: string) {
+function readClaim(
+  databaseAgentId: string,
+  databasePathname: string,
+  key: string,
+  env: NodeJS.ProcessEnv,
+) {
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const entry = readExactSessionEntryRowForCanonicalRepair(database, key)?.entry;
@@ -125,7 +135,7 @@ function readClaim(databaseAgentId: string, databasePathname: string, key: strin
           }
         : undefined;
     },
-    { agentId: databaseAgentId, path: databasePathname },
+    { agentId: databaseAgentId, path: databasePathname, env },
   );
   return result.found ? result.value : undefined;
 }
@@ -144,8 +154,8 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         ...(inPlace ? { session: { store: opsPath } } : {}),
       };
       await state.writeConfig(cfg);
-      seedClaim(sourceAgentId, sourcePath, "agent:main:chat");
-      const original = readClaim(sourceAgentId, sourcePath, "agent:main:chat")!;
+      seedClaim(sourceAgentId, sourcePath, "agent:main:chat", state.env);
+      const original = readClaim(sourceAgentId, sourcePath, "agent:main:chat", state.env)!;
       const admission = prepareSystemAgentRunAdmission(cfg, "migration-race", "ops", "setup");
       const beforePersistentApply = resolveAdmittedRunActiveAssertion(
         await admission.admit("embedded"),
@@ -220,9 +230,9 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
           .toMatchObject({ error: new Error("admitted run authority is no longer active") });
         expect.soft(readLedger()).toEqual(ledgerBefore);
         const copied = boundary === "cleanup queue" || boundary === "ledger";
-        const source = readClaim(sourceAgentId, sourcePath, "agent:main:chat");
+        const source = readClaim(sourceAgentId, sourcePath, "agent:main:chat", state.env);
         expect.soft(source).toEqual(boundary === "ledger" ? undefined : original);
-        const destination = readClaim("ops", opsPath, "agent:ops:chat");
+        const destination = readClaim("ops", opsPath, "agent:ops:chat", state.env);
         if (copied) {
           expect.soft(destination?.events).toEqual(original.events);
           expect.soft(destination?.entry.owner).toEqual(original.entry.owner);
@@ -238,8 +248,10 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
           mode: "doctor-fix",
         });
         expect(recovered.complete).toBe(true);
-        expect(readClaim(sourceAgentId, sourcePath, "agent:main:chat")).toBeUndefined();
-        expect(readClaim("ops", opsPath, "agent:ops:chat")?.events).toEqual(original.events);
+        expect(readClaim(sourceAgentId, sourcePath, "agent:main:chat", state.env)).toBeUndefined();
+        expect(readClaim("ops", opsPath, "agent:ops:chat", state.env)?.events).toEqual(
+          original.events,
+        );
         expect(readLedger()).toEqual([expect.objectContaining({ status: "completed" })]);
       } finally {
         race.queued = undefined;
@@ -254,7 +266,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
 );
 
 async function runCleanupRace(
-  mutateSource: (mainPath: string) => void,
+  mutateSource: (mainPath: string, env: NodeJS.ProcessEnv) => void,
   boundary: "copy" | "cleanup" = "cleanup",
 ) {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-legacy-main-race-"));
@@ -263,11 +275,11 @@ async function runCleanupRace(
   const mainPath = databasePath(stateDir, "main");
   const opsPath = databasePath(stateDir, "ops");
   const env = { ...process.env, OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir };
-  seedClaim("main", mainPath, "agent:main:chat");
+  seedClaim("main", mainPath, "agent:main:chat", env);
   const resume = createDeferred();
   let blocker: Promise<void> | undefined;
   if (boundary === "cleanup") {
-    race.beforeDelete = () => mutateSource(mainPath);
+    race.beforeDelete = () => mutateSource(mainPath, env);
   } else {
     const entered = createDeferred();
     blocker = runExclusiveSqliteSessionWrite(
@@ -282,7 +294,7 @@ async function runCleanupRace(
     race.queued = (pathname) => {
       if (pathname === opsPath) {
         race.queued = undefined;
-        mutateSource(mainPath);
+        mutateSource(mainPath, env);
         resume.resolve();
       }
     };
@@ -294,7 +306,7 @@ async function runCleanupRace(
       env,
       mode: "doctor-fix",
     });
-    return { mainPath, opsPath, result };
+    return { mainPath, opsPath, result, env };
   } finally {
     resume.resolve();
     await blocker;
@@ -304,7 +316,7 @@ async function runCleanupRace(
 it.each(["copy", "cleanup"] as const)(
   "preserves changed source history before %s",
   async (boundary) => {
-    const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {
+    const { mainPath, opsPath, result, env } = await runCleanupRace((sourcePath, sourceEnv) => {
       runOpenClawAgentWriteTransaction(
         (database) => {
           appendTranscriptEventInTransaction(
@@ -319,14 +331,14 @@ it.each(["copy", "cleanup"] as const)(
             { allowStoredAlias: true },
           );
         },
-        { agentId: "main", path: sourcePath },
+        { agentId: "main", path: sourcePath, env: sourceEnv },
       );
     }, boundary);
 
     expect(result.complete).toBe(false);
     expect(result.outcomes.map((outcome) => outcome.kind)).toContain("divergent-canonical");
-    expect(readClaim("main", mainPath, "agent:main:chat")?.events).toHaveLength(2);
-    const destination = readClaim("ops", opsPath, "agent:ops:chat");
+    expect(readClaim("main", mainPath, "agent:main:chat", env)?.events).toHaveLength(2);
+    const destination = readClaim("ops", opsPath, "agent:ops:chat", env);
     if (boundary === "copy") {
       expect(destination).toBeUndefined();
     } else {
@@ -336,7 +348,7 @@ it.each(["copy", "cleanup"] as const)(
 );
 
 it("preserves both claims when the source entry becomes locked before cleanup", async () => {
-  const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {
+  const { mainPath, opsPath, result, env } = await runCleanupRace((sourcePath, sourceEnv) => {
     runOpenClawAgentWriteTransaction(
       (database) => {
         const current = readExactSessionEntryRowForCanonicalRepair(
@@ -353,12 +365,14 @@ it("preserves both claims when the source entry becomes locked before cleanup", 
           { allowStoredAliases: true, previousEntry: current },
         );
       },
-      { agentId: "main", path: sourcePath },
+      { agentId: "main", path: sourcePath, env: sourceEnv },
     );
   });
 
   expect(result.complete).toBe(false);
   expect(result.outcomes.map((outcome) => outcome.kind)).toContain("divergent-canonical");
-  expect(readClaim("main", mainPath, "agent:main:chat")?.entry.modelSelectionLocked).toBe(true);
-  expect(readClaim("ops", opsPath, "agent:ops:chat")?.events).toHaveLength(1);
+  expect(readClaim("main", mainPath, "agent:main:chat", env)?.entry.modelSelectionLocked).toBe(
+    true,
+  );
+  expect(readClaim("ops", opsPath, "agent:ops:chat", env)?.events).toHaveLength(1);
 });

@@ -25,7 +25,6 @@ function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTas
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
     cancellingTaskIds: new Set(),
@@ -65,7 +64,6 @@ function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
     props.subagentActivity = deriveSubagentActivity({
       tasks: props.tasks ?? [],
       sessionKey: props.sessionKey,
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     });
   }

@@ -150,6 +150,12 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+Failed app-server startup waits for child shutdown before returning its error.
+If startup times out or is canceled during process registration, cleanup joins
+that registration and closes any late child. Cleanup can extend beyond the
+startup deadline. A canceled caller leaves startup running when another caller
+still owns it.
+
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
 Completed items, including empty messages, reconcile the transcript with Codex's
@@ -236,6 +242,34 @@ an idle chat does not require unrelated chats, model discovery, or tool-catalog
 reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
+
+Managed local connections share a bounded inference relay. Up to 16 request
+preparations and uploads run at once, with another 16 waiting in arrival order.
+Responses keep streaming after their upload capacity is released, so a long
+response does not block a seventeenth chat or native child from starting.
+
+The relay allows up to 80 combined HTTP operations and WebSocket connections,
+with room for 16 pending or closing admissions. It retains up to 64 usable
+WebSockets and reclaims the oldest completed idle connection when either
+transport needs room. Active responses and newly opened connections awaiting
+their first request are not evicted. HTTP connections close after each response;
+native WebSocket reuse remains intact. The separate limit of 64 admitted root
+contexts is unchanged; transport capacity is not a count of saved conversations.
+
+A new WebSocket waits before opening its upstream connection; admission and its
+handshake share a 10-second deadline. HTTP admission and queued WebSocket
+uploads wait at most 30 seconds. Cancelled or superseded queued work does not
+reach the provider. Already-started preparation and transport cleanup keep their
+capacity until their owning operation settles.
+
+These limits apply across chats and native child agents sharing the relay.
+Queue capacity or deadline exhaustion returns a retryable busy response.
+Sustained overload can still fail a turn after Codex exhausts its retries.
+
+If an admitted WebSocket cannot connect upstream, the relay returns HTTP `502`;
+an upstream handshake deadline returns `504`. These errors use a fixed message
+without credentials or model content. Native Codex keeps control of retries and
+HTTPS fallback. Provider HTTP failures retain their original status and body.
 
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including

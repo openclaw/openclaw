@@ -12,6 +12,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createCoreHealthChecks } from "./doctor-core-checks.js";
 import { exitCodeFromFindings } from "./doctor-lint-flow.js";
+import type { HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
@@ -98,11 +99,9 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
-const {
-  collectGatewayDaemonFindings,
-  collectProviderCatalogProjectionFindings,
-  collectRuntimeToolSchemaFindings,
-} = await import("./doctor-core-checks.runtime.js");
+const { collectGatewayDaemonFindings, collectProviderCatalogProjectionFindings } =
+  await import("./doctor-core-checks.runtime.js");
+const { collectRuntimeToolSchemaFindings } = await import("./doctor-tool-schema-runtime.js");
 
 function tool(name: string, parameters: unknown): AnyAgentTool {
   return {
@@ -118,6 +117,25 @@ function bundleMcpTool(name: string, parameters: unknown): AnyAgentTool {
   const entry = tool(name, parameters);
   setPluginToolMeta(entry, { pluginId: "bundle-mcp", optional: false });
   return entry;
+}
+
+function mcpConfig(serverName = "fuzzplugin") {
+  return { mcp: { servers: { [serverName]: { command: "node", args: ["fuzzplugin-mcp.mjs"] } } } };
+}
+
+function mockBundleDiagnostic(serverName = "fuzzplugin") {
+  mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
+    tools: [],
+    diagnostics: [
+      {
+        serverName,
+        safeServerName: serverName,
+        launchSummary: "node fuzzplugin-mcp.mjs",
+        message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+      },
+    ],
+    dispose: mocks.disposeBundleRuntime,
+  });
 }
 
 describe("doctor runtime tool schema checks", () => {
@@ -157,15 +175,7 @@ describe("doctor runtime tool schema checks", () => {
       dispose: mocks.disposeBundleRuntime,
     });
 
-    await expect(
-      collectRuntimeToolSchemaFindings({
-        mcp: {
-          servers: {
-            fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
-      }),
-    ).resolves.toContainEqual({
+    await expect(collectRuntimeToolSchemaFindings(mcpConfig())).resolves.toContainEqual({
       checkId: "core/doctor/runtime-tool-schemas",
       severity: "error",
       message:
@@ -225,65 +235,38 @@ describe("doctor runtime tool schema checks", () => {
     },
   );
 
-  it("preserves direct OpenAI catalog transport while building doctor runtime models", async () => {
-    mocks.loadModelCatalog.mockResolvedValueOnce([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        compat: { supportsTools: true },
-      },
-    ]);
-    mocks.createOpenClawCodingTools.mockReturnValueOnce([
-      tool("healthy", { type: "object", properties: {} }),
-    ]);
+  it.each([
+    ["direct OpenAI", "openai-responses", "https://api.openai.com/v1"],
+    ["ChatGPT OpenAI", "openai-chatgpt-responses", "https://chatgpt.com/backend-api"],
+  ])(
+    "preserves %s catalog transport while building doctor runtime models",
+    async (_, api, baseUrl) => {
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api,
+          baseUrl,
+          compat: { supportsTools: true },
+        },
+      ]);
+      mocks.createOpenClawCodingTools.mockReturnValueOnce([
+        tool("healthy", { type: "object", properties: {} }),
+      ]);
 
-    await collectRuntimeToolSchemaFindings({});
+      await collectRuntimeToolSchemaFindings({});
 
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          modelApi: "openai-responses",
-          model: expect.objectContaining({
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
+      expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: expect.objectContaining({
+            modelApi: api,
+            model: expect.objectContaining({ api, baseUrl }),
           }),
         }),
-      }),
-    );
-  });
-
-  it("preserves ChatGPT OpenAI catalog transport while building doctor runtime models", async () => {
-    mocks.loadModelCatalog.mockResolvedValueOnce([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        compat: { supportsTools: true },
-      },
-    ]);
-    mocks.createOpenClawCodingTools.mockReturnValueOnce([
-      tool("healthy", { type: "object", properties: {} }),
-    ]);
-
-    await collectRuntimeToolSchemaFindings({});
-
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          modelApi: "openai-chatgpt-responses",
-          model: expect.objectContaining({
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api",
-          }),
-        }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it.each([false, true])(
     "preserves MCP schema diagnostics with cleanup failure=%s",
@@ -337,59 +320,13 @@ describe("doctor runtime tool schema checks", () => {
     },
   );
 
-  it("reports bundle MCP runtime diagnostics for exact MCP tool allowlists", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
-
-    await expect(
-      collectRuntimeToolSchemaFindings({
-        tools: { allow: ["fuzzplugin__healthy"] },
-        mcp: {
-          servers: {
-            fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
-      }),
-    ).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/runtime-tool-schemas",
-        path: "mcp.servers.fuzzplugin",
-      }),
-    );
-  });
-
   it("reports exact MCP allowlists when the safe server name contains the separator", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "my__server",
-          safeServerName: "my__server",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+    mockBundleDiagnostic("my__server");
 
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { allow: ["my__server__healthy"] },
-        mcp: {
-          servers: {
-            my__server: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
+        ...mcpConfig("my__server"),
       }),
     ).resolves.toContainEqual(
       expect.objectContaining({
@@ -400,27 +337,12 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("reports bundle MCP runtime diagnostics for glob MCP tool allowlists", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+    mockBundleDiagnostic();
 
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { allow: ["*__healthy"] },
-        mcp: {
-          servers: {
-            fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
+        ...mcpConfig(),
       }),
     ).resolves.toContainEqual(
       expect.objectContaining({
@@ -539,11 +461,7 @@ describe("doctor runtime tool schema checks", () => {
     });
 
     const findings = await collectRuntimeToolSchemaFindings({
-      mcp: {
-        servers: {
-          fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-        },
-      },
+      ...mcpConfig(),
       agents: {
         list: [
           { id: "main", default: true, workspace: "/tmp/main-workspace" },
@@ -664,63 +582,29 @@ describe("doctor runtime tool schema checks", () => {
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { deny: ["bundle-mcp"] },
-        mcp: {
-          servers: {
-            fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
+        ...mcpConfig(),
       }),
     ).resolves.toEqual([]);
   });
 
   it("does not report bundle MCP diagnostics filtered out by the final runtime tool policy", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+    mockBundleDiagnostic();
 
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { deny: ["bundle-mcp"] },
-        mcp: {
-          servers: {
-            fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
+        ...mcpConfig(),
       }),
     ).resolves.toEqual([]);
   });
 
   it("does not report bundle MCP diagnostics filtered out by server-level deny policy", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+    mockBundleDiagnostic();
 
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { deny: ["fuzzplugin__*"] },
-        mcp: {
-          servers: {
-            fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
-          },
-        },
+        ...mcpConfig(),
       }),
     ).resolves.toEqual([]);
   });
@@ -1152,6 +1036,29 @@ describe("doctor gateway runtime checks", () => {
   });
 });
 
+function mockProviderCatalog(staticCatalog: Record<string, unknown>) {
+  mocks.resolvePluginProvidersCore.mockReturnValueOnce([
+    { id: "mockplugin", pluginId: "mockplugin", label: "Mock", auth: [], staticCatalog },
+  ]);
+}
+
+function expectCatalogFinding(
+  findings: readonly HealthFinding[],
+  message: string,
+  requirement: string,
+) {
+  expect(findings).toContainEqual(
+    expect.objectContaining({
+      checkId: "core/doctor/provider-catalog-projection",
+      severity: "error",
+      path: "plugins.entries.mockplugin",
+      target: "mockplugin",
+      message,
+      requirement,
+    }),
+  );
+}
+
 describe("doctor provider catalog projection checks", () => {
   beforeEach(() => {
     mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
@@ -1174,18 +1081,10 @@ describe("doctor provider catalog projection checks", () => {
         },
       },
     );
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({ providers }),
-        },
-      },
-    ]);
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({ providers }),
+    });
 
     await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual({
       checkId: "core/doctor/provider-catalog-projection",
@@ -1214,138 +1113,64 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog model rows with invalid ids", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            providers: {
-              mockplugin: {
-                api: "openai-completions" as const,
-                baseUrl: "https://mockplugin.test/v1",
-                models: [{ name: "Missing ID" }],
-              },
-            },
-          }),
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({
+        providers: {
+          mockplugin: {
+            api: "openai-completions" as const,
+            baseUrl: "https://mockplugin.test/v1",
+            models: [{ name: "Missing ID" }],
+          },
         },
-      },
-    ]);
+      }),
+    });
 
     const findings = await collectProviderCatalogProjectionFindings({});
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
-        requirement: "model id must be a non-empty trimmed string",
-      }),
-    );
-  });
-
-  it("reports whitespace-only provider catalog model ids", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            providers: {
-              mockplugin: {
-                api: "openai-completions" as const,
-                baseUrl: "https://mockplugin.test/v1",
-                models: [{ id: "   " }],
-              },
-            },
-          }),
-        },
-      },
-    ]);
-
-    const findings = await collectProviderCatalogProjectionFindings({});
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
-        requirement: "model id must be a non-empty trimmed string",
-      }),
+    expectCatalogFinding(
+      findings,
+      "Provider catalog mockplugin model row 0 has an invalid model id.",
+      "model id must be a non-empty trimmed string",
     );
   });
 
   it("reports provider catalog model rows with invalid names", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            provider: {
-              api: "openai-completions" as const,
-              baseUrl: "https://mockplugin.test/v1",
-              models: [{ id: "mock-model", name: { label: "Mock" } }],
-            },
-          }),
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({
+        provider: {
+          api: "openai-completions" as const,
+          baseUrl: "https://mockplugin.test/v1",
+          models: [{ id: "mock-model", name: { label: "Mock" } }],
         },
-      },
-    ]);
+      }),
+    });
 
     const findings = await collectProviderCatalogProjectionFindings({});
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin model row 0 has an invalid model name.",
-        requirement: "model name must be a string when present",
-      }),
+    expectCatalogFinding(
+      findings,
+      "Provider catalog mockplugin model row 0 has an invalid model name.",
+      "model name must be a string when present",
     );
   });
 
   it("reports provider catalog model lists with invalid shapes", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            provider: {
-              api: "openai-completions" as const,
-              baseUrl: "https://mockplugin.test/v1",
-              models: {},
-            },
-          }),
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({
+        provider: {
+          api: "openai-completions" as const,
+          baseUrl: "https://mockplugin.test/v1",
+          models: {},
         },
-      },
-    ]);
+      }),
+    });
 
     const findings = await collectProviderCatalogProjectionFindings({});
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin models value is invalid during doctor validation.",
-        requirement: "models must be an array",
-      }),
+    expectCatalogFinding(
+      findings,
+      "Provider catalog mockplugin models value is invalid during doctor validation.",
+      "models must be an array",
     );
   });
 
@@ -1356,167 +1181,96 @@ describe("doctor provider catalog projection checks", () => {
         throw new Error("model iterator failed");
       },
     });
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            provider: {
-              api: "openai-completions" as const,
-              baseUrl: "https://mockplugin.test/v1",
-              models,
-            },
-          }),
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({
+        provider: {
+          api: "openai-completions" as const,
+          baseUrl: "https://mockplugin.test/v1",
+          models,
         },
-      },
-    ]);
+      }),
+    });
 
     const findings = await collectProviderCatalogProjectionFindings({});
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message:
-          "Provider catalog mockplugin model rows cannot be enumerated during doctor validation.",
-        requirement: "model iterator failed",
-      }),
+    expectCatalogFinding(
+      findings,
+      "Provider catalog mockplugin model rows cannot be enumerated during doctor validation.",
+      "model iterator failed",
     );
   });
 
   it("reports provider catalog results without provider containers", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({ providers: undefined }),
-        },
-      },
-    ]);
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({ providers: undefined }),
+    });
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin result is invalid during doctor validation.",
-        requirement: "result must include provider or providers object",
-      }),
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin result is invalid during doctor validation.",
+      "result must include provider or providers object",
     );
   });
 
   it("reports invalid multi-provider catalog keys", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            providers: {
-              " ": {
-                api: "openai-completions" as const,
-                baseUrl: "https://mockplugin.test/v1",
-                models: [{ id: "mock-model" }],
-              },
-            },
-          }),
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({
+        providers: {
+          " ": {
+            api: "openai-completions" as const,
+            baseUrl: "https://mockplugin.test/v1",
+            models: [{ id: "mock-model" }],
+          },
         },
-      },
-    ]);
-
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin provider key is invalid during doctor validation.",
-        requirement: "provider key must be a non-empty trimmed string",
       }),
+    });
+
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin provider key is invalid during doctor validation.",
+      "provider key must be a non-empty trimmed string",
     );
   });
 
   it("reports falsy non-empty provider catalog results", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => false as never,
-        },
-      },
-    ]);
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => false as never,
+    });
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin result is invalid during doctor validation.",
-        requirement: "result must be an object",
-      }),
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin result is invalid during doctor validation.",
+      "result must be an object",
     );
   });
 
   it("reports invalid provider catalog orders without aborting doctor", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "middle" as never,
-          run: async () => ({
-            providers: {
-              mockplugin: {
-                api: "openai-completions" as const,
-                baseUrl: "https://mockplugin.test/v1",
-                models: [{ id: " " }],
-              },
-            },
-          }),
+    mockProviderCatalog({
+      order: "middle" as never,
+      run: async () => ({
+        providers: {
+          mockplugin: {
+            api: "openai-completions" as const,
+            baseUrl: "https://mockplugin.test/v1",
+            models: [{ id: " " }],
+          },
         },
-      },
-    ]);
+      }),
+    });
 
     const findings = await collectProviderCatalogProjectionFindings({});
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin order is invalid during doctor validation.",
-        requirement: "order must be simple, profile, paired, or late",
-      }),
+    expectCatalogFinding(
+      findings,
+      "Provider catalog mockplugin order is invalid during doctor validation.",
+      "order must be simple, profile, paired, or late",
     );
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
-        requirement: "model id must be a non-empty trimmed string",
-      }),
+    expectCatalogFinding(
+      findings,
+      "Provider catalog mockplugin model row 0 has an invalid model id.",
+      "model id must be a non-empty trimmed string",
     );
   });
 
@@ -1545,71 +1299,38 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
-        requirement: "model id must be a non-empty trimmed string",
-      }),
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin model row 0 has an invalid model id.",
+      "model id must be a non-empty trimmed string",
     );
   });
 
   it("reports static catalog hook access failures without aborting doctor", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          get run() {
-            throw new Error("run getter failed");
-          },
-        },
+    mockProviderCatalog({
+      order: "simple",
+      get run() {
+        throw new Error("run getter failed");
       },
-    ]);
+    });
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message:
-          "Provider catalog mockplugin static catalog hook cannot be read during doctor validation.",
-        requirement: "run getter failed",
-      }),
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin static catalog hook cannot be read during doctor validation.",
+      "run getter failed",
     );
   });
 
   it("reports static catalog hooks with non-function run values", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: "not-callable",
-        },
-      },
-    ]);
+    mockProviderCatalog({
+      order: "simple",
+      run: "not-callable",
+    });
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message:
-          "Provider catalog mockplugin static catalog hook is invalid during doctor validation.",
-        requirement: "static catalog run must be a function",
-      }),
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin static catalog hook is invalid during doctor validation.",
+      "static catalog run must be a function",
     );
   });
 
@@ -1621,20 +1342,12 @@ describe("doctor provider catalog projection checks", () => {
       {},
     );
     revoke();
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          // Awaiting a promise resolved with a proxy reads "then", so revoked
-          // catalog results fail at the hook boundary before result key checks.
-          run: async () => proxy,
-        },
-      },
-    ]);
+    mockProviderCatalog({
+      order: "simple",
+      // Awaiting a promise resolved with a proxy reads "then", so revoked
+      // catalog results fail at the hook boundary before result key checks.
+      run: async () => proxy,
+    });
 
     await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
       expect.objectContaining({
@@ -1649,37 +1362,24 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports present but invalid single-provider catalog branches", async () => {
-    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
-      {
-        id: "mockplugin",
-        pluginId: "mockplugin",
-        label: "Mock",
-        auth: [],
-        staticCatalog: {
-          order: "simple",
-          run: async () => ({
-            provider: undefined,
-            providers: {
-              mockplugin: {
-                api: "openai-completions" as const,
-                baseUrl: "https://mockplugin.test/v1",
-                models: [{ id: "mock-model" }],
-              },
-            },
-          }),
+    mockProviderCatalog({
+      order: "simple",
+      run: async () => ({
+        provider: undefined,
+        providers: {
+          mockplugin: {
+            api: "openai-completions" as const,
+            baseUrl: "https://mockplugin.test/v1",
+            models: [{ id: "mock-model" }],
+          },
         },
-      },
-    ]);
-
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/provider-catalog-projection",
-        severity: "error",
-        path: "plugins.entries.mockplugin",
-        target: "mockplugin",
-        message: "Provider catalog mockplugin provider value is invalid during doctor validation.",
-        requirement: "provider must be an object",
       }),
+    });
+
+    expectCatalogFinding(
+      await collectProviderCatalogProjectionFindings({}),
+      "Provider catalog mockplugin provider value is invalid during doctor validation.",
+      "provider must be an object",
     );
   });
 });

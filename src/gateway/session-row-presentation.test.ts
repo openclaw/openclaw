@@ -3,7 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
@@ -12,6 +15,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createExpectedProfileBinding,
@@ -74,8 +78,31 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           subagentRuns.commitOwnership(entry);
         }
       }
+      const retainedRunIds: string[] = [];
+      if (state === "running") {
+        for (let index = 0; index < 2_048; index++) {
+          const entry = createSubagentRunRecord({
+            runId: `retained-history-${index}`,
+            childSessionKey: `agent:main:subagent:retained-${index}`,
+            requesterSessionKey: "agent:main:unrelated-parent",
+            createdAt: endedAt - 1_000,
+            startedAt: endedAt - 1_000,
+            endedAt,
+            outcome: { status: "ok" },
+            completion: { required: false },
+            delivery: { status: "not_required" },
+          });
+          subagentRuns.set(entry.runId, entry);
+          subagentRuns.commitOwnership(entry);
+          retainedRunIds.push(entry.runId);
+        }
+      }
       const projection = await createSessionRowProjection({ cfg });
-      const connection = createGatewayConnectionState({ bootId: "follow-up", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "follow-up",
+        cfg,
+      });
       const runId = "follow-up";
       const claim = claimAgentRunContext(
         runId,
@@ -104,6 +131,27 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           hasActiveSubagentRun: true,
           childSessions: [child],
         });
+        if (retainedRunIds.length) {
+          const history = projection.state.rowContext.subagentRuns.latestRunsByChildSessionKey;
+          const iterate = history[Symbol.iterator].bind(history);
+          let visited = 0;
+          const historyIterator = vi
+            .spyOn(history, Symbol.iterator)
+            .mockImplementation(function* () {
+              for (const entry of iterate()) {
+                visited++;
+                yield entry;
+              }
+              return undefined;
+            });
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: movedParent },
+            { sessionId: movedParent, updatedAt: endedAt + 1, label: "Unrelated update" },
+          );
+          expect((await list()).sessions[0]?.hasActiveSubagentRun).toBe(true);
+          expect(visited).toBeLessThan(16);
+          historyIterator.mockRestore();
+        }
         const presentation = prepareProjectedSessionPresentation(
           projection,
           undefined,
@@ -155,6 +203,9 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         for (const key of [child, grandchild]) {
           subagentRuns.delete(`original:${key}`);
         }
+        for (const retainedRunId of retainedRunIds) {
+          subagentRuns.delete(retainedRunId);
+        }
       }
     });
   },
@@ -200,7 +251,11 @@ it("presents current recipient roles without SQLite while rejecting source overr
     );
     addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
     const projection = await createSessionRowProjection({ cfg });
-    const connection = createGatewayConnectionState({ bootId: "presentation", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "presentation",
+      cfg,
+    });
     const detach = connection.attachSessionRowProjection(projection);
     for (const client of clients) {
       connection.clients.add(client);
@@ -294,6 +349,22 @@ it("presents current recipient roles without SQLite while rejecting source overr
         expiresAtMs: Date.now() + 60_000,
       };
       connection.chatAbortControllers.set("old-run", activeRun);
+      for (let index = 0; index < 49; index++) {
+        connection.chatAbortControllers.set(`unrelated-${index}`, {
+          ...activeRun,
+          sessionKey: `agent:main:unrelated-${index}`,
+          sessionId: `unrelated-session-${index}`,
+        });
+      }
+      const controllerScans = vi.spyOn(connection.chatAbortControllers, Symbol.iterator);
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      expect(controllerScans).toHaveBeenCalledTimes(1);
+      controllerScans.mockRestore();
+      for (const client of clients.slice(0, 2)) {
+        expect(
+          JSON.parse(String(vi.mocked(client.socket).send.mock.lastCall?.[0])).payload.session,
+        ).toMatchObject({ hasActiveRun: true, activeRunIds: ["old-run"] });
+      }
       for (const client of clients) {
         vi.mocked(client.socket).send.mockClear();
       }
@@ -322,6 +393,66 @@ it("presents current recipient roles without SQLite while rejecting source overr
         });
       }
       expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      const replacement = connection.chatAbortControllers.get("replacement-run")!;
+      for (const change of [
+        "session-id",
+        "session-key",
+        "terminal",
+        "visibility",
+        "agent",
+      ] as const) {
+        replacement.sessionKey = change === "session-key" ? query.key : "agent:main:adopted-source";
+        replacement.sessionId = change === "session-key" ? "adopted-session" : entry.sessionId;
+        replacement.agentId = query.agentId;
+        replacement.projectSessionActive = true;
+        replacement.controlUiVisible = true;
+        for (const client of clients) {
+          vi.mocked(client.socket).send.mockClear();
+        }
+        vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
+          if (change === "session-id") {
+            replacement.sessionId = "adopted-session";
+          } else if (change === "session-key") {
+            replacement.sessionKey = "agent:main:adopted-source";
+          } else if (change === "terminal") {
+            replacement.projectSessionActive = false;
+          } else if (change === "visibility") {
+            replacement.controlUiVisible = false;
+          } else {
+            replacement.agentId = "other";
+          }
+        });
+        connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+        for (const [index, hasActiveRun] of [true, false].entries()) {
+          const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+          expect(sends).toHaveLength(1);
+          expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
+            hasActiveRun,
+            activeRunIds: hasActiveRun ? ["replacement-run"] : [],
+          });
+        }
+        expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+      }
+      Object.assign(replacement, activeRun);
+      const joining = connection.chatAbortControllers.get("unrelated-0")!;
+      for (const client of clients) {
+        vi.mocked(client.socket).send.mockClear();
+      }
+      vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
+        joining.sessionKey = query.key;
+      });
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      for (const [index, activeRunIds] of [
+        [0, ["replacement-run"]],
+        [1, ["replacement-run", "unrelated-0"]],
+      ] as const) {
+        const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+        expect(sends).toHaveLength(1);
+        expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
+          hasActiveRun: true,
+          activeRunIds,
+        });
+      }
       connection.chatAbortControllers.clear();
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
@@ -360,7 +491,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
   });
 });
 
-it("checks selected profile identity from current resident facts without following the requested ID through a merge", async () => {
+it("preserves selected account across role changes but rejects a changed merge identity without SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const source = ensureProfileForEmail("source@expected-profile.test");
     const target = ensureProfileForEmail("target@expected-profile.test");
@@ -368,7 +499,15 @@ it("checks selected profile identity from current resident facts without followi
     prepareGatewayRecipientProfile(client);
     const release = retainUserProfileCatalog();
     try {
-      const binding = createExpectedProfileBinding(source.id, client)!;
+      const binding = (await createExpectedProfileBinding(source.id, client))!;
+      const targetBinding = (await createExpectedProfileBinding(
+        target.id,
+        sharingPolicyClient({ user: target.id }),
+      ))!;
+      binding.markInvoked();
+      setUserProfileRole(source.id, "admin");
+      setUserProfileRole(source.id, "member");
+      linkEmail("extra@expected-profile.test", source.id);
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       binding.assertCurrent();
       const response = vi.fn();
@@ -376,10 +515,13 @@ it("checks selected profile identity from current resident facts without followi
       expect(response).toHaveBeenCalledWith(true, { session: null });
       expect(prepares).not.toHaveBeenCalled();
       prepares.mockRestore();
+      // Moving the last alias triggers the source profile's canonical merge.
+      linkEmail("extra@expected-profile.test", target.id);
       linkEmail("source@expected-profile.test", target.id);
       prepareGatewayRecipientProfile(client);
       const afterMerge = vi.spyOn(DatabaseSync.prototype, "prepare");
       expect(() => binding.assertCurrent()).toThrow(ExpectedProfileMismatchError);
+      expect(() => targetBinding.assertCurrent()).not.toThrow();
       expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(afterMerge).not.toHaveBeenCalled();
     } finally {

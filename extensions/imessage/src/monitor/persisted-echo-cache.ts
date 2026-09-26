@@ -10,21 +10,9 @@ import {
   resolveIMessageEchoMediaKey,
   type PersistedEchoEntry,
 } from "../state-contract.js";
-import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
+import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 
 type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry>;
-
-function normalizeText(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  // Match the in-memory echo-cache key so a reflected echo with a leading attributedBody
-  // corruption marker still matches the clean stored send (the persisted sibling of #93511).
-  const normalized = stripLeadingEchoTextCorruptionMarkers(
-    text.replace(/\r\n?/g, "\n").trim(),
-  ).trim();
-  return normalized || undefined;
-}
 
 function normalizeMessageId(messageId: string | undefined): string | undefined {
   const normalized = messageId?.trim();
@@ -120,7 +108,7 @@ export async function rememberPersistedIMessageEcho(params: {
   ttlMs?: number;
   pending?: boolean;
 }): Promise<string | undefined> {
-  const text = normalizeText(params.text);
+  const text = normalizeIMessageEchoText(params.text);
   const media = normalizeMedia(params.media);
   const messageId = normalizeMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
@@ -159,7 +147,7 @@ export async function hasPersistedIMessageEcho(params: {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
 }): Promise<boolean> {
-  const text = normalizeText(params.text);
+  const text = normalizeIMessageEchoText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
   const messageId = normalizeMessageId(params.messageId);
   if (!text && !mediaKey && !messageId) {

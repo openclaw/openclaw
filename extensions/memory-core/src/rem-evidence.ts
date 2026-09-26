@@ -2,6 +2,10 @@ import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { collectMarkdownFiles } from "./rem-evidence-files.js";
+import {
+  normalizeMemoryPath,
+  normalizeSnippet as normalizeWhitespace,
+} from "./short-term-promotion-utils.js";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -102,10 +106,7 @@ type ParsedMarkdownSection = {
   lines: ParsedSectionLine[];
 };
 
-type SectionSnippet = {
-  text: string;
-  line: number;
-};
+type SectionSnippet = ParsedSectionLine;
 
 type SectionSummary = {
   title: string;
@@ -123,14 +124,6 @@ type SectionSummary = {
     overall: number;
   };
 };
-
-function normalizeWhitespace(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
-}
-
-function normalizePath(rawPath: string): string {
-  return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
-}
 
 function stripMarkdown(text: string): string {
   return normalizeWhitespace(
@@ -223,7 +216,7 @@ function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
     }
     const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
     const candidateText = bulletMatch?.[1] ?? trimmed;
-    const text = normalizeWhitespace(stripMarkdown(candidateText));
+    const text = stripMarkdown(candidateText);
     if (text.length < 10) {
       continue;
     }
@@ -249,24 +242,16 @@ function countMatchingSnippets(snippets: SectionSnippet[], pattern: RegExp): num
 
 function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]) {
   const title = section.title;
-  const titleBonus = (pattern: RegExp) => (pattern.test(title) ? 1 : 0);
-  const preference =
-    countMatchingSnippets(snippets, REM_MEMORY_SIGNAL_RE) + titleBonus(REM_MEMORY_SIGNAL_RE);
-  const build =
-    countMatchingSnippets(snippets, REM_BUILD_SIGNAL_RE) + titleBonus(REM_BUILD_SIGNAL_RE);
-  const incident =
-    countMatchingSnippets(snippets, REM_INCIDENT_SIGNAL_RE) + titleBonus(REM_INCIDENT_SIGNAL_RE);
-  const logistics =
-    countMatchingSnippets(snippets, REM_LOGISTICS_SIGNAL_RE) + titleBonus(REM_LOGISTICS_SIGNAL_RE);
-  const tasks =
-    countMatchingSnippets(snippets, REM_TASK_SIGNAL_RE) + titleBonus(REM_TASK_SIGNAL_RE);
-  const routing =
-    countMatchingSnippets(snippets, REM_ROUTING_SIGNAL_RE) + titleBonus(REM_ROUTING_SIGNAL_RE);
-  const externalization =
-    countMatchingSnippets(snippets, REM_EXTERNALIZATION_SIGNAL_RE) +
-    titleBonus(REM_EXTERNALIZATION_SIGNAL_RE);
-  const retries =
-    countMatchingSnippets(snippets, REM_RETRY_SIGNAL_RE) + titleBonus(REM_RETRY_SIGNAL_RE);
+  const score = (pattern: RegExp) =>
+    countMatchingSnippets(snippets, pattern) + Number(pattern.test(title));
+  const preference = score(REM_MEMORY_SIGNAL_RE);
+  const build = score(REM_BUILD_SIGNAL_RE);
+  const incident = score(REM_INCIDENT_SIGNAL_RE);
+  const logistics = score(REM_LOGISTICS_SIGNAL_RE);
+  const tasks = score(REM_TASK_SIGNAL_RE);
+  const routing = score(REM_ROUTING_SIGNAL_RE);
+  const externalization = score(REM_EXTERNALIZATION_SIGNAL_RE);
+  const retries = score(REM_RETRY_SIGNAL_RE);
   const overall =
     preference * 2 +
     build * 1.6 +
@@ -290,35 +275,24 @@ function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]
 }
 
 function scoreSnippet(text: string, title: string): number {
-  let score = 1;
-  if (REM_MEMORY_SIGNAL_RE.test(text)) {
-    score += 2.2;
-  }
-  if (REM_BUILD_SIGNAL_RE.test(text)) {
-    score += 1.2;
-  }
-  if (REM_INCIDENT_SIGNAL_RE.test(text)) {
-    score += 1.2;
-  }
-  if (REM_LOGISTICS_SIGNAL_RE.test(text)) {
-    score += 0.9;
-  }
-  if (REM_ROUTING_SIGNAL_RE.test(text)) {
-    score += 1.4;
-  }
-  if (REM_EXTERNALIZATION_SIGNAL_RE.test(text)) {
-    score += 1.1;
-  }
-  if (REM_RETRY_SIGNAL_RE.test(text)) {
-    score += 0.9;
-  }
-  if (REM_TASK_SIGNAL_RE.test(text) && !REM_BUILD_SIGNAL_RE.test(text)) {
-    score -= 0.8;
-  }
-  if (title && !REM_GENERIC_SECTION_RE.test(title)) {
-    score += 0.25;
-  }
-  return score;
+  return scoreSignals(
+    [
+      [REM_MEMORY_SIGNAL_RE.test(text), 2.2],
+      [REM_BUILD_SIGNAL_RE.test(text), 1.2],
+      [REM_INCIDENT_SIGNAL_RE.test(text), 1.2],
+      [REM_LOGISTICS_SIGNAL_RE.test(text), 0.9],
+      [REM_ROUTING_SIGNAL_RE.test(text), 1.4],
+      [REM_EXTERNALIZATION_SIGNAL_RE.test(text), 1.1],
+      [REM_RETRY_SIGNAL_RE.test(text), 0.9],
+      [REM_TASK_SIGNAL_RE.test(text) && !REM_BUILD_SIGNAL_RE.test(text), -0.8],
+      [Boolean(title) && !REM_GENERIC_SECTION_RE.test(title), 0.25],
+    ],
+    1,
+  );
+}
+
+function scoreSignals(signals: readonly (readonly [boolean, number])[], initial = 0): number {
+  return signals.reduce((score, [matches, weight]) => (matches ? score + weight : score), initial);
 }
 
 function chooseSummarySnippets(
@@ -326,7 +300,7 @@ function chooseSummarySnippets(
   snippets: SectionSnippet[],
 ): SectionSnippet[] {
   const selectionLimit = REM_GENERIC_SECTION_RE.test(section.title) ? 2 : 3;
-  return [...snippets]
+  return snippets
     .toSorted((left, right) => {
       const scoreDelta =
         scoreSnippet(right.text, section.title) - scoreSnippet(left.text, section.title);
@@ -352,14 +326,8 @@ function joinSummaryParts(parts: string[]): string {
 function summarizeSection(
   pathValue: string,
   section: ParsedMarkdownSection,
+  snippets: SectionSnippet[],
 ): SectionSummary | null {
-  if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-    return null;
-  }
-  const snippets = sectionToSnippets(section);
-  if (snippets.length === 0) {
-    return null;
-  }
   const selected = chooseSummarySnippets(section, snippets);
   if (selected.length === 0) {
     return null;
@@ -416,93 +384,52 @@ function isDurableSignalSnippet(text: string, title: string): boolean {
 }
 
 function scoreCandidateSnippet(text: string, title: string): number {
-  let score = 0;
-  if (REM_PERSISTENCE_SIGNAL_RE.test(text)) {
-    score += 3.2;
-  }
-  if (REM_MEMORY_SIGNAL_RE.test(text)) {
-    score += 2.4;
-  }
-  if (REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text)) {
-    score += 1.8;
-  }
-  if (REM_PERSON_PATTERN_SIGNAL_RE.test(text)) {
-    score += 2.3;
-  }
-  if (REM_OPERATOR_RULE_SIGNAL_RE.test(text)) {
-    score += 1.6;
-  }
-  if (REM_SECTION_PERSISTENCE_TITLE_RE.test(title)) {
-    score += 1.2;
-  }
-  if (REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score += 1.5;
-  }
-  if (REM_METADATA_HEAVY_SIGNAL_RE.test(text)) {
-    score -= 2.4;
-  }
-  if (REM_PROJECT_META_SIGNAL_RE.test(`${title} ${text}`)) {
-    score -= 2.2;
-  }
-  if (REM_PROCESS_FRAME_SIGNAL_RE.test(text)) {
-    score -= 2.4;
-  }
-  if (REM_TOOLING_META_SIGNAL_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score -= 2.1;
-  }
-  if (REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 4.2;
-  }
-  if (REM_TRAVEL_DECISION_SIGNAL_RE.test(text)) {
-    score -= 2.6;
-  }
-  if (REM_SPECIFICITY_BURDEN_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score -= 1.2;
-  }
-  if (REM_SITUATIONAL_SIGNAL_RE.test(text)) {
-    score -= 2.8;
-  }
-  if (REM_TRANSIENT_SIGNAL_RE.test(text)) {
-    score -= 2;
-  }
-  if (REM_INCIDENT_SIGNAL_RE.test(text)) {
-    score -= 1.6;
-  }
-  if (REM_TASK_SIGNAL_RE.test(text)) {
-    score -= 1.2;
-  }
-  if (REM_LOGISTICS_SIGNAL_RE.test(text) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 1.4;
-  }
-  if (REM_BUILD_SIGNAL_RE.test(text) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 0.8;
-  }
-  if (REM_SECTION_TRANSIENT_TITLE_RE.test(title) && !REM_SECTION_PERSISTENCE_TITLE_RE.test(title)) {
-    score -= 1.2;
-  }
-  if (/[`/]/.test(text) || /https?:\/\//i.test(text)) {
-    score -= 0.8;
-  }
-  return score;
+  const memory = REM_MEMORY_SIGNAL_RE.test(text);
+  const stablePerson = REM_STABLE_PERSON_SIGNAL_RE.test(text);
+  const persistentTitle = REM_SECTION_PERSISTENCE_TITLE_RE.test(title);
+  return scoreSignals([
+    [REM_PERSISTENCE_SIGNAL_RE.test(text), 3.2],
+    [memory, 2.4],
+    [REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text), 1.8],
+    [REM_PERSON_PATTERN_SIGNAL_RE.test(text), 2.3],
+    [REM_OPERATOR_RULE_SIGNAL_RE.test(text), 1.6],
+    [persistentTitle, 1.2],
+    [stablePerson, 1.5],
+    [REM_METADATA_HEAVY_SIGNAL_RE.test(text), -2.4],
+    [REM_PROJECT_META_SIGNAL_RE.test(`${title} ${text}`), -2.2],
+    [REM_PROCESS_FRAME_SIGNAL_RE.test(text), -2.4],
+    [REM_TOOLING_META_SIGNAL_RE.test(text) && !stablePerson, -2.1],
+    [REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !memory, -4.2],
+    [REM_TRAVEL_DECISION_SIGNAL_RE.test(text), -2.6],
+    [REM_SPECIFICITY_BURDEN_RE.test(text) && !stablePerson, -1.2],
+    [REM_SITUATIONAL_SIGNAL_RE.test(text), -2.8],
+    [REM_TRANSIENT_SIGNAL_RE.test(text), -2],
+    [REM_INCIDENT_SIGNAL_RE.test(text), -1.6],
+    [REM_TASK_SIGNAL_RE.test(text), -1.2],
+    [REM_LOGISTICS_SIGNAL_RE.test(text) && !memory, -1.4],
+    [REM_BUILD_SIGNAL_RE.test(text) && !memory, -0.8],
+    [REM_SECTION_TRANSIENT_TITLE_RE.test(title) && !persistentTitle, -1.2],
+    [/[`/]/.test(text) || /https?:\/\//i.test(text), -0.8],
+  ]);
 }
 
-function chooseFactSnippets(
+function chooseScoredSnippets(
   section: ParsedMarkdownSection,
   snippets: SectionSnippet[],
+  scoreFor: (text: string, title: string) => number,
+  minimumScore: number,
 ): SectionSnippet[] {
-  return [...snippets]
+  return snippets
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
-      const score =
-        scoreCandidateSnippet(text, section.title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0);
-      return { snippet: { ...snippet, text }, score };
+      return { snippet: { ...snippet, text }, score: scoreFor(text, section.title) };
     })
     .filter(
       (entry) =>
         !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
         isDurableSignalSnippet(entry.snippet.text, section.title),
     )
-    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.4)
+    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= minimumScore)
     .toSorted((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;
@@ -531,44 +458,6 @@ function buildFactText(title: string, text: string): string {
     return `${compactTitle}: ${text}`;
   }
   return text;
-}
-
-function chooseCandidateSnippets(
-  section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
-  return [...snippets]
-    .map((snippet) => {
-      const text = compactCandidateSnippetText(snippet.text, section.title);
-      const claimScores = atomizeClaimText(text).map((claim) =>
-        scoreCandidateSnippet(claim, section.title),
-      );
-      const score = Math.max(
-        scoreCandidateSnippet(text, section.title),
-        ...claimScores,
-        Number.NEGATIVE_INFINITY,
-      );
-      return { snippet: { ...snippet, text }, score };
-    })
-    .filter(
-      (entry) =>
-        !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
-        isDurableSignalSnippet(entry.snippet.text, section.title),
-    )
-    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.8)
-    .toSorted((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.snippet.line - right.snippet.line;
-    })
-    .slice(0, 2)
-    .map((entry) => entry.snippet)
-    .toSorted((left, right) => left.line - right.line);
-}
-
-function buildCandidateSnippetText(title: string, text: string): string {
-  return buildFactText(title, text);
 }
 
 function findTopLevelDelimiter(text: string, delimiter: string): number {
@@ -731,23 +620,25 @@ export function previewGroundedRemForFile(params: {
       (REM_MONITORING_SIGNAL_RE.test(section.title) ? 1 : 0),
     0,
   );
-  const summaries = sectionScores
-    .map(({ section }) => summarizeSection(params.relPath, section))
+  const eligibleSections = sectionScores.filter(
+    ({ section, snippets }) => !REM_BLOCKED_SECTION_RE.test(section.title) && snippets.length > 0,
+  );
+  const summaries = eligibleSections
+    .map(({ section, snippets }) => summarizeSection(params.relPath, section, snippets))
     .filter((summary): summary is SectionSummary => summary !== null);
-  const factSummaries: FactSnippetSummary[] = sections.flatMap((section) => {
-    if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-      return [];
-    }
-    const snippets = sectionToSnippets(section);
-    if (snippets.length === 0) {
-      return [];
-    }
-    return chooseFactSnippets(section, snippets).map((snippet) => ({
+  const factSummaries: FactSnippetSummary[] = eligibleSections.flatMap(({ section, snippets }) =>
+    chooseScoredSnippets(
+      section,
+      snippets,
+      (text, title) =>
+        scoreCandidateSnippet(text, title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0),
+      1.4,
+    ).map((snippet) => ({
       text: buildFactText(section.title, snippet.text),
       refs: [makeRef(params.relPath, snippet.line)],
       score: scoreCandidateSnippet(snippet.text, section.title),
-    }));
-  });
+    })),
+  );
 
   const memoryImplications = coalesceGroundedRemItems(
     summaries
@@ -758,29 +649,28 @@ export function previewGroundedRemForFile(params: {
       })),
   ).slice(0, REM_SUMMARY_MEMORY_LIMIT);
 
-  const candidateSnippets: CandidateSnippetSummary[] = sections.flatMap((section) => {
-    if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-      return [];
-    }
-    const snippets = sectionToSnippets(section);
-    if (snippets.length === 0) {
-      return [];
-    }
-    return chooseCandidateSnippets(section, snippets).flatMap((snippet) =>
-      atomizeClaimText(snippet.text)
-        .map((claim) => {
-          const score = scoreCandidateSnippet(claim, section.title);
-          const text = buildCandidateSnippetText(section.title, claim);
-          return {
-            text,
+  const candidateSnippets: CandidateSnippetSummary[] = eligibleSections.flatMap(
+    ({ section, snippets }) =>
+      chooseScoredSnippets(
+        section,
+        snippets,
+        (text, title) =>
+          Math.max(
+            scoreCandidateSnippet(text, title),
+            ...atomizeClaimText(text).map((claim) => scoreCandidateSnippet(claim, title)),
+          ),
+        1.8,
+      ).flatMap((snippet) =>
+        atomizeClaimText(snippet.text)
+          .map((claim) => ({
+            text: buildFactText(section.title, claim),
             refs: [makeRef(params.relPath, snippet.line)],
             lean: classifyCandidateLeanFromText(claim, section.title),
-            score,
-          };
-        })
-        .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
-    );
-  });
+            score: scoreCandidateSnippet(claim, section.title),
+          }))
+          .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
+      ),
+  );
 
   const candidates = coalesceGroundedRemItems(
     candidateSnippets.toSorted((left, right) => {
@@ -793,23 +683,17 @@ export function previewGroundedRemForFile(params: {
     }),
   ).slice(0, 4);
 
-  const durableImplications = coalesceGroundedRemItems(
-    candidateSnippets.filter(
-      (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
-    ),
-  )
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT)
-    .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
-
-  const candidateDrivenImplications = coalesceGroundedRemItems(
-    candidateSnippets.filter(
-      (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
-    ),
-  )
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT)
-    .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
+  const selectImplications = (eligible: (candidate: CandidateSnippetSummary) => boolean) =>
+    coalesceGroundedRemItems(candidateSnippets.filter(eligible))
+      .toSorted((left, right) => right.score - left.score)
+      .slice(0, REM_SUMMARY_MEMORY_LIMIT)
+      .map(({ text, refs }) => ({ text, refs }));
+  const durableImplications = selectImplications(
+    (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
+  );
+  const candidateDrivenImplications = selectImplications(
+    (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
+  );
 
   const effectiveMemoryImplications =
     durableImplications.length > 0
@@ -1043,7 +927,7 @@ export async function previewGroundedRemMarkdown(params: {
   const previews: GroundedRemFilePreview[] = [];
   for (const filePath of files) {
     const content = await readWorkspaceText(workspaceDir, filePath);
-    const relPath = normalizePath(path.relative(workspaceDir, filePath));
+    const relPath = normalizeMemoryPath(path.relative(workspaceDir, filePath));
     previews.push(previewGroundedRemForFile({ relPath, content }));
   }
   return {

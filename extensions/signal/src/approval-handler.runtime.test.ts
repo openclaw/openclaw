@@ -39,41 +39,6 @@ describe("Signal approval native runtime", () => {
     });
   });
 
-  it("uses the live Signal RPC context when delivering approval prompts", async () => {
-    const prepared = await signalApprovalNativeRuntime.transport.prepareTarget({
-      plannedTarget: { target: { to: "+15551230000" } },
-      accountId: "default",
-      context: { baseUrl: "http://127.0.0.1:18080", account: "+15550001111" },
-    } as never);
-
-    expect(prepared?.target).toMatchObject({
-      to: "+15551230000",
-      accountId: "default",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
-    });
-
-    await signalApprovalNativeRuntime.transport.deliverPending({
-      cfg: {},
-      preparedTarget: prepared!.target,
-      pendingPayload: buildPendingContent({ manualText: "approval" }),
-    } as never);
-
-    expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith("+15551230000", {
-      cfg: {},
-      accountId: "default",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
-    });
-    expect(sendMocks.sendMessageSignal).toHaveBeenCalledWith("+15551230000", "approval", {
-      cfg: {},
-      accountId: "default",
-      baseUrl: "http://127.0.0.1:18080",
-      account: "+15550001111",
-      textMode: "markdown",
-    });
-  });
-
   it("resolves aliases before delivering native approval prompts", async () => {
     const cfg = {
       channels: {

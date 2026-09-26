@@ -1,8 +1,8 @@
 /** Config IO adapter used by secrets apply/configure flows. */
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { createConfigIO } from "../config/config.js";
 import { privateFileStoreSync } from "../infra/private-file-store.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 
 const silentConfigIoLogger = {
   error: () => {},

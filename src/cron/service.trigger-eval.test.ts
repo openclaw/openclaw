@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
-import { proposeCronRunRecovery, recoverCronRunProposal } from "./service/run-recovery.js";
+import {
+  observeCronRecoveryForTest,
+  recoverCronRunForTest,
+} from "./service/run-recovery.test-support.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
@@ -125,7 +128,7 @@ async function finishWatcherRun(params: {
   }
 
   const readHistory = () =>
-    readCronTaskRunHistoryPage({ storeKey: cronStoreKey(harness.storePath), jobId }).entries;
+    readCronRunHistoryPageForTests({ storeKey: cronStoreKey(harness.storePath), jobId }).entries;
   const history = readHistory();
   // The payload has durably succeeded, but its separate scheduler write failed.
   expect(history).toEqual([
@@ -144,7 +147,7 @@ async function finishWatcherRun(params: {
     ? createCronServiceState(harness.deps)
     : undefined;
   const proposal = recoveryState
-    ? await proposeCronRunRecovery(recoveryState, jobId, undefined, receipt.startedAtMs)
+    ? await observeCronRecoveryForTest(recoveryState, jobId, undefined, receipt.startedAtMs)
     : undefined;
   await params.editAfterTask?.();
   if (params.expectedReceiptStatus === "interrupted") {
@@ -156,7 +159,7 @@ async function finishWatcherRun(params: {
   }
   if (recoveryState && proposal) {
     expect(proposal.receipt?.receiptId).toBe(receipt.receiptId);
-    expect(recoverCronRunProposal(recoveryState, proposal, "startup")).toMatchObject({
+    expect(await recoverCronRunForTest(recoveryState, proposal, "startup")).toMatchObject({
       kind: "repaired",
     });
   }
@@ -297,7 +300,7 @@ describe("cron trigger evaluation", () => {
         job: { state: { nextRunAtMs: persisted?.state.nextRunAtMs } },
       });
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(harness.storePath),
           jobId: job.id,
         }).entries,
@@ -337,7 +340,7 @@ describe("cron trigger evaluation", () => {
         throw new Error("missing finished event");
       }
       expect(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(harness.storePath),
           jobId: job.id,
         }).entries,
@@ -459,7 +462,7 @@ describe("cron trigger evaluation", () => {
       expect(finished?.delivered).toBeUndefined();
       expect(finished?.deliveryError).toBeUndefined();
 
-      const history = readCronTaskRunHistoryPage({
+      const history = readCronRunHistoryPageForTests({
         storeKey: cronStoreKey(harness.storePath),
         jobId: job.id,
       }).entries;
@@ -641,7 +644,7 @@ describe("cron trigger evaluation", () => {
           expectedReceiptStatus: ownerEdit === "none" ? "ok" : "interrupted",
           editAfterTask: async () => {
             expect(
-              readCronTaskRunHistoryPage({
+              readCronRunHistoryPageForTests({
                 storeKey: cronStoreKey(harness.storePath),
                 jobId: job.id,
               }).entries[0]?.nextRunAtMs,

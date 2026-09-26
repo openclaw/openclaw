@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
@@ -14,13 +15,17 @@ import {
 } from "./sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
   type SqliteWalCheckpointOptions,
   type SqliteWalHealth,
 } from "./sqlite-wal-checkpoint.js";
+import {
+  reclaimSqliteWalFreePages,
+  type SqliteWalReclamationOptions,
+  type SqliteWalReclamationResult,
+} from "./sqlite-wal-reclamation.js";
 import {
   detectSqliteWalSplitBrain,
   terminateForSqliteWalSplitBrain,
@@ -29,9 +34,12 @@ import {
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
+  type SqliteWalPeriodicRequest,
+  type SqliteWalPeriodicResult,
 } from "./sqlite-wal-write-admission.js";
 
 export type { SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
+export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
@@ -41,9 +49,6 @@ const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
 // pathological high-water marks pay the truncation cost.
 const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
-// 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
-// bounded so maintenance can never behave like a blocking full VACUUM.
-const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
@@ -76,6 +81,11 @@ export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
   readonly health?: SqliteWalHealth;
   checkpoint: () => boolean;
+  maintainPeriodic?: (
+    request: SqliteWalPeriodicRequest,
+    admit?: (stage: "transaction" | "commit") => void,
+  ) => SqliteWalPeriodicResult;
+  reclaimFreePages: (options?: SqliteWalReclamationOptions) => SqliteWalReclamationResult;
   /** Inspect this retained WAL connection, independently of checkpoint completion elsewhere. */
   inspectIdle?: () => "healthy" | "retire";
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
@@ -179,21 +189,10 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
 function parseMountCommandEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
-    const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
-    if (linuxMatch) {
-      const source = linuxMatch[1];
-      const mountPoint = linuxMatch[2];
-      const fsType = linuxMatch[3];
-      if (source && mountPoint && fsType) {
-        entries.push({ source, mountPoint, fsType });
-      }
-      continue;
-    }
-    const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
-    if (bsdMatch) {
-      const source = bsdMatch[1];
-      const mountPoint = bsdMatch[2];
-      const fsType = bsdMatch[3];
+    const match =
+      /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line) ?? /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
+    if (match) {
+      const [, source, mountPoint, fsType] = match;
       if (source && mountPoint && fsType) {
         entries.push({ source, mountPoint, fsType });
       }
@@ -286,10 +285,22 @@ function resolveMountEntryJournalPolicy(
 }
 
 function combineMountEntryJournalPolicies(
-  targetPaths: readonly string[],
+  targetPaths: readonly [string, string],
 ): SqliteFilesystemJournalPolicy {
   const mountResult = readMountEntries();
   if (!mountResult.ok) {
+    const [originalPath, canonicalPath] = targetPaths;
+    if (process.platform === "darwin" && originalPath === canonicalPath) {
+      try {
+        // This read-only probe identifies APFS by its native name, not a numeric type.
+        // Aliased paths still require mount metadata for both original and real locations.
+        if (probeTreeClone(canonicalPath) === "apfs") {
+          return "wal";
+        }
+      } catch {
+        // Failed native inspection cannot override the unknown-filesystem policy.
+      }
+    }
     return "rollback";
   }
   const policies = new Set(
@@ -334,7 +345,7 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
   if (!checkedPaths) {
     return "wal";
   }
-  const mountLookupPaths = [checkedPaths.originalPath, checkedPaths.canonicalPath];
+  const mountLookupPaths = [checkedPaths.originalPath, checkedPaths.canonicalPath] as const;
   if (typeof fs.statfsSync !== "function") {
     return combineMountEntryJournalPolicies(mountLookupPaths);
   }
@@ -484,14 +495,12 @@ export function configureSqliteWalMaintenance(
   }
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
-    return {
-      checkpoint: () => true,
-      close: () => true,
-    };
   }
-  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+  if (journalPolicy === "rollback" || !enableWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
+      reclaimFreePages: (reclaimOptions = {}) =>
+        reclaimSqliteWalFreePages(db, () => true, reclaimOptions),
       close: () => true,
     };
   }
@@ -506,37 +515,11 @@ export function configureSqliteWalMaintenance(
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
   let splitBrainDetectionWarningLogged = false;
   const checkpointOwner = createSqliteWalCheckpoint(
+    db,
     options,
     DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES,
   );
-  const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
-    try {
-      return checkpointOwner.record(mode, db.prepare(`PRAGMA wal_checkpoint(${mode});`).get());
-    } catch (error) {
-      checkpointOwner.recordError(error);
-      return false;
-    }
-  };
-
-  // Bounded page release for databases opened with auto_vacuum=INCREMENTAL.
-  // A no-op elsewhere, and never a blocking full VACUUM: unbounded vacuums on
-  // the event loop have starved channel sockets in production (#83712).
-  const runIncrementalVacuum = (): void => {
-    try {
-      // Page limits do not bound lock waits; service worker commit requests before taking the lock.
-      runSqliteImmediateTransactionSync(
-        db,
-        () => db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`),
-        {
-          busyTimeoutMs: options.busyTimeoutMs,
-          databaseLabel: options.databaseLabel ?? options.databasePath,
-          operationLabel: "incremental-vacuum",
-        },
-      );
-    } catch (error) {
-      options.onCheckpointError?.(error);
-    }
-  };
+  const runCheckpoint = checkpointOwner.checkpoint;
 
   const runMaintenance = (operation: () => boolean): boolean => {
     if (invalidated) {
@@ -550,32 +533,96 @@ export function configureSqliteWalMaintenance(
     }
   };
   const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
+  const reclaimFreePages = (
+    reclaimOptions: SqliteWalReclamationOptions = {},
+  ): SqliteWalReclamationResult => {
+    let result: SqliteWalReclamationResult | undefined;
+    let failure: { error: unknown } | undefined;
+    runMaintenance(() => {
+      try {
+        result = reclaimSqliteWalFreePages(db, runCheckpoint, reclaimOptions);
+        return result.checkpointCompleted;
+      } catch (error) {
+        failure = { error };
+        throw error;
+      }
+    });
+    if (failure) {
+      throw failure.error;
+    }
+    if (!result) {
+      throw new Error("SQLite page reclamation owner is unavailable");
+    }
+    return { ...result, checkpoint: checkpointOwner.snapshot };
+  };
 
   let timer: IntervalHandle | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const maintainPeriodic = (
+    request: SqliteWalPeriodicRequest,
+    admit?: (stage: "transaction" | "commit") => void,
+  ): SqliteWalPeriodicResult => {
+    if (invalidated) {
+      return { reclaimedPages: 0 };
+    }
+    if (request.checkpoint) {
+      checkpointOwner.adopt(request.checkpoint);
+    }
+    let reclaimedPages = 0;
+    runMaintenance(() => {
+      const reclaimed = reclaimSqliteWalFreePages(db, runCheckpoint, {
+        checkpointMode: request.checkpointMode,
+        maxPages: request.maxPages,
+        beforeMutation: () => admit?.("transaction"),
+        onCommit: () => admit?.("commit"),
+      });
+      const checkpointed = reclaimed.checkpointCompleted;
+      if (
+        checkpointed &&
+        reclaimed.freePagesBefore !== null &&
+        reclaimed.remainingFreePages !== null
+      ) {
+        reclaimedPages = Math.min(
+          reclaimed.vacuumPagesRequested,
+          reclaimed.freePagesBefore - reclaimed.remainingFreePages,
+        );
+      }
+      if (
+        checkpointed &&
+        request.checkpointMode === "PASSIVE" &&
+        (checkpointOwner.health?.walBytes ?? 0) > DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES
+      ) {
+        // A completed PASSIVE checkpoint need not recycle its high-water file
+        // until another commit. Try once without waiting for readers or writers.
+        admit?.("transaction");
+        runWithSqliteBusyTimeout(db, 0, () => runCheckpoint("TRUNCATE"));
+      }
+      return checkpointed;
+    });
+    return { reclaimedPages, checkpoint: checkpointOwner.snapshot };
+  };
   const maintain = createSqliteWalMaintenanceScheduler(
     db,
-    () => {
-      // Admission may outlive this timer or its exact native connection.
-      if (!timer || invalidated) {
-        return;
-      }
-      runMaintenance(() => {
-        const checkpointed = runCheckpoint(periodicCheckpointMode);
-        if (
-          checkpointed &&
-          periodicCheckpointMode === "PASSIVE" &&
-          (checkpointOwner.health?.walBytes ?? 0) > DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES
-        ) {
-          // A completed PASSIVE checkpoint need not recycle its high-water file
-          // until another commit. Try once without waiting for readers or writers.
-          runWithSqliteBusyTimeout(db, 0, () => runCheckpoint("TRUNCATE"));
-        }
-        runIncrementalVacuum();
-        return checkpointed;
-      });
-    },
+    maintainPeriodic,
+    (maxPages) =>
+      timer && !invalidated
+        ? { maxPages, checkpointMode: periodicCheckpointMode, checkpoint: checkpointOwner.snapshot }
+        : undefined,
+    checkpointOwner.adopt,
     (error) => checkpointOwner.recordError(error),
+    512,
   );
+  const maintainPeriodically = (retry = true) => {
+    void maintain().then(() => {
+      if (retry && timer && !invalidated && checkpointOwner.health?.blockingOwner && !retryTimer) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          maintainPeriodically(false);
+        }, 1_000);
+        retryTimer.unref();
+      }
+    });
+  };
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
       () =>
@@ -583,6 +630,7 @@ export function configureSqliteWalMaintenance(
           if (!timer || invalidated) {
             return;
           }
+          // Inspect the published handle before identity admission or synchronous cleanup.
           if (tripwireDatabasePath && splitBrainDetectionEnabled) {
             let splitBrain: SqliteWalSplitBrainEvent | undefined;
             try {
@@ -607,7 +655,7 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          maintain();
+          maintainPeriodically();
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();
@@ -618,13 +666,12 @@ export function configureSqliteWalMaintenance(
       return checkpointOwner.health;
     },
     checkpoint,
-    inspectIdle: () =>
-      runMaintenance(() =>
-        checkpointOwner.inspectIdle(db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get()),
-      )
-        ? "healthy"
-        : "retire",
+    maintainPeriodic,
+    reclaimFreePages,
+    inspectIdle: () => (runMaintenance(checkpointOwner.inspectIdle) ? "healthy" : "retire"),
     close: (closeOptions) => {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
       clearInterval(timer ?? undefined);
       timer = null;
       cancelSqliteWalWriteAdmission(db);
@@ -639,22 +686,64 @@ export function configureSqliteWalMaintenance(
   };
 }
 
+type SqliteExitRegistration = { close: () => void; fired: boolean };
+type SqliteExitGroup = {
+  pending: Set<SqliteExitRegistration>;
+  dispatch: () => void;
+};
+let lastSqliteExitGroup: SqliteExitGroup | undefined;
+
+function detachEmptySqliteExitGroup(group: SqliteExitGroup): void {
+  if (group.pending.size > 0) {
+    return;
+  }
+  if (lastSqliteExitGroup === group) {
+    lastSqliteExitGroup = undefined;
+  }
+  process.removeListener("exit", group.dispatch);
+}
+
 /**
  * Register a best-effort exit-time close for a SQLite handle cache. Returns an
  * unregister callback the cache's orderly close path must invoke, so tests and
  * runtime shutdowns do not accumulate listeners on shared worker processes.
  */
 export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
-  const closeOnExit = () => {
-    try {
-      closeAll();
-    } catch {
-      // Exit-time close is best-effort; unclean exits rely on WAL recovery.
-    }
-  };
-  process.once("exit", closeOnExit);
+  const registration = { close: closeAll, fired: false };
+  let group = lastSqliteExitGroup;
+  // Preserve intervening owners, such as capture finalization before database close.
+  if (!group || process.listeners("exit").at(-1) !== group.dispatch) {
+    const pending = new Set([registration]);
+    const created: SqliteExitGroup = {
+      pending,
+      dispatch: () => {
+        // Snapshot this batch before callbacks; disposal cannot skip an admitted close.
+        const snapshot = [...pending];
+        for (const entry of snapshot) {
+          if (entry.fired) {
+            continue;
+          }
+          entry.fired = true;
+          pending.delete(entry);
+          detachEmptySqliteExitGroup(created);
+          try {
+            entry.close();
+          } catch {
+            // Exit-time close is best-effort; unclean exits rely on WAL recovery.
+          }
+        }
+      },
+    };
+    // Keep the dispatcher until the last callback starts, including nested emissions.
+    process.on("exit", created.dispatch);
+    lastSqliteExitGroup = group = created;
+  } else {
+    group.pending.add(registration);
+  }
+  const owner = group;
   return () => {
-    process.removeListener("exit", closeOnExit);
+    owner.pending.delete(registration);
+    detachEmptySqliteExitGroup(owner);
   };
 }
 

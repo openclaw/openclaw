@@ -25,6 +25,23 @@ function runtimeWithNode(invoke: (params: Record<string, unknown>) => Promise<un
 }
 
 describe("Microsoft Teams meetings runtime setup", () => {
+  it("reports live-caption capture for observe-only setup without probing audio", async () => {
+    const runtime = runtimeWithNode(async () => ({ ok: true }));
+    const status = await getTeamsMeetingsSetupStatus({
+      config: resolveTeamsMeetingsConfig({ chromeNode: { node: "teams-node" } }),
+      fullConfig: {},
+      runtime,
+      options: { mode: "transcribe", transport: "chrome-node" },
+    });
+
+    expect(status.checks).toContainEqual({
+      id: "captions",
+      message: "Teams live-caption capture is enabled and ready",
+      ok: true,
+    });
+    expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+  });
+
   it("probes remote talk-back prerequisites through the selected Chrome node", async () => {
     const runtime = runtimeWithNode(async () => ({ ok: true }));
     const config = resolveTeamsMeetingsConfig({

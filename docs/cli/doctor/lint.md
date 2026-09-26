@@ -20,6 +20,11 @@ report, preserving the live database and its WAL files. Each new report reads a
 fresh snapshot. Checks that need writable inspection state or independent database
 verification retain their own copies; `--only` checks prepare state on demand.
 
+Doctor retires private database readers and writers before removing inspection
+snapshots. A cleanup failure preserves completed findings and check counts;
+updater runs report failed temporary-file removal as a warning. If database
+retirement fails, Doctor reports the error and leaves the private snapshot in place.
+
 ```bash
 openclaw doctor --json
 openclaw doctor --lint
@@ -109,6 +114,11 @@ plugin owner could not be inspected; see [Plugin repair warnings](/install/updat
 Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
 
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
+
+`core/doctor/session-snapshots` reports stale paths in retained legacy session
+metadata as informational findings. It preserves the original files even under
+`--fix`; active sessions use canonical SQLite state and the current runtime skill
+catalog. Historical snapshot paths do not require cleanup or a session reset.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
 

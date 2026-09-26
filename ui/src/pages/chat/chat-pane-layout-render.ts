@@ -5,11 +5,12 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
-import "../../plugins/control-ui-contributions.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -31,6 +32,7 @@ import {
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { renderChatTasksPanel } from "./components/chat-tasks-panel.ts";
+import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -125,7 +127,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
       ])}
       @outbox-restored=${() => {
-        this.chatState.restoreComposer();
+        this.chatState.composerPersistence.restore();
         state.requestUpdate?.();
       }}
     ></openclaw-chat-outbox-recovery>`;
@@ -147,7 +149,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
+    const companionSessionKey = state.sessionKey;
+    const companionThread = this.sessionCompanionThreads.view(companionSessionKey, currentAgentId);
     const companionPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
@@ -160,11 +163,20 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
+    const discoveredDesktopSource = this.activeSessionResources.desktopSource(
+      state.client,
+      state.sessionKey,
+      scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      state.connectionEpoch,
+      this.resourceSessionObservation()?.row ?? undefined,
+    );
     const desktopSource =
       sidebarLayout.columns
         .flatMap((column) => column.panels)
         .find((panel) => panel.slot === "desktop")?.environmentId ??
-      resolveChatPaneDesktopTarget(selectedSession);
+      (discoveredDesktopSource !== undefined
+        ? discoveredDesktopSource
+        : resolveChatPaneDesktopTarget(selectedSession));
     const desktopFocusKey = JSON.stringify([
       state.sessionKey,
       this.connectionGeneration,
@@ -239,6 +251,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
+      onCompanionAttachmentsChange: (attachments) =>
+        this.sessionCompanionThreads.setAttachments(
+          companionSessionKey,
+          attachments,
+          currentAgentId,
+        ),
       onCompanionVisibilityChange: this.setSessionObserverVisibility,
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),
@@ -276,6 +294,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             .presented=${this.visuallyPresented}
           ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
+      presentationId: this.presentationId,
+      conversationTab: {
+        label: chatProps.assistantName,
+        icon: renderAgentIdentityAvatar(resolveAssistantDisplayAvatar(chatProps)),
+      },
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
       availableSlots,

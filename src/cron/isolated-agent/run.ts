@@ -163,6 +163,7 @@ export async function runCronIsolatedAgentTurn(
                 enabled: isDiagnosticsEnabled(params.cfg),
                 sessionId: prepared.context.runSessionId,
                 sessionKey: prepared.context.runSessionKey,
+                agentId: prepared.context.agentId,
                 channel: "cron",
                 source: "cron-isolated",
                 startedAtMs: turnStartedAtMs,
@@ -248,6 +249,7 @@ export async function runCronIsolatedAgentTurn(
               thinkingCatalog: prepared.context.thinkingSelection.catalog,
               loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
               executionIdentity: params.executionIdentity,
+              admissionSource: params.admissionSource,
             };
             const execution = await prepared.context.sessionWorkAdmission.run(() =>
               withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>

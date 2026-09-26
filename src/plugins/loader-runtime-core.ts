@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
@@ -46,8 +47,22 @@ import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
 
-type PluginLoadInput = { source: string; signature: string; config: PreparedPluginConfig };
+type PluginLoadInput = {
+  source: string;
+  signature: string | undefined;
+  config: PreparedPluginConfig;
+};
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
+
+/** Captured JSON inputs ignore object key order, but preserve array order and values. */
+function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      isDeepStrictEqual(JSON.parse(left), JSON.parse(right)))
+  );
+}
 
 type PluginModuleLoaderOverrides = Pick<
   Parameters<typeof createPluginModuleLoader>[0],
@@ -174,7 +189,6 @@ export function loadOpenClawPluginsCore(
                 subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
-              loadPluginModule,
             });
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??
@@ -270,7 +284,7 @@ export function loadOpenClawPluginsCore(
         context.normalized.entries[normalizePluginPolicyId(manifest.id)] ?? {};
       const preparedConfig: PreparedPluginConfig = { input: JSON.stringify(pluginConfig) };
       const degradedPlugin = findActiveDegradedPlugin(manifest.id);
-      const signature = JSON.stringify([
+      const signatureInputs = [
         candidate.source,
         candidate.origin,
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
@@ -290,14 +304,39 @@ export function loadOpenClawPluginsCore(
         validateOnly,
         options.toolDiscovery === true,
         options.mode,
-      ]);
+      ];
+      let signature: string | undefined;
+      try {
+        signature = JSON.stringify(signatureInputs);
+      } catch (error) {
+        // A malformed external schema must reach the validation diagnostic, not abort
+        // sibling loading while preparing an optional runtime-retention signature.
+        if (
+          !(error instanceof RangeError) ||
+          candidate.origin === "bundled" ||
+          prepareRuntimePluginConfig({
+            candidate,
+            manifestRecord: manifest,
+            context,
+            preparedConfig,
+          }).ok
+        ) {
+          throw error;
+        }
+      }
       inputs.set(manifest.id, { source: candidate.source, signature, config: preparedConfig });
       const previous = options.previousRegistry?.plugins.find(
         (record) => record.id === manifest.id,
       );
       const previousInput =
         options.previousRegistry && registryInputs.get(options.previousRegistry)?.get(manifest.id);
-      if (previous && !replacedIds.has(manifest.id) && previousInput?.signature === signature) {
+      if (
+        signature !== undefined &&
+        previous &&
+        previousInput &&
+        !replacedIds.has(manifest.id) &&
+        samePluginLoadInput(previousInput.signature, signature)
+      ) {
         // Reserve retained contributions before newcomers register. Reuse validation only after
         // matching policy/admission inputs, leaving excluded candidates on their existing path.
         if (previousInput.config.validation) {
@@ -308,7 +347,7 @@ export function loadOpenClawPluginsCore(
             preparedConfig,
           });
         }
-        if (previousInput.config.input === preparedConfig.input) {
+        if (samePluginLoadInput(previousInput.config.input, preparedConfig.input)) {
           retained.set(manifest.id, previous);
           projectPluginContributions(options.previousRegistry!, previous, registry);
         }
@@ -437,7 +476,13 @@ export function loadOpenClawPluginsCore(
         ),
       });
     }
-    maybeThrowOnPluginLoadError(registry, options.throwOnLoadError, retained);
+    maybeThrowOnPluginLoadError(
+      registry,
+      options.throwOnLoadError,
+      retained,
+      options.previousRegistry,
+      replacedIds,
+    );
     if (context.shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
       if (failedPlugins.length > 0) {

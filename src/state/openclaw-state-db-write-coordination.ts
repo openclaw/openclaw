@@ -4,6 +4,7 @@ import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
+  logSlowSqliteCoordinatorWait,
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
@@ -16,6 +17,11 @@ const coordinatedStateTransactions = resolveGlobalSingleton(
   Symbol.for("openclaw.coordinatedStateTransactions"),
   () => new WeakSet<DatabaseSync>(),
 );
+
+/** Only the synchronous transaction owner may lend its uncommitted authority rows. */
+export function isCoordinatedStateTransaction(database: DatabaseSync): boolean {
+  return database.isTransaction && coordinatedStateTransactions.has(database);
+}
 
 export function withSharedStateWriteCoordinator<T>(
   params: {
@@ -33,12 +39,23 @@ export function withSharedStateWriteCoordinator<T>(
   }
   // Cached and supplied handles join the same lifecycle gate as fresh opens.
   // Acquire before BEGIN and retain through outer commit and postcommit work.
-  const coordinator = acquireStateDatabaseCoordinator({
-    databasePath: params.databasePath,
-    busyTimeoutMs:
-      params.busyTimeoutMs ??
-      (params.existing ? readSqliteBusyTimeout(params.existing) : OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
-  });
+  const started = performance.now();
+  let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator>;
+  try {
+    coordinator = acquireStateDatabaseCoordinator({
+      databasePath: params.databasePath,
+      busyTimeoutMs:
+        params.busyTimeoutMs ??
+        (params.existing
+          ? readSqliteBusyTimeout(params.existing)
+          : OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+    });
+  } finally {
+    logSlowSqliteCoordinatorWait(performance.now() - started, {
+      databaseLabel: params.databasePath,
+      operationLabel: params.operationLabel ?? "state.write",
+    });
+  }
   return runWithSqliteCoordinator(coordinator, params.operationLabel ?? "state.write", operation);
 }
 

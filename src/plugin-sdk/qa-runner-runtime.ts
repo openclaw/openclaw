@@ -25,6 +25,7 @@ type QaRunnerTransportPolicy = {
 
 type QaRunnerAdapterOptions = {
   explicitScenarioSelection?: boolean;
+  agentE2e?: boolean;
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
@@ -42,6 +43,7 @@ type QaRunnerMessageRecorder = {
 
 type QaRunnerCredentialLease<TPayload> = {
   credentialId?: string;
+  assertHealthy?: () => void;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
   kind: string;
@@ -56,6 +58,8 @@ type QaRunnerCredentialLease<TPayload> = {
 
 type QaRunnerCredentialLeaseOptions<TPayload> = {
   kind: string;
+  cwd?: string;
+  signal?: AbortSignal;
   parsePayload: (payload: unknown) => TPayload;
   resolveEnvPayload: () => TPayload;
   role?: string;
@@ -129,6 +133,12 @@ type QaRunnerTransportAdapterDefinition = {
   requiredPluginIds: readonly string[];
   supportedActions: readonly ("delete" | "edit" | "react" | "thread-create")[];
   assertTransportHealthy?: () => void;
+  /**
+   * Resolve (do not reject) with a terminal failure to abort active flow admission.
+   * The adapter still settles owned requests during cleanup. Omission leaves
+   * explicit health checks and scenario deadlines in effect.
+   */
+  whenUnhealthy?: Promise<Error>;
   describeTransportState?: () => string;
   resetTransport?: () => void | Promise<void>;
   sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
@@ -190,7 +200,19 @@ type QaRunnerTransportAdapterDefinition = {
     concurrency: number;
     isolatedWorkers?: boolean;
   }) => string[];
+  /** Stop new actions before Gateway shutdown; retain the lease and ownership of pending writes. */
   cleanup?: () => Promise<void>;
+  /**
+   * Host-final-teardown hook after confirmed Gateway stop, before temporary-file removal.
+   * A successful capture runs once per Gateway lifetime. Throwing retains runtime
+   * evidence and reports teardown failure; post-stop adapter cleanup still runs.
+   * Omission means no adapter-specific snapshot, not a request to retain scratch state.
+   */
+  captureBeforeGatewayCleanup?: () => Promise<void>;
+  /**
+   * Settle fixture cleanup and release the lease after confirmed Gateway stop.
+   * Not called when process shutdown is unconfirmed; errors join the teardown result.
+   */
   cleanupAfterGatewayStop?: () => Promise<void>;
 };
 
@@ -254,24 +276,15 @@ export type LiveTransportQaSuiteCommandOptions = {
   }) => string[];
 };
 
-type LiveTransportQaCommanderOptions = {
-  channelDriver?: string;
-  concurrency?: number;
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
+type LiveTransportQaCommanderOptions = Omit<
+  LiveTransportQaCommandOptions,
+  "primaryModel" | "alternateModel" | "scenarioIds" | "fastMode" | "sutAccountId"
+> & {
   model?: string;
   altModel?: string;
   scenario?: string[];
-  listScenarios?: boolean;
   fast?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
   sutAccount?: string;
-  credentialFile?: string;
-  credentialSource?: string;
-  credentialRole?: string;
 };
 
 /** Commander registration hook for one live-transport QA subcommand. */
@@ -330,30 +343,11 @@ function mapLiveTransportQaCommanderOptions(
   opts: LiveTransportQaCommanderOptions,
   normalizeInactiveSelectionOptions: boolean,
 ): LiveTransportQaCommandOptions {
-  if (!normalizeInactiveSelectionOptions) {
-    return {
-      ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
-      concurrency: opts.concurrency,
-      repoRoot: opts.repoRoot,
-      outputDir: opts.outputDir,
-      providerMode: opts.providerMode,
-      primaryModel: opts.model,
-      alternateModel: opts.altModel,
-      fastMode: opts.fast,
-      allowFailures: opts.allowFailures,
-      failFast: opts.failFast,
-      profile: opts.profile,
-      scenarioIds: opts.scenario,
-      listScenarios: opts.listScenarios,
-      sutAccountId: opts.sutAccount,
-      credentialFile: opts.credentialFile,
-      credentialSource: opts.credentialSource,
-      credentialRole: opts.credentialRole,
-    };
-  }
   return {
     ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
-    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+    ...(!normalizeInactiveSelectionOptions || opts.concurrency !== undefined
+      ? { concurrency: opts.concurrency }
+      : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -364,9 +358,13 @@ function mapLiveTransportQaCommanderOptions(
     failFast: opts.failFast,
     profile: opts.profile,
     scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios || undefined,
+    listScenarios: normalizeInactiveSelectionOptions
+      ? opts.listScenarios || undefined
+      : opts.listScenarios,
     sutAccountId: opts.sutAccount,
-    ...(opts.credentialFile ? { credentialFile: opts.credentialFile } : {}),
+    ...(!normalizeInactiveSelectionOptions || opts.credentialFile
+      ? { credentialFile: opts.credentialFile }
+      : {}),
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };

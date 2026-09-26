@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import {
   completePendingPackageLifecycle,
   discardPendingPackageLifecycle,
@@ -9,13 +10,16 @@ import {
 } from "./package-lifecycle.js";
 import { removePackageUpdatePath } from "./package-update-filesystem.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
+import { mergePathPrepend } from "./path-prepend.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 import {
   resolveNpmLifecyclePolicyGate,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -47,7 +51,7 @@ export type PackageUpdateStepRunner = (params: {
   name: string;
   argv: string[];
   cwd?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }) => Promise<UpdateStepResult>;
 
@@ -58,13 +62,25 @@ type PackageUpdateLifecycleResult =
 /** Adapt lifecycle ownership refusal without flattening it into removable stage failure. */
 export async function runPackageUpdateLifecycle(params: {
   packageRoot: string;
+  nodeRunner?: string;
   manager: ResolvedGlobalInstallTarget["manager"];
   timeoutMs: number;
+  /** Null leaves script work unbounded; omission retains the caller's timeout. */
+  workTimeoutMs?: number | null;
   env?: NodeJS.ProcessEnv;
   runStep: PackageUpdateStepRunner;
   verifyCompleted: () => Promise<void>;
   steps: UpdateStepResult[];
 }): Promise<PackageUpdateLifecycleResult> {
+  const env =
+    params.nodeRunner && path.isAbsolute(params.nodeRunner)
+      ? {
+          ...params.env,
+          PATH: mergePathPrepend(resolveEnvironmentValue(params.env ?? process.env, "PATH"), [
+            path.dirname(params.nodeRunner),
+          ]),
+        }
+      : params.env;
   let failedScript: UpdateStepResult | null = null;
   try {
     await completePendingPackageLifecycle({
@@ -73,13 +89,16 @@ export async function runPackageUpdateLifecycle(params: {
       runScript: async (script) => {
         const step = await params.runStep({
           name: `${params.manager}-package-${script.name}`,
-          argv: [process.execPath, path.join(params.packageRoot, script.relativePath)],
+          argv: [
+            params.nodeRunner ?? process.execPath,
+            path.join(params.packageRoot, script.relativePath),
+          ],
           cwd: params.packageRoot,
-          env: params.env,
-          timeoutMs: params.timeoutMs,
+          env,
+          timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
         });
         params.steps.push(step);
-        if (step.exitCode !== 0) {
+        if (isFailedUpdateStep(step)) {
           failedScript = step;
           throw new Error(step.stderrTail ?? `${step.name} failed`);
         }

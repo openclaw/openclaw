@@ -6,6 +6,7 @@ import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
+import { getCronJobsStoreRevision } from "../store.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -39,43 +40,55 @@ import { applyJobResult, armTimer } from "./timer.js";
 
 /** Returns cron service status after a read-only maintenance pass. */
 export async function status(state: CronServiceState) {
-  return await locked(state, async () => {
-    await ensureLoadedForRead(state);
-    const sqlitePath = resolveOpenClawStateSqlitePath();
-    return {
-      enabled: state.deps.cronEnabled,
-      triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
-      storePath: sqlitePath,
-      storage: "sqlite" as const,
-      sqlitePath,
-      jobs: state.store?.jobs.length ?? 0,
-      nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
-    };
-  });
+  return await locked(
+    state,
+    async () => {
+      await ensureLoadedForRead(state);
+      const sqlitePath = resolveOpenClawStateSqlitePath();
+      return {
+        enabled: state.deps.cronEnabled,
+        triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
+        storePath: sqlitePath,
+        storage: "sqlite" as const,
+        sqlitePath,
+        jobs: state.store?.jobs.length ?? 0,
+        nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+      };
+    },
+    { readOnly: true },
+  );
 }
 
 /** Lists cron jobs sorted by next run time, excluding disabled jobs unless requested. */
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
-  return await locked(state, async () => {
-    await ensureLoadedForRead(state);
-    const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-    return sortCronJobs(jobs, "nextRunAtMs", "asc");
-  });
+  return await locked(
+    state,
+    async () => {
+      await ensureLoadedForRead(state);
+      const includeDisabled = opts?.includeDisabled === true;
+      const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
+      return sortCronJobs(jobs, "nextRunAtMs", "asc");
+    },
+    { readOnly: true },
+  );
 }
 
 /** Reads one cron job by id without advancing due schedules. */
 export async function readJob(state: CronServiceState, id: string) {
-  return await locked(state, async () => {
-    await ensureLoadedForRead(state);
-    return state.store?.jobs.find((job) => job.id === id);
-  });
+  return await locked(
+    state,
+    async () => {
+      await ensureLoadedForRead(state);
+      return state.store?.jobs.find((job) => job.id === id);
+    },
+    { readOnly: true },
+  );
 }
 
 /** Reads one job's private scratch state after proving the job exists in this store. */
 export async function readScratch(state: CronServiceState, id: string) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     findJobOrThrow(state, id);
     // Scratch intentionally opens the process-global state DB, matching every
     // other cron store write in this service (see saveCronJobsStore); threading
@@ -97,7 +110,7 @@ export async function writeScratch(
   },
 ) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     findJobOrThrow(state, id);
     params.commitGuard?.();
     return writeCronJobScratch({
@@ -120,7 +133,7 @@ export async function recordExternalFailure(
   source?: { scheduleKey: string; identity: string },
 ) {
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const job = findJobOrThrow(state, id);
     if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
       return;
@@ -187,7 +200,7 @@ export async function updateExternalState(
   statePatch: Partial<CronJob["state"]>,
 ): Promise<boolean> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     assertCronJobStateTimestamps(statePatch);
     const committedJob = commitCronRuntimeRows({
       state,
@@ -219,7 +232,7 @@ export async function retireExternalStreamSource(
   streamSourceIdentity: string,
 ): Promise<string | undefined> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const nextIdentity = createCronStreamSourceIdentity();
     const committedJob = commitCronRuntimeRows({
       state,
@@ -249,7 +262,7 @@ export async function updateExternalCounters(
   counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
 ): Promise<void> {
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const committedJob = commitCronRuntimeRows({
       state,
       jobIds: [id],
@@ -335,89 +348,115 @@ export async function listPage(
   let sourceCount: number | undefined;
   let result: CronListPageResult | undefined;
   try {
-    return await locked(state, async () => {
-      enteredAt = performance.now();
-      try {
-        await ensureLoadedForRead(state);
-        const query = normalizeLowercaseStringOrEmpty(opts?.query);
-        const enabledFilter = resolveEnabledFilter(opts);
-        const scheduleKindFilter = resolveScheduleKindFilter(opts);
-        const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
-        const triggerFilter = resolveTriggerFilter(opts);
-        const sortBy = opts?.sortBy ?? "nextRunAtMs";
-        const sortDir = opts?.sortDir ?? "asc";
-        const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
-        const source = state.store?.jobs ?? [];
-        sourceCount = source.length;
-        const filtered = source.filter((job) => {
-          if (enabledFilter === "enabled" && !isJobEnabled(job)) {
-            return false;
-          }
-          if (enabledFilter === "disabled" && isJobEnabled(job)) {
-            return false;
-          }
-          if (
-            requestedAgentId &&
-            tryResolveCronJobEffectiveAgentId(job, resolveCurrentDefaultAgentId(state)) !==
-              requestedAgentId
-          ) {
-            return false;
-          }
-          if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
-            return false;
-          }
-          if (
-            lastRunStatusFilter !== "all" &&
-            (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
-          ) {
-            return false;
-          }
-          if (triggerFilter === "conditional" && !job.trigger) {
-            return false;
-          }
-          if (triggerFilter === "unconditional" && job.trigger) {
-            return false;
-          }
-          if (query) {
-            const haystack = normalizeLowercaseStringOrEmpty(
-              [
-                job.id,
-                job.name,
-                job.description ?? "",
-                job.agentId ?? "",
-                ...(job.displayName ? [job.displayName] : []),
-              ].join(" "),
-            );
-            if (!haystack.includes(query)) {
+    return await locked(
+      state,
+      async () => {
+        enteredAt = performance.now();
+        try {
+          await ensureLoadedForRead(state);
+          const query = normalizeLowercaseStringOrEmpty(opts?.query);
+          const enabledFilter = resolveEnabledFilter(opts);
+          const scheduleKindFilter = resolveScheduleKindFilter(opts);
+          const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
+          const triggerFilter = resolveTriggerFilter(opts);
+          const sortBy = opts?.sortBy ?? "nextRunAtMs";
+          const sortDir = opts?.sortDir ?? "asc";
+          const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
+          const source = state.store?.jobs ?? [];
+          sourceCount = source.length;
+          const filtered = source.filter((job) => {
+            if (enabledFilter === "enabled" && !isJobEnabled(job)) {
               return false;
             }
+            if (enabledFilter === "disabled" && isJobEnabled(job)) {
+              return false;
+            }
+            if (
+              requestedAgentId &&
+              tryResolveCronJobEffectiveAgentId(job, resolveCurrentDefaultAgentId(state)) !==
+                requestedAgentId
+            ) {
+              return false;
+            }
+            if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
+              return false;
+            }
+            if (
+              lastRunStatusFilter !== "all" &&
+              (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
+            ) {
+              return false;
+            }
+            if (triggerFilter === "conditional" && !job.trigger) {
+              return false;
+            }
+            if (triggerFilter === "unconditional" && job.trigger) {
+              return false;
+            }
+            if (query) {
+              const haystack = normalizeLowercaseStringOrEmpty(
+                [
+                  job.id,
+                  job.name,
+                  job.description ?? "",
+                  job.agentId ?? "",
+                  ...(job.displayName ? [job.displayName] : []),
+                ].join(" "),
+              );
+              if (!haystack.includes(query)) {
+                return false;
+              }
+            }
+            // In-process visibility must share the sorted snapshot and its revision.
+            return !matchesJob || matchesJob(job);
+          });
+          // Recheck visibility on every request; only sorting and full-result hashing
+          // share the owner's prepared snapshot. Passive readers still reload/repair.
+          const storeRevision = getCronJobsStoreRevision(state.deps.storePath);
+          let snapshot = state.schedulerStarted ? state.listPageSnapshot : undefined;
+          if (
+            !snapshot ||
+            snapshot.storeRevision !== storeRevision ||
+            snapshot.sortBy !== sortBy ||
+            snapshot.sortDir !== sortDir ||
+            snapshot.filteredJobs.length !== filtered.length ||
+            !snapshot.filteredJobs.every((job, index) => job === filtered[index])
+          ) {
+            const jobs = sortCronJobs([...filtered], sortBy, sortDir);
+            snapshot = {
+              storeRevision,
+              filteredJobs: filtered,
+              sortBy,
+              sortDir,
+              jobs,
+              snapshotRevision: resolveCronListSnapshotRevision(jobs),
+            };
+            if (state.schedulerStarted) {
+              state.listPageSnapshot = snapshot;
+            }
           }
-          // In-process visibility must share the sorted snapshot and its revision.
-          return !matchesJob || matchesJob(job);
-        });
-        // Hash the complete sorted result under the lock, but detach only the page
-        // that can outlive later in-place execution state changes.
-        const sortedJobs = sortCronJobs(filtered, sortBy, sortDir);
-        const snapshotRevision = resolveCronListSnapshotRevision(sortedJobs);
-        const total = sortedJobs.length;
-        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-        const defaultLimit = total === 0 ? 50 : total;
-        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-        const jobs = structuredClone(sortedJobs.slice(offset, offset + limit));
-        const nextOffset = offset + jobs.length;
-        return (result = {
-          jobs,
-          snapshotRevision,
-          total,
-          offset,
-          limit,
-          hasMore: nextOffset < total,
-          nextOffset: nextOffset < total ? nextOffset : null,
-        } satisfies CronListPageResult);
-      } finally {
-        finishedAt = performance.now();
-      }
-    });
+          const { jobs: sortedJobs, snapshotRevision } = snapshot;
+          const total = sortedJobs.length;
+          const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+          const defaultLimit = total === 0 ? 50 : total;
+          const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+          const jobs = structuredClone(sortedJobs.slice(offset, offset + limit));
+          const nextOffset = offset + jobs.length;
+          return (result = {
+            jobs,
+            snapshotRevision,
+            total,
+            offset,
+            limit,
+            hasMore: nextOffset < total,
+            nextOffset: nextOffset < total ? nextOffset : null,
+          } satisfies CronListPageResult);
+        } finally {
+          finishedAt = performance.now();
+        }
+      },
+      { readOnly: true },
+    );
   } finally {
     const completedAt = performance.now();
     const elapsedMs = completedAt - startedAt;

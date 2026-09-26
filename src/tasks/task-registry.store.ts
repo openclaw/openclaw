@@ -1,5 +1,6 @@
 import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
 import type {
@@ -10,11 +11,11 @@ import type {
   TaskRegistryRestoreResult,
   TaskMirroredFlowSyncOutcome,
 } from "./task-registry-restore.worker.js";
+import type { TaskRetentionSource } from "./task-registry-retention-source.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 // Stores task registry records in memory and bridges persistence runtime hooks.
 import {
   closeTaskRegistryDatabase,
-  deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryMutationStateFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
@@ -29,12 +30,17 @@ import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
   TaskRegistryObserverEvent,
+  TaskRegistryObservers,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = TaskExecutionRestoreStore & {
+  prepareRetentionSourceAsync(
+    context: OpenClawStateWorkerContext,
+    taskId: string,
+  ): Promise<TaskRetentionSource | undefined>;
   runAgentEventMutationAsync(
     context: OpenClawStateWorkerContext,
     input: TaskAgentEventInput,
@@ -55,7 +61,7 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
   ): Promise<TaskLiveFlowSyncOutcome>;
   withSnapshotAsync<T>(
     context: OpenClawStateWorkerContext,
-    consume: (snapshot: TaskRegistryRestoreResult) => T,
+    consume: (snapshot: TaskRegistryRestoreResult, reconcileFlows: () => Promise<void>) => T,
   ): Promise<T>;
   syncTaskFlowAsync: (
     context: OpenClawStateWorkerContext,
@@ -64,6 +70,7 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
   loadMutationSnapshotAsync: (
     context: OpenClawStateWorkerContext,
     scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
+    options?: { missingDatabase: "empty" },
   ) => Promise<TaskRegistryStoreSnapshot>;
   loadMutationSnapshot?: (
     scopes: readonly TaskRegistryMutationScope[],
@@ -73,17 +80,22 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
     ownerKey: string,
     assertCurrent: () => void,
   ) => Promise<TaskRecord[]>;
-  deleteTaskWithDeliveryState: (taskId: string) => void;
   upsertDeliveryState: (state: TaskDeliveryState) => void;
   close?: () => void;
 };
 
-type TaskRegistryObservers = {
-  // Observers are incremental/best-effort only. Persistence belongs to TaskRegistryStore.
-  onEvent?: (event: TaskRegistryObserverEvent) => void;
-};
-
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  async prepareRetentionSourceAsync(context, taskId) {
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "tasks.retentionSource", taskId },
+      { context },
+    );
+    if (!reply?.ok || reply.type !== "tasks.retentionSource") {
+      throw new Error("Task retention source requires its admitted database");
+    }
+    return reply.source;
+  },
   async runAgentEventMutationAsync(context, input, assertCurrent, onGranted) {
     const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
     return runTaskRegistryWorkerOperation(
@@ -103,25 +115,41 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
     return syncLiveTaskFlowWithWorker(context, params, authority);
   },
   async withSnapshotAsync(context, consume) {
-    const { runOpenClawStateWorkerOperation } =
-      await import("../state/openclaw-state-worker-store.js");
-    return runOpenClawStateWorkerOperation(context, async (scope) => {
-      const snapshot = await scope.execute({ type: "tasks.restore", input: undefined });
-      // Deliver durable settlement receipts before projection admission is rechecked.
-      return consume(snapshot);
-    });
+    const { runTaskFlowRestoreWorkerOperation } = await import("./task-flow-restore-store.js");
+    return runTaskFlowRestoreWorkerOperation(
+      context,
+      { type: "tasks.restore", input: undefined },
+      consume,
+    );
   },
   async syncTaskFlowAsync(context, params) {
-    const { runOpenClawStateWorkerOperation } =
-      await import("../state/openclaw-state-worker-store.js");
-    return runOpenClawStateWorkerOperation(context, (scope) =>
-      scope.execute({ type: "flows.syncMirroredTask", input: params }),
+    const { runTaskFlowRestoreWorkerOperation } = await import("./task-flow-restore-store.js");
+    return runTaskFlowRestoreWorkerOperation(
+      context,
+      { type: "flows.syncMirroredTask", input: params },
+      async (result, reconcileFlows) => {
+        await reconcileFlows();
+        return result;
+      },
     );
   },
   loadSnapshot: loadTaskRegistryStateFromSqlite,
-  async loadMutationSnapshotAsync(context, scope) {
-    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-    return executeOpenClawStateWorker(context, { type: "tasks.mutationSnapshot", input: scope });
+  async loadMutationSnapshotAsync(context, scope, options) {
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "tasks.mutationSnapshot", input: scope },
+      { context },
+    );
+    if (!reply) {
+      if (options?.missingDatabase === "empty") {
+        return { tasks: new Map(), deliveryStates: new Map() };
+      }
+      throw new Error("Task registry snapshot requires an admitted database");
+    }
+    if (!reply.ok || reply.type !== "tasks.mutationSnapshot") {
+      throw new Error("Unexpected task registry snapshot result");
+    }
+    return reply.snapshot;
   },
   loadMutationSnapshot: loadTaskRegistryMutationStateFromSqlite,
   withMutation: withTaskRegistrySqliteMutation,
@@ -136,20 +164,18 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
     return records;
   },
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
-  deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
   close: closeTaskRegistryDatabase,
 };
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
-let configuredTaskRegistryObservers: TaskRegistryObservers | null = null;
 
 export function getTaskRegistryStore(): TaskRegistryStore {
   return configuredTaskRegistryStore;
 }
 
 export function getTaskRegistryObservers(): TaskRegistryObservers | null {
-  return configuredTaskRegistryObservers;
+  return getTaskRegistryProcessState().observers;
 }
 
 /** Subscribe at the publication owner; readers recheck current task authority. */
@@ -169,14 +195,14 @@ export function configureTaskRegistryRuntime(params: {
     configuredTaskRegistryStore = params.store;
   }
   if ("observers" in params) {
-    configuredTaskRegistryObservers = params.observers ?? null;
+    getTaskRegistryProcessState().observers = params.observers ?? null;
   }
 }
 
 export function resetTaskRegistryRuntimeForTests() {
   configuredTaskRegistryStore.close?.();
   configuredTaskRegistryStore = defaultTaskRegistryStore;
-  configuredTaskRegistryObservers = null;
+  getTaskRegistryProcessState().observers = null;
 }
 
 const storeLog = createSubsystemLogger("tasks/registry");
@@ -230,19 +256,6 @@ export function tryPersistTaskUpsert(
       operation,
       taskId: task.taskId,
       runId: task.runId,
-      error,
-    });
-    return false;
-  }
-}
-
-export function tryPersistTaskDelete(taskId: string): boolean {
-  try {
-    getTaskRegistryStore().deleteTaskWithDeliveryState(taskId);
-    return true;
-  } catch (error) {
-    storeLog.warn("Failed to persist task registry delete", {
-      taskId,
       error,
     });
     return false;

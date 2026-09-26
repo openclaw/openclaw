@@ -18,7 +18,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {

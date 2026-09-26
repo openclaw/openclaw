@@ -5,7 +5,7 @@ import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-i
 import { getInheritedProcessLineageFds } from "./inherited-process-lineage.js";
 import { supportsNodeWorkerProcessOwner } from "./service-child-protocol.js";
 import { reserveStdioEntry } from "./service-child-stdio.js";
-import type { ProcessAdapterConstruction, SpawnSecretInput } from "./types.js";
+import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
 
 export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   command: string;
@@ -24,6 +24,13 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
     | { ownedWorker: true; env: NodeJS.ProcessEnv; cleanupBinding: NodeWorkerCleanupBinding }
     | { ownedWorker?: never; env?: NodeJS.ProcessEnv; cleanupBinding?: never }
   );
+
+export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
+  waitForExtinction: () => Promise<void>;
+  confirmExtinction: () => boolean;
+  openStartGate?: () => Promise<void>;
+  closeStartGate?: () => void;
+} & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 
 /** Prepare transport facts; the host revalidates authority immediately before spawning. */
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {

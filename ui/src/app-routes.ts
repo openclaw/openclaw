@@ -56,12 +56,12 @@ import { page as pluginPage } from "./pages/plugin/route.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
-import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
@@ -111,6 +111,7 @@ const APP_ROUTE_TREE = [
   sessionsPage,
   systemsPage,
   secretsPage,
+  searchPage,
   usagePage,
   debugPage,
   logsPage,
@@ -118,7 +119,6 @@ const APP_ROUTE_TREE = [
   ...skillsPages,
   ...pluginsPages,
   cronPage,
-  tasksPage,
   devicePage,
   devicePermissionsPage,
   devicesPage,

@@ -165,29 +165,43 @@ export function acquireGatewayOwnerLease(params: {
   });
   const expiresAt = withOpenClawStateStartupMigrationCheckpointDatabase(
     (db) =>
-      runSqliteImmediateTransactionSync(db, () => {
-        assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-        reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
-        const acquired = acquireOpenClawStateLeaseInTransaction(
-          db,
-          identity,
-          STARTUP_MIGRATION_LEASE_TTL_MS,
-          payloadJson,
-        );
-        if (acquired.kind === "held") {
-          throw new Error("Another Gateway owner lease is still active for this state directory");
-        }
-        return acquired.expiresAt;
-      }),
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+          reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+          const acquired = acquireOpenClawStateLeaseInTransaction(
+            db,
+            identity,
+            STARTUP_MIGRATION_LEASE_TTL_MS,
+            payloadJson,
+          );
+          if (acquired.kind === "held") {
+            throw new Error("Another Gateway owner lease is still active for this state directory");
+          }
+          return acquired.expiresAt;
+        },
+        {
+          databaseLabel: databasePath,
+          operationLabel: "gateway.owner-lease.acquire",
+        },
+      ),
     { env, path: databasePath },
   );
   const releaseRow = () =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
-        runSqliteImmediateTransactionSync(db, () => {
-          assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-          releaseOpenClawStateLeaseInTransaction(db, identity);
-        }),
+        runSqliteImmediateTransactionSync(
+          db,
+          () => {
+            assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+            releaseOpenClawStateLeaseInTransaction(db, identity);
+          },
+          {
+            databaseLabel: databasePath,
+            operationLabel: "gateway.owner-lease.release",
+          },
+        ),
       { env, path: databasePath },
     );
   let heartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
@@ -201,6 +215,7 @@ export function acquireGatewayOwnerLease(params: {
         existingOnly: true,
         identity,
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+        acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
         heartbeatMs: 30_000,
         ...(processOwner.startedAt === null

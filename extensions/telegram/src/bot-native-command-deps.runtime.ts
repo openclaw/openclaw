@@ -1,5 +1,4 @@
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
-// Telegram plugin module implements bot native command deps behavior.
 import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,

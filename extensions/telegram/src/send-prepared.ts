@@ -2,12 +2,13 @@ import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isTelegramSkippableChunkSendError,
   mergeTelegramPartialDeliveryError,
 } from "./chunk-delivery.js";
-import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
+import { rethrowTelegramSendError, isSafeToRetrySendError } from "./network-errors.js";
 import {
   sendTelegramCaptionedMediaWithFallback,
   sendTelegramOutboundMediaWithPhotoFallback,
@@ -18,7 +19,6 @@ import {
   withTelegramNativeQuoteFallback,
   isTelegramQuoteParamError,
 } from "./reply-parameters.js";
-import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
@@ -44,9 +44,8 @@ type PreparedRequest = <T>(
 
 export function createTelegramReplyRequest(runtime: RuntimeEnv): PreparedRequest {
   const retry = createChannelApiRetryRunner({
-    shouldRetry: shouldRetryTelegramSendError,
+    shouldRetry: isSafeToRetrySendError,
     strictShouldRetry: true,
-    retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
   });
   return (send, operation, options) =>
     withTelegramApiErrorLogging({
@@ -149,7 +148,9 @@ export function createTelegramPreparedSender(config: {
         config.request(
           () => {
             config.assertPlatformSendAuthorized?.();
-            return send(effective);
+            return runAuthorizedTelegramRequest(config.assertPlatformSendAuthorized, () =>
+              send(effective),
+            );
           },
           operation,
           {
@@ -312,12 +313,12 @@ export function createTelegramPreparedSender(config: {
   };
 
   const sendMedia = async (params: {
-    sender: TelegramOutboundMediaSender<Message>;
-    documentSender?: TelegramOutboundMediaSender<Message>;
+    sender: TelegramOutboundMediaSender;
+    documentSender?: TelegramOutboundMediaSender;
     requestParams: Record<string, unknown>;
     plainCaption?: string;
   }) => {
-    const send = async (sender: TelegramOutboundMediaSender<Message>) => {
+    const send = async (sender: TelegramOutboundMediaSender) => {
       await config.beforeMedia?.();
       return sendTelegramCaptionedMediaWithFallback({
         operation: sender.operation,

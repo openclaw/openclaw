@@ -23,8 +23,13 @@ without requiring a Gateway connection. Update finalization and standalone
 `openclaw doctor --fix` reconcile eligible, previously running managed services
 through the native installer; update-time Doctor reports drift and defers publication
 to finalization. Doctor can automatically refresh installation-only drift in a
-verified, writable packaged service; additional native settings, operator edits,
-or uncertain inspection still require interactive confirmation.
+verified, writable packaged service. It also repairs recognized stale native
+policy, such as a missing systemd `KillMode=mixed` or zero Scheduled Task restart
+retries, through the update installer's backup transaction before restoring a
+Gateway stopped for maintenance. Doctor reports changed keys and backup paths;
+supported custom settings survive the rewrite. Automatic native-policy repair
+preserves unknown operator edits and uncertain definitions for operator review.
+Other command or credential changes still require interactive confirmation.
 Services already stopped keep their definitions and stop state; run the reported
 profile-aware `openclaw gateway install --force` command from the intended
 installation to reconcile them (installation may start the service).
@@ -39,6 +44,29 @@ can verify ownership of the replacement. The warning reports whether the
 definition was unchanged, restored, or needs inspection; follow the reported
 status and installer commands after the active maintenance or update finishes.
 Unverified restoration keeps recovery pending instead of claiming a safe restart.
+
+When explicit repair stops a managed Gateway, Doctor waits for that process to
+release shared-state lifecycle ownership within the service stop deadline before
+repairing state. If ownership remains held, Doctor warns, restores the service,
+and refuses the unsafe repair. On macOS, failed activation attempts restore the
+LaunchAgent registration so its KeepAlive policy can recover; the error reports
+whether the job is loaded and gives a recovery command if bootstrap also fails.
+An ambiguous `kickstart` error followed by a probe that confirms the job is absent
+uses bootstrap recovery; successful activation then completes normally. A failure
+for a job that remains loaded stays visible.
+
+Doctor rechecks update admission after acquiring both maintenance coordinators.
+If it must cancel before repair starts, it reverses its own stop while its native
+service custody remains valid. Normal post-repair restoration still requires
+current update admission.
+
+If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
+or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
+admitted repair work and service restoration before exiting. An ordinary repair
+error also restores the managed service Doctor stopped, using the current saved
+configuration. Pending approval prompts cancel without interrupting admitted
+writes. Concrete data risks, lost service authority, and unverified child
+cleanup still prevent unsafe activation and report the recovery action.
 
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup

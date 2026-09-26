@@ -3,11 +3,10 @@
  * Parses OpenAI-style patch envelopes and applies add/update/delete/move hunks
  * through guarded host or sandbox filesystem operations.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
+import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "@openclaw/fs-safe/advanced";
 import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
-import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import {
   type ApplyPatchContainmentSource,
   withApplyPatchContainmentHint,
@@ -19,11 +18,7 @@ import {
   resolvePatchFileOps,
   type SandboxApplyPatchConfig,
 } from "./apply-patch-file-ops.js";
-import {
-  relativePathEscapesRoot,
-  resolveApplyPatchInputPath,
-  toDisplayPath,
-} from "./apply-patch-paths.js";
+import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
@@ -229,7 +224,6 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         async () => {
           const target = await targetResolution;
           const fileOps = await getFileOps();
-          await assertPatchParentPath(hunk.path, patchOptions);
           await ensureDir(target.resolved, fileOps);
           await createPatchTarget({
             target,
@@ -281,37 +275,19 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
         const applied = await applyUpdateHunk(target.resolved, hunk.chunks, fileOps);
 
         if (hunk.movePath && moveTarget) {
-          await assertPatchParentPath(hunk.movePath, patchOptions);
           await ensureDir(moveTarget.resolved, fileOps);
-          // Container aliases can name the same file; reuse the physical identity
-          // already held by the mutation queue instead of comparing spellings.
-          const moveResolvesToSource = moveTarget.queueKey === target.queueKey;
-          if (moveResolvesToSource) {
-            const existing = await fileOps.readFile(target.resolved);
-            if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
-              noOpPaths.add(target.display);
-            } else {
-              noOpPaths.delete(target.display);
-              await fileOps.writeFile(target.resolved, applied);
-            }
-          } else {
-            noOpPaths.delete(target.display);
-            await createPatchTarget({
-              target: moveTarget,
-              contents: applied,
-              ops: fileOps,
-              hint: "Delete it earlier in the same patch to replace it.",
-            });
-            await fileOps.remove(target.resolved);
-          }
-          if (!noOpPaths.has(target.display)) {
-            recordSummary(
-              summary,
-              seen,
-              "modified",
-              moveResolvesToSource ? target.display : moveTarget.display,
-            );
-          }
+        }
+        // Container aliases can name the same file; use the physical queue identity.
+        if (moveTarget && moveTarget.queueKey !== target.queueKey) {
+          noOpPaths.delete(target.display);
+          await createPatchTarget({
+            target: moveTarget,
+            contents: applied,
+            ops: fileOps,
+            hint: "Delete it earlier in the same patch to replace it.",
+          });
+          await fileOps.remove(target.resolved);
+          recordSummary(summary, seen, "modified", moveTarget.display);
           return;
         }
         const existing = await fileOps.readFile(target.resolved);
@@ -395,56 +371,7 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
   if (!parent || parent === ".") {
     return;
   }
-  await ops.mkdirp(parent);
-}
-
-async function assertPatchParentPath(rawFilePath: string, options: ApplyPatchOptions) {
-  if (options.workspaceOnly === false || options.sandbox) {
-    return;
-  }
-  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
-  const parent = path.dirname(filePath);
-  if (!parent || parent === ".") {
-    return;
-  }
-  const checked = await assertSandboxPath({
-    filePath: parent,
-    cwd: options.cwd,
-    root: options.root ?? options.cwd,
-  });
-  await assertNoExistingParentAliases({
-    parentPath: checked.resolved,
-    rootPath: options.root ?? options.cwd,
-  });
-}
-
-async function assertNoExistingParentAliases(params: { parentPath: string; rootPath: string }) {
-  const rootPath = path.resolve(params.rootPath);
-  const parentPath = path.resolve(params.parentPath);
-  const relative = path.relative(rootPath, parentPath);
-  if (!relative || relative === "" || relativePathEscapesRoot(relative)) {
-    return;
-  }
-
-  let current = rootPath;
-  for (const segment of relative.split(path.sep)) {
-    if (!segment) {
-      continue;
-    }
-    current = path.join(current, segment);
-    const stat = await fs.lstat(current).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw error;
-    });
-    if (!stat) {
-      return;
-    }
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Path alias under sandbox root: ${path.relative(rootPath, current)}`);
-    }
-  }
+  await ops.mkdirp?.(parent);
 }
 
 async function resolvePatchPath(
@@ -731,15 +658,7 @@ function parseUpdateFileChunk(
     }
 
     const marker = line[0];
-    if (!marker) {
-      chunk.contextOldIndexes.push(chunk.oldLines.length);
-      chunk.oldLines.push("");
-      chunk.newLines.push("");
-      parsedLines += 1;
-      continue;
-    }
-
-    if (marker === " ") {
+    if (!marker || marker === " ") {
       const content = line.slice(1);
       chunk.contextOldIndexes.push(chunk.oldLines.length);
       chunk.oldLines.push(content);

@@ -1,8 +1,11 @@
+import { ok } from "@openclaw/normalization-core/result";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
+import { createPreparedTranscriptDateReader } from "./store-date-preparation.js";
 import {
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readStoredTranscriptNotes,
   readTranscriptEntry,
@@ -10,12 +13,17 @@ import {
   TranscriptLibraryError,
 } from "./store-read.js";
 import {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
   readStoredTranscriptSummary,
   readTranscriptUtterances,
   readTranscriptSummarySnapshot,
+  readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
 import {
   readRecentStoppedTranscriptSession,
@@ -36,92 +44,91 @@ export function executeTranscriptRead(
   const database = target.database.db;
   try {
     switch (command.type) {
+      case "transcripts.canonicalSessionRow":
+        return ok(readTranscriptCanonicalSessionRow(database, command.input.params.selector));
+      case "transcripts.readEntries":
+        return ok(
+          queryTranscriptReadEntries(
+            database,
+            command.input.params,
+            createPreparedTranscriptDateReader(),
+          ),
+        );
+      case "transcripts.exportOwnership":
+        return ok(readTranscriptExportOwnership(database, command.input.params.session));
+      case "transcripts.exportPathCollisions":
+        return ok(readTranscriptExportPathCollisions(database, command.input.params.exportKey));
+      case "transcripts.exportPathOwners":
+        return ok(readTranscriptExportPathOwners(database, command.input.params.exportKey));
       case "transcripts.summarySnapshot":
-        return {
-          ok: true,
-          value: runSqliteDeferredTransactionSync(database, () =>
+        return ok(
+          runSqliteDeferredTransactionSync(database, () =>
             readTranscriptSummarySnapshot(
               database,
               command.input.params.session,
               command.input.params.maxUtterances,
             ),
           ),
-        };
+        );
       case "transcripts.sessionEntries":
-        return {
-          ok: true,
-          value: runSqliteDeferredTransactionSync(database, () =>
-            readTranscriptSessionEntries(database),
-          ),
-        };
+        return ok(
+          runSqliteDeferredTransactionSync(database, () => readTranscriptSessionEntries(database)),
+        );
       case "transcripts.matches":
-        return {
-          ok: true,
-          value: runSqliteDeferredTransactionSync(database, () =>
+        return ok(
+          runSqliteDeferredTransactionSync(database, () =>
             readTranscriptSessionMatches(database, command.input.params.value),
           ),
-        };
+        );
       case "transcripts.session":
-        return {
-          ok: true,
-          value: readTranscriptSessionByIdentity(database, command.input.params.session),
-        };
+        return ok(readTranscriptSessionByIdentity(database, command.input.params.session));
       case "transcripts.entry":
-        return {
-          ok: true,
-          value: readTranscriptEntry(
+        return ok(
+          readTranscriptEntry(
             database,
             command.input.params.selector,
             command.input.params.purpose,
           ),
-        };
+        );
       case "transcripts.latest":
-        return { ok: true, value: readLatestTranscriptEntry(database) };
+        return ok(readLatestTranscriptEntry(database));
       case "transcripts.notes":
-        return {
-          ok: true,
-          value: readStoredTranscriptNotes(
+        return ok(
+          readStoredTranscriptNotes(
             database,
             command.input.params.session,
             command.input.params.purpose,
           ),
-        };
+        );
       case "transcripts.libraryEntry":
-        return {
-          ok: true,
-          value: runSqliteDeferredTransactionSync(database, () =>
+        return ok(
+          runSqliteDeferredTransactionSync(database, () =>
             readTranscriptLibraryEntry(database, command.input.params),
           ),
-        };
+        );
       case "transcripts.recentStopped":
-        return {
-          ok: true,
-          value: readRecentStoppedTranscriptSession(
+        return ok(
+          readRecentStoppedTranscriptSession(
             database,
             command.input.params.source,
             command.input.params.stoppedAfter,
             command.input.params.stoppedBefore,
           ),
-        };
+        );
       case "transcripts.summaryRevision":
-        return {
-          ok: true,
-          value: readTranscriptSummaryInputRevision(database, command.input.params.session),
-        };
+        return ok(readTranscriptSummaryInputRevision(database, command.input.params.session));
       case "transcripts.utterances":
-        return {
-          ok: true,
-          value: readTranscriptUtterances(
+        return ok(
+          readTranscriptUtterances(
             database,
             command.input.params.session,
             command.input.params.maxUtterances,
           ),
-        };
+        );
       case "transcripts.summary":
-        return {
-          ok: true,
-          value: readStoredTranscriptSummary(database, command.input.params.session),
-        };
+        return ok(readStoredTranscriptSummary(database, command.input.params.session));
+      case "transcripts.exportDigest":
+        return ok(readTranscriptJsonlDigest(database, command.input.params.session));
       default:
         throw new Error("Unknown transcript SQLite command");
     }

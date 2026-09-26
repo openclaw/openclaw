@@ -25,29 +25,33 @@ describe("worker environment runtime upgrades", () => {
     ],
   };
 
-  function setupUpgrade(
+  async function setupUpgrade(
     transport: "node" | "ssh",
     state: "ready" | "idle" | "attached" = "attached",
     bootstrapReceipt: WorkerAdmissionHandshake = support.BOOTSTRAP_RECEIPT,
   ) {
     const environmentId = "worker-runtime-upgrade";
-    support.testState.store.createIntent({
+    await support.testState.store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "development",
       profileSnapshot: { settings: { region: "test", desktop: true } },
       provisionOperationId: `provision:${environmentId}`,
     });
-    support.testState.store.transition({ environmentId, from: "requested", to: "provisioning" });
+    await support.testState.store.transition({
+      environmentId,
+      from: "requested",
+      to: "provisioning",
+    });
     if (transport === "ssh") {
-      support.testState.store.transition({
+      await support.testState.store.transition({
         environmentId,
         from: "provisioning",
         to: "bootstrapping",
         patch: { leaseId: `lease:${environmentId}`, sshEndpoint: support.SSH_ENDPOINT },
       });
     }
-    const ready = support.testState.store.transition({
+    const ready = await support.testState.store.transition({
       environmentId,
       from: transport === "node" ? "provisioning" : "bootstrapping",
       to: "ready",
@@ -62,7 +66,7 @@ describe("worker environment runtime upgrades", () => {
     const environment =
       state === "ready"
         ? ready
-        : support.testState.store.transition({
+        : await support.testState.store.transition({
             environmentId,
             from: "ready",
             to: state,
@@ -76,7 +80,7 @@ describe("worker environment runtime upgrades", () => {
     });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, {
+        ? await seedActivePlacement(placements, {
             environmentId,
             ownerEpoch: environment.ownerEpoch,
             executionMode: transport === "node" ? "worker-turn" : "remote-exec",
@@ -146,7 +150,7 @@ describe("worker environment runtime upgrades", () => {
   ] as const)(
     "upgrades the %s %s runtime while retaining its machine and workspace",
     async (transport, state) => {
-      const h = setupUpgrade(transport, state);
+      const h = await setupUpgrade(transport, state);
       await h.service.reconcileOnce();
       expect(h.events).toEqual(["stopped", "installed"]);
       expect(h.stop).toHaveBeenCalledWith(h.environment.environmentId, h.environment.ownerEpoch);
@@ -185,7 +189,7 @@ describe("worker environment runtime upgrades", () => {
   it.each(["node", "ssh"] as const)(
     "retains the %s machine after an interrupted install and retries its runtime",
     async (transport) => {
-      const h = setupUpgrade(transport);
+      const h = await setupUpgrade(transport);
       h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));
       await h.service.reconcileOnce();
       expect(support.testState.store.get(h.environment.environmentId)).toMatchObject({
@@ -217,7 +221,7 @@ describe("worker environment runtime upgrades", () => {
   );
 
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
-    const h = setupUpgrade("ssh", "attached", {
+    const h = await setupUpgrade("ssh", "attached", {
       ...support.BOOTSTRAP_RECEIPT,
       protocolFeatures: [
         WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
@@ -262,7 +266,7 @@ describe("worker environment runtime upgrades", () => {
   it.each(["shutdown", "destroy", "move", "live turn"] as const)(
     "rejects a finished installation after %s closes its authority",
     async (race) => {
-      const h = setupUpgrade("node");
+      const h = await setupUpgrade("node");
       const started = createDeferred();
       const installed = createDeferred<typeof currentReceipt>();
       h.install.mockImplementationOnce(async () => {
@@ -275,7 +279,7 @@ describe("worker environment runtime upgrades", () => {
       if (race === "shutdown") {
         stopping = h.service.stop();
       } else if (race === "destroy") {
-        support.testState.store.requestDestroy({
+        await support.testState.store.requestDestroy({
           environmentId: h.environment.environmentId,
           state: "attached",
         });
@@ -290,7 +294,7 @@ describe("worker environment runtime upgrades", () => {
           target: { kind: "gateway" },
         });
       } else {
-        h.placements.claimTurn({
+        await h.placements.claimTurn({
           ...REQUEST,
           claimId: "new-live-claim",
           runId: "new-live-run",
