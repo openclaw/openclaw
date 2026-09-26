@@ -307,6 +307,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     fs.rmSync(distNodeModules, { recursive: true, force: true });
 
     sourcePluginDirs.add(dirent.name);
+    copyPresentationAsset(pluginDir, distPluginDir, "README.md");
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");

@@ -701,7 +701,7 @@ describe("registered async managed child linkage", () => {
       if (eventTiming === "before metadata admission") {
         const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
         vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (admit) => {
+          (admit, attachment) => {
             let transactionCount = 0;
             return createAdmission((request, grant) => {
               if (
@@ -716,7 +716,7 @@ describe("registered async managed child linkage", () => {
                 }
               }
               admit(request, grant);
-            });
+            }, attachment);
           },
         );
       }

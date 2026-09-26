@@ -2,7 +2,6 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.ui.chat.ChatTimelineItem
 import ai.openclaw.app.ui.chat.buildTimeline
-import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import ai.openclaw.app.ui.chat.prepareChatHistory
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
@@ -187,13 +186,23 @@ class RoomChatTranscriptCacheTest {
           .last()
           .entryId,
       )
-      assertEquals(null, latestChatMessageUsage(controller.messages.value))
+      assertEquals(
+        null,
+        controller.messages.value
+          .last()
+          .usage,
+      )
 
       val offline = createChatController(transcriptCache = store, cacheScope = { ChatCacheScope("gateway-a", 2) }) { _, _ -> error("offline") }
       offline.load("main")
       advanceUntilIdle()
       assertTrue(offline.messagesFromCache.value)
-      assertEquals(null, latestChatMessageUsage(offline.messages.value))
+      assertEquals(
+        null,
+        offline.messages.value
+          .last()
+          .usage,
+      )
       assertEquals(2, offline.messages.value.size)
       assertEquals(
         "read",
@@ -533,11 +542,11 @@ class RoomChatTranscriptCacheTest {
       assertEquals("run-1", loaded[0].runId)
       assertEquals("run-parent", loaded[0].steerTargetRunId)
       assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
+      assertEquals(ChatMessageUsage(input = 0, output = 0), loaded[1].usage)
       assertTrue(loaded[2].content.isEmpty())
       assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
       assertEquals(ChatMessageCost(total = 0.031), loaded[2].cost)
       assertTrue(loaded[3].isSyntheticDisplay)
-      assertEquals(ChatMessageUsage(input = 7_500, output = 450), latestChatMessageUsage(loaded))
     }
 
   @Test

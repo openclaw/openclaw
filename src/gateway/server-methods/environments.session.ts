@@ -168,22 +168,13 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
                   params: {
                     sessionKey: caller.identity.sessionKey,
                     agentId: caller.identity.agentId,
-                    command:
-                      presentation === "desktop"
-                        ? {
-                            kind: "panel",
-                            panel: "desktop",
-                            environmentId,
-                            open: true,
-                            dock: "right",
-                          }
-                        : {
-                            kind: "panel",
-                            panel: "portal",
-                            environmentId,
-                            open: true,
-                            dock: "right",
-                          },
+                    command: {
+                      kind: "panel",
+                      panel: presentation === "desktop" ? "desktop" : "portal",
+                      environmentId,
+                      open: true,
+                      dock: "right",
+                    },
                   },
                 });
                 if (!dispatched.ok) {

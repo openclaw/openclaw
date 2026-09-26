@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
 // the redactor; neither candidate code nor raw fixture data owns uploads.
@@ -43,6 +44,12 @@ const backupRollbackLogs = [
   "backup-rollback-create.json.err",
   "backup-rollback-restore.json",
   "backup-rollback-restore.json.err",
+];
+const pluginPolicyLogs = [
+  "webhooks-only-policy/result.json",
+  "webhooks-only-policy/update.json",
+  "webhooks-only-policy/baseline-runtime.out",
+  "webhooks-only-policy/candidate-runtime.out",
 ];
 const logNames = [
   "baseline-install.log",
@@ -85,6 +92,10 @@ const logNames = [
   "physical-candidate-doctor.log",
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
+  ...pluginPolicyLogs,
+  "webhooks-only-policy/update.err",
+  "webhooks-only-policy/gateway.log",
+  "webhooks-only-policy/baseline-gateway.log",
   "legacy-operator-post-update-cron-history.json",
   "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
@@ -1630,6 +1641,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   if (snapshot.status !== "passed") {
     throw new Error();
   }
+  const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1703,6 +1715,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     updateRestartSource: sanitize(snapshot.updateRestartSource, "summary"),
     firstHopPostCore: publishedPostCore(snapshot.firstHopPostCore, sanitize),
     backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
+    ...(pluginPolicy ? { pluginPolicy } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -1723,6 +1736,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         "recovery-update.json",
         ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
         ...(snapshot.scenario === "legacy-operator-state" ? backupRollbackLogs : []),
+        ...(pluginPolicy ? pluginPolicyLogs : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
           ? [
               "workshop-doctor-recovery.json",

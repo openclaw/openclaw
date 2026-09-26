@@ -69,6 +69,8 @@ type HistoryParams = {
   reseedReceipt?: CliSessionReseedReceipt;
 };
 let snapshotCache: { key: string; pending: Promise<readonly Message[]> } | undefined;
+// Other sessions may replace the completed-cache slot while an import is still running.
+const pendingSnapshots = new Map<string, Promise<readonly Message[]>>();
 
 function normalizeOversizedEntry(value: unknown): ClaudeCliProjectEntry | null {
   if (!isRecord(value) || (value.type !== "user" && value.type !== "assistant")) {
@@ -240,7 +242,9 @@ export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): 
   }
   const [filePath, cacheKey] = source;
   if (snapshotCache?.key !== cacheKey) {
-    snapshotCache = { key: cacheKey, pending: parseSnapshot(filePath, params) };
+    const pending = pendingSnapshots.get(cacheKey) ?? parseSnapshot(filePath, params);
+    pendingSnapshots.set(cacheKey, pending);
+    snapshotCache = { key: cacheKey, pending };
   }
   const pending = snapshotCache.pending;
   let snapshot: readonly Message[];
@@ -251,6 +255,10 @@ export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): 
       snapshotCache = undefined;
     }
     return [];
+  } finally {
+    if (pendingSnapshots.get(cacheKey) === pending) {
+      pendingSnapshots.delete(cacheKey);
+    }
   }
   const messages: Message[] = [];
   for (const [index, message] of snapshot.entries()) {

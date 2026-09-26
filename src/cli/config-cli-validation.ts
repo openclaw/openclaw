@@ -440,7 +440,8 @@ export async function validateConfigMutation(params: {
   const requiresFullSchema = operations.some(
     (operation) =>
       operation.inputMode === "unset" ||
-      (operation.inputMode === "json" && operation.schemaValidated !== true),
+      ((operation.inputMode === "json" || operation.inputMode === "builder") &&
+        operation.schemaValidated !== true),
   );
   const { refsToResolve, skippedExecRefs } = selectDryRunRefsForResolution({
     refs: checksRefs ? selection.refs : [],

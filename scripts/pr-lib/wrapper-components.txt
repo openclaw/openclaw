@@ -14,6 +14,7 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
@@ -260,6 +261,7 @@ src/channels/chat-meta.ts
 src/channels/config-metadata.ts
 src/channels/config-presence.ts
 src/channels/ids.ts
+src/channels/message/ingress-queue-read-contract.ts
 src/channels/plugins/bootstrap-registry.ts
 src/channels/plugins/bundled-ids.ts
 src/channels/plugins/bundled-root.ts
@@ -1212,6 +1214,7 @@ src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/sandbox-workspace-paths.ts
+src/shared/settle-within.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
@@ -1321,6 +1324,7 @@ src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
 src/state/session-metadata-unavailable-error.ts
 src/state/session-watch-cursor-provenance.ts
+src/test-utils/bun-process.ts
 src/utils.ts
 src/utils/boolean.ts
 src/utils/fetch-timeout.ts

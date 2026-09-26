@@ -513,6 +513,13 @@ the underlying database error.
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
 
+Media migration uses the schema admission integrity check first. Healthy agent
+databases do not repeat that full-file scan inside an immediate repair transaction.
+A proven integrity failure still invokes Doctor's preserving index repair before
+retrying admission. Startup diagnostics label schema admission, index repair, and
+quarantine cleanup separately; stored data, schema versions, and update recovery
+semantics are unchanged.
+
 For shared-state or per-agent index-only corruption, `openclaw doctor --fix` is
 the supported repair. Doctor requires every `integrity_check` finding to name missing,
 non-unique, or incorrectly counted index entries, verifies the table data without

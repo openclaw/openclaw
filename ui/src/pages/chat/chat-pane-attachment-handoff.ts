@@ -10,6 +10,8 @@ import {
 import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerDraftRevision,
@@ -239,6 +241,7 @@ export function restorePaneStagedAttachments(
     state.chatMessage = restored.message ?? "";
     state.chatMentions = restored.mentions;
     state.chatGoalDraftMode = restored.goalMode ?? null;
+    state.chatReplyTarget = restored.replyTarget ?? null;
   }
   const currentIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
   state.chatAttachments = [
@@ -276,13 +279,19 @@ export function preparePaneStagedAttachments(
 ): void {
   const attachments = [...state.chatAttachments];
   context.chatAttachmentHandoff.prepare({
+    reviewPrivateDraft: reviewPrivateComposerDraft,
     ...handoffKey(paneId, state, owner),
     attachments,
     fallbacks: state.chatComposerFallbackByScope,
     message: state.chatMessage,
     mentions: state.chatMentions,
     goalMode: state.chatGoalDraftMode,
+    replyTarget: state.chatReplyTarget,
     draftRevision,
+    incognito: isIncognitoComposerScope(
+      state,
+      resolveUiConversationIdentity(state, state.sessionKey),
+    ),
   });
 }
 

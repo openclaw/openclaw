@@ -613,14 +613,14 @@ describe("appendSessionTranscriptNote", () => {
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const spy = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit) =>
+        .mockImplementation((admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "commit" && changed === 0) {
               changed++;
               registerSecretValueForRedaction(marker);
             }
             admit(request, grant);
-          }),
+          }, attachment),
         );
       try {
         const rejected = await appendSessionTranscriptNote(target, note).then(

@@ -380,7 +380,7 @@ async function closeGatewayResources(
   params: GatewayCloseParams,
   preparation: GatewayClosePreparation,
 ): Promise<ShutdownResult> {
-  params.pluginMetadata.beginClose();
+  await params.pluginMetadata.beginClose();
   const { start, notice, warnings, cleanupWork } = preparation;
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;

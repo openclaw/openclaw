@@ -48,6 +48,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
+import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
@@ -1739,6 +1740,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: [
           "test/scripts/build-all.test.ts",
+          "test/scripts/pr-gate-base.test.ts",
           "test/scripts/check-dynamic-import-warts.test.ts",
           "test/scripts/lint-status.test.ts",
           "test/scripts/run-oxlint.test.ts",
@@ -2710,7 +2712,9 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.infra.config.ts",
           forwardedArgs,
-          includePatterns: ["src/gateway/server-methods/memory-search.test.ts"],
+          includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+            file.startsWith("src/gateway/"),
+          ),
           watchMode: false,
         },
       ]);
@@ -4987,7 +4991,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
-    const [spec] = createVitestRunSpecs(["ui/src/pages/tasks/tasks.e2e.test.ts"], {
+    const [spec] = createVitestRunSpecs(["ui/src/pages/cron/run-transcript.e2e.test.ts"], {
       baseEnv: {},
     });
 
@@ -5073,7 +5077,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plan).toEqual({
       mode: "targets",
       skippedBroadFallbackPaths: ["src/gateway/server.impl.ts"],
-      targets: ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/check.test.ts"],
+      targets: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/check.test.ts",
+        "test/scripts/pr-gate-base.test.ts",
+      ],
     });
     expect(repoSourceReads).toEqual([]);
   });
@@ -5832,7 +5840,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
-  it("expands untargeted local runs to leaf project configs by default", () => {
+  it("expands untargeted local runs to leaf project configs by default", async () => {
+    const infraConfig = "test/vitest/vitest.infra.config.ts";
+    const infraFiles = await listVitestConfigTestFiles(infraConfig);
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -5863,6 +5873,16 @@ describe("scripts/test-projects full-suite sharding", () => {
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
         expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        const infraPlans = plans.filter((plan) => plan.config === infraConfig);
+        expect(infraPlans.length).toBeGreaterThan(1);
+        expect(
+          infraPlans.every(
+            (plan) => plan.forwardedArgs.length > 0 && plan.forwardedArgs.length <= 64,
+          ),
+        ).toBe(true);
+        expect(infraPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(infraFiles)].toSorted(),
+        );
         const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
         expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
         expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(

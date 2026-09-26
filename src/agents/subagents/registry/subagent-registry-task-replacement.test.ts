@@ -120,7 +120,7 @@ it.each(["end", "error"] as const)(
         ...transition,
       });
     }
-    const turnClaim = placementStore.claimTurn({
+    const turnClaim = await placementStore.claimTurn({
       ...placementIdentity,
       claimId: "fixture-turn-claim",
       runId: previous.runId,

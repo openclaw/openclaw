@@ -60,7 +60,12 @@ function hasProxyPrototype(object: object): boolean {
   return false;
 }
 
-function isPluginData(value: unknown, seen?: Set<object>): boolean {
+function isPluginData(
+  value: unknown,
+  seen?: Set<object>,
+  knownPrototype?: object,
+  knownNative?: Function,
+): boolean {
   if (!value || typeof value !== "object") {
     return typeof value !== "function";
   }
@@ -90,17 +95,18 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   if (prototype && types.isProxy(prototype)) {
     return false;
   }
-  const constructor = prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
-  // Same-engine realm intrinsics share native source; subclasses retain their own executable source.
-  if (
-    prototype !== null &&
-    (typeof constructor !== "function" ||
+  if (prototype && (prototype !== knownPrototype || native !== knownNative)) {
+    const constructor = Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+    // Same-engine realm intrinsics share native source; subclasses retain their own executable source.
+    if (
+      typeof constructor !== "function" ||
       (constructor !== native &&
         Function.prototype.toString.call(constructor) !==
           Function.prototype.toString.call(native)) ||
-      Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype)
-  ) {
-    return false;
+      Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype
+    ) {
+      return false;
+    }
   }
   let firstChild: object | undefined;
   let moreChildren: object[] | undefined;
@@ -126,12 +132,15 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   }
   const visited = seen ?? new Set<object>();
   visited.add(value);
-  if (firstChild && !isPluginData(firstChild, visited)) {
+  // Reuse intrinsic checks within this walk; later wraps must recheck mutable prototypes.
+  const nextPrototype = knownPrototype ?? prototype ?? undefined;
+  const nextNative = knownPrototype ? knownNative : native;
+  if (firstChild && !isPluginData(firstChild, visited, nextPrototype, nextNative)) {
     return false;
   }
   if (moreChildren) {
     for (const child of moreChildren) {
-      if (!isPluginData(child, visited)) {
+      if (!isPluginData(child, visited, nextPrototype, nextNative)) {
         return false;
       }
     }
@@ -140,13 +149,16 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   // entry, and Set members do not allocate duplicate key/value pairs.
   if (native === Map) {
     for (const [key, entry] of Map.prototype.entries.call(value)) {
-      if (!isPluginData(key, visited) || !isPluginData(entry, visited)) {
+      if (
+        !isPluginData(key, visited, nextPrototype, nextNative) ||
+        !isPluginData(entry, visited, nextPrototype, nextNative)
+      ) {
         return false;
       }
     }
   } else if (native === Set) {
     for (const entry of Set.prototype.values.call(value)) {
-      if (!isPluginData(entry, visited)) {
+      if (!isPluginData(entry, visited, nextPrototype, nextNative)) {
         return false;
       }
     }
@@ -514,12 +526,33 @@ export function createPluginValueView(
       }
       return undefined;
     };
-    const invoke = <T>(run: () => T): T => {
+    const assertActive = () => {
       if (!active || !bindings.hasToken(token)) {
         throw new Error(`Plugin ${bindings.instance.pluginId} stream is closed`);
       }
+    };
+    const invoke = <T>(run: () => T): T => {
+      assertActive();
       pending += 1;
       return bindings.invoke(run, { token, release: releaseOperation });
+    };
+    const readResultMember = (result: object, key: "done" | "value"): unknown => {
+      assertActive();
+      const descriptor = !types.isProxy(result) && Object.getOwnPropertyDescriptor(result, key);
+      if (descriptor && "value" in descriptor) {
+        const value: unknown = descriptor.value;
+        // Ordinary data reads need authority, but only executable Promise inspection needs scope.
+        if (
+          value === null ||
+          (typeof value !== "object" && typeof value !== "function") ||
+          (!types.isPromise(value) &&
+            !pluginMemberNeedsAdmission(value, "then") &&
+            typeof Reflect.get(value, "then") !== "function")
+        ) {
+          return value;
+        }
+      }
+      return invoke(() => Reflect.get(result, key));
     };
     const admission: PluginIteratorAdmission = {
       get done() {
@@ -560,7 +593,7 @@ export function createPluginValueView(
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
-            const complete = Boolean(invoke(() => Reflect.get(next, "done")));
+            const complete = Boolean(readResultMember(next, "done"));
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
@@ -568,8 +601,7 @@ export function createPluginValueView(
               // The consumer reads completion after the last call may have joined disposal.
               done: complete,
               get value() {
-                const read = (): unknown => Reflect.get(next, "value");
-                return active ? invoke(read) : read();
+                return active ? readResultMember(next, "value") : Reflect.get(next, "value");
               },
             };
           } catch (error) {

@@ -3,11 +3,17 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  setLoggerOverride(null);
+  resetLogger();
+});
 
 function fixture(replacement = "bravo"): { pathname: string; database: DatabaseSync } {
   const pathname = path.join(tempDirs.make("index-corruption-"), "state.sqlite");
@@ -27,11 +33,16 @@ function fixture(replacement = "bravo"): { pathname: string; database: DatabaseS
 describe("explicit index corruption repair", () => {
   it.each(["bravo", "omega"])(
     "preserves table rows and backs up before UNIQUE index repair (%s)",
-    (replacement) => {
+    async (replacement) => {
       const { pathname, database } = fixture(replacement);
+      const file = path.join(path.dirname(pathname), "repair.log");
+      setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+      let clock = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
       try {
         const before = database.prepare("SELECT * FROM audit_events NOT INDEXED").all();
         const backup = vi.fn(() => {
+          clock += 1_200;
           expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
           expect(database.prepare("SELECT * FROM audit_events NOT INDEXED").all()).toEqual(before);
         });
@@ -39,6 +50,23 @@ describe("explicit index corruption repair", () => {
           repairSqliteIndexCorruption(database, pathname, { backup, assertCurrent: () => {} }),
         ).toEqual(["sqlite_autoindex_audit_events_1"]);
         expect(backup).toHaveBeenCalledOnce();
+        await flushLogger();
+        const holds = fs
+          .readFileSync(file, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .filter((record) => record.message === "slow SQLite transaction hold");
+        expect(holds).toContainEqual(
+          expect.objectContaining({
+            "1": expect.objectContaining({
+              database: pathname,
+              operation: "sqlite.index-corruption-repair",
+              mode: "immediate",
+              elapsedMs: 1_200,
+            }),
+          }),
+        );
         expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
         expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         expect(database.prepare("SELECT event_id FROM audit_links").all()).toEqual([

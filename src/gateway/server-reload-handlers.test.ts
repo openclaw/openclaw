@@ -430,8 +430,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
-  advancePreparedModelRuntimeConfig: (cfg: OpenClawConfig) =>
-    hoisted.advancePreparedModelRuntimeConfig(cfg),
+  advancePreparedModelRuntimeConfig: hoisted.advancePreparedModelRuntimeConfig,
   markPreparedModelRuntimeSnapshotsStale: (
     reason?: string,
     options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
@@ -439,8 +438,8 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
     hoisted.reloadEvents.push("stale-prepared-model-runtime");
     return hoisted.markPreparedModelRuntimeSnapshotsStale(reason, options);
   },
-  rejectPendingPreparedModelRuntimeReplacement: (gateId: symbol | undefined, error: unknown) =>
-    hoisted.rejectPendingPreparedModelRuntimeReplacement(gateId, error),
+  rejectPendingPreparedModelRuntimeReplacement:
+    hoisted.rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots: (
     cfg: OpenClawConfig,
     options?: { catalogMode?: "live" | "static" },
@@ -451,6 +450,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 }));
 
 vi.mock("../agents/context.js", () => ({
+  resetContextWindowCache: vi.fn(),
   refreshContextWindowCache: async (cfg: OpenClawConfig) => {
     hoisted.reloadEvents.push("refresh-context-window");
     await hoisted.refreshContextWindowCache(cfg);

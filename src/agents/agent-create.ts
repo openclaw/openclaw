@@ -25,9 +25,9 @@ import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key
 import {
   readAgentDeletionRecoveryHolds,
   resolveAgentDeletionRecoveryHolds,
-  type HeldAgentDatabase,
 } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";

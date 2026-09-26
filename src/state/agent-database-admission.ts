@@ -9,6 +9,11 @@ import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migration
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  openClawStateDatabaseCache,
+  requireOpenClawStateDatabaseIdentity,
+} from "./openclaw-state-db-cache.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export type AgentDatabaseAdmissionRefusal = {
@@ -60,6 +65,87 @@ export function createAgentDatabaseInspectionRefusal(params: {
 
 function stateKey(options: AdmissionOptions): string {
   return resolveOpenClawStateSqlitePath(options.env ?? process.env);
+}
+
+function sameKnownState(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  const leftIdentity = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(left);
+  const rightIdentity = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(right);
+  return Boolean(leftIdentity && rightIdentity && leftIdentity.key === rightIdentity.key);
+}
+
+/** Capture existing pending decisions; a later commit must never revoke their successors. */
+export function captureAgentDatabasePreparationDeletion(
+  agentId: string,
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+): () => void {
+  const id = normalizeAgentId(agentId);
+  const identityKey = requireOpenClawStateDatabaseIdentity(database).key;
+  const databasePath = database.path;
+  const captured = [...refusalsByState].flatMap(([key, owner]) => {
+    const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(key);
+    const refusal = owner.refusals.get(id);
+    return (key === databasePath || known?.key === identityKey) &&
+      refusal?.code === "agent-database-inspection-pending"
+      ? [{ key, owner, refusal }]
+      : [];
+  });
+  return () => {
+    if (
+      openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(databasePath)?.key !==
+      identityKey
+    ) {
+      return;
+    }
+    for (const { key, owner, refusal } of captured) {
+      if (
+        refusalsByState.get(key) !== owner ||
+        owner.refusals.get(id) !== refusal ||
+        !sameKnownState(key, databasePath)
+      ) {
+        continue;
+      }
+      const refusals = new Map(owner.refusals);
+      refusals.set(
+        id,
+        createAgentDatabaseInspectionRefusal({
+          ...refusal,
+          reason: `Agent ${id} was deleted during startup inspection`,
+        }),
+      );
+      owner.refusals = refusals;
+    }
+  };
+}
+
+/** Capture only the live preparation whose native command must report fresh journal facts. */
+export function captureAgentDatabasePreparationJournal(
+  agentId: string,
+  options: AdmissionOptions = {},
+): ((present: unknown) => void) | undefined {
+  const scope = preparation.getStore();
+  if (
+    !scope ||
+    scope.refusal.agentId !== normalizeAgentId(agentId) ||
+    !sameKnownState(scope.key, stateKey(options))
+  ) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    if (!scope.active) {
+      throw new Error(`Agent database preparation has ended: ${agentId}`);
+    }
+    scope.assertCurrent();
+  };
+  assertCurrent();
+  return (present) => {
+    assertCurrent();
+    if (present !== false) {
+      throw new Error(`Agent ${scope.refusal.agentId} was deleted during startup inspection`);
+    }
+  };
 }
 
 /** Ownership is derived from the inspected file; missing or corrupt metadata keeps normal refusal. */
@@ -170,7 +256,7 @@ export async function preparePendingAgentDatabase(
     const current = refusalsByState.get(key)!;
     const refusals = new Map(current.refusals);
     refusals.delete(refusal.agentId);
-    refusalsByState.set(key, { ...current, refusals });
+    current.refusals = refusals;
   } finally {
     scope.active = false;
   }
@@ -220,7 +306,7 @@ export function failPendingAgentDatabase(
   }
   const refusals = new Map(current.refusals);
   refusals.set(refusal.agentId, createAgentDatabaseInspectionRefusal({ ...refusal, reason }));
-  refusalsByState.set(key, { ...current, refusals });
+  current.refusals = refusals;
 }
 
 export function listAgentDatabaseAdmissionRefusals(

@@ -392,6 +392,7 @@ export function projectChatTranscript(
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
+      searchResult: searchFiltering,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
   // Only the working indicator shows live usage, so rows without one keep
@@ -426,7 +427,7 @@ export function projectChatTranscript(
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
     return `${continuationKey}|${recapKey}|${
       item.key === latestAssistantItemKey ? "latest-assistant" : ""
-    }`;
+    }|${searchFiltering ? "search-result" : ""}`;
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {

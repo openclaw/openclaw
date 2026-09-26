@@ -563,7 +563,7 @@ describe("subagents info", () => {
       addSubagentRunForTests(run);
     }
     const context = buildInfoContext({ cfg: buildCommandTestConfig(), runs, restTokens: ["1"] });
-    const listing = requireReplyText(handleSubagentsListAction(context).reply);
+    const listing = requireReplyText((await handleSubagentsListAction(context)).reply);
     expect(listing).toContain("1. recent worker");
     expect(listing).not.toContain("stale worker");
     expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
@@ -602,7 +602,7 @@ describe("subagents info", () => {
     },
   ])(
     "keeps /subagents info and list aligned for $name",
-    ({ endedReason, outcome, expectedStatus }) => {
+    async ({ endedReason, outcome, expectedStatus }) => {
       const now = Date.now();
       const run = {
         runId: `commands-subagents-status-${expectedStatus}`,
@@ -630,7 +630,7 @@ describe("subagents info", () => {
       expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
         `Status: ${expectedStatus}`,
       );
-      expect(requireReplyText(handleSubagentsListAction(context).reply)).toContain(
+      expect(requireReplyText((await handleSubagentsListAction(context)).reply)).toContain(
         ` ${expectedStatus}`,
       );
     },

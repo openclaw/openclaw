@@ -3314,6 +3314,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/codesign-mac-app.sh",
         "scripts/create-dmg.sh",
         "scripts/lib/plistbuddy.sh",
+        "scripts/lib/mac-signing-identity.sh",
         "scripts/lib/swift-toolchain.sh",
         "scripts/mac-elevation-host.sh",
         "scripts/notarize-mac-artifact.sh",

@@ -35,10 +35,7 @@ import {
 import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
-import {
-  buildCodexWorkspaceBootstrapContext,
-  getCodexWorkspaceMemoryToolNames,
-} from "./attempt-workspace-context.js";
+import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import {
@@ -77,6 +74,7 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import * as attemptTurnState from "./run-attempt-turn-state.js";
@@ -328,14 +326,13 @@ async function buildCodexTurnContextForTest(
     signal: new AbortController().signal,
   });
   const dynamicTools = toolBridge.availableSpecs;
-  const memoryToolNames = getCodexWorkspaceMemoryToolNames(dynamicTools);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionAgentId,
-    memoryToolNames,
+    tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
@@ -3980,6 +3977,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).not.toContain("is the previous message trustworthy?");
     expect(secondInputText).toContain("continue from there");
   });
+
+  registerCodexMemoryInstructionTests();
 
   it("routes AGENTS.md natively and MEMORY.md through tools", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

@@ -347,7 +347,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     sessions,
     chatSubmissions,
   });
-  const chatAttachmentHandoff = createChatAttachmentHandoff();
+  const chatAttachmentHandoff = createChatAttachmentHandoff(gateway);
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
