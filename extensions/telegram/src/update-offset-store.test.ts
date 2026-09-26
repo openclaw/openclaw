@@ -11,6 +11,7 @@ import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
   deleteTelegramUpdateOffset,
+  prepareTelegramAccount,
   readTelegramUpdateOffset,
   writeTelegramUpdateOffset,
 } from "./update-offset-store.js";
@@ -160,7 +161,7 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("returns null when the plugin-state read fails", async () => {
+  it("tolerates read-only lookup failures but refuses account preparation without identity", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       installStore({
         ...createPluginStateKeyedStoreForTests<unknown>("telegram", {
@@ -173,6 +174,13 @@ describe("deleteTelegramUpdateOffset", () => {
       });
 
       expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
+      await expect(
+        prepareTelegramAccount({
+          accountId: "primary",
+          botToken: "111111:fixture",
+          onRotationDetected: () => {},
+        }),
+      ).rejects.toThrow(/account "primary".*restart.*store unavailable/);
     });
   });
 

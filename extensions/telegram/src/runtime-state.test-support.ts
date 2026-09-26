@@ -36,6 +36,11 @@ export function installTelegramIngressQueueRuntime(
     createPluginRuntimeMock({
       state: {
         resolveStateDir,
+        openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("telegram", {
+            ...options,
+            env: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() },
+          }),
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
         ) => {
