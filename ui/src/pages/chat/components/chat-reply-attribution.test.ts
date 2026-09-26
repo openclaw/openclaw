@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
+import { resolveReplyAttributionPresentation } from "./chat-reply-attribution.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 const alice = { id: "alice", name: "Alice" };
@@ -25,7 +26,9 @@ function draw(
   replies: unknown[] = [{ role: "assistant", content: "Answer" }],
   loaded = true,
   presentation: "group" | "frame" = "group",
+  context: Partial<MessageGroup> & { missing?: string[] } = {},
 ) {
+  const { missing = [], ...groupContext } = context;
   container = document.body.appendChild(document.createElement("div"));
   const group: MessageGroup = {
     kind: "group",
@@ -37,6 +40,7 @@ function draw(
     senderLabel: "Alice",
     replyToSender: alice,
     replyToMessage: { key: "prompt-render-key", message: source },
+    ...groupContext,
     messages: replies.map((message, index) => ({
       message,
       key: `answer-${index}`,
@@ -51,7 +55,10 @@ function draw(
         ? [["prompt", { message: source, messageId: "prompt-render-key", senderLabel: "Alice" }]]
         : [],
     ),
-    { assistantName: "Assistant" },
+    {
+      assistantName: "Assistant",
+      replyMessageAccess: { read: () => undefined, missing: (id) => missing.includes(id) },
+    },
   );
   const options = {
     showReasoning: false,
@@ -92,6 +99,24 @@ function draw(
     row: container.querySelector<HTMLElement>(".chat-reply-attribution--reply")!,
   };
 }
+
+describe("reply attribution presentation", () => {
+  const base = { resolved: true, missing: false, known: false, turnSource: false, shared: false };
+  it.each([
+    { rule: "a: unresolved reference", reply: { resolved: false }, expected: "hidden" },
+    { rule: "b: 1:1 answer to its own prompt", reply: { turnSource: true }, expected: "hidden" },
+    { rule: "c: 1:1 reply to an older message", reply: {}, expected: "full" },
+    { rule: "c: shared turn prompt", reply: { turnSource: true, shared: true }, expected: "full" },
+    {
+      rule: "d: missing with a known name",
+      reply: { missing: true, known: true },
+      expected: "unavailable",
+    },
+    { rule: "d: missing without name or excerpt", reply: { missing: true }, expected: "hidden" },
+  ] as const)("$rule -> $expected", ({ reply, expected }) => {
+    expect(resolveReplyAttributionPresentation({ ...base, ...reply })).toBe(expected);
+  });
+});
 
 describe("reply attribution excerpt", () => {
   it.each([
@@ -175,16 +200,31 @@ it("keeps an unavailable explicit source's snapshot without linking or inferring
   expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
 });
 
-it("keeps an unavailable reference without a recipient snapshot noninteractive", () => {
-  const { row } = draw(
-    prompt,
-    [{ role: "assistant", content: "Answer", __openclaw: { replyToId: "deleted" } }],
-    false,
-  );
-  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("message");
-  expect(row.querySelector("button, a")).toBeNull();
-  expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
-});
+it.each([
+  { snapshot: undefined, missing: [] },
+  { snapshot: { senderLabel: "Jordan", text: "" }, missing: [] },
+  { snapshot: undefined, missing: ["deleted"] },
+])(
+  "renders no strip for an unresolved or anonymous missing reference %o",
+  ({ snapshot, missing }) => {
+    const { onResolveReply } = draw(
+      prompt,
+      [
+        {
+          role: "assistant",
+          content: "Answer",
+          __openclaw: { replyToId: "deleted", replyToPreview: snapshot },
+        },
+      ],
+      false,
+      "group",
+      { missing },
+    );
+    expect(container.querySelector(".chat-reply-attribution")).toBeNull();
+    expect(container.textContent).not.toContain("Original message unavailable");
+    expect(onResolveReply).toHaveBeenCalledTimes(missing.length ? 0 : 1);
+  },
+);
 
 it.each(["group", "frame"] as const)(
   "keeps a later name-only snapshot for an unavailable source in a %s",
@@ -204,12 +244,13 @@ it.each(["group", "frame"] as const)(
       ],
       false,
       presentation,
+      { missing: ["deleted"] },
     );
     expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
     expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
       "Original message unavailable",
     );
-    expect(row.querySelector("button, a")).toBeNull();
+    expect(row.querySelector(".chat-author-avatar, button, a")).toBeNull();
   },
 );
 
@@ -349,7 +390,7 @@ it.each([
   },
 );
 
-it("renders an unquoted unavailable label when the source text is unavailable", () => {
+it("renders an automatic recipient without claiming a textless source is unavailable", () => {
   const { row } = draw(null);
   expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
   // The decorative strokeIcon shell contributes whitespace, not visible copy.
@@ -359,35 +400,93 @@ it("renders an unquoted unavailable label when the source text is unavailable", 
     label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
   ).toBe("true");
   expect(row.querySelector(".chat-reply-attribution__excerpt")).toBeNull();
-  expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
-    "Original message unavailable",
-  );
+  expect(row.querySelector(".chat-reply-attribution__unavailable")).toBeNull();
   expect(row.querySelector("button, a")).toBeNull();
   expect(row.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
 });
 
-it("preserves a name-only snapshot while requesting its missing source", () => {
-  const { row, onResolveReply } = draw(
-    prompt,
-    [
+it.each([
+  { case: "unresolved", source: undefined, turnSource: false, strip: false },
+  { case: "resolved to its own prompt", source: "prompt", turnSource: true, strip: false },
+  { case: "resolved to an older prompt", source: "prompt", turnSource: false, strip: true },
+])(
+  "renders a 1:1 reply_to_current $case without guessing an origin",
+  ({ source, turnSource, strip }) => {
+    const prompted = { key: "prompt-render-key", message: prompt };
+    draw(
+      prompt,
+      [{ role: "assistant", content: "Tô aqui", openclawDelivery: { replyToCurrent: true } }],
+      true,
+      "group",
       {
-        role: "assistant",
-        content: "Answer",
-        __openclaw: {
-          replyToId: "deleted",
-          replyToPreview: { senderLabel: "Jordan", text: "" },
-        },
+        replyToSender: undefined,
+        replyToMessage: undefined,
+        ...(source ? { replyCurrentSource: prompted } : {}),
+        replyTurnSource: turnSource ? prompted : { key: "later", message: {} },
       },
-    ],
-    false,
-  );
-  expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
-  expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
-    "Original message unavailable",
-  );
-  expect(row.querySelector("button, a")).toBeNull();
-  expect(onResolveReply).toHaveBeenCalledWith("deleted");
-});
+    );
+    expect(container.textContent).not.toContain("current message");
+    expect(container.textContent).not.toContain("Original message unavailable");
+    expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
+    const row = container.querySelector(".chat-reply-attribution--reply");
+    expect(Boolean(row)).toBe(strip);
+    if (row) {
+      expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
+      expect(row.querySelector("button")?.textContent).toContain("Original question");
+    }
+  },
+);
+
+it.each([
+  { target: "prompt", shared: false, strip: false },
+  { target: "prompt", shared: true, strip: true },
+  { target: "older", shared: false, strip: true },
+])(
+  "renders an explicit reply to $target (shared: $shared) only when it adds context",
+  ({ target, shared, strip }) => {
+    const older = {
+      ...prompt,
+      __openclaw: { id: "older", senderId: "alice", senderName: "Alice" },
+    };
+    container = document.body.appendChild(document.createElement("div"));
+    const resolveReplyPreview = createReplyPreviewResolver(
+      new Map([
+        ["prompt", { message: prompt, messageId: "prompt-render", senderLabel: "Alice" }],
+        ["older", { message: older, messageId: "older-render", senderLabel: "Alice" }],
+      ]),
+      { assistantName: "Assistant" },
+    );
+    render(
+      renderMessageGroup(
+        {
+          kind: "group",
+          key: "answer",
+          role: "assistant",
+          timestamp: 1,
+          isStreaming: false,
+          visibleContent: "text",
+          ...(shared ? { replyShared: true } : {}),
+          replyTurnSource: { key: "prompt-render", message: prompt },
+          messages: [
+            {
+              key: "answer-0",
+              hasVisibleContent: true,
+              message: { role: "assistant", content: "Answer", __openclaw: { replyToId: target } },
+            },
+          ],
+        },
+        {
+          showReasoning: false,
+          showToolCalls: false,
+          avatarPlacement: "none",
+          resolveReplyPreview,
+        },
+      ),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(strip ? 1 : 0);
+  },
+);
 
 it.each([
   { preview: undefined, requests: 1 },
@@ -421,8 +520,9 @@ it.each([
     ),
     container,
   );
-  expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toContain(
-    preview ? "Jordan" : "message",
+  // Only a known excerpt resolves the quote before its source loads.
+  expect(container.querySelector(".chat-reply-attribution__name")?.textContent).toBe(
+    preview?.text ? "Jordan" : undefined,
   );
   expect(onResolveReply).toHaveBeenCalledTimes(requests);
   if (requests) {

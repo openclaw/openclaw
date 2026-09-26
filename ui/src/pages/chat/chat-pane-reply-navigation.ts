@@ -17,21 +17,27 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   protected replyMessageRevision = 0;
   private readonly replyMessages = new Map<
     string,
-    { client: object; generation: number; message?: unknown }
+    { client: object; generation: number; message?: unknown; missing?: true }
   >();
 
   protected abstract loadOlderMessages(): Promise<boolean>;
 
-  protected readonly readReplyMessage = (messageId: string): unknown => {
+  private currentReplyMessage(messageId: string) {
     const state = this.state;
     if (!state) {
       return undefined;
     }
     const cached = this.replyMessages.get(this.replyMessageCacheKey(state.sessionKey, messageId));
     return cached?.client === state.client && cached.generation === this.connectionGeneration
-      ? cached.message
+      ? cached
       : undefined;
-  };
+  }
+
+  protected readonly readReplyMessage = (messageId: string): unknown =>
+    this.currentReplyMessage(messageId)?.message;
+
+  protected readonly isReplyMessageMissing = (messageId: string): boolean =>
+    this.currentReplyMessage(messageId)?.missing === true;
 
   protected readonly requestReplyMessage = (messageId: string): void => {
     void this.loadReplyMessage(messageId);
@@ -80,10 +86,14 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     if (!this.isConnectionScopeCurrent(scope) || this.replyMessages.get(cacheKey) !== attempt) {
       return;
     }
-    if (!result.ok || !result.message) {
-      return;
-    }
-    this.replyMessages.set(cacheKey, { ...attempt, message: result.message });
+    // A Gateway answer without a message confirms the original is inaccessible;
+    // transport failures above stay unconfirmed.
+    this.replyMessages.set(
+      cacheKey,
+      result.ok && result.message
+        ? { ...attempt, message: result.message }
+        : { ...attempt, missing: true },
+    );
     this.replyMessageRevision += 1;
     if (areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)) {
       this.requestUpdate();
@@ -116,6 +126,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       revision: this.replyMessageRevision,
       navigationId: this.currentReplyNavigationId(sessionKey),
       read: this.readReplyMessage,
+      missing: this.isReplyMessageMissing,
       request: this.requestReplyMessage,
       open: this.openReplyMessage,
     };

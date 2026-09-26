@@ -84,8 +84,9 @@ describe("quoted agent identity", () => {
         senderAgentAvatars: new Map([["research", "/avatars/research.png"]]),
       },
     );
-    const preview = resolve("typed-source");
-    expect(preview?.sender).toMatchObject({ identity, name: "Source author" });
+    expect(resolve("typed-source")).toMatchObject({
+      sender: { identity, name: "Source author" },
+    });
   });
 
   it.each([

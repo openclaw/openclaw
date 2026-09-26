@@ -94,6 +94,8 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
+  /** True once a lookup confirmed the message is inaccessible. */
+  missing?: (messageId: string) => boolean;
   request: (messageId: string) => void;
   open: (messageId: string) => void;
 };

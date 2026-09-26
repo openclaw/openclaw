@@ -91,7 +91,60 @@ describe("reply attribution grouping", () => {
     const assistant = groups.find((group) => group.role === "assistant");
     expect(assistant?.replyToSender).toBeUndefined();
     expect(assistant?.replyToMessage).toBeUndefined();
+    expect(assistant?.replyShared).toBeUndefined();
+    expect(assistant?.replyTurnSource?.message).toMatchObject({ content: "Alice asks" });
   });
+
+  it.each([
+    { identity: "run-owned prompt", promptRun: "run-a", replyRun: "run-a", resolved: true },
+    {
+      identity: "prompt without run identity",
+      promptRun: null,
+      replyRun: "run-a",
+      resolved: false,
+    },
+    { identity: "another run's prompt", promptRun: "run-b", replyRun: "run-a", resolved: false },
+    {
+      identity: "duplicate run owners",
+      promptRun: "run-a",
+      replyRun: "run-a",
+      duplicate: true,
+      resolved: false,
+    },
+  ])(
+    "resolves reply_to_current only through the turn's $identity",
+    ({ promptRun, replyRun, duplicate, resolved }) => {
+      const alice = { senderId: "alice", senderName: "Alice" };
+      const prompt = userMessage("hey hey", 1000, {
+        __openclaw: {
+          id: "prompt",
+          ...alice,
+          ...(promptRun ? { idempotencyKey: `${promptRun}:user` } : {}),
+        },
+      });
+      const groups = messageGroups({
+        messages: [
+          ...(duplicate
+            ? [
+                userMessage("earlier", 999, {
+                  __openclaw: { ...alice, idempotencyKey: "run-a:user" },
+                }),
+              ]
+            : []),
+          prompt,
+          // The latest visible message never stands in for an unresolved origin.
+          userMessage("Unrelated", 1001, { __openclaw: { senderId: "bob", senderName: "Bob" } }),
+          assistantMessage("Tô aqui", 1002, {
+            openclawDelivery: { replyToCurrent: true },
+            __openclaw: { runId: replyRun },
+          }),
+        ],
+      });
+      const assistant = groups.find((group) => group.role === "assistant");
+      expect(assistant?.replyShared).toBe(true);
+      expect(assistant?.replyCurrentSource?.message).toBe(resolved ? prompt : undefined);
+    },
+  );
 
   it.each([
     { first: null, second: "older", groups: 2 },

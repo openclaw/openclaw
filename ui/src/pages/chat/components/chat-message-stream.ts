@@ -17,7 +17,11 @@ import {
 } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
-import { renderReplyAttribution, resolveReplyAttribution } from "./chat-reply-attribution.ts";
+import {
+  isReplyAttributionVisible,
+  renderReplyAttribution,
+  resolveReplyAttribution,
+} from "./chat-reply-attribution.ts";
 import { renderReplyConnector } from "./chat-reply-connector.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
@@ -165,7 +169,9 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     },
     opts.resolveReplyPreview,
   );
-  const hasReplyConnector = Boolean(replyAttribution && avatar !== nothing);
+  const hasReplyConnector = Boolean(
+    isReplyAttributionVisible(replyAttribution) && avatar !== nothing,
+  );
   const groupClass = `chat-group assistant${hasReplyConnector ? " chat-group--reply" : ""}${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`

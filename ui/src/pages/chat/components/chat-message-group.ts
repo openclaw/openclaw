@@ -56,13 +56,14 @@ import {
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import {
+  isReplyAttributionVisible,
   renderReplyAttribution,
   resolveMessageReplyAttribution,
   resolveReplyAttribution,
   type ReplyAttribution,
 } from "./chat-reply-attribution.ts";
 import { renderReplyConnector } from "./chat-reply-connector.ts";
-import type { ReplyPreview } from "./chat-reply-preview.types.ts";
+import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
@@ -116,7 +117,7 @@ type RenderMessageGroupOptions = Omit<
     showAssistantAvatar?: boolean;
     contextWindow?: number | null;
     onReply?: (target: MessageReplyTarget) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    resolveReplyPreview?: ReplyPreviewLookup;
     onRewind?: () => void;
     rewindDisabled?: boolean;
     activeContinuation?: ActiveContinuation;
@@ -437,8 +438,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const isForwarded = normalizedRole === "assistant" && forwardedSource;
   const replyAttribution =
     opts.replyAttribution ?? resolveReplyAttribution(group, opts.resolveReplyPreview);
+  const visibleReplyAttribution = isReplyAttributionVisible(replyAttribution)
+    ? replyAttribution
+    : undefined;
   const showSenderName =
-    resolveMessageGroupSenderLabel(group, opts) !== replyAttribution?.name &&
+    resolveMessageGroupSenderLabel(group, opts) !== visibleReplyAttribution?.name &&
     !isForwarded &&
     !sourceOnly &&
     (normalizedRole !== "user" || isPeerGroup || opts.showOwnSenderName !== false);
@@ -568,7 +572,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           )
       : nothing;
 
-  const hasReplyConnector = Boolean(replyAttribution && avatar !== nothing);
+  const hasReplyConnector = Boolean(visibleReplyAttribution && avatar !== nothing);
   return html`
     <div
       class="chat-group ${roleClass} chat-group--with-footer${
@@ -630,6 +634,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                       opts.userId,
                     )
                   : undefined;
+                const peerVisible = isReplyAttributionVisible(peerAttribution);
                 const message = renderPreparedGroupMessage(
                   group,
                   index,
@@ -638,7 +643,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                     isForwarded: forwardedSource,
                     hasReplyAttribution: Boolean(replyAttribution || peerAttribution),
                     avatar:
-                      !peerAttribution &&
+                      !peerVisible &&
                       inlineUserAvatar &&
                       (isPeerGroup || index === lastMessageIndex)
                         ? avatar
@@ -648,13 +653,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 );
                 return html`
                   ${
-                    peerAttribution
+                    peerVisible
                       ? html`<div class="chat-message--reply">
                           ${renderReplyAttribution(peerAttribution, opts.onOpenReply, opts.onResolveReply, { navigateToUnloaded: true, navigationLoading: peerAttribution.target?.kind === "id" && opts.replyNavigationId === peerAttribution.target.id })}
                           ${message}${avatar}
                           ${avatar !== nothing ? renderReplyConnector() : nothing}
                         </div>`
-                      : message
+                      : html`${renderReplyAttribution(peerAttribution, opts.onOpenReply, opts.onResolveReply)}${message}`
                   }
                   ${actions}
                 `;

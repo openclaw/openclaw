@@ -85,6 +85,11 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.replyToMessage?.key === next.replyToMessage?.key &&
     previous.replyToMessage?.message === next.replyToMessage?.message &&
+    previous.replyShared === next.replyShared &&
+    previous.replyTurnSource?.key === next.replyTurnSource?.key &&
+    previous.replyTurnSource?.message === next.replyTurnSource?.message &&
+    previous.replyCurrentSource?.key === next.replyCurrentSource?.key &&
+    previous.replyCurrentSource?.message === next.replyCurrentSource?.message &&
     previous.isStreaming === next.isStreaming &&
     previous.visibleContent === next.visibleContent &&
     previous.runId === next.runId &&

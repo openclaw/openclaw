@@ -27,42 +27,70 @@ function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
   const userSenderKeys = new Set<string>();
+  // reply_to_current names the prompt that started the run. Only the persisted
+  // user-turn run identity resolves it; an ambiguous owner stays unresolved.
+  const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
   for (const item of items) {
-    if (item.kind !== "group" || item.role !== "user" || !item.sender) {
+    if (item.kind !== "group" || item.role !== "user") {
       continue;
     }
-    const senderKey = senderIdentityKey(item.sender);
+    for (const source of item.messages) {
+      const runId = userTurnRunId(source.message);
+      if (runId) {
+        runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+      }
+    }
+    const senderKey = item.sender ? senderIdentityKey(item.sender) : null;
     if (senderKey) {
       userSenderKeys.add(senderKey);
     }
   }
-  if (userSenderKeys.size < 2) {
-    return items;
-  }
+  // Automatic attribution is only useful when several people share the thread.
+  const shared = userSenderKeys.size >= 2;
 
   let latestUserSender: MessageGroup["sender"];
   let latestUserMessage: MessageGroup["replyToMessage"];
+  let turnSource: MessageGroup["replyTurnSource"];
   for (const item of items) {
     if (item.kind === "stream") {
-      item.replyToSender = latestUserSender;
-      item.replyToMessage = latestUserMessage;
+      if (shared) {
+        item.replyToSender = latestUserSender;
+        item.replyToMessage = latestUserMessage;
+      }
       continue;
     }
     if (item.kind !== "group") {
       continue;
     }
     if (item.role === "user") {
+      turnSource = item.messages.at(-1);
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
       latestUserSender = item.sender;
       latestUserMessage = item.sender ? item.messages.at(-1) : undefined;
     } else if (item.role === "assistant" && hasForwardedSource(item)) {
       // Forwarded input starts a turn without a local human reply recipient.
+      turnSource = undefined;
       latestUserSender = undefined;
       latestUserMessage = undefined;
-    } else if (item.role === "assistant" && latestUserSender) {
-      item.replyToSender = latestUserSender;
-      item.replyToMessage = latestUserMessage;
+    } else if (item.role === "assistant") {
+      const currentSource =
+        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+          ? runPrompts.get(item.runId)
+          : undefined;
+      if (shared) {
+        item.replyShared = true;
+      }
+      if (turnSource) {
+        item.replyTurnSource = turnSource;
+      }
+      if (currentSource) {
+        item.replyCurrentSource = currentSource;
+      }
+      if (shared && latestUserSender) {
+        item.replyToSender = latestUserSender;
+        item.replyToMessage = latestUserMessage;
+      }
     }
   }
   return items;

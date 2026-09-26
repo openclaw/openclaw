@@ -11,10 +11,13 @@ import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { prepareChatMessageRender, resolveMessageReplyText } from "./chat-message-markdown.ts";
-import type { ReplyPreview } from "./chat-reply-preview.types.ts";
+import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import { chatResponsiveLayout } from "./chat-responsive-layout.ts";
 
+export type ReplyAttributionPresentation = "hidden" | "full" | "unavailable";
+
 export type ReplyAttribution = {
+  presentation: ReplyAttributionPresentation;
   sender: SenderIdentity;
   name: string;
   text: string;
@@ -26,6 +29,55 @@ export type ReplyAttribution = {
   resolveMessageId?: string;
 };
 
+/**
+ * The one place that decides whether a reply reference adds context:
+ * unresolved references and a 1:1 turn answering its own prompt stay hidden;
+ * a confirmed-missing target keeps only a known name or excerpt.
+ */
+export function resolveReplyAttributionPresentation(reply: {
+  /** The origin is known: loaded, fetched, or carried by a snapshot excerpt. */
+  resolved: boolean;
+  /** A concrete id whose lookup confirmed the origin is inaccessible. */
+  missing: boolean;
+  /** A snapshot name or excerpt survives the missing origin. */
+  known: boolean;
+  /** The origin is the prompt that opened this turn. */
+  turnSource: boolean;
+  /** More than one person speaks in the conversation. */
+  shared: boolean;
+}): ReplyAttributionPresentation {
+  if (reply.missing) {
+    return reply.known ? "unavailable" : "hidden";
+  }
+  if (!reply.resolved || (reply.turnSource && !reply.shared)) {
+    return "hidden";
+  }
+  return "full";
+}
+
+export function isReplyAttributionVisible(
+  attribution: ReplyAttribution | undefined,
+): attribution is ReplyAttribution {
+  return Boolean(attribution && attribution.presentation !== "hidden");
+}
+
+type ReplyContext = { shared?: boolean; turnSource?: MessageGroup["replyTurnSource"] };
+
+const hiddenAttribution = (target?: NormalizedMessage["replyTarget"]): ReplyAttribution => ({
+  presentation: "hidden",
+  sender: {},
+  name: "",
+  text: "",
+  target,
+});
+
+function lookupReply(resolveReplyPreview: ReplyPreviewLookup | undefined, id: string) {
+  const result = resolveReplyPreview?.(id);
+  return result && "missing" in result
+    ? { missing: true }
+    : { missing: false, preview: result as ReplyPreview | undefined };
+}
+
 function replyAttributionExcerpt(text: string): string {
   return (
     stripMarkdown(text, { stripHtml: true, linkStyle: "label" })
@@ -36,15 +88,43 @@ function replyAttributionExcerpt(text: string): string {
 }
 
 function resolveTargetAttribution(
-  target: NonNullable<NormalizedMessage["replyTarget"]>,
-  preview: NormalizedMessage["replyPreview"],
-  resolved?: ReplyPreview,
+  target: Extract<NonNullable<NormalizedMessage["replyTarget"]>, { kind: "id" }>,
+  snapshot: NormalizedMessage["replyPreview"],
+  lookup: ReturnType<typeof lookupReply>,
+  context: ReplyContext = {},
 ): ReplyAttribution {
+  const resolved = lookup.preview;
+  const preview = resolved ?? snapshot;
   const name =
-    preview?.senderLabel ||
-    formatSenderLabel(resolved?.sender) ||
-    t(target.kind === "current" ? "chat.messages.currentMessage" : "chat.messages.message");
+    preview?.senderLabel || formatSenderLabel(resolved?.sender) || t("chat.messages.message");
+  const presentation = resolveReplyAttributionPresentation({
+    resolved: Boolean(resolved || snapshot?.text),
+    missing: lookup.missing,
+    known: Boolean(snapshot?.senderLabel || snapshot?.text),
+    turnSource: Boolean(
+      context.turnSource && persistedMessageEntryId(context.turnSource.message) === target.id,
+    ),
+    shared: Boolean(context.shared),
+  });
+  if (presentation === "hidden") {
+    return {
+      ...hiddenAttribution(target),
+      resolveMessageId: !preview?.text && !lookup.missing ? target.id : undefined,
+    };
+  }
+  if (presentation === "unavailable") {
+    // Known snapshot facts only: no inferred avatar and nothing to navigate to.
+    const known = snapshot?.senderLabel || t("chat.messages.message");
+    return {
+      presentation,
+      sender: { name: known },
+      name: known,
+      text: snapshot?.text ?? "",
+      target,
+    };
+  }
   return {
+    presentation,
     sender: { ...resolved?.sender, name },
     name,
     text: preview?.text ?? "",
@@ -52,23 +132,58 @@ function resolveTargetAttribution(
     isImage: resolved?.isImage,
     agentAvatar: resolved?.agentAvatar,
     target,
-    loadedMessageId: target.kind === "id" && resolved?.isLoaded ? target.id : undefined,
-    resolveMessageId: target.kind === "id" && !preview?.text ? target.id : undefined,
+    loadedMessageId: resolved?.isLoaded ? target.id : undefined,
+    resolveMessageId: !preview?.text ? target.id : undefined,
+  };
+}
+
+/** Attribution to a transcript row the group already knows (automatic or resolved current). */
+function resolveSourceAttribution(
+  source: unknown,
+  sender: SenderIdentity | undefined,
+  resolveReplyPreview: ReplyPreviewLookup | undefined,
+): ReplyAttribution | undefined {
+  const sourceId = source ? persistedMessageEntryId(source) : null;
+  const resolved = sourceId ? lookupReply(resolveReplyPreview, sourceId).preview : undefined;
+  const sourceSender = sender ?? resolved?.sender;
+  const name = resolved?.senderLabel || formatSenderLabel(sourceSender);
+  if (!name) {
+    return undefined;
+  }
+  const prepared = source ? prepareChatMessageRender(source) : undefined;
+  const text = prepared
+    ? resolveMessageReplyText(source, prepared.normalizedMessage, prepared.displayMarkdown)
+    : "";
+  return {
+    presentation: "full",
+    sender: { ...sourceSender, name },
+    name,
+    text,
+    isAttachment: resolved?.isAttachment ?? Boolean(prepared && text && !prepared.displayMarkdown),
+    isImage: resolved?.isImage,
+    agentAvatar: resolved?.agentAvatar,
+    target: sourceId ? { kind: "id", id: sourceId } : { kind: "current" },
+    loadedMessageId: sourceId && resolved?.isLoaded ? sourceId : undefined,
   };
 }
 
 export function resolveMessageReplyAttribution(
   message: NormalizedMessage,
-  resolveReplyPreview?: (id: string) => ReplyPreview | undefined,
+  resolveReplyPreview?: ReplyPreviewLookup,
   userId?: string | null,
 ): ReplyAttribution | undefined {
   const target = message.replyTarget;
   if (!target) {
     return undefined;
   }
-  const resolved = target.kind === "id" ? resolveReplyPreview?.(target.id) : undefined;
-  const attribution = resolveTargetAttribution(target, resolved ?? message.replyPreview, resolved);
+  // A bare reply_to_current names no origin outside its turn context.
+  if (target.kind === "current") {
+    return hiddenAttribution(target);
+  }
+  const lookup = lookupReply(resolveReplyPreview, target.id);
+  const attribution = resolveTargetAttribution(target, message.replyPreview, lookup);
   if (
+    attribution.presentation === "full" &&
     attribution.sender.identity?.type === "profile" &&
     attribution.sender.identity.id === userId
   ) {
@@ -79,7 +194,7 @@ export function resolveMessageReplyAttribution(
 
 export function resolveReplyAttribution(
   group: MessageGroup,
-  resolveReplyPreview?: (id: string) => ReplyPreview | undefined,
+  resolveReplyPreview?: ReplyPreviewLookup,
   replyMessages: MessageGroup["messages"] = group.messages,
 ): ReplyAttribution | undefined {
   if (group.role !== "assistant") {
@@ -90,6 +205,7 @@ export function resolveReplyAttribution(
     replyMessages === group.messages
       ? messages
       : replyMessages.map(({ message }) => normalizeMessage(message));
+  const context: ReplyContext = { shared: group.replyShared, turnSource: group.replyTurnSource };
   const explicit =
     messages.find((message) => message.replyTarget?.kind === "id") ??
     (messages.some((message) => message.replyTarget?.kind === "current")
@@ -97,44 +213,37 @@ export function resolveReplyAttribution(
       : snapshots.find((message) => message.replyTarget?.kind === "id"));
   if (explicit?.replyTarget?.kind === "id") {
     const target = explicit.replyTarget;
-    const resolved = resolveReplyPreview?.(target.id);
+    const lookup = lookupReply(resolveReplyPreview, target.id);
     const matching = snapshots.filter(
       (message) => message.replyTarget?.kind === "id" && message.replyTarget.id === target.id,
     );
-    const preview =
-      resolved ??
+    const snapshot =
       matching.find((message) => message.replyPreview?.text)?.replyPreview ??
       matching.find((message) => message.replyPreview)?.replyPreview;
-    return resolveTargetAttribution(target, preview, resolved);
+    return resolveTargetAttribution(target, snapshot, lookup, context);
+  }
+  const current =
+    messages.find((message) => message.replyTarget?.kind === "current") ??
+    snapshots.find((message) => message.replyTarget?.kind === "current");
+  const currentSource = current ? group.replyCurrentSource : undefined;
+  if (currentSource) {
+    const attribution = resolveSourceAttribution(
+      currentSource.message,
+      normalizeMessage(currentSource.message).sender,
+      resolveReplyPreview,
+    );
+    const turnSource = currentSource.key === group.replyTurnSource?.key;
+    return attribution && !(turnSource && !group.replyShared)
+      ? attribution
+      : hiddenAttribution(current?.replyTarget);
   }
   const sender = group.replyToSender;
-  if (!sender) {
-    const current =
-      messages.find((message) => message.replyTarget?.kind === "current") ??
-      snapshots.find((message) => message.replyTarget?.kind === "current");
-    return current ? resolveMessageReplyAttribution(current, resolveReplyPreview) : undefined;
+  if (sender) {
+    // Automatic attribution: several people share this thread.
+    return resolveSourceAttribution(group.replyToMessage?.message, sender, resolveReplyPreview);
   }
-  const source = group.replyToMessage?.message;
-  const sourceId = source ? persistedMessageEntryId(source) : null;
-  const resolved = sourceId ? resolveReplyPreview?.(sourceId) : undefined;
-  const name = resolved?.senderLabel || formatSenderLabel(sender);
-  if (!name) {
-    return undefined;
-  }
-  const prepared = source ? prepareChatMessageRender(source) : undefined;
-  const text = prepared
-    ? resolveMessageReplyText(source, prepared.normalizedMessage, prepared.displayMarkdown)
-    : "";
-  return {
-    sender: { ...sender, name },
-    name,
-    text,
-    isAttachment: resolved?.isAttachment ?? Boolean(prepared && text && !prepared.displayMarkdown),
-    isImage: resolved?.isImage,
-    agentAvatar: resolved?.agentAvatar,
-    target: sourceId ? { kind: "id", id: sourceId } : { kind: "current" },
-    loadedMessageId: sourceId && resolved?.isLoaded ? sourceId : undefined,
-  };
+  // An unresolved reply_to_current never guesses its origin.
+  return current ? hiddenAttribution(current.replyTarget) : undefined;
 }
 
 function inlineReplyTargetRef(onResolve: (element?: Element) => void) {
@@ -208,6 +317,13 @@ export function renderReplyAttribution(
   if (!attribution) {
     return nothing;
   }
+  if (attribution.presentation === "hidden") {
+    // Nothing to show yet, but an unresolved id still asks for its origin.
+    if (attribution.resolveMessageId) {
+      onResolveReply?.(attribution.resolveMessageId);
+    }
+    return nothing;
+  }
   return options.variant === "inline"
     ? renderReplyAttributionContent(attribution, onOpenReply, onResolveReply, options, false)
     : chatResponsiveLayout((mobile) =>
@@ -223,10 +339,12 @@ function renderReplyAttributionContent(
   mobile: boolean,
 ) {
   const inline = options.variant === "inline";
+  const unavailable = attribution.presentation === "unavailable";
   const excerpt = replyAttributionExcerpt(attribution.text);
   // Human quotes retain navigation to originals outside the loaded history.
-  const sourceId =
-    (inline || options.navigateToUnloaded) && attribution.target?.kind === "id"
+  const sourceId = unavailable
+    ? undefined
+    : (inline || options.navigateToUnloaded) && attribution.target?.kind === "id"
       ? attribution.target.id
       : attribution.loadedMessageId;
   const accessibleName = t("chat.messages.replyingTo", { name: attribution.name });
@@ -245,7 +363,7 @@ function renderReplyAttributionContent(
       >${excerpt}</span
     >`;
   const person = html`
-    ${renderChatAuthorAvatar(attribution.sender, "chat-author-avatar", attribution.agentAvatar)}
+    ${unavailable ? nothing : renderChatAuthorAvatar(attribution.sender, "chat-author-avatar", attribution.agentAvatar)}
     <span class="chat-reply-attribution__name" title=${attribution.name}>${attribution.name}</span>
   `;
   const reference = html`
@@ -257,13 +375,19 @@ function renderReplyAttributionContent(
     ${
       mobile
         ? nothing
-        : excerpt
-          ? !inline && sourceId && onOpenReply
-            ? button("chat-reply-attribution__excerpt", contents)
-            : html`<span class="chat-reply-attribution__excerpt">${contents}</span>`
-          : html`<span class="chat-reply-attribution__unavailable"
-              >${t("chat.messages.replyOriginalUnavailable")}</span
-            >`
+        : html`${
+            excerpt
+              ? !inline && sourceId && onOpenReply
+                ? button("chat-reply-attribution__excerpt", contents)
+                : html`<span class="chat-reply-attribution__excerpt">${contents}</span>`
+              : nothing
+          }${
+            unavailable
+              ? html`<span class="chat-reply-attribution__unavailable"
+                  >${t("chat.messages.replyOriginalUnavailable")}</span
+                >`
+              : nothing
+          }`
     }
   `;
   const className = `chat-reply-attribution ${inline ? "chat-reply-attribution--inline" : "chat-reply-attribution--reply"}`;

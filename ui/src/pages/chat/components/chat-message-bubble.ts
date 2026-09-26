@@ -63,7 +63,7 @@ import {
   renderReplyAttribution,
   resolveMessageReplyAttribution,
 } from "./chat-reply-attribution.ts";
-import type { ReplyPreview } from "./chat-reply-preview.types.ts";
+import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
@@ -209,7 +209,7 @@ export function renderGroupedMessage(
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    resolveReplyPreview?: ReplyPreviewLookup;
     onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;

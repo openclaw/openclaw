@@ -62,14 +62,12 @@ suite.define(() => {
       let firstCount = 0;
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
-        const reply = page.locator(
-          ".chat-pane-cache__pane--active .chat-reply-attribution--inline",
-        );
-        await reply.waitFor({ state: "visible" });
-        expect(await reply.locator(".chat-reply-attribution__name").textContent()).toBe("message");
-        expect(await reply.textContent()).toContain("Original message unavailable");
-        expect(await reply.getByRole("button").count()).toBe(0);
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await pane.locator('[data-entry-id="reply-message"]').waitFor({ state: "visible" });
         await gateway.waitForRequest("chat.message.get");
+        // Neither an unconfirmed nor an anonymous missing source adds a quote strip.
+        expect(await pane.locator(".chat-reply-attribution").count()).toBe(0);
+        expect(await pane.textContent()).not.toContain("Original message unavailable");
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
         );
@@ -181,11 +179,16 @@ suite.define(() => {
         const preview = page.locator(
           ".chat-pane-cache__pane--active .chat-reply-attribution--inline",
         );
-        await preview.waitFor();
+        await page
+          .locator('.chat-pane-cache__pane--active [data-entry-id="reconnect-reply"]')
+          .waitFor();
         await gateway.waitForRequest("chat.message.get");
         await expectRequestCountStable(gateway, "chat.message.get", 1);
         if (initial === "previous success") {
           expect(await preview.textContent()).toContain("Previous preview.");
+        } else {
+          // An unconfirmed or anonymous missing source adds no quote strip.
+          expect(await preview.count()).toBe(0);
         }
         await gateway.setMethodResponse("chat.message.get", { ok: true, message: source });
         const connectCount = (await gateway.getRequests("connect")).length;

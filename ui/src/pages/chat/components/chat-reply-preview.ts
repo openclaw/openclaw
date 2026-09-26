@@ -6,10 +6,16 @@ import { persistedMessageEntryId } from "../chat-thread.ts";
 import { prepareChatMessageRender, resolveMessageReplyText } from "./chat-message-markdown.ts";
 import { projectMessageMedia } from "./chat-message-media.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import type { LoadedReplySource, ReplyPreview } from "./chat-reply-preview.types.ts";
+import type {
+  LoadedReplySource,
+  MissingReplyPreview,
+  ReplyPreview,
+  ReplyPreviewLookup,
+} from "./chat-reply-preview.types.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 type ResolvedReplyPreview = ReplyPreview | undefined;
+const MISSING_REPLY_PREVIEW: MissingReplyPreview = { missing: true };
 type ReplyPreviewProps = Omit<
   Parameters<typeof resolveAssistantDisplayAvatar>[0],
   "assistantAvatar"
@@ -19,7 +25,10 @@ type ReplyPreviewProps = Omit<
   userId?: string | null;
   userName?: string | null;
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
-  replyMessageAccess?: { read: (messageId: string) => unknown };
+  replyMessageAccess?: {
+    read: (messageId: string) => unknown;
+    missing?: (messageId: string) => boolean;
+  };
 };
 
 function projectResolvedReplyPreview(
@@ -75,8 +84,8 @@ function projectResolvedReplyPreview(
 export function createReplyPreviewResolver(
   loadedReplySources: ReadonlyMap<string, LoadedReplySource>,
   props: ReplyPreviewProps,
-): (replyToId: string) => ResolvedReplyPreview {
-  const resolved = new Map<string, ResolvedReplyPreview>();
+): ReplyPreviewLookup {
+  const resolved = new Map<string, ReturnType<ReplyPreviewLookup>>();
   return (replyToId) => {
     if (resolved.has(replyToId)) {
       return resolved.get(replyToId);
@@ -90,7 +99,11 @@ export function createReplyPreviewResolver(
       return loadedPreview;
     }
     const message = props.replyMessageAccess?.read(replyToId);
-    const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
+    const preview = message
+      ? projectResolvedReplyPreview(message, replyToId, props)
+      : props.replyMessageAccess?.missing?.(replyToId)
+        ? MISSING_REPLY_PREVIEW
+        : undefined;
     resolved.set(replyToId, preview);
     return preview;
   };

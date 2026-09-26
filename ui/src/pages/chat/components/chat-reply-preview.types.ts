@@ -16,3 +16,10 @@ export type ReplyPreview = MessageReplyTarget & {
   isImage?: boolean;
   agentAvatar?: Parameters<typeof renderChatAuthorAvatar>[2];
 };
+
+/** The lookup confirmed that the referenced message is inaccessible. */
+export type MissingReplyPreview = { missing: true };
+
+export type ReplyPreviewLookup = (
+  replyToId: string,
+) => ReplyPreview | MissingReplyPreview | undefined;
