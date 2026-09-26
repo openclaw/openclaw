@@ -259,7 +259,7 @@ function resolveSymbolAndDeclaration(
         node !== undefined && node.kind !== ts.SyntaxKind.SourceFile,
     )
     .toSorted((left, right) => compareDeclarations(repoRoot, left, right));
-  const declaration = declarations.find((candidate) => candidate.kind !== ts.SyntaxKind.SourceFile);
+  const declaration = declarations[0];
   return { declaration, resolvedSymbol };
 }
 
