@@ -10,7 +10,7 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../plugins/provider-failover.js", () => hoisted);
 
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
-import { isContextOverflowError } from "./classify.js";
+import { classifyFailoverReason, isContextOverflowError } from "./classify.js";
 import { isLikelyHttpErrorText, renderSanitizedUserFacingText } from "./user-copy.js";
 
 it("renders task results and HTTP errors without activating provider hooks", () => {
@@ -39,6 +39,9 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   const cloudflareHtml502 =
     "<!doctype html><html><head><title>502 Bad Gateway</title></head>" +
     "<body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>";
+  const cloudflareHtml503 =
+    "<!doctype html><html><head><title>503</title></head>" +
+    "<body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>";
   const cloudflareChallengeHtml =
     "<!doctype html><html><head><title>403 Forbidden</title></head>" +
     "<body>Enable JavaScript and cookies to continue." +

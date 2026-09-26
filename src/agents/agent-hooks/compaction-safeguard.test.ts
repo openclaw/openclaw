@@ -2042,7 +2042,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         "None.",
       ].join("\n");
       mockSummarizeInStages.mockReset();
-      mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+      mockSummarizeInStages.mockResolvedValue(generatedSummary);
       const sessionManager = createQualityGuardSessionManager();
       const event = createCompactionEvent({ messageText: latestAsk, tokensBefore: 1_500 });
       (event.preparation as { settings?: { reserveTokens: number } }).settings = {
