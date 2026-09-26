@@ -339,31 +339,58 @@ test.each([false, true])(
     let checksDuringMaintenance = 0;
     let authorizationChecked = false;
     let nativeSettled = false;
-    const workers: Worker[] = [];
+    let reclamationWorker: Worker | undefined;
+    const stopObservingWorkers: Array<() => void> = [];
     const observeWorker = (worker: Worker) => {
-      workers.push(worker);
-      worker.on("message", (message: unknown) => {
+      const onMessage = (message: unknown) => {
+        if (isRecord(message) && message.type === "commit-request") {
+          reclamationWorker = worker;
+        }
         if (isRecord(message) && message.type === "reclaimed" && message.settled === true) {
           nativeSettled = true;
         }
-      });
-      worker.once("exit", () => {
-        nativeSettled = true;
+      };
+      const onExit = () => {
+        if (worker === reclamationWorker) {
+          nativeSettled = true;
+        }
+      };
+      worker.on("message", onMessage);
+      worker.once("exit", onExit);
+      stopObservingWorkers.push(() => {
+        worker.off("message", onMessage);
+        worker.off("exit", onExit);
       });
     };
     process.on("worker", observeWorker);
-    const vacuumCalls: Array<{
-      statement: string;
+    const maintenanceAdmissions: Array<{
+      stage: "transaction" | "commit";
       authorizationChecked: boolean;
       nativeSettled: boolean;
     }> = [];
-    const execute = database.db.exec.bind(database.db);
-    const execSpy = vi.spyOn(database.db, "exec").mockImplementation((statement) => {
-      if (statement.startsWith("PRAGMA incremental_vacuum(")) {
-        vacuumCalls.push({ statement, authorizationChecked, nativeSettled });
-      }
-      execute(statement);
-    });
+    const databasePathKey = sqliteReaderDatabasePathKey(database.path);
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const observeAdmission = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (
+            (request.stage === "transaction" || request.stage === "commit") &&
+            isRecord(request.facts) &&
+            isRecord(request.facts.identity) &&
+            typeof request.facts.identity.nativeLocation === "string" &&
+            sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
+          ) {
+            maintenanceAdmissions.push({
+              stage: request.stage,
+              authorizationChecked,
+              nativeSettled,
+            });
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    const execSpy = vi.spyOn(database.db, "exec");
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const maintenance = configureSqliteWalMaintenance(database.db, {
       busyTimeoutMs: 1_000,
@@ -406,20 +433,27 @@ test.each([false, true])(
       );
       expect(checksDuringMaintenance).toBe(0);
       expect(authorizationChecked).toBe(true);
-      expect(vacuumCalls[0]).toEqual({
-        statement: "PRAGMA incremental_vacuum(8);",
+      expect(maintenanceAdmissions[0]).toEqual({
+        stage: "transaction",
         authorizationChecked: true,
         nativeSettled: true,
       });
-      expect(vacuumCalls.every((call) => call.authorizationChecked && call.nativeSettled)).toBe(
-        true,
-      );
+      expect(maintenanceAdmissions.some((request) => request.stage === "commit")).toBe(true);
+      expect(
+        maintenanceAdmissions.every(
+          (request) => request.authorizationChecked && request.nativeSettled,
+        ),
+      ).toBe(true);
+      expect(
+        execSpy.mock.calls.filter(([statement]) =>
+          statement.startsWith("PRAGMA incremental_vacuum("),
+        ),
+      ).toEqual([]);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)?.db === database.db).toBe(true);
       maintenance.close({ checkpointMode: "PASSIVE" });
       vi.useRealTimers();
       await closeOpenClawAgentDatabasesAsync();
-      expect(workers).toHaveLength(1);
-      expect(workers[0]?.threadId).toBe(-1);
+      expect(reclamationWorker?.threadId).toBe(-1);
       const remaining = withOpenClawAgentDatabaseReadOnly(
         ({ db }) => Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count),
         databaseOptions,
@@ -431,6 +465,10 @@ test.each([false, true])(
       expect(maintenanceErrors).toEqual([]);
     } finally {
       process.off("worker", observeWorker);
+      for (const stop of stopObservingWorkers) {
+        stop();
+      }
+      observeAdmission.mockRestore();
       execSpy.mockRestore();
       if (database.db.isOpen) {
         maintenance.close({ checkpointMode: "PASSIVE" });
