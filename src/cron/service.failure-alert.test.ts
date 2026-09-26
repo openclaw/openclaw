@@ -1,5 +1,6 @@
 // Cron failure alert tests cover notification behavior for failed scheduled jobs.
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   alertCallArg,
   createTelegramDelivery,
@@ -29,6 +30,7 @@ describe("CronService failure alerts", () => {
   ])("groups delivery failures with $name cooldown without an after gate", async (testCase) => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: testCase.global,
         runResult: { status: "ok", delivered: false, deliveryError: "primary rejected" },
       },
@@ -75,25 +77,31 @@ describe("CronService failure alerts", () => {
   });
 
   it("defaults route-backed jobs to two failures and a one-hour cooldown", async () => {
-    await withFailureAlertCron({}, async ({ cron, sendCronFailureAlert, addJob }) => {
-      const job = await addJob("default routed alert", { delivery: createTelegramDelivery() });
+    await withFailureAlertCron(
+      { scheduler: createTestGatewayScheduler() },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("default routed alert", { delivery: createTelegramDelivery() });
 
-      await cron.run(job.id, "force");
-      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).not.toHaveBeenCalled();
 
-      await cron.run(job.id, "force");
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      expectAlertFields(sendCronFailureAlert, { channel: "telegram", to: "19098680" });
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        expectAlertFields(sendCronFailureAlert, { channel: "telegram", to: "19098680" });
 
-      vi.advanceTimersByTime(60 * 60_000 - 1);
-      await cron.run(job.id, "force");
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    });
+        vi.setSystemTime(Date.now() + 60 * 60_000 - 1);
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   it("activates policy when the global failureAlert object omits enabled", async () => {
     await withFailureAlertCron(
-      { failureAlert: { after: 1 } },
+      {
+        scheduler: createTestGatewayScheduler(),
+        failureAlert: { after: 1 },
+      },
       async ({ cron, sendCronFailureAlert, addJob }) => {
         const job = await addJob("object-enabled alert", { delivery: { mode: "none" } });
 
@@ -107,7 +115,11 @@ describe("CronService failure alerts", () => {
 
   it("keeps fallback events and immediate wakes on the failing job owner", async () => {
     await withFailureAlertCron(
-      { failureAlert: { enabled: true, after: 1 }, useFallback: true },
+      {
+        scheduler: createTestGatewayScheduler(),
+        failureAlert: { enabled: true, after: 1 },
+        useFallback: true,
+      },
       async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
         const sessionKey = "agent:work:cron:failure-alert";
         const job = await addJob("work-owned failure", {
@@ -164,7 +176,10 @@ describe("CronService failure alerts", () => {
     },
   ])("falls back exactly once only when an alert $name", async (testCase) => {
     await withFailureAlertCron(
-      { failureAlert: { enabled: true, after: 1 } },
+      {
+        scheduler: createTestGatewayScheduler(),
+        failureAlert: { enabled: true, after: 1 },
+      },
       async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
         sendCronFailureAlert.mockImplementationOnce(async (alert) => {
           await alert.onDeliverySettled(testCase.outcome);
@@ -187,6 +202,7 @@ describe("CronService failure alerts", () => {
   it("groups an incident, alerts on a changed cause, and reports recovery once", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 2, cooldownMs: 60_000 },
         runResult: { status: "error", error: "wrong model id" },
       },
@@ -212,7 +228,7 @@ describe("CronService failure alerts", () => {
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
 
         runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "wrong model id" });
-        vi.advanceTimersByTime(60_000);
+        vi.setSystemTime(Date.now() + 60_000);
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
 
@@ -244,6 +260,7 @@ describe("CronService failure alerts", () => {
   it("supports per-job failure alert override when global alerts are disabled", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: false },
         runResult: { status: "error", error: "timeout" },
       },
@@ -269,7 +286,10 @@ describe("CronService failure alerts", () => {
 
   it("reports an existing incident to a changed failure destination", async () => {
     await withFailureAlertCron(
-      { failureAlert: { after: 1, cooldownMs: 60_000 } },
+      {
+        scheduler: createTestGatewayScheduler(),
+        failureAlert: { after: 1, cooldownMs: 60_000 },
+      },
       async ({ cron, sendCronFailureAlert, addJob }) => {
         const job = await addJob("rerouted incident", { delivery: createTelegramDelivery() });
         await cron.run(job.id, "force");
@@ -277,7 +297,7 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledOnce();
 
-        vi.advanceTimersByTime(60_000);
+        vi.setSystemTime(Date.now() + 60_000);
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
         expectAlertFields(sendCronFailureAlert, { to: "new-recipient" });
@@ -287,7 +307,10 @@ describe("CronService failure alerts", () => {
 
   it("fences delayed alerts across recovery and failure in the same clock tick", async () => {
     await withFailureAlertCron(
-      { failureAlert: { after: 1, cooldownMs: 0 } },
+      {
+        scheduler: createTestGatewayScheduler(),
+        failureAlert: { after: 1, cooldownMs: 0 },
+      },
       async ({ cron, sendCronFailureAlert, runIsolatedAgentJob, addJob }) => {
         const job = await addJob("same-tick incident", { delivery: createTelegramDelivery() });
         await cron.run(job.id, "force");
@@ -311,6 +334,7 @@ describe("CronService failure alerts", () => {
   it("respects per-job failureAlert=false and suppresses alerts", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: { status: "error", error: "auth error" },
       },
@@ -327,6 +351,7 @@ describe("CronService failure alerts", () => {
   it("preserves includeSkipped through failure alert updates", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: { status: "skipped", error: "requests-in-flight" },
       },
@@ -369,6 +394,7 @@ describe("CronService failure alerts", () => {
   it("threads failure alert mode/accountId and skips best-effort jobs", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: {
           enabled: true,
           after: 1,
@@ -600,26 +626,29 @@ describe("CronService failure alerts", () => {
       },
     },
   ])("$name", async ({ globalAlert, jobAlert, expected }) => {
-    await withFailureAlertCron({ failureAlert: globalAlert }, async (context) => {
-      const { cron, sendCronFailureAlert, addJob } = context;
-      const job = await addJob("globally routed failure alert", {
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "telegram:19098680",
-        },
-        ...(jobAlert ? { failureAlert: jobAlert } : {}),
-      });
+    await withFailureAlertCron(
+      { scheduler: createTestGatewayScheduler(), failureAlert: globalAlert },
+      async (context) => {
+        const { cron, sendCronFailureAlert, addJob } = context;
+        const job = await addJob("globally routed failure alert", {
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:19098680",
+          },
+          ...(jobAlert ? { failureAlert: jobAlert } : {}),
+        });
 
-      await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
 
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      expectAlertFields(sendCronFailureAlert, expected);
-      expectAlertTextContaining(
-        sendCronFailureAlert,
-        'Automation "globally routed failure alert" failed 1 times',
-      );
-    });
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+        expectAlertFields(sendCronFailureAlert, expected);
+        expectAlertTextContaining(
+          sendCronFailureAlert,
+          'Automation "globally routed failure alert" failed 1 times',
+        );
+      },
+    );
   });
 
   it.each([
@@ -637,6 +666,7 @@ describe("CronService failure alerts", () => {
   ])("routes one scheduler alert through the $name", async ({ failureDestination }) => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: {
           enabled: true,
           after: 1,
@@ -664,6 +694,7 @@ describe("CronService failure alerts", () => {
   it("preserves explicit job alerts alongside an owned failure destination", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: {
           enabled: true,
           after: 1,
@@ -704,6 +735,7 @@ describe("CronService failure alerts", () => {
   it("preserves global skipped alerts alongside an owned failure destination", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: {
           enabled: true,
           after: 1,
@@ -741,6 +773,7 @@ describe("CronService failure alerts", () => {
   it("alerts for repeated skipped runs only when opted in", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: {
           enabled: true,
           after: 2,
@@ -784,6 +817,7 @@ describe("CronService failure alerts", () => {
   it("keeps classified raw errors out of chat failure alerts", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: { status: "error", error: "cron: job execution timed out" },
       },
@@ -804,6 +838,7 @@ describe("CronService failure alerts", () => {
   it("adds provider login recovery to OpenAI OAuth refresh failures", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: {
           status: "error",
@@ -843,6 +878,7 @@ describe("CronService failure alerts", () => {
   it("does not offer provider login for non-OAuth authentication failures", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: {
           status: "error",
@@ -890,6 +926,7 @@ describe("CronService failure alerts", () => {
   ])("renders a closed $name fact in threshold alerts", async ({ detail, expected }) => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: {
           status: "error",
@@ -916,6 +953,7 @@ describe("CronService failure alerts", () => {
   it("keeps arbitrary permanent errors generic without a closed detail", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: {
           status: "error",
@@ -943,6 +981,7 @@ describe("CronService failure alerts", () => {
   it("tracks skipped runs without alerting or affecting error backoff when includeSkipped is off", async () => {
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: { enabled: true, after: 1 },
         runResult: { status: "skipped", error: "requests-in-flight" },
       },
@@ -965,6 +1004,7 @@ describe("CronService failure alerts", () => {
     const longError = `${"x".repeat(199)}🎉trailing`;
     await withFailureAlertCron(
       {
+        scheduler: createTestGatewayScheduler(),
         failureAlert: {
           enabled: true,
           after: 1,
