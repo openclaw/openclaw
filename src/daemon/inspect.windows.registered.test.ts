@@ -12,6 +12,46 @@ vi.mock("node:child_process", async (importOriginal) => ({
 beforeEach(() => spawnSync.mockReset());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("excludes a static non-Gateway runtime command without admitting its missing profile", async () => {
+  const taskName = "\\OpenClaw Helper (non-gateway)";
+  const scriptPath = "C:\\openclaw-schtasks\\non-gateway\\non-gateway.cmd";
+  const task = {
+    taskPath: taskName,
+    state: 1,
+    actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+  };
+  spawnSync
+    .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
+    .mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
+  const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+    if (pathname !== scriptPath) {
+      throw new Error("Unexpected file read in unrelated-task inventory fixture");
+    }
+    return Buffer.from('@echo off\r\n"C:\\Node\\node.exe" --version\r\n');
+  });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+  const env = {
+    USERPROFILE: "C:\\Users\\test",
+    APPDATA: tempDirs.make("unrelated-task-startup-"),
+  };
+  try {
+    await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
+      services: [],
+      errors: [],
+    });
+    await expect(
+      readScheduledTaskCommand(
+        { ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName },
+        { requireEffective: true, requireLoaded: true },
+      ),
+    ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+  } finally {
+    readFile.mockRestore();
+    Object.defineProperty(process, "platform", platform);
+  }
+});
+
 it.each(["direct executable", "Node runtime", "CMD launcher"])(
   "binds the selected profile to effective argv for a %s",
   async (kind) => {

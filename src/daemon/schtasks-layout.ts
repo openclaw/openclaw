@@ -285,16 +285,15 @@ async function readWindowsTaskCommand(
     }
     assertInspectionDeadline();
     const assertCommandProfile = (command: GatewayServiceCommandConfig) => {
-      if (!registered) {
+      if (!registered || options?.profileScope === "registered") {
         return;
       }
       const profile = resolveWindowsServiceCommandProfile(command);
       if (
         profile.kind === "unavailable" ||
-        (options?.profileScope !== "registered" &&
-          profile.profile !==
-            (normalizeProfileName(resolveEnvironmentValue(env, "OPENCLAW_PROFILE", "win32")) ??
-              "default"))
+        profile.profile !==
+          (normalizeProfileName(resolveEnvironmentValue(env, "OPENCLAW_PROFILE", "win32")) ??
+            "default")
       ) {
         throw new Error("Scheduled Task selector changed during inspection");
       }
