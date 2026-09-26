@@ -6,7 +6,6 @@ import {
   ListToolsResultSchema,
   McpError,
   type CallToolResult,
-  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -16,6 +15,7 @@ import {
   createCombinedSessionMcpRuntime,
   mergeMcpToolCatalogs,
 } from "./agent-bundle-mcp-combined.js";
+import { loadBundleMcpCatalogWithDiagnostics } from "./agent-bundle-mcp-diagnostics.js";
 import {
   disposeAllSessionMcpRuntimes,
   getSessionMcpRuntimeManagerForTesting,
@@ -33,7 +33,7 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
-import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
+import { MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
 import {
   connectMcpClient,
   disposeMcpClient,
@@ -55,7 +55,6 @@ import {
   buildMcpClientCapabilities,
   normalizeToolUiVisibility,
   sanitizeMcpMetadataText,
-  summarizeServerCapabilities,
 } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import {
@@ -105,14 +104,6 @@ type McpServerBackoffState = {
 };
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
-
-function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
-    return true;
-  }
-  const message = String(error);
-  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
-}
 
 function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
   if (!rawServer || typeof rawServer !== "object") {
@@ -778,37 +769,30 @@ function createServerMcpRuntime(
       }
 
       try {
-        failIfDisposed();
-        if (!session.connected) {
-          const connectingSession = session;
-          await connectWithMcpStartupBackoff(
-            startupKey,
-            lifecycleAbortController.signal,
-            () => ensureSessionConnected(connectingSession, resolved.connectionTimeoutMs),
-            BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS,
-          );
-        }
-        startupRetryAfterMs = undefined;
-        failIfDisposed();
-        const capabilities = summarizeServerCapabilities(session.client.getServerCapabilities());
-        let listedTools: Tool[];
-        try {
-          listedTools = await listAllMcpTools(
-            session.client,
-            getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
-            lifecycleAbortController.signal,
-          );
-        } catch (error) {
-          if (
-            !capabilities.tools &&
-            (capabilities.resources || capabilities.prompts) &&
-            isMcpMethodNotFoundError(error)
-          ) {
-            listedTools = [];
-          } else {
-            throw error;
-          }
-        }
+        const { capabilities, listedTools } = await loadBundleMcpCatalogWithDiagnostics({
+          config: params.cfg,
+          attributes: {
+            reusedSession,
+            safeServerName,
+            serverName,
+            transportType: resolved.transportType,
+          },
+          assertActive: failIfDisposed,
+          isConnected: () => session.connected,
+          connect: () =>
+            connectWithMcpStartupBackoff(
+              startupKey,
+              lifecycleAbortController.signal,
+              () => ensureSessionConnected(session, resolved.connectionTimeoutMs),
+              BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS,
+            ),
+          onConnected: () => {
+            startupRetryAfterMs = undefined;
+          },
+          client: session.client,
+          listTimeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
+          signal: lifecycleAbortController.signal,
+        });
         failIfDisposed();
         const toolFilter = normalizeMcpToolFilter(
           isRecord(rawServer) ? rawServer.toolFilter : undefined,
