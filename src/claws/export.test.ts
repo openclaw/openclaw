@@ -436,11 +436,7 @@ describe("exportClawAgent", () => {
         subagents: { allowAgents: ["inherited-worker"], delegationMode: "prefer" },
       };
       const out = join(fixture.root, "selections");
-      await exportClawAgent("worker", out, {
-        env: fixture.env,
-        config: fixture.config,
-        sourceMcpServers: fixture.sourceMcpServers,
-      });
+      await exportClawAgent("worker", out, fixture.exportOptions);
       const exported = await readClawManifestFile(out);
       if (!exported.ok) {
         throw new Error(JSON.stringify(exported.diagnostics));
