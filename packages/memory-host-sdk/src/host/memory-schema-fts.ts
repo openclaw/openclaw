@@ -6,6 +6,20 @@ export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 
+const MEMORY_SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Reject caller-supplied names that cannot be interpolated into DDL. */
+export function assertSafeMemorySqlIdentifier(name: string, label: string): string {
+  if (!MEMORY_SQL_IDENTIFIER.test(name)) {
+    throw new Error(`Memory ${label} "${name}" is not a safe SQL identifier`);
+  }
+  return name;
+}
+
+export function assertSafeMemoryFtsTableName(name: string): string {
+  return assertSafeMemorySqlIdentifier(name, "FTS table");
+}
+
 type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
 
 /** Check every persisted FTS column declaration and supported table option. */
@@ -191,6 +205,7 @@ export function ensureMemoryChunkFtsTriggers(db: DatabaseSync): void {
 }
 
 export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void {
+  assertSafeMemoryFtsTableName(ftsTable);
   db.exec(`
     DELETE FROM ${ftsTable};
     INSERT INTO ${ftsTable} (
@@ -209,6 +224,7 @@ export function ensureMemoryChunkFtsSchema(params: {
 }): void {
   // Body and path indexes have incompatible columns and maintenance triggers.
   // Reject SQLite's case-insensitive path alias before replacing either index.
+  assertSafeMemoryFtsTableName(params.ftsTable);
   if (params.ftsTable.toLowerCase() === MEMORY_INDEX_PATHS_FTS_TABLE.toLowerCase()) {
     throw new Error(`Memory body FTS table "${params.ftsTable}" collides with the path FTS index`);
   }
@@ -267,6 +283,7 @@ export function ensureMemoryChunkFtsSchema(params: {
 }
 
 export function dropDisabledMemoryFts(db: DatabaseSync, ftsTable: string, enabled: boolean): void {
+  assertSafeMemoryFtsTableName(ftsTable);
   if (enabled) {
     return;
   }
