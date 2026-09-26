@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, test, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -7,12 +6,12 @@ import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as agentDatabaseLeases from "../state/openclaw-agent-db-lease.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { readSessionGroupMembershipInWorker } from "./session-group-catalog.js";
 
 const EXPECTED_OPEN_HANDLE_CAP = 64;
@@ -21,7 +20,6 @@ test.each([false, true])(
   "discovers current group members without decoding saved prompts (cold=%s)",
   async (cold) => {
     await withStateDirEnv("openclaw-session-group-metadata-", async ({ stateDir }) => {
-      setStateDirEnv(fs.realpathSync(stateDir));
       const scopes = [
         { agentId: "main", sessionKey: "agent:main:group-member" },
         { agentId: "research", sessionKey: "agent:research:matrix:group:!Room:example.org" },
@@ -61,7 +59,8 @@ test.each([false, true])(
           await upsertSessionEntryCore(scope, entry);
         }
         if (cold) {
-          closeOpenClawAgentDatabasesForTest();
+          await closeOpenClawAgentDatabasesAsync(stateDir);
+          closeOpenClawAgentDatabasesForTest(stateDir);
         }
         expect(await readTargets()).toEqual(new Map([["Shared work", scopes]]));
         await upsertSessionEntryCore(scopes[0], { ...entry, category: "Renamed" });
@@ -95,8 +94,6 @@ test.each([false, true])(
         });
       } finally {
         parse.mockRestore();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     });
   },
@@ -104,10 +101,6 @@ test.each([false, true])(
 
 test("discovers groups across more than the handle cap without writable database maintenance", async () => {
   await withStateDirEnv("openclaw-session-group-readonly-", async ({ stateDir }) => {
-    setStateDirEnv(fs.realpathSync(stateDir));
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
     const agentIds = Array.from(
       { length: EXPECTED_OPEN_HANDLE_CAP + 1 },
       (_, index) => `group-reader-${index}`,
@@ -124,7 +117,8 @@ test("discovers groups across more than the handle cap without writable database
         { category: "Shared work", sessionId: `group-session-${index}`, updatedAt: index + 1 },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawAgentDatabasesForTest(stateDir);
 
     const integritySpy = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const claimSpy = vi.spyOn(agentDatabaseLeases, "claimOpenClawAgentDatabaseLease");
@@ -153,8 +147,6 @@ test("discovers groups across more than the handle cap without writable database
       claimSpy.mockRestore();
       releaseSpy.mockRestore();
       walSpy.mockRestore();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
     }
   });
 });
