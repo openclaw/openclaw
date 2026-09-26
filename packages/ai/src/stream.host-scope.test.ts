@@ -3,6 +3,10 @@ import type {
   AssistantMessageEventStreamContract,
   Model,
 } from "@openclaw/llm-core";
+import {
+  createAssistantMessageEventStream,
+  getEventStreamCompletion,
+} from "@openclaw/llm-core/event-stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApiRegistry } from "./api-registry.js";
 import {
@@ -77,6 +81,37 @@ function deferred() {
 }
 
 describe("runtime-owned transport host", () => {
+  it.each(["stream", "streamSimple"] as const)(
+    "preserves native producer completion through %s without invoking result decorators",
+    async (method) => {
+      const source = createAssistantMessageEventStream();
+      const result = source.result.bind(source);
+      let resultCalls = 0;
+      source.result = () => {
+        resultCalls += 1;
+        return result();
+      };
+      const registry = createApiRegistry();
+      registry.registerApiProvider({
+        api: model.api,
+        stream: () => source,
+        streamSimple: () => source,
+      });
+      const runtime = createLlmRuntime(registry, { transportHost: {} });
+      const scoped = runtime[method](model, { messages: [] });
+      expect(scoped).toBe(source);
+      const completion = getEventStreamCompletion(scoped);
+      expect(completion).toBe(getEventStreamCompletion(source));
+      expect(resultCalls).toBe(0);
+      const final = message("producer done");
+      source.end(final);
+      await expect(completion).resolves.toBe(final);
+      expect(resultCalls).toBe(0);
+      await expect(scoped.result()).resolves.toBe(final);
+      expect(resultCalls).toBe(1);
+    },
+  );
+
   it("keeps overlapping native hosts separate while the ordinary runtime selects the current default", async () => {
     const gate = deferred();
     const registry = registryFor(async (value) => {

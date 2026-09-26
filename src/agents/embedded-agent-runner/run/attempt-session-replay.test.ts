@@ -338,7 +338,7 @@ describe("interrupted canonical user replay", () => {
                   JSON.stringify(message.content).includes(fixture.attempt.prompt),
               );
               expect(users).toHaveLength(1);
-              expect(users[0].content).toContainEqual(image);
+              expect(users[0]?.content).toContainEqual(image);
               expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
                 before,
               );
