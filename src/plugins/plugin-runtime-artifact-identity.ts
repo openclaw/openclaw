@@ -19,7 +19,7 @@ import {
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { getPluginRegistryForContext } from "./runtime.js";
-import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 const MAX_RUNTIME_ARTIFACT_DEPTH = 64;
 const MAX_RUNTIME_ARTIFACT_ENTRIES = 50_000;
@@ -143,7 +143,7 @@ export function fingerprintPluginRuntimeArtifact(
         // Identity must choose the same source/build policy as runtime registration.
         preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
           resolvePluginRuntimeArtifactPreference(
-            getPluginRuntimeLoadContext(getPluginRegistryForContext() ?? undefined)
+            getPluginRuntimeLoadContextState(getPluginRegistryForContext() ?? undefined)
               ?.preferBuiltPluginArtifacts,
           ),
           record.origin,
