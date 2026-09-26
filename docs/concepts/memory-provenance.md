@@ -75,6 +75,10 @@ Three records serve different purposes:
 | Entry origins         | Tracked entry | Session ingestion, backfill, and consolidation | Finding entries derived from a selected session |
 | Curated-write records | Memory file   | The memory write observer                      | Identifying files to review during a purge      |
 
+Curated-write lookups read only the requested physical workspace. Corrupt JSON
+in another workspace's records does not block that lookup; corrupt JSON in a
+live record in the selected workspace still reports a storage error.
+
 [Chunk provenance](/concepts/memory-architecture#provenance-every-memory-knows-where-it-came-from)
 describes the origin class and session kind. Entry origins instead associate
 an entry key with an agent and source session in SQLite. Promotion markers in
