@@ -1,5 +1,6 @@
 // Nextcloud Talk tests cover monitor.replay plugin behavior.
 import { ServerResponse, type IncomingMessage } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
@@ -57,7 +58,7 @@ async function invokeWebhookRequestListener(params: {
     legacyListeners.set(req, params.legacyListener);
   }
 
-  const result = Promise.withResolvers<{ body: string; status: number }>();
+  const result = createDeferred<{ body: string; status: number }>();
   const response = new ServerResponse(req);
   const res = Object.assign(response, {
     end(body?: string): ServerResponse {
@@ -191,7 +192,7 @@ describe("Nextcloud Talk Gateway webhook backend allowlist", () => {
 });
 
 describe("Nextcloud Talk Gateway webhook payload validation", () => {
-  it.each([
+  it.each<Record<string, string>>([
     {},
     { "content-type": "text/plain; charset=iso-8859-1" },
     { "content-type": "application/json", "content-encoding": "gzip" },
@@ -421,8 +422,8 @@ describe("Nextcloud Talk Gateway webhook auth rate limiting", () => {
 
 describe("Nextcloud Talk accounts sharing a Gateway route", () => {
   it("keeps a stopping account retryable without charging its sibling's auth budget", async () => {
-    const admitted = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
+    const admitted = createDeferred<void>();
+    const release = createDeferred<void>();
     const path = "/nextcloud-stopping-account";
     const first = await startWebhookServer({
       path,

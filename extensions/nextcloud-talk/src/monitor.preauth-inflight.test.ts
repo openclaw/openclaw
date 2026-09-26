@@ -1,6 +1,7 @@
 // Nextcloud Talk tests cover pre-authentication webhook in-flight admission behavior.
 import type { IncomingMessage } from "node:http";
 import { createConnection, type Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
@@ -87,8 +88,8 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
           legacyListeners.set(req, endpoint);
         }
       };
-      const admitted = Promise.withResolvers<void>();
-      const releaseAdmission = Promise.withResolvers<void>();
+      const admitted = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
       const dispatches: string[] = [];
       const { server, webhookUrl, waitForIdle } = await startWebhookServer({
         path: WEBHOOK_PATH,
@@ -120,7 +121,7 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
       const sockets: Socket[] = [];
       let received = 0;
       let awaitedCount = 0;
-      let receivedCount = Promise.withResolvers<void>();
+      let receivedCount = createDeferred<void>();
       const onRequest = () => {
         received += 1;
         if (received === awaitedCount) {
@@ -129,7 +130,7 @@ describe("Nextcloud Talk webhook pre-authentication in-flight limit", () => {
       };
       const waitForRequests = (count: number) => {
         awaitedCount = count;
-        receivedCount = Promise.withResolvers<void>();
+        receivedCount = createDeferred<void>();
         if (received >= count) {
           receivedCount.resolve();
         }

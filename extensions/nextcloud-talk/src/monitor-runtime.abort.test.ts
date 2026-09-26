@@ -4,6 +4,7 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
@@ -211,8 +212,8 @@ describe("Nextcloud Talk monitor abort", () => {
       setNextcloudTalkRuntime(createPluginRuntimeMock());
       const registry = createTestRegistry();
       setActivePluginRegistry(registry);
-      const admitted = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const admitted = createDeferred<void>();
+      const release = createDeferred<void>();
       const abortController = new AbortController();
       const spoolStop = vi.fn(async () => {
         expect(registry.httpRoutes).toHaveLength(0);

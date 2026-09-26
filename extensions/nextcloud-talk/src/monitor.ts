@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -131,7 +132,7 @@ function createWebhookHandler(
     // Authentication selects the account after upload; until then each candidate owns the read.
     if (!res.destroyed && !res.writableFinished) {
       for (const entry of servingTargets) {
-        const responseDone = Promise.withResolvers<void>();
+        const responseDone = createDeferred<void>();
         entry.pendingResponses.add(responseDone.promise);
         responseOwners.set(entry, () => {
           entry.pendingResponses.delete(responseDone.promise);

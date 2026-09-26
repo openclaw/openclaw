@@ -1,4 +1,5 @@
 // Nextcloud Talk webhook acknowledgement follows durable admission.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
@@ -10,7 +11,7 @@ describe("Nextcloud Talk durable webhook acknowledgement", () => {
     const admission = new Promise<void>((resolve) => {
       releaseAdmission = resolve;
     });
-    const entered = Promise.withResolvers<void>();
+    const entered = createDeferred<void>();
     const onWebhook = vi.fn(async () => {
       entered.resolve();
       await admission;
