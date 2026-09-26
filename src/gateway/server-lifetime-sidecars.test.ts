@@ -6,6 +6,7 @@ import { MessageChannel, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   getProcessCleanupBudget,
   runWithProcessCleanupBudget,
@@ -331,6 +332,7 @@ describe("gateway lifetime sidecars", () => {
     });
 
     expect(oauth.create).toHaveBeenCalledWith({
+      scheduler: expect.any(GatewayScheduler),
       getConfig: context.getRuntimeConfig,
       getPersistedConfig: expect.any(Function),
       warn,

@@ -123,6 +123,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   const githubOAuth = createGitHubOAuthLifecycle({
+    scheduler: params.scheduler,
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     getPersistedConfig: () => getRuntimeConfig({ pin: false }),
     warn: params.logWarning,
