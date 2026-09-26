@@ -86,6 +86,7 @@ async function runCodeModeBridgeRequest(
       return await runtime.search(query, {
         parentToolCallId: options?.parentToolCallId,
         limit: typeof optionsLocal?.limit === "number" ? optionsLocal.limit : undefined,
+        signal: options?.signal,
       });
     }
     case "describe": {
@@ -135,6 +136,7 @@ export function runCodeModeChild(params: {
     let settled = false;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
     const bridgeAbortController = new AbortController();
+    const pendingSearches = new Set<Promise<unknown>>();
     const settle = (callback: () => void, abortReason?: unknown) => {
       if (settled) {
         return;
@@ -150,7 +152,9 @@ export function runCodeModeChild(params: {
       // Host tool calls share the child lifetime, including fatal exits and final IPC results.
       bridgeAbortController.abort(abortReason);
       child.kill();
-      callback();
+      // Search can now own Decision-provider I/O. A stopped child must not
+      // return while any already-started search still occupies that capacity.
+      void Promise.allSettled(pendingSearches).then(callback);
     };
     const abortFromParent: () => void = () => {
       child.kill("SIGKILL");
@@ -238,7 +242,7 @@ export function runCodeModeChild(params: {
       if (!id || !method) {
         return;
       }
-      void runCodeModeBridgeRequest(params.runtime, method, message.args, {
+      const request = runCodeModeBridgeRequest(params.runtime, method, message.args, {
         parentToolCallId: params.parentToolCallId,
         signal: bridgeAbortController.signal,
         onUpdate: params.onUpdate,
@@ -267,6 +271,13 @@ export function runCodeModeChild(params: {
           };
           child.send(response, () => undefined);
         });
+      if (method === "search") {
+        pendingSearches.add(request);
+        void request.then(
+          () => pendingSearches.delete(request),
+          () => pendingSearches.delete(request),
+        );
+      }
     });
 
     child.send({ type: "run", code: params.code, timeoutMs: params.config.codeTimeoutMs });

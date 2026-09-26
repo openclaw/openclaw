@@ -440,6 +440,38 @@ Tune code-mode timeout and search result limits (values shown are the defaults):
 The runtime clamps `codeTimeoutMs` to 1000-60000, `maxSearchLimit` to 1-50, and
 `searchDefaultLimit` to 1..`maxSearchLimit`.
 
+Semantic ranking is an opt-in shadow observation. It additionally requires
+[Decision assistance Labs](/concepts/experimental-features#decision-assistance)
+and an effective Decision model for the owning agent; model selection alone
+is not consent. Labs off or an explicit empty agent model preserves lexical
+results without automatic provider requests. It runs after the authorized
+lexical BM25 search, receives at most eight already-permitted candidates, and
+never changes the returned candidate set or order:
+
+```json5
+{
+  tools: {
+    toolSearch: {
+      mode: "tools",
+      semanticRanking: "shadow",
+      semanticRankingTimeoutMs: 1000,
+    },
+  },
+}
+```
+
+The default is `semanticRanking: "off"`; the cancellation budget is clamped to
+1-5000 ms. At that deadline, the host requests cancellation and waits for the
+provider to settle. A provider that ignores cancellation can delay search and
+code-tool completion beyond this budget; it is not a hard return deadline.
+Exact tool-name and tool-id searches remain a zero-semantic-call fast path.
+
+Shadow telemetry compares a stable descending-probability ordering against
+lexical order, with lexical position breaking ties. It deliberately uses this
+consumer-owned distribution policy rather than the provider's `choice` label;
+the Decision contract permits those to differ. Low top probability or a narrow
+probability margin records an uncertain observation instead of an ordering.
+
 Disable it:
 
 ```json5
@@ -461,6 +493,11 @@ Code mode attaches a `telemetry` object to every `tool_search_code` result:
   when the catalog is replaced or restored
 - `searchCount`, `describeCount`, `callCount`: running totals for the catalog
   session, carried across calls rather than reset per call
+- Shadow-ranking telemetry, when enabled and used, contains only aggregate
+  counters: calls, candidate count, succeeded/unavailable/incomplete/uncertain/
+  canceled outcomes, top-one agreement/disagreement with BM25, bounded rank
+  displacement, and total latency. It does not include query text, tool names,
+  descriptions, schemas, or provider content.
 
 `tools` and `directory` mode emit no telemetry object; their `tool_search`,
 `tool_describe`, and `tool_call` results carry only the catalog data for that

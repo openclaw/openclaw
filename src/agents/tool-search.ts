@@ -2,6 +2,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
@@ -262,6 +263,10 @@ export function addClientToolsToToolSearchCatalog(params: {
 
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
+  // Retain the original context: its identity owns catalog and guest lifetimes.
+  ctx.readDecisionAssistanceConfig ??= createRuntimeConfigReader(
+    ctx.runtimeConfig ?? ctx.config ?? {},
+  );
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
   return [
@@ -352,27 +357,48 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           ),
         ),
       }),
-      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+      execute: async (
+        toolCallId: string,
+        args: unknown,
+        signal?: AbortSignal,
+      ): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
         if (request.kind === "single") {
           return formatToolSearchControlResult(
             await runtime.search(request.search.query, {
               limit: request.search.limit,
+              signal,
               parentToolCallId: toolCallId,
             }),
             runtime,
             { parentToolCallId: toolCallId },
           );
         }
-        const results = await Promise.all(
+        // Await every independent search before surfacing a rejection. A
+        // canceled batch must not leave a sibling Decision provider call
+        // physically unsettled in the background.
+        const settled = await Promise.allSettled(
           request.searches.map(async (search) => ({
             query: search.query,
             candidates: await runtime.search(search.query, {
               limit: search.limit,
+              signal,
               parentToolCallId: toolCallId,
             }),
           })),
         );
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (rejected) {
+          throw rejected.reason;
+        }
+        const results = settled.map((result) => {
+          if (result.status === "rejected") {
+            throw result.reason;
+          }
+          return result.value;
+        });
         return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
       },
     },

@@ -293,6 +293,19 @@ function registerToolSearchCatalog(params: {
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
+    semanticRankingShadowCalls: prior?.semanticRankingShadowCalls,
+    semanticRankingShadowCandidates: prior?.semanticRankingShadowCandidates,
+    semanticRankingShadowSucceeded: prior?.semanticRankingShadowSucceeded,
+    semanticRankingShadowUnavailable: prior?.semanticRankingShadowUnavailable,
+    semanticRankingShadowIncomplete: prior?.semanticRankingShadowIncomplete,
+    semanticRankingShadowCanceled: prior?.semanticRankingShadowCanceled,
+    semanticRankingShadowUncertain: prior?.semanticRankingShadowUncertain,
+    semanticRankingShadowTop1Agreement: prior?.semanticRankingShadowTop1Agreement,
+    semanticRankingShadowTop1Disagreement: prior?.semanticRankingShadowTop1Disagreement,
+    semanticRankingShadowRankDisplacement: prior?.semanticRankingShadowRankDisplacement,
+    semanticRankingShadowOrderingDisplacement: prior?.semanticRankingShadowOrderingDisplacement,
+    semanticRankingShadowOrderingAgreement: prior?.semanticRankingShadowOrderingAgreement,
+    semanticRankingShadowLatencyMs: prior?.semanticRankingShadowLatencyMs,
   };
   // Finalization can narrow schemas after last-write-wins registration.
   catalogMetadata.set(next, {
@@ -384,7 +397,7 @@ function getTelemetry(catalog: ToolSearchCatalogSession): ToolSearchCatalogTelem
   for (const entry of catalog.entries) {
     sources[entry.source] += 1;
   }
-  return {
+  const telemetry: ToolSearchCatalogTelemetry = {
     catalogSize: catalog.entries.length,
     sources,
     counterScope: catalog.counterScope,
@@ -392,6 +405,27 @@ function getTelemetry(catalog: ToolSearchCatalogSession): ToolSearchCatalogTelem
     describeCount: catalog.describeCount,
     callCount: catalog.callCount,
   };
+  // Keep the existing compact telemetry shape for ordinary runs. Once shadow
+  // ranking has actually run, expose only aggregate facts; query text and
+  // candidate descriptors never enter telemetry.
+  if ((catalog.semanticRankingShadowCalls ?? 0) > 0) {
+    telemetry.semanticRankingShadowCalls = catalog.semanticRankingShadowCalls;
+    telemetry.semanticRankingShadowCandidates = catalog.semanticRankingShadowCandidates;
+    telemetry.semanticRankingShadowSucceeded = catalog.semanticRankingShadowSucceeded;
+    telemetry.semanticRankingShadowUnavailable = catalog.semanticRankingShadowUnavailable;
+    telemetry.semanticRankingShadowIncomplete = catalog.semanticRankingShadowIncomplete;
+    telemetry.semanticRankingShadowCanceled = catalog.semanticRankingShadowCanceled;
+    telemetry.semanticRankingShadowUncertain = catalog.semanticRankingShadowUncertain;
+    telemetry.semanticRankingShadowTop1Agreement = catalog.semanticRankingShadowTop1Agreement;
+    telemetry.semanticRankingShadowTop1Disagreement = catalog.semanticRankingShadowTop1Disagreement;
+    telemetry.semanticRankingShadowRankDisplacement = catalog.semanticRankingShadowRankDisplacement;
+    telemetry.semanticRankingShadowOrderingDisplacement =
+      catalog.semanticRankingShadowOrderingDisplacement;
+    telemetry.semanticRankingShadowOrderingAgreement =
+      catalog.semanticRankingShadowOrderingAgreement;
+    telemetry.semanticRankingShadowLatencyMs = catalog.semanticRankingShadowLatencyMs;
+  }
+  return telemetry;
 }
 
 export function readToolSearchCatalogTelemetry(

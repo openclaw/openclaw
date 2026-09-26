@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DecisionRuntimeV1 } from "../decisions/types.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
@@ -34,6 +35,7 @@ export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
 ]);
 
 export type ToolSearchMode = "code" | "tools" | "directory";
+export type ToolSearchSemanticRanking = "off" | "shadow";
 export type ToolSearchRequest =
   | { kind: "single"; search: { query: string; limit: number } }
   | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
@@ -84,18 +86,26 @@ export type ToolSearchConfig = {
   codeTimeoutMs: number;
   searchDefaultLimit: number;
   maxSearchLimit: number;
+  /** Optional semantic ranking observation; it never changes returned results. */
+  semanticRanking?: ToolSearchSemanticRanking;
+  /** Decision timeout for the optional semantic ranking observation. */
+  semanticRankingTimeoutMs?: number;
 };
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
+  /** Retain the prepared config owner across fresh code-mode executions. */
+  readDecisionAssistanceConfig?: () => OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
+  /** Optional owner-bound Decision runtime; production falls back to the shared runtime. */
+  decisionRuntime?: Pick<DecisionRuntimeV1, "evaluate">;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
@@ -125,6 +135,20 @@ export type ToolSearchCatalogSession = {
   searchCount: number;
   describeCount: number;
   callCount: number;
+  /** Content-free shadow-ranking counters, omitted from telemetry until used. */
+  semanticRankingShadowCalls?: number;
+  semanticRankingShadowCandidates?: number;
+  semanticRankingShadowSucceeded?: number;
+  semanticRankingShadowUnavailable?: number;
+  semanticRankingShadowIncomplete?: number;
+  semanticRankingShadowCanceled?: number;
+  semanticRankingShadowUncertain?: number;
+  semanticRankingShadowTop1Agreement?: number;
+  semanticRankingShadowTop1Disagreement?: number;
+  semanticRankingShadowRankDisplacement?: number;
+  semanticRankingShadowOrderingDisplacement?: number;
+  semanticRankingShadowOrderingAgreement?: number;
+  semanticRankingShadowLatencyMs?: number;
 };
 
 export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries"> & {

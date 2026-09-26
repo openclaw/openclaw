@@ -267,6 +267,7 @@ export async function runBridgeRequest(params: {
         const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           allowedIds: catalogProjection.searchableIds,
+          signal: params.signal,
           parentToolCallId: params.parentToolCallId,
         });
         value = exactBinding

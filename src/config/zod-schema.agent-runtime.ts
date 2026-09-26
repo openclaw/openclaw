@@ -502,6 +502,10 @@ const ToolSearchSchema = z
         searchDefaultLimit: z.number().int().positive().optional(),
         /** Maximum search result count. Runtime clamps to 1..50. */
         maxSearchLimit: z.number().int().positive().optional(),
+        /** Optional typed semantic Tool Search ranking observation. Off by default; shadow never changes results. */
+        semanticRanking: z.enum(["off", "shadow"]).optional(),
+        /** Decision timeout for semantic ranking observation. Runtime clamps to 1..5000 ms. */
+        semanticRankingTimeoutMs: z.number().int().positive().optional(),
       })
       .strict(),
   ])

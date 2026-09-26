@@ -4,6 +4,7 @@
  */
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -191,6 +192,10 @@ function createCodeModeExecDescription(
 }
 
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
+  // Retain the original context: its identity owns catalog and guest lifetimes.
+  ctx.readDecisionAssistanceConfig ??= createRuntimeConfigReader(
+    ctx.runtimeConfig ?? ctx.config ?? {},
+  );
   const runtimeRefresh = captureAgentPluginRuntimeRefresh();
   // The surface planner owns activation. Capture limits once so an admitted
   // control remains executable during model overrides and restart recovery.

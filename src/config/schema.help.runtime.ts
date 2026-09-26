@@ -135,6 +135,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
+  "tools.toolSearch.semanticRanking":
+    'Optional typed semantic ranking observation after lexical BM25. Set to "shadow" to record a Decision observation without changing the original result order or candidate set. Off by default.',
+  "tools.toolSearch.semanticRankingTimeoutMs":
+    "Cooperative cancellation budget in milliseconds for optional semantic Tool Search ranking, clamped to 1..5000. Search waits for provider settlement after cancellation, so this is not a maximum completion time.",
   "tools.codeMode":
     'Generic OpenClaw Code Mode. When omitted globally, defaults to `"auto"`; an authored object without `enabled` remains off. Engaged agent runs expose only `exec` and `wait` to the model and access normal tools through the catalog bridge.',
   "tools.codeMode.enabled":

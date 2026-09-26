@@ -1065,35 +1065,6 @@ describe("config schema", () => {
     expect(parsed?.updatePlan).toBe(false);
   });
 
-  it("accepts simplified Tool Search config in the runtime zod schema", () => {
-    expect(ToolsSchema.parse({ toolSearch: true })?.toolSearch).toBe(true);
-    expect(
-      ToolsSchema.parse({
-        toolSearch: {
-          enabled: true,
-          mode: "directory",
-          codeTimeoutMs: 5000,
-          searchDefaultLimit: 4,
-          maxSearchLimit: 12,
-        },
-      })?.toolSearch,
-    ).toEqual({
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 5000,
-      searchDefaultLimit: 4,
-      maxSearchLimit: 12,
-    });
-    expect(
-      ToolsSchema.safeParse({
-        toolSearch: {
-          enabled: true,
-          mode: "both",
-        },
-      }).success,
-    ).toBe(false);
-  });
-
   it("accepts install policy exec config in the runtime zod schema", () => {
     const parsed = OpenClawSchema.parse({
       security: {

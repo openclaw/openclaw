@@ -5,11 +5,14 @@ import {
   MAX_TOOL_SEARCH_RESULTS,
   type ToolSearchConfig,
   type ToolSearchMode,
+  type ToolSearchSemanticRanking,
 } from "./tool-search-types.js";
 
 const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
+const DEFAULT_SEMANTIC_RANKING_TIMEOUT_MS = 1_000;
+const MAX_SEMANTIC_RANKING_TIMEOUT_MS = 5_000;
 
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
@@ -61,6 +64,8 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     rawMode === "tools" || rawMode === "directory" || rawMode === "code" ? rawMode : "code";
   const mode: ToolSearchMode =
     requestedMode === "code" && !isToolSearchCodeModeSupported() ? "tools" : requestedMode;
+  const semanticRanking: ToolSearchSemanticRanking =
+    raw.semanticRanking === "shadow" ? "shadow" : "off";
   const configured = Object.keys(raw).some((key) => key !== "enabled");
   const maxSearchLimit = Math.max(
     1,
@@ -78,6 +83,11 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
       Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT)),
     ),
     maxSearchLimit,
+    semanticRanking,
+    semanticRankingTimeoutMs: Math.min(
+      MAX_SEMANTIC_RANKING_TIMEOUT_MS,
+      readInteger(raw.semanticRankingTimeoutMs, DEFAULT_SEMANTIC_RANKING_TIMEOUT_MS),
+    ),
   };
 }
 
