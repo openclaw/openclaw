@@ -12,7 +12,9 @@ import {
 const key = "agent:main:unread-contract";
 
 function rowUnread(result: SessionsListResult | null): boolean {
-  return result?.sessions.find((row) => row.key === key)?.unread === true;
+  const row = result?.sessions.find((row) => row.key === key);
+  expect(row).toBeDefined();
+  return row?.unread === true;
 }
 
 function unreadHarness(options: {

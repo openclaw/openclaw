@@ -14,7 +14,9 @@ import type { SessionListSnapshot } from "./session-capability.ts";
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 function rowPinned(result: SessionsListResult | null, key: string): boolean {
-  return result?.sessions.find((row) => row.key === key)?.pinned === true;
+  const row = result?.sessions.find((row) => row.key === key);
+  expect(row).toBeDefined();
+  return row?.pinned === true;
 }
 
 // Shape of `buildGatewaySessionEventFields`: every payload carries the server's

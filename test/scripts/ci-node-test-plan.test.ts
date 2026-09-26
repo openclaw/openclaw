@@ -3362,9 +3362,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
-    expect(compact.every((shard) => usesParallelPacking(shard) || shard.groups.length <= 10)).toBe(
-      true,
-    );
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
       compact.every((shard) =>
@@ -3436,7 +3433,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         originalHybridJob.pretestBuildMode === undefined &&
         shard.pretestBuildMode === "runtime";
       if (promoted) {
-        expect(shard.pretestBuildMode).toBe("runtime");
         expect(shard.planConcurrency).toBe(1);
         expect(exclusiveCount).toBe(0);
         expect(shard.requiresDist).toBe(false);

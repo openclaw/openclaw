@@ -25,6 +25,7 @@ afterEach(() => {
 
 describe("loadPluginManifest JSON5 tolerance", () => {
   it("parses a standard JSON manifest without issues", () => {
+    const json5Parse = vi.spyOn(JSON5, "parse");
     const dir = makeTempDir();
     const manifest = {
       id: "demo",
@@ -37,6 +38,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     );
     const result = loadPluginManifest(dir, false);
     expect(result.ok).toBe(true);
+    expect(json5Parse).not.toHaveBeenCalled();
     if (result.ok) {
       expect(result.manifest.id).toBe("demo");
     }
@@ -78,24 +80,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         },
       ]);
     }
-  });
-
-  it("uses native JSON parsing for standard JSON manifests", () => {
-    const json5Parse = vi.spyOn(JSON5, "parse");
-    const dir = makeTempDir();
-    fs.writeFileSync(
-      path.join(dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "strict-json",
-        configSchema: { type: "object" },
-      }),
-      "utf-8",
-    );
-
-    const result = loadPluginManifest(dir, false);
-
-    expect(result.ok).toBe(true);
-    expect(json5Parse).not.toHaveBeenCalled();
   });
 
   it("reuses unchanged manifest loads within one lifecycle generation", () => {

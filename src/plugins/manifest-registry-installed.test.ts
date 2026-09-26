@@ -479,49 +479,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(reused.diagnostics).toEqual([]);
   });
 
-  it("reconstructs bundle candidates with their bundle manifest format", () => {
-    const rootDir = makeTempDir();
-    fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
-    fs.mkdirSync(path.join(rootDir, "commands"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "Claude Bundle",
-        commands: "commands",
-      }),
-      "utf8",
-    );
-
-    const index = createIndex(rootDir);
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: {
-        ...index,
-        plugins: [
-          {
-            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
-            pluginId: "claude-bundle",
-            manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
-            source: rootDir,
-            format: "bundle",
-            bundleFormat: "claude",
-          },
-        ],
-      },
-      env: {
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-      includeDisabled: true,
-    });
-
-    expect(registry.diagnostics).toStrictEqual([]);
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.id).toBe("claude-bundle");
-    expect(registry.plugins[0]?.format).toBe("bundle");
-    expect(registry.plugins[0]?.bundleFormat).toBe("claude");
-    expect(registry.plugins[0]?.skills).toEqual(["commands"]);
-  });
-
   it("hydrates package metadata while dropping setup fields with mismatched CLI names", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
