@@ -6,13 +6,13 @@ import {
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
 } from "../../../config/gateway-control-ui-origins.js";
+import { DEFAULT_GATEWAY_PORT } from "../../../config/gateway-defaults.js";
 import {
   defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 
 const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "port"],

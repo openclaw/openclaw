@@ -12,6 +12,7 @@ import {
 } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
+import { DEFAULT_GATEWAY_PORT } from "./gateway-defaults.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "./state-dir.js";
 import type { OpenClawConfig } from "./types.js";
 export { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "./state-dir.js";
@@ -359,8 +360,6 @@ export function resolveDefaultConfigCandidates(
   }
   return candidates;
 }
-
-export const DEFAULT_GATEWAY_PORT = 18789;
 
 /**
  * Gateway lock directory inside the selected state tree.

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DEFAULT_PLUGINS_ENABLED } from "./default-enablement.js";
 import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
@@ -180,7 +181,7 @@ export function normalizePluginsConfigWithResolverCore(
 ): NormalizedPluginsConfig {
   const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
   return {
-    enabled: config?.enabled !== false,
+    enabled: config?.enabled ?? DEFAULT_PLUGINS_ENABLED,
     allow: normalizePluginConfigList(config?.allow, normalizePluginId),
     deny: normalizePluginConfigList(config?.deny, normalizePluginId),
     loadPaths: normalizePluginConfigList(config?.load?.paths, identityNormalizePluginId),

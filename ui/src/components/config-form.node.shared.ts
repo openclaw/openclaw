@@ -297,9 +297,10 @@ export function renderCollectionDefaultDescription(
 export function renderSchemaDefaultDescription(
   schema: JsonSchema,
   value: unknown,
+  placeholder?: string,
 ): TemplateResult | typeof nothing {
   if (schema.default === undefined) {
-    return nothing;
+    return value === undefined && placeholder ? html`${placeholder}` : nothing;
   }
   return (
     renderSettingsDefaultDescription(formatConfigValueText(schema.default), value !== undefined) ??

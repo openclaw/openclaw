@@ -5,10 +5,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { DEFAULT_GATEWAY_PORT } from "./gateway-defaults.js";
 import {
   allowsProcessHomeSessionScan,
   CONFIG_PATH,
-  DEFAULT_GATEWAY_PORT,
   isDefaultInstallIdentity,
   isDefaultStateDir,
   isNixMode,
