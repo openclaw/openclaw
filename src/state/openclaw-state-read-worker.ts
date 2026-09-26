@@ -90,6 +90,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   if (command.type === "channelIngress.failedHealth") {
     return { type: command.type };
   }
+  if (command.type === "channelIngress.pressureHealth") {
+    return { type: command.type, input: { now: command.input.now } };
+  }
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
   }

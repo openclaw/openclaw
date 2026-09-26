@@ -420,7 +420,7 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
   });
 
-  it("retains activity across navigation after diagnostic eviction", () => {
+  it("retains activity across navigation without retaining raw diagnostic events", () => {
     const { gateway: source, current } = activityGateway();
     const page = bindActivity(source);
     const fillDiagnosticLog = () => {
@@ -435,8 +435,7 @@ describe("ActivityPage gateway lifecycle", () => {
 
     current().opts.onEvent?.(toolEvent("while-away", "agent:other:work"));
     fillDiagnosticLog();
-    expect(source.eventLog).toHaveLength(250);
-    expect(source.eventLog.every((event) => event.event === "diagnostic")).toBe(true);
+    expect(source.eventLog).toEqual([]);
 
     const revisitedPage = bindActivity(source);
     expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual([

@@ -61,10 +61,16 @@ function atCopyMutation(mutate: () => void) {
   });
 }
 
-it("copies a nonempty plugin without native support or sharing its source inode", async () => {
-  const f = await fixture(true);
+it("copies a plugin portably without repeated recursive parent creation or shared inodes", async () => {
+  const f = await fixture(true, async (source) => {
+    await fs.mkdir(path.join(source, "nested"));
+    for (let index = 0; index < 8; index++) {
+      await fs.writeFile(path.join(source, "nested", `${index}.txt`), `payload ${index}`);
+    }
+  });
   const linked = `${f.file}.linked`;
   const before = await fs.stat(f.file, { bigint: true });
+  const mkdir = vi.spyOn(fs, "mkdir");
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   try {
     // FreeBSD has no fs-safe native binding. Exercise its real portable backend.
@@ -72,6 +78,17 @@ it("copies a nonempty plugin without native support or sharing its source inode"
     await f.copy();
   } finally {
     vi.unstubAllEnvs();
+  }
+  const recursiveMkdirCalls = mkdir.mock.calls.filter(
+    ([, options]) => typeof options === "object" && options?.recursive,
+  );
+  expect(recursiveMkdirCalls.length).toBeLessThanOrEqual(
+    f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
+  );
+  for (let index = 0; index < 8; index++) {
+    expect(await fs.readFile(path.join(f.destination, "nested", `${index}.txt`), "utf8")).toBe(
+      `payload ${index}`,
+    );
   }
   const copied = path.join(f.destination, "payload.txt");
   const after = await fs.stat(f.file, { bigint: true });
@@ -90,7 +107,7 @@ it("copies a nonempty plugin without native support or sharing its source inode"
   if (process.platform !== "win32") {
     expect(snapshot.mode & 0o777n).toBe(0o444n);
   }
-  expect(await fs.readdir(f.destination)).toEqual(["payload.txt", "payload.txt.linked"]);
+  expect(await fs.readdir(f.destination)).toEqual(["nested", "payload.txt", "payload.txt.linked"]);
 });
 
 it.each(["file", "symlink"] as const)(

@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { countFailedChannelIngressQueueEntriesInDatabase } from "./ingress-queue-health.kernel.js";
+import {
+  countChannelIngressQueuePressureInDatabase,
+  countFailedChannelIngressQueueEntriesInDatabase,
+} from "./ingress-queue-health.kernel.js";
 import type {
   ChannelIngressReadCommand,
   ChannelIngressReadReply,
@@ -9,10 +12,18 @@ export function readChannelIngressInDatabase(
   db: DatabaseSync,
   command: ChannelIngressReadCommand,
 ): ChannelIngressReadReply {
+  if (command.type === "channelIngress.failedHealth") {
+    return {
+      ok: true,
+      sourceAdmitted: true,
+      type: command.type,
+      result: countFailedChannelIngressQueueEntriesInDatabase(db),
+    };
+  }
   return {
     ok: true,
     sourceAdmitted: true,
     type: command.type,
-    result: countFailedChannelIngressQueueEntriesInDatabase(db),
+    result: countChannelIngressQueuePressureInDatabase(db, command.input.now),
   };
 }

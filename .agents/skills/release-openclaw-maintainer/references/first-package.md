@@ -30,8 +30,9 @@ ClawHub package.
   first; do not create placeholder versions or a fake beta. Alpha,
   extended-stable, unselected packages, and direct stable bootstrap without the
   attested parent remain unsupported. Configure the package's GitHub trusted
-  publisher for `plugin-npm-release.yml` / `npm-release` after first publication,
-  then run its read-only OIDC preflight before the next release. Same-byte
+  publisher for `plugin-npm-release.yml` / `npm-publish` after first publication,
+  then run its read-only OIDC preflight from a protected `release-publish/*`
+  tooling tag before the next release. Same-byte
   retries do not republish; a selector mismatch needs selector recovery.
 - Bootstrap a new ClawHub package only from the trusted workflow source:
   `gh workflow run plugin-clawhub-new.yml --ref main -f plugins=@openclaw/name -f ref=<full-release-sha> -f pretag_validation=true -f dry_run=true`.
