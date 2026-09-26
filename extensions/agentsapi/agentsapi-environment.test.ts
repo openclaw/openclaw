@@ -279,10 +279,17 @@ describe("Agents API attempt environment selection", () => {
       environment: { type: "openai_hosted", files: [file] },
     });
     expect(await requestBody(1)).toMatchObject({
-      events: [{
-        type: "agent.session.input.message",
-        input: [{ role: "user", content: [{ type: "input_text", text: `Fixture prompt\n\n${mappingText}` }] }],
-      }],
+      events: [
+        {
+          type: "agent.session.input.message",
+          input: [
+            {
+              role: "user",
+              content: [{ type: "input_text", text: `Fixture prompt\n\n${mappingText}` }],
+            },
+          ],
+        },
+      ],
     });
     expect(mocks.collectOutputs).toHaveBeenCalledOnce();
   });

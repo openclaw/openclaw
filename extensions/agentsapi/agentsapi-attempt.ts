@@ -246,12 +246,7 @@ export async function runAgentsApiAttempt(
     }
     const inputs =
       environment.type === "openai_hosted"
-        ? await prepareInputs(
-            params.media,
-            params.workspaceDir,
-            assertCurrent,
-            controller.signal,
-          )
+        ? await prepareInputs(params.media, params.workspaceDir, assertCurrent, controller.signal)
         : { files: [], mappingText: "" };
     const client = new AgentsApiClient(params.resolvedApiKey!, assertOwnerCurrent);
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
