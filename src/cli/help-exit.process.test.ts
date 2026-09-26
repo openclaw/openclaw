@@ -128,16 +128,11 @@ async function runCliProcess(params: {
     await fs.writeFile(path.join(fixture.stateDir, ".env"), `${lines.join("\n")}\n`);
   }
   const expectedExitCode = params.expectedExitCode ?? 0;
-  // The complete package retains the real run-main import boundary used by the loader guard.
-  const entrypoint =
-    params.entry ??
-    (/\.[cm]?ts$/u.test(preparedCliEntry.pathname)
-      ? preparedCliEntry
-      : pathToFileURL(path.resolve("dist/entry.js")));
-  const runtimeArgv = resolveRuntimeWorkerArgv(entrypoint);
   const exit = await runCliProcessChild({
     nodeArgs: [
-      ...runtimeArgv.slice(0, -1),
+      // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
+      "--import",
+      "tsx",
       // Node runs later sync customization hooks first. Install test guards after
       // TSX so they own the requested specifier instead of TSX's resolved result.
       ...(params.forbidTlsImport
@@ -147,7 +142,7 @@ async function runCliProcess(params: {
       ...(params.failRunMainImport
         ? ["--import", pathToFileURL(fixture.failRunMainImportPath).href]
         : []),
-      runtimeArgv.at(-1)!,
+      params.entry ? fileURLToPath(params.entry) : "src/entry.ts",
       ...params.args,
     ],
     env: {
@@ -164,9 +159,6 @@ async function runCliProcess(params: {
       NODE_OPTIONS: undefined,
       NODE_USE_SYSTEM_CA: "1",
       OPENCLAW_CONFIG_PATH: params.pristineHome ? undefined : fixture.configPath,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: /\.[cm]?ts$/u.test(entrypoint.pathname)
-        ? undefined
-        : path.resolve("dist/extensions"),
       OPENCLAW_NO_RESPAWN: params.allowRespawn ? undefined : "1",
       OPENCLAW_STATE_DIR: params.pristineHome ? undefined : fixture.stateDir,
       VITEST: undefined,

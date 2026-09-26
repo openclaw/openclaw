@@ -208,9 +208,6 @@ inside one lazily created package fixture per test run, keeping real UI checks o
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
 
-Help and model-list process fixtures use prepared JavaScript and built bundled plugins;
-watch runs keep source entrypoints. Default help fixtures use the complete package,
-which retains the run-main import boundary used by the loader-failure guard.
 Broadcast output coverage prepares its message helper and exit finalizer together,
 preserving command substitution and joining its process tree before fixture cleanup.
 
