@@ -103,6 +103,8 @@ suite.define(() => {
         ...transcript("Main transcript reloaded", 6),
         sessionId: mainSession.sessionId,
       });
+      // The paused clock must deliver the frame that commits the resolved history.
+      await page.clock.runFor(16);
       await page.locator(".chat-bubble", { hasText: "Main transcript reloaded" }).first().waitFor();
       await page.clock.runFor(35_000);
       await expect.poll(() => historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(2);

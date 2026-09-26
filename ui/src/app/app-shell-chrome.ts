@@ -1,3 +1,4 @@
+import type { LitElement } from "lit";
 import { isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
 import {
@@ -312,6 +313,9 @@ export class ShellChromeOwner {
 
   readonly handleWindowResize = (): void => {
     const host = this.host;
+    const focusSource = host.ownerDocument.activeElement;
+    const href = window.location.href;
+    const connection = this.listeners;
     const mobileNavLayout = isMobileNavLayout();
     // Dismiss the old surface before moving the shared sidebar between breakpoints.
     const dismissedSidebarMenus =
@@ -328,7 +332,25 @@ export class ShellChromeOwner {
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => {
-          this.restoreFocusTo(visibleNavDrawerToggle(host));
+          const paneSelector =
+            'openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]';
+          const pane = host.querySelector<LitElement>(paneSelector);
+          // The merged navigation toggle belongs to the pane's deferred commit.
+          void Promise.resolve(pane?.updateComplete).then(() => {
+            const active = host.ownerDocument.activeElement;
+            if (
+              !host.isConnected ||
+              this.listeners !== connection ||
+              window.location.href !== href ||
+              !isMobileNavLayout() ||
+              host.navDrawerOpen ||
+              host.querySelector(paneSelector) !== pane ||
+              (active !== focusSource && active !== host.ownerDocument.body)
+            ) {
+              return;
+            }
+            this.restoreFocusTo(visibleNavDrawerToggle(host));
+          });
         });
       }
     });
@@ -732,11 +754,10 @@ export class ShellChromeOwner {
 
   readonly nativeNavCollapsed = (): boolean => {
     const host = this.host;
-    const mobileNavLayout = isMobileNavLayout();
     return (
       host.onboardingMode ||
-      mobileNavLayout ||
-      (isSettingsTakeover(host.routeState.routeId) && !mobileNavLayout) ||
+      isMobileNavLayout() ||
+      isSettingsTakeover(host.routeState.routeId) ||
       (!host.navDrawerOpen &&
         !host.desktopNavigationExpanded &&
         (host.context?.navigation.snapshot.navCollapsed ?? false))

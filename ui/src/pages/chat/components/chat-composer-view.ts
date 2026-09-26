@@ -504,7 +504,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
                     dir=${draftDirection}
                     ?disabled=${!canCompose}
-                    ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
+                    ?readonly=${live(dictation?.locksComposer === true || goalComposer.pending)}
                     aria-autocomplete="list"
                     aria-controls=${ifDefined(menuVisible ? slashMenuListboxId : undefined)}
                     aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
