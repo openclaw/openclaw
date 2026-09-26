@@ -96,7 +96,7 @@ export async function resolveMatrixIngressContent(config: {
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
   } = access;
-  const { messageIngress, resolveMessageIngress } = accessState;
+  const { resolveMessageIngress } = accessState;
   let content = accessContent;
   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
   const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
@@ -261,7 +261,6 @@ export async function resolveMatrixIngressContent(config: {
     cfg,
     surface: "matrix",
   });
-  const useAccessGroups = true;
   // Keep mention stripping on the command-only path so history and agent
   // prompt text continue to see the original Matrix message.
   const commandCheckText = stripMatrixMentionPrefix({
@@ -272,7 +271,7 @@ export async function resolveMatrixIngressContent(config: {
   });
   const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
-    useAccessGroups,
+    useAccessGroups: true,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
   });
@@ -428,32 +427,19 @@ export async function resolveMatrixIngressContent(config: {
   }
   const preparedTrigger =
     isRoom && historyLimit > 0
-      ? reservedHistorySlot
-        ? roomHistoryTracker.prepareReservedTrigger(
-            _route.agentId,
-            roomId,
-            historyLimit,
-            reservedHistorySlot,
-            {
-              sender: senderName,
-              body: bodyText,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            },
-            historyThreadId,
-          )
-        : roomHistoryTracker.prepareTrigger(
-            _route.agentId,
-            roomId,
-            historyLimit,
-            {
-              sender: senderName,
-              body: bodyText,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            },
-            historyThreadId,
-          )
+      ? roomHistoryTracker.prepareTrigger(
+          _route.agentId,
+          roomId,
+          historyLimit,
+          {
+            sender: senderName,
+            body: bodyText,
+            timestamp: eventTs ?? undefined,
+            messageId,
+          },
+          historyThreadId,
+          reservedHistorySlot,
+        )
       : undefined;
   if (reservedHistorySlot && preparedTrigger) {
     markReservedHistorySlotConsumed();
@@ -464,12 +450,10 @@ export async function resolveMatrixIngressContent(config: {
         limit: historyLimit,
       })
     : undefined;
-  const triggerSnapshot = preparedTrigger;
 
   return {
     cfg,
     liveDmAllowFrom,
-    messageIngress,
     resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
@@ -490,7 +474,7 @@ export async function resolveMatrixIngressContent(config: {
     preflightAudioTranscript,
     locationPayload,
     messageId,
-    triggerSnapshot,
+    triggerSnapshot: preparedTrigger,
     threadRootId,
     thread,
     botLoopProtection,

@@ -43,7 +43,7 @@ import {
 } from "./ingress.js";
 
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.delivery.runtime.js"),
+  () => import("./bot/delivery.js"),
 );
 const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
   () => import("./bot-native-commands.runtime.js"),
@@ -235,15 +235,18 @@ async function resolveTelegramCommandAuth(params: {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
-  const sendAuthMessage = async (text: string) => {
+  const rejectNotAuthorized = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, text, threadParams ?? {}),
+      fn: () =>
+        bot.api.sendMessage(
+          chatId,
+          "You are not authorized to use this command.",
+          threadParams ?? {},
+        ),
     });
     return null;
   };
-  const rejectNotAuthorized = async () =>
-    await sendAuthMessage("You are not authorized to use this command.");
 
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,

@@ -97,29 +97,26 @@ describe("telegram bot message processor", () => {
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
     turnContext?: Partial<TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
-    options: Parameters<typeof processMessage>[4] = {},
-    allMedia: Parameters<typeof processMessage>[1] = [],
+    options: Parameters<typeof processMessage>[0]["options"] = {},
+    allMedia: Parameters<typeof processMessage>[0]["allMedia"] = [],
   ) {
-    return await processMessage(
-      {
+    return await processMessage({
+      ctx: {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
           message_id: 456,
         },
         ...primaryCtxOverrides,
-      } as unknown as Parameters<typeof processMessage>[0],
+      } as unknown as Parameters<typeof processMessage>[0]["ctx"],
       allMedia,
-      [],
-      {
+      storeAllowFrom: [],
+      turnContext: {
         ...turnContext,
         cfg: turnContext?.cfg ?? baseTurnContext.cfg,
         telegramCfg: turnContext?.telegramCfg ?? baseTurnContext.telegramCfg,
       },
       options,
-      undefined,
-      undefined,
-      undefined,
-    );
+    });
   }
 
   function createDispatchFailureHarness(

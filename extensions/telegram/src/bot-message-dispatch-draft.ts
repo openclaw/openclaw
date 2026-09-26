@@ -583,7 +583,3 @@ export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<vo
     failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
   });
 }
-
-export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;
-
-export const flushDraftLane = (_turn: Turn, lane: DraftLaneState) => lane.stream?.flush();

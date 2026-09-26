@@ -14,7 +14,7 @@ import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -119,11 +119,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     if (!options?.stripButtons) {
       return channelData;
     }
-    const telegramData = channelData?.telegram;
-    if (!telegramData || typeof telegramData !== "object" || Array.isArray(telegramData)) {
+    const telegramData = asOptionalRecord(channelData?.telegram);
+    if (!telegramData) {
       return channelData;
     }
-    const { buttons: _buttons, ...telegramRest } = telegramData as Record<string, unknown>;
+    const { buttons: _buttons, ...telegramRest } = telegramData;
     if (_buttons === undefined) {
       return channelData;
     }
@@ -157,22 +157,16 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       return payload;
     }
     const channelData = payload.channelData ?? {};
-    const telegramData = channelData.telegram;
-    if (
-      telegramData &&
-      typeof telegramData === "object" &&
-      !Array.isArray(telegramData) &&
-      "buttons" in telegramData
-    ) {
+    const telegramData = asOptionalRecord(channelData.telegram);
+    if (telegramData && "buttons" in telegramData) {
       return payload;
     }
-    const telegramRest = asNonArrayRecord(telegramData);
     return copyReplyPayloadMetadata(payload, {
       ...payload,
       channelData: {
         ...channelData,
         telegram: {
-          ...telegramRest,
+          ...telegramData,
           buttons,
         },
       },
@@ -183,16 +177,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     text: string,
     options?: { stripButtons?: boolean; fallbackButtons?: TelegramInlineButtons },
   ): ReplyPayload => {
+    let mediaPayload: ReplyPayload;
     if (getReplyPayloadTtsSupplement(payload)) {
-      return withFallbackTelegramButtons(
-        withMediaChannelData(
-          buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text)),
-          options,
-        ),
-        options?.fallbackButtons,
-      );
-    }
-    if (payload.audioAsVoice === true) {
+      mediaPayload = buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text));
+    } else if (payload.audioAsVoice === true) {
       const {
         text: _text,
         presentation: _presentation,
@@ -201,23 +189,19 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         spokenText: _spokenText,
         ...voicePayload
       } = params.applyTextToPayload(payload, text);
-      return withFallbackTelegramButtons(
-        withMediaChannelData(
-          copyReplyPayloadMetadata(payload, { ...voicePayload, spokenText: text }),
-          options,
-        ),
-        options?.fallbackButtons,
-      );
+      mediaPayload = copyReplyPayloadMetadata(payload, { ...voicePayload, spokenText: text });
+    } else {
+      const {
+        text: _text,
+        presentation: _presentation,
+        interactive: _interactive,
+        btw: _btw,
+        ...rest
+      } = payload;
+      mediaPayload = copyReplyPayloadMetadata(payload, rest);
     }
-    const {
-      text: _text,
-      presentation: _presentation,
-      interactive: _interactive,
-      btw: _btw,
-      ...rest
-    } = payload;
     return withFallbackTelegramButtons(
-      withMediaChannelData(copyReplyPayloadMetadata(payload, rest), options),
+      withMediaChannelData(mediaPayload, options),
       options?.fallbackButtons,
     );
   };

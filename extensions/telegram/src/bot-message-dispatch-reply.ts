@@ -33,7 +33,6 @@ import {
   rotateAnswerLaneForNewMessage,
   splitTextIntoLaneSegments,
   takeQueuedAnswerBlockRotation,
-  waitForDraftEvents,
 } from "./bot-message-dispatch-draft.js";
 import {
   applyTextToPayload,
@@ -55,7 +54,6 @@ import {
 } from "./button-types.js";
 import {
   buildTelegramErrorScopeKey,
-  isSilentErrorPolicy,
   resolveTelegramErrorPolicy,
   shouldSuppressTelegramError,
 } from "./error-policy.js";
@@ -238,7 +236,7 @@ async function adoptProgressContinuation(
     return false;
   }
   const adopt = info.adoptProgressContinuation;
-  await waitForDraftEvents(turn);
+  await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
@@ -689,7 +687,7 @@ export function handleReplyError(
     groupConfig: turn.context.groupConfig,
     topicConfig: turn.context.topicConfig,
   });
-  if (isSilentErrorPolicy(errorPolicy.policy)) {
+  if (errorPolicy.policy === "silent") {
     return;
   }
   if (

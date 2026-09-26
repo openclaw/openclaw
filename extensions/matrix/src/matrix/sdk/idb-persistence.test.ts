@@ -125,6 +125,49 @@ describe("Matrix IndexedDB persistence", () => {
     ).resolves.toEqual([{ key: "room-owned", value: { session: "retained-runtime" } }]);
   });
 
+  it("settles failed restore transactions and closes the database", async () => {
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
+    await writeMatrixIdbSnapshotJson({
+      storageRootDir: tmpDir,
+      databaseCount: 1,
+      snapshotJson: JSON.stringify([
+        {
+          name: cryptoDatabaseName,
+          version: 1,
+          stores: [
+            {
+              name: "sessions",
+              keyPath: null,
+              autoIncrement: false,
+              indexes: [{ name: "session", keyPath: "session", multiEntry: false, unique: true }],
+              records: [
+                { key: "room-1", value: { session: "duplicate" } },
+                { key: "room-2", value: { session: "duplicate" } },
+              ],
+            },
+          ],
+        },
+      ]),
+    });
+
+    await expect(restoreIdbFromDisk(snapshotPath)).resolves.toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "IdbPersistence",
+      "Failed to restore IndexedDB snapshot from SQLite:",
+      expect.objectContaining({ name: "ConstraintError" }),
+    );
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(cryptoDatabaseName);
+      request.addEventListener("success", () => resolve(), { once: true });
+      request.addEventListener("error", () => reject(request.error), { once: true });
+      request.addEventListener(
+        "blocked",
+        () => reject(new Error("Failed restore left its IndexedDB connection open")),
+        { once: true },
+      );
+    });
+  });
+
   it.each(["bulk", "legacy"])(
     "reassembles exact snapshot bytes beyond chunk 9 with %s stores",
     async (mode) => {

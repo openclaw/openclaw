@@ -27,6 +27,7 @@ import {
   resolveTelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 import { registerTelegramQuestionDelivery } from "./question-finalization.js";
+import type { TelegramSendOpts } from "./send-message-types.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramTextChunkLimit, TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
@@ -36,11 +37,16 @@ export { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 const TELEGRAM_POLL_OPTION_LIMIT = 12;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
-type TelegramSendOpts = Parameters<TelegramSendFn>[2];
 type TelegramReactionFn = typeof import("./send.js").reactMessageTelegram;
 type TelegramLocationFn = typeof import("./send.js").sendLocationTelegram;
 type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn>;
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
+
+type TelegramPayloadData = {
+  buttons?: TelegramInlineButtons;
+  quoteText?: string;
+  reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
+};
 
 function toTelegramOutboundResult<T extends { chatId?: string }>(result: T) {
   const { chatId, ...delivery } = result;
@@ -127,29 +133,21 @@ function telegramRichTablesEnabled(params: {
   );
 }
 
-type CreateTelegramOutboundAdapterOptions = {
+type CreateTelegramOutboundAdapterOptions = Pick<
+  ChannelOutboundAdapter,
+  | "beforeDeliverPayload"
+  | "shouldSuppressLocalPayloadPrompt"
+  | "shouldTreatDeliveredTextAsVisible"
+  | "targetsMatchForReplySuppression"
+  | "preferFinalAssistantVisibleText"
+> & {
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
-  beforeDeliverPayload?: ChannelOutboundAdapter["beforeDeliverPayload"];
-  shouldSuppressLocalPayloadPrompt?: ChannelOutboundAdapter["shouldSuppressLocalPayloadPrompt"];
-  shouldTreatDeliveredTextAsVisible?: ChannelOutboundAdapter["shouldTreatDeliveredTextAsVisible"];
-  targetsMatchForReplySuppression?: ChannelOutboundAdapter["targetsMatchForReplySuppression"];
-  preferFinalAssistantVisibleText?: boolean;
 };
 
 function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPayload | null {
-  const telegramData = payload.channelData?.telegram as
-    | {
-        buttons?: TelegramInlineButtons;
-        quoteText?: string;
-        reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
-      }
-    | undefined;
-  const text = resolveTelegramInteractiveTextFallback({
-    text: payload.text,
-    interactive: payload.interactive,
-    presentation: payload.presentation,
-  });
+  const telegramData = payload.channelData?.telegram as TelegramPayloadData | undefined;
+  const text = resolveTelegramInteractiveTextFallback(payload);
   if (
     text?.trim() ||
     resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0 ||
@@ -182,12 +180,8 @@ function normalizeTelegramMetadataOnlyPayload(payload: ReplyPayload): ReplyPaylo
 }
 
 function mergeTelegramFallbackPayloads(source: ReplyPayload, adopter: ReplyPayload): ReplyPayload {
-  const sourceTelegram = source.channelData?.telegram as
-    | { buttons?: TelegramInlineButtons; quoteText?: string }
-    | undefined;
-  const adopterTelegram = adopter.channelData?.telegram as
-    | { buttons?: TelegramInlineButtons; quoteText?: string }
-    | undefined;
+  const sourceTelegram = source.channelData?.telegram as TelegramPayloadData | undefined;
+  const adopterTelegram = adopter.channelData?.telegram as TelegramPayloadData | undefined;
   const buttons = [...(sourceTelegram?.buttons ?? []), ...(adopterTelegram?.buttons ?? [])];
   const quoteText = sourceTelegram?.quoteText?.trim()
     ? sourceTelegram.quoteText
@@ -234,13 +228,7 @@ function normalizeTelegramFallbackPayloadBatch(
     }
     const channelData = entry.payload.channelData;
     const channelDataKeys = channelData ? Object.keys(channelData) : [];
-    const telegramData = channelData?.telegram as
-      | {
-          buttons?: TelegramInlineButtons;
-          quoteText?: string;
-          reaction?: unknown;
-        }
-      | undefined;
+    const telegramData = channelData?.telegram as TelegramPayloadData | undefined;
     if (
       channelDataKeys.length !== 1 ||
       channelDataKeys[0] !== "telegram" ||
@@ -280,23 +268,12 @@ export async function sendTelegramPayloadMessages(params: {
       htmlTextMode: params.baseOpts.textMode === "html",
     }),
   });
-  const telegramData = payload.channelData?.telegram as
-    | {
-        buttons?: TelegramInlineButtons;
-        quoteText?: string;
-        reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
-      }
-    | undefined;
+  const telegramData = payload.channelData?.telegram as TelegramPayloadData | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
   const reactionEmoji =
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
-  const text =
-    resolveTelegramInteractiveTextFallback({
-      text: payload.text,
-      interactive: payload.interactive,
-      presentation: payload.presentation,
-    }) ?? "";
+  const text = resolveTelegramInteractiveTextFallback(payload) ?? "";
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
@@ -310,10 +287,9 @@ export async function sendTelegramPayloadMessages(params: {
   const projectionCursor = promptContextSource
     ? createTelegramPromptContextProjectionCursor(promptContextSource)
     : undefined;
-  const projectionOptions = (finalPart: boolean) =>
-    projectionCursor
-      ? { promptContextProjectionPlan: { cursor: projectionCursor, finalPart } }
-      : {};
+  const projectionOptions = projectionCursor
+    ? { promptContextProjectionPlan: { cursor: projectionCursor, finalPart: true } }
+    : {};
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
@@ -342,7 +318,7 @@ export async function sendTelegramPayloadMessages(params: {
     }
     return await params.sendLocation(params.to, payload.location, {
       ...params.baseOpts,
-      ...projectionOptions(true),
+      ...projectionOptions,
       buttons,
       quoteText,
     });
@@ -375,7 +351,7 @@ export async function sendTelegramPayloadMessages(params: {
 
   return await params.send(params.to, text, {
     ...payloadOpts,
-    ...projectionOptions(true),
+    ...projectionOptions,
     ...(mediaUrls.length === 1
       ? { mediaUrl: mediaUrls[0] }
       : mediaUrls.length > 1
@@ -529,8 +505,7 @@ export function createTelegramOutboundAdapter(
         assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });
     },
-    resolveEffectiveTextChunkLimit: ({ cfg, accountId, formatting }) =>
-      resolveTelegramTextChunkLimit({ cfg, accountId, formatting }),
+    resolveEffectiveTextChunkLimit: resolveTelegramTextChunkLimit,
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,
@@ -541,11 +516,7 @@ export function createTelegramOutboundAdapter(
           ...params,
           resolveSend,
         });
-        return toTelegramOutboundResult(
-          await send(outboundTo, params.text, {
-            ...baseOpts,
-          }),
-        );
+        return toTelegramOutboundResult(await send(outboundTo, params.text, baseOpts));
       },
       sendMedia: async (params) => {
         const { outboundTo, send, baseOpts } = await resolveTelegramOutboundSendContext({
