@@ -12,7 +12,7 @@ import {
   prepareSessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-replacement-state.js";
 
-export function commitSessionEntryReplacementsInWorker(
+export function commitSessionEntryReplacementTransaction(
   database: OpenClawAgentDatabase,
   options: OpenClawAgentDatabaseOptions,
   input: AgentDatabaseOperations["session.entries.replace"]["input"],

@@ -8,7 +8,7 @@ import type { AgentDatabaseOperations } from "../../state/openclaw-agent-executi
 import type { SessionTranscriptInitializationPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 
-export function initializeSessionTranscriptInWorker(
+export function initializeSessionTranscriptTransaction(
   database: OpenClawAgentDatabase,
   options: OpenClawAgentDatabaseOptions,
   input: AgentDatabaseOperations["session.transcript.initialize"]["input"],

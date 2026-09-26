@@ -330,7 +330,7 @@ function openAgentDatabaseBackend(
   let transcript:
     | {
         initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
-        initializeInWorker: typeof import("../config/sessions/session-transcript-initialization.worker.js").initializeSessionTranscriptInWorker;
+        initializeInWorker: typeof import("../config/sessions/session-transcript-initialization.worker.js").initializeSessionTranscriptTransaction;
         assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
       }
     | undefined;
@@ -457,7 +457,7 @@ function openAgentDatabaseBackend(
       return transcript.initializeInWorker(openWriter(), options, command.input, admit);
     }
     if (command.type === "session.entries.replace" && replacements) {
-      return replacements.commitSessionEntryReplacementsInWorker(
+      return replacements.commitSessionEntryReplacementTransaction(
         openWriter(),
         options,
         command.input,
@@ -558,7 +558,7 @@ function openAgentDatabaseBackend(
           replacements = replacement ?? replacements;
           transcript = {
             initialize: header.ensureTranscriptHeader,
-            initializeInWorker: worker.initializeSessionTranscriptInWorker,
+            initializeInWorker: worker.initializeSessionTranscriptTransaction,
             assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
           };
         });
