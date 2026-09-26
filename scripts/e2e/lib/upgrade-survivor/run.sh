@@ -2603,7 +2603,20 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     legacy-operator-turn candidate
   phase legacy-operator-plugin assert_prepublish_plugin_install
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    # The restart shim has no native service cgroup. After proving the published
+    # managed restart, exercise candidate no-op convergence with a foreground Gateway.
+    phase legacy-operator-noop-service-stop stop_update_restart_probe_gateway "$COMMAND_TIMEOUT"
+    phase legacy-operator-noop-foreground-start start_gateway
+  fi
   phase legacy-operator-update-noop assert_legacy_operator_update_noop
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    phase legacy-operator-noop-foreground-alive openclaw_e2e_process_alive "$gateway_pid"
+    phase legacy-operator-noop-service-inactive assert_update_restart_probe_inactive
+    phase legacy-operator-noop-foreground-stop stop_gateway
+    phase legacy-operator-noop-service-start run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
+    phase legacy-operator-noop-service-status check_gateway_status
+  fi
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
   phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
     "$candidate_version"

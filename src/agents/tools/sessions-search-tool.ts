@@ -335,7 +335,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readToolStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }

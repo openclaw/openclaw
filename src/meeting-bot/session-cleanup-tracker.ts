@@ -196,8 +196,8 @@ export class MeetingSessionCleanupTracker {
       params.warn(`replacement cleanup failed: ${params.formatError(error)}`);
       try {
         await params.leave();
-      } catch (error) {
-        params.warn(`replacement cleanup retry failed: ${params.formatError(error)}`);
+      } catch (retryError) {
+        params.warn(`replacement cleanup retry failed: ${params.formatError(retryError)}`);
       }
     }
     const retry = await this.retryBrowserAfterFailedJoin(params);

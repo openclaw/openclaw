@@ -167,9 +167,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
         if (stopped) {
           return;
         }
-        await invoke("clearAudio", {
-          ...(outputGenerationSupported ? { outputGeneration } : {}),
-        });
+        await invoke("clearAudio", outputGenerationSupported ? { outputGeneration } : {});
       });
     },
     dispose: async () => {

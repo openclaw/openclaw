@@ -28,6 +28,10 @@ import {
 import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
+import {
+  isChannelIngressCommand,
+  executeChannelIngressCommand,
+} from "../channels/message/ingress-queue.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
@@ -124,12 +128,14 @@ import {
   executeTranscriptWrite,
   isTranscriptWriteCommand,
 } from "../transcripts/store-worker-write.js";
+import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
@@ -431,6 +437,13 @@ export function executeSharedStateCommand(
   if (isNodeWorkerJournalCommand(command)) {
     return executeNodeWorkerJournalCommand(command, context.databasePath, open);
   }
+  if (isChannelIngressCommand(command)) {
+    return executeChannelIngressCommand(
+      command,
+      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      open,
+    );
+  }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>
       command.type === "deviceAuth.read"
@@ -519,6 +532,16 @@ export function executeSharedStateCommand(
     command.type === "nativeHookRelay.prune"
   ) {
     return executeNativeHookRelayMutation(command, writeOptions);
+  }
+  if (command.type === "tui.lastSession.write") {
+    return writeConfigMachineState(command.input.stateKey, command.input.sessionKey, writeOptions);
+  }
+  if (command.type === "tui.lastSession.clear") {
+    return clearRetiredTuiPointers(
+      command.input.stateKeys,
+      new Set(command.input.retiredSessionKeys),
+      writeOptions,
+    );
   }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);

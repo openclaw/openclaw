@@ -1,4 +1,3 @@
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff } from "../infra/backoff.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -37,10 +36,7 @@ export abstract class ExecApprovalExpiry<TPayload> extends ExecApprovalLifecycle
     callerGuard?: OperatorApprovalStoreGuard,
   ): Promise<ExecApprovalForceDenyResult<TPayload>>;
 
-  protected override scheduleExpiryTimer(
-    entry: PendingEntry<TPayload>,
-    delayMs = entry.record.expiresAtMs - Date.now(),
-  ): void {
+  protected override scheduleExpiry(entry: PendingEntry<TPayload>, delayMs?: number): void {
     if (
       this.retired ||
       entry.record.resolvedAtMs !== undefined ||
@@ -48,20 +44,20 @@ export abstract class ExecApprovalExpiry<TPayload> extends ExecApprovalLifecycle
     ) {
       return;
     }
-    clearTimeout(entry.timer ?? undefined);
-    const timer = setTimeout(
-      () => {
-        if (this.retired || this.pending.get(entry.record.id) !== entry || entry.timer !== timer) {
+    entry.expiryJob?.cancel();
+    entry.expiryJob = this.scheduler.schedule({
+      id: `approval:${this.runtimeEpoch}:${this.approvalKind}:${entry.record.id}:expiry`,
+      ...(delayMs === undefined ? { atMs: entry.record.expiresAtMs } : { delayMs }),
+      run: async () => {
+        if (this.retired || this.pending.get(entry.record.id) !== entry) {
           return;
         }
-        entry.timer = null;
-        void this.expireDue(entry.record.id).catch((error: unknown) => {
+        entry.expiryJob = null;
+        await this.expireDue(entry.record.id).catch((error: unknown) => {
           this.reportError(error, { approvalId: entry.record.id, operation: "expire" });
         });
       },
-      resolveTimerTimeoutMs(delayMs, 1),
-    );
-    entry.timer = timer;
+    });
   }
 
   protected override async expireDue(
@@ -106,7 +102,7 @@ export abstract class ExecApprovalExpiry<TPayload> extends ExecApprovalLifecycle
         assertExecApprovalMutationPersistenceCurrent(persistence);
         this.assertPendingPersistenceCurrent(entry);
         entry.expiryRefusals = (entry.expiryRefusals ?? 0) + 1;
-        this.scheduleExpiryTimer(
+        this.scheduleExpiry(
           entry,
           computeBackoff(
             { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.1 },
@@ -118,7 +114,7 @@ export abstract class ExecApprovalExpiry<TPayload> extends ExecApprovalLifecycle
     }
     authority?.assertCurrent();
     if (result.outcome === "not-due") {
-      this.scheduleExpiryTimer(entry);
+      this.scheduleExpiry(entry);
       return false;
     }
     return result.outcome === "denied" || result.outcome === "expired";

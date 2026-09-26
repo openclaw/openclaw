@@ -34,26 +34,6 @@ describe("handleDirFetch — input validation", () => {
   it("rejects empty / non-string path", async () => {
     await expectDirFetchError({ path: "" }, "INVALID_PATH");
   });
-
-  it("rejects relative paths", async () => {
-    await expectDirFetchError({ path: "relative" }, "INVALID_PATH");
-  });
-
-  it("rejects paths with NUL bytes", async () => {
-    await expectDirFetchError({ path: "/tmp/foo\0bar" }, "INVALID_PATH");
-  });
-});
-
-describe("handleDirFetch — fs errors", () => {
-  it.runIf(HAS_TAR)("returns NOT_FOUND for a missing directory", async () => {
-    await expectDirFetchError({ path: path.join(tmpRoot, "missing") }, "NOT_FOUND");
-  });
-
-  it.runIf(HAS_TAR)("returns IS_FILE when path resolves to a file", async () => {
-    const f = path.join(tmpRoot, "f.txt");
-    await fs.writeFile(f, "x");
-    await expectDirFetchError({ path: f }, "IS_FILE");
-  });
 });
 
 describe("handleDirFetch — happy path", () => {

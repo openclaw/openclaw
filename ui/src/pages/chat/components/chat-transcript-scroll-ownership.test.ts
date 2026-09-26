@@ -521,7 +521,13 @@ describe("chat transcript scroll ownership", () => {
     ],
     ["transcript text", "PageUp", html`<span>History</span>`, false],
     ["readonly content", "End", html`<div contenteditable="false">History</div>`, false],
-    ...nativeControlNavigationCases,
+    // The pane keyboard suite covers native-control/platform variants.
+    // Retain downward nested scrolling and media boundaries in restoration.
+    ["native video", "End", html`<video controls></video>`, true],
+    ["native audio paging", "PageDown", html`<audio controls></audio>`, false],
+    ...nativeControlNavigationCases.filter(
+      ([name, key]) => name.startsWith("Mac textarea ") && (key === "End" || key === "PageDown"),
+    ),
   ] as const)(
     "resolves pending restoration ownership for %s",
     async (command, key, content, preservesRestore, fixture = {}) => {

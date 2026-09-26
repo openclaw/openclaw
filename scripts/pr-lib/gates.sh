@@ -296,13 +296,29 @@ read_crabbox_gate_pr_binding() {
 
 finalize_remote_crabbox_aws_gate() {
   local pr="$1"
-  local head_sha="$2"
+  local head_sha="$2" resume_run="${3:-}"
   local base_sha log_file stamp run_id lease_id run_url
+  local dispatch_args=(--backend crabbox --pending-gates)
   base_sha=$(read_crabbox_gate_pr_binding "$pr" "$head_sha") || return 1
+  if [ -n "$resume_run" ]; then
+    # Preparation already resolved the retained immutable base; never reread a
+    # moving base or take one from the observed check as recovery authority.
+    base_sha="${4:-}"
+    [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+    dispatch_args+=(--resume-crabbox-run "$resume_run")
+  fi
   require_active_org_admin_for_crabbox_gate >/dev/null || return 1
+  if [ "${LAST_VERIFIED_HEAD_SHA:-}" != "$head_sha" ]; then
+    [ -z "${PENDING_CRABBOX_STATE:-}" ] || return 1
+    # The publication owner has verified this hosted alias against the local
+    # reviewed tree. Pending provenance must follow its actual public OID.
+    write_gates_env_stamp "$pr" "${DOCS_ONLY:-false}" "${CHANGELOG_REQUIRED:-false}" \
+      remote_crabbox_aws_pending "$head_sha" "" "" aws "" "" "" || return 1
+  fi
   log_file=".local/gates-crabbox-aws.log"
   run_quiet_logged "protected-main Crabbox AWS exact-head gate" "$log_file" \
-    ci_dispatch "$pr" --backend crabbox || return 1
+    node "$script_parent_dir/pr-lib/ci-dispatch.mjs" \
+      "$pr" "$PR_HEAD" "$head_sha" "$base_sha" false "${dispatch_args[@]}" || return 1
   stamp=$(jq -c -R \
     --arg baseSha "$base_sha" \
     --arg headSha "$head_sha" '
@@ -322,7 +338,12 @@ finalize_remote_crabbox_aws_gate() {
     echo "Protected-main Crabbox publisher passed without trusted exact-head metadata." >&2
     return 1
   fi
-  read_crabbox_gate_pr_binding "$pr" "$head_sha" "$base_sha" >/dev/null || return 1
+  # Main may advance while a protected run is executing. Its immutable base is
+  # verified by the check; admission still requires this open PR's exact head.
+  read_crabbox_gate_pr_binding "$pr" "$head_sha" >/dev/null || return 1
+  if declare -F verify_correction_publication_authority >/dev/null; then
+    verify_correction_publication_authority || return 1
+  fi
   run_id=$(printf '%s\n' "$stamp" | jq -r .runId)
   lease_id=$(printf '%s\n' "$stamp" | jq -r .leaseId)
   run_url=$(printf '%s\n' "$stamp" | jq -r .actionsRunUrl)
@@ -337,7 +358,10 @@ finalize_remote_crabbox_aws_gate() {
     "aws" \
     "$run_id" \
     "$lease_id" \
-    "$run_url"
+    "$run_url" \
+    "$base_sha" \
+    "$(printf '%s\n' "$stamp" | jq -r .workflowSha)" \
+    "$(printf '%s\n' "$stamp" | jq -r .actionsRunAttempt)"
 }
 
 write_gates_env_stamp() {
@@ -352,15 +376,19 @@ write_gates_env_stamp() {
   local remote_run_id="$9"
   local remote_lease_id="${10}"
   local remote_run_url="${11}"
+  local remote_base_sha="${12:-}" remote_workflow_sha="${13:-}" remote_attempt="${14:-}"
 
-  # Security: shell-escape values to prevent command injection when sourced.
+  local temporary
+  temporary=$(mktemp .local/gates.env.XXXXXX) || return 1
+  # Shell-escape values; chain every write so a skipped optional block cannot
+  # mask an earlier failure and publish a partial receipt.
   {
     printf '%s=%q\n' \
       PR_NUMBER "$pr" \
       DOCS_ONLY "$docs_only" \
       CHANGELOG_REQUIRED "$changelog_required" \
       GATES_MODE "$gates_mode" \
-      HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head"
+      HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head" &&
     if [ "$gates_mode" != github_pending ]; then
       printf '%s=%q\n' \
         LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
@@ -370,8 +398,15 @@ write_gates_env_stamp() {
         REMOTE_GATES_LEASE_ID "$remote_lease_id" \
         REMOTE_GATES_RUN_URL "$remote_run_url" \
         GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi &&
+    if [ "$gates_mode" = remote_crabbox_aws ] && [ -n "$remote_base_sha" ]; then
+      printf '%s=%q\n' \
+        REMOTE_GATES_BASE_SHA "$remote_base_sha" \
+        REMOTE_GATES_WORKFLOW_SHA "$remote_workflow_sha" \
+        REMOTE_GATES_ACTIONS_RUN_ATTEMPT "$remote_attempt"
     fi
-  } > .local/gates.env
+  } > "$temporary" || { rm -f "$temporary"; return 1; }
+  mv -f "$temporary" .local/gates.env || { rm -f "$temporary"; return 1; }
 }
 
 # Correction publication requires the native gate owner's exact candidate

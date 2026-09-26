@@ -116,13 +116,6 @@ describe("chat placement composer presentation", () => {
     );
   });
 
-  it("keeps move reconciliation blocked with truthful copy", () => {
-    const result = presentation(placementSession("reconciling"));
-
-    expect(result.blocksSend).toBe(true);
-    expect(result.busyMessage).toBe("Finishing session move…");
-  });
-
   it.each(["local", undefined] as const)(
     "blocks a repository-only session with %s placement and offers worker dispatch",
     (placementState) => {

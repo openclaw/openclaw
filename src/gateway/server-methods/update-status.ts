@@ -9,6 +9,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  OcmUpdateCapabilitiesUnsupportedError,
+  resolveOcmUpdateManager,
+} from "../../infra/ocm-update-client.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -54,9 +58,20 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       phase = next;
     };
     try {
+      let manager = await resolveOcmUpdateManager().catch((error: unknown) => {
+        if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
+          throw error;
+        }
+        context?.logGateway?.warn(error.message);
+        return null;
+      });
+      const managedRun = manager ? await manager.status() : null;
+      if (manager && !manager.canStart && !managedRun) {
+        manager = null;
+      }
       let sentinel: RestartSentinelPayload | null;
       try {
-        sentinel = await refreshLatestUpdateRestartSentinel();
+        sentinel = manager ? null : await refreshLatestUpdateRestartSentinel();
       } catch (err) {
         context?.logGateway?.warn(
           `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
@@ -76,14 +91,21 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("reconciliation");
       try {
-        await reconcileAbandonedUpdateRunsAsync();
+        if (!manager) {
+          await reconcileAbandonedUpdateRunsAsync();
+        }
       } catch (error) {
         context?.logGateway?.warn(
           `update.status reconciliation failed: ${formatErrorMessage(error)}`,
         );
       }
       mark("history");
-      const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+      const { activeRun, lastRun } = manager
+        ? {
+            activeRun: managedRun?.status === "running" ? managedRun : undefined,
+            lastRun: managedRun?.status !== "running" ? (managedRun ?? undefined) : undefined,
+          }
+        : await getUpdateRunStatusAsync();
       const campaignRunId = gatewayUpdateCampaign.getRunId();
       const campaignRun =
         !campaignRunId || lastRun?.runId === campaignRunId
@@ -194,6 +216,18 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
   },
   "update.runs.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
+      return;
+    }
+    if (params.runId.startsWith("ocm:")) {
+      const manager = await resolveOcmUpdateManager();
+      if (!manager) {
+        respond(false, undefined, {
+          code: "UNAVAILABLE",
+          message: "The OCM update manager is unavailable for this Gateway.",
+        });
+        return;
+      }
+      respond(true, { run: await manager.status(params.runId) });
       return;
     }
     // Lazy handler preparation can outlast an in-process restart. Reacquire

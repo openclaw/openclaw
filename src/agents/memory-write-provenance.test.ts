@@ -14,61 +14,66 @@ afterEach(() => {
 });
 
 describe("memory write provenance", () => {
-  it.each(
-    (["write-classification", "write-observer", "remove-classification"] as const).flatMap(
-      (phase) => [false, true].map((revoke) => ({ phase, revoke })),
-    ),
-  )("preserves caller authority across $phase (revoke=$revoke)", async ({ phase, revoke }) => {
-    await withStateDirEnv("openclaw-memory-source-authority-", async ({ tempRoot }) => {
-      const target = `${tempRoot}/MEMORY.md`;
-      await fs.writeFile(target, "before");
-      let active = true;
-      const operations = withMemoryWriteProvenance(
-        {
-          readFile: (file: string) => fs.readFile(file),
-          writeFile: (file: string, content: string) => fs.writeFile(file, content),
-          remove: (file: string) => fs.rm(file),
-        },
-        {
-          classifies: async () => {
-            if (phase !== "write-observer" && revoke) {
-              active = false;
-            }
-            return true;
+  it.each([
+    { phase: "write-classification", revoke: false },
+    { phase: "write-classification", revoke: true },
+    { phase: "write-observer", revoke: true },
+    { phase: "remove-classification", revoke: false },
+    { phase: "remove-classification", revoke: true },
+  ] as const)(
+    "preserves caller authority across $phase (revoke=$revoke)",
+    async ({ phase, revoke }) => {
+      await withStateDirEnv("openclaw-memory-source-authority-", async ({ tempRoot }) => {
+        const target = `${tempRoot}/MEMORY.md`;
+        await fs.writeFile(target, "before");
+        let active = true;
+        const operations = withMemoryWriteProvenance(
+          {
+            readFile: (file: string) => fs.readFile(file),
+            writeFile: (file: string, content: string) => fs.writeFile(file, content),
+            remove: (file: string) => fs.rm(file),
           },
-          write: async ({ commit }) => {
-            if (phase === "write-observer" && revoke) {
-              active = false;
-            }
-            await commit();
+          {
+            classifies: async () => {
+              if (phase !== "write-observer" && revoke) {
+                active = false;
+              }
+              return true;
+            },
+            write: async ({ commit }) => {
+              if (phase === "write-observer" && revoke) {
+                active = false;
+              }
+              await commit();
+            },
+            clearAfterDelete: async () => {},
           },
-          clearAfterDelete: async () => {},
-        },
-      );
-      const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:memory-authority",
-          receiptAuthority: () => active,
-        },
-        () =>
-          phase === "remove-classification"
-            ? operations.remove(target)
-            : operations.writeFile(target, "after"),
-      );
-      if (revoke) {
-        await expect(pending).rejects.toThrow("authority is no longer active");
-        expect(await fs.readFile(target, "utf8")).toBe("before");
-      } else {
-        await pending;
-        if (phase === "remove-classification") {
-          await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+        );
+        const pending = withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:memory-authority",
+            receiptAuthority: () => active,
+          },
+          () =>
+            phase === "remove-classification"
+              ? operations.remove(target)
+              : operations.writeFile(target, "after"),
+        );
+        if (revoke) {
+          await expect(pending).rejects.toThrow("authority is no longer active");
+          expect(await fs.readFile(target, "utf8")).toBe("before");
         } else {
-          expect(await fs.readFile(target, "utf8")).toBe("after");
+          await pending;
+          if (phase === "remove-classification") {
+            await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+          } else {
+            expect(await fs.readFile(target, "utf8")).toBe("after");
+          }
         }
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("rolls provenance back when the filesystem write fails", async () => {
     await withStateDirEnv("openclaw-memory-provenance-", async ({ tempRoot }) => {

@@ -65,7 +65,7 @@ export function normalizeTtsPersonaId(personaId: string | null | undefined): str
 export function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
 ): ResolvedTtsModelOverrides {
-  const enabled = Boolean(overrides?.enabled ?? true);
+  const enabled = overrides?.enabled ?? true;
   return {
     enabled,
     allowText: enabled && (overrides?.allowText ?? true),

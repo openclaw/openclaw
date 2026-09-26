@@ -120,7 +120,10 @@ export function startGatewayEventSubscriptions(params: {
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   // Collection changes gate new work; the writer retains accepted work and maintenance.
-  const auditRecorder = createAuditEventRecorder({ getConfig: getRuntimeConfig });
+  const auditRecorder = createAuditEventRecorder({
+    getConfig: getRuntimeConfig,
+    scheduler: params.scheduler,
+  });
   const clearAuditSinks = [
     configureExecutionIdentityAdmissionSink(auditRecorder.recordExecutionIdentity),
     configureExecutionDecisionWorkSink(auditRecorder.recordExecutionDecisionWork),

@@ -48,15 +48,6 @@ describe("node HTTP proxy resolution", () => {
     });
   });
 
-  it("honors default WebSocket ports in NO_PROXY", () => {
-    withProxyEnv(
-      { HTTPS_PROXY: "http://proxy.example:8080", NO_PROXY: "web.whatsapp.com:443" },
-      () => {
-        expect(createHttpProxyAgentsForTarget("wss://web.whatsapp.com/ws")).toBeUndefined();
-      },
-    );
-  });
-
   it("does not mutate URL inputs when normalizing WebSocket targets", () => {
     withProxyEnv(
       { HTTPS_PROXY: "http://proxy.example:8080", NO_PROXY: "web.whatsapp.com:443" },

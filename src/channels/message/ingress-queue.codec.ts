@@ -1,5 +1,8 @@
 import type {
   ChannelIngressRow,
+  ChannelIngressClaimRequest,
+  ChannelIngressClaimSnapshot,
+  ChannelIngressClaimSelection,
   ChannelIngressQueueRecord,
   ChannelIngressQueueClaim,
   ChannelIngressQueueCorruptClaim,
@@ -145,4 +148,43 @@ export function failedRecord<TPayload, TMetadata>(
     reason: row.failed_reason ?? "failed",
     ...(row.last_error === null ? {} : { message: row.last_error }),
   };
+}
+
+export const CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT = 100;
+
+/** Resolve host policy only for the rows the original bounded scan would visit. */
+export function selectChannelIngressClaim(
+  snapshot: ChannelIngressClaimSnapshot,
+  request: ChannelIngressClaimRequest,
+  resolveLane: (row: ChannelIngressRow) => string | undefined,
+): ChannelIngressClaimSelection {
+  const blocked = new Set(request.blockedLaneKeys);
+  for (const row of snapshot.claimed) {
+    const lane = resolveLane(row);
+    if (lane) {
+      blocked.add(lane);
+    }
+  }
+  const corruptIds: string[] = [];
+  let pending = snapshot.pending;
+  while (true) {
+    const removed = new Set<string>();
+    for (const row of pending.slice(0, Math.max(1, Math.floor(request.scanLimit ?? 100)))) {
+      if (!baseRecord(row)) {
+        if (corruptIds.length < CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
+          corruptIds.push(row.event_id);
+          removed.add(row.event_id);
+        }
+        continue;
+      }
+      const laneKey = resolveLane(row);
+      if (!laneKey || !blocked.has(laneKey)) {
+        return { corruptIds, selected: { id: row.event_id, laneKey } };
+      }
+    }
+    if (removed.size === 0 || corruptIds.length >= CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
+      return { corruptIds };
+    }
+    pending = pending.filter((row) => !removed.has(row.event_id));
+  }
 }

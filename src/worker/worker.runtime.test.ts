@@ -1768,13 +1768,27 @@ describe("worker runtime", () => {
           "text",
         ],
         ...(processState === "completed"
-          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-file.cjs` }
+          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
       });
+      const releaseBackground = createDeferred();
+      let completionServer: Server | undefined;
       if (processState === "completed") {
+        completionServer = createServer((_request, response) => {
+          void releaseBackground.promise.then(() => response.end("background-finished"));
+        });
+        const listening = once(completionServer, "listening");
+        completionServer.listen(0, "127.0.0.1");
+        await listening;
+        const address = completionServer.address();
+        if (!address || typeof address === "string") {
+          throw new Error("background completion server did not allocate a TCP port");
+        }
+        // An explicit response also releases a child that starts after the turn finishes.
+        // Filesystem watch notifications can be lost while this shared machine is busy.
         await writeFile(
-          path.join(workspaceDir, "finish-on-file.cjs"),
-          "const fs = require('node:fs'); const finish = () => { if (fs.existsSync('finish-marker')) { process.stdout.write('background-finished'); watcher.close(); } }; const watcher = fs.watch('.', finish); finish();",
+          path.join(workspaceDir, "finish-on-release.cjs"),
+          `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
         );
       }
       const scopeKey = `worker:${SESSION_ID}`;
@@ -1808,7 +1822,7 @@ describe("worker runtime", () => {
         const sessionId = running[0]!.id;
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
-          await writeFile(path.join(workspaceDir, "finish-marker"), "finish");
+          releaseBackground.resolve();
           await waitForExecScope(scopeKey);
           await waitForFast(() =>
             expect(
@@ -1869,12 +1883,18 @@ describe("worker runtime", () => {
           expect(results[1]?.retainWorker).toBe(false);
         }
       } finally {
+        releaseBackground.resolve();
         input.end();
         try {
           await command;
         } finally {
           supervisor.cancelScope(scopeKey, "manual-cancel");
           await waitForExecScope(scopeKey);
+          if (completionServer) {
+            await new Promise<void>((resolve, reject) => {
+              completionServer.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
         }
       }
       expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
