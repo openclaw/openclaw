@@ -1236,16 +1236,16 @@ export function buildConfiguredModelCatalog(params: {
         provider: providerId,
         id,
         name,
-        api,
+        ...(api !== undefined ? { api } : {}),
         ...(baseUrl ? { baseUrl } : {}),
-        contextWindow,
-        contextTokens,
-        reasoning,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(contextTokens !== undefined ? { contextTokens } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
         ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-        input,
+        ...(input !== undefined ? { input } : {}),
         ...(modelParams ? { params: modelParams } : {}),
-        compat,
+        ...(compat ? { compat } : {}),
       });
     }
   }

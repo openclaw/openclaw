@@ -87,9 +87,13 @@ export function overlayCatalogMetadata(
   // Options + default are one normalized unit (default ∈ options): an overlay
   // that replaces the options list must also own the default, or a base default
   // absent from the new list would leak through the field-by-field merge.
+  // The resolved compat below is the single source for the merged row. Leaving the
+  // base value in the spread would let an inherited capability survive a decision
+  // to clear it.
   const {
     contextWindows: _baseContextWindows,
     contextWindowDefault: _baseContextWindowDefault,
+    compat: _baseCompat,
     ...selectionNeutralBase
   } = routeBase;
   const contextWindowSelection =
@@ -112,6 +116,17 @@ export function overlayCatalogMetadata(
             : {}),
         };
   const applyRoute = !options?.preserveBaseRoute;
+  const compat = options?.preserveBaseCompat
+    ? resolveCatalogOwnedModelCompat({
+        catalogRoute: base,
+        catalogCompat: base.compat,
+        configuredRoute: {
+          api: overlay.api ?? base.api,
+          baseUrl: overlay.baseUrl ?? base.baseUrl,
+        },
+        configuredCompat: overlay.compat,
+      })
+    : mergeCatalogFields(routeBase.compat, overlay.compat);
   return {
     ...selectionNeutralBase,
     ...contextWindowSelection,
@@ -133,16 +148,6 @@ export function overlayCatalogMetadata(
     ...(overlay.statusReason !== undefined ? { statusReason: overlay.statusReason } : {}),
     ...(overlay.replaces !== undefined ? { replaces: overlay.replaces } : {}),
     ...(overlay.replacedBy !== undefined ? { replacedBy: overlay.replacedBy } : {}),
-    compat: options?.preserveBaseCompat
-      ? resolveCatalogOwnedModelCompat({
-          catalogRoute: base,
-          catalogCompat: base.compat,
-          configuredRoute: {
-            api: overlay.api ?? base.api,
-            baseUrl: overlay.baseUrl ?? base.baseUrl,
-          },
-          configuredCompat: overlay.compat,
-        })
-      : mergeCatalogFields(routeBase.compat, overlay.compat),
+    ...(compat ? { compat } : {}),
   };
 }
