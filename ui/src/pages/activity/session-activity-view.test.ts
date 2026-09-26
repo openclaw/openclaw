@@ -153,8 +153,8 @@ describe("session activity semantics", () => {
           },
         },
       } as unknown as ApplicationContext;
-      const container = document.createElement("div");
-      document.body.append(container);
+      const surfaceContainer = document.createElement("div");
+      document.body.append(surfaceContainer);
       render(
         surface === "activity"
           ? renderSessionActivityView(input)
@@ -166,9 +166,9 @@ describe("session activity semantics", () => {
               mainKey: "main",
               globalScope,
             }),
-        container,
+        surfaceContainer,
       );
-      const item = container.querySelector<HTMLElement>(
+      const item = surfaceContainer.querySelector<HTMLElement>(
         surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
       )!;
       expect(item.textContent).toContain("Stored session");
@@ -299,8 +299,8 @@ describe("session activity semantics", () => {
         agents: [{ id: "research", name: "Research partner", identity: { emoji: "🔬" } }],
       },
     );
-    const container = createApplicationContextProvider(context);
-    document.body.append(container);
+    const providerContainer = createApplicationContextProvider(context);
+    document.body.append(providerContainer);
     render(
       renderSessionActivityView(
         props({
@@ -312,11 +312,13 @@ describe("session activity semantics", () => {
           ],
         }),
       ),
-      container,
+      providerContainer,
     );
 
     await vi.waitFor(() => {
-      const session = container.querySelector('[data-activity-session="agent:research:review"]');
+      const session = providerContainer.querySelector(
+        '[data-activity-session="agent:research:review"]',
+      );
       expect(session?.textContent).toContain("Alex Morgan");
       expect(session?.textContent).toContain("Channel: discord");
       expect(session?.textContent).not.toContain("Agent:");
