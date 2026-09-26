@@ -1,4 +1,5 @@
 // Gateway RPC handler for the tool catalog shown by clients and Control UI.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ToolsCatalogResult,
@@ -26,6 +27,28 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ToolCatalogGroup = ToolsCatalogResult["groups"][number];
+
+function summarizeToolParameters(schema: unknown): ToolCatalogGroup["tools"][number]["parameters"] {
+  if (!isRecord(schema) || schema.type !== "object" || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return Object.entries(schema.properties)
+    .filter(([name]) => name.length > 0)
+    .map(([name, property]) => {
+      const parameter: NonNullable<ToolCatalogGroup["tools"][number]["parameters"]>[number] = {
+        name,
+        required: required.has(name),
+      };
+      if (isRecord(property)) {
+        parameter.type = normalizeOptionalString(property.type);
+        if (typeof property.description === "string") {
+          parameter.description = property.description;
+        }
+      }
+      return parameter;
+    });
+}
 
 function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
@@ -104,6 +127,7 @@ function buildPluginGroups(params: {
     const ownedMetadata = meta?.pluginId
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
+    const parameters = summarizeToolParameters(tool.parameters);
     existing.tools.push({
       id: tool.name,
       label:
@@ -119,6 +143,7 @@ function buildPluginGroups(params: {
       fullDescription:
         ownedMetadata?.description ??
         (typeof tool.description === "string" ? tool.description : undefined),
+      ...(parameters?.length ? { parameters } : {}),
       source: "plugin",
       pluginId,
       optional: meta?.optional,

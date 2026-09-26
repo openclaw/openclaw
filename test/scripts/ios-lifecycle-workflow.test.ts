@@ -112,6 +112,7 @@ if (tool === "uname") {
       WATCH_FIXTURE_MODE: mode,
       GITHUB_ENV: environmentFile,
       IOS_CI_PHASE: "smoke",
+      IOS_MAIN_TIER: "false",
       HISTORICAL_TARGET: "false",
       IOS_DEST: "",
       XCODE_XCCONFIG_FILE: "",
@@ -233,39 +234,48 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
     expect(commands.every((command) => command.tool === "xcrun")).toBe(true);
   });
 
-  it("executes cleanup and sibling suites with normal Debug simulator signing", () => {
-    const { result, commands } = runSimulatorStep("voice", [prepareStep, buildStep, voiceStep]);
-    expect(result.status, result.stderr).toBe(0);
-    const appBuild = commands.find((command) => command.tool === "pnpm");
-    expect(appBuild?.destination).toBe("platform=iOS Simulator,id=watch-fixture");
-    expect(appBuild?.settings).toBe("ARCHS = arm64\nCOMPILER_INDEX_STORE_ENABLE = NO\n");
-    expect(
-      commands.filter((command) => command.tool === "xcrun").map((command) => command.args),
-    ).toEqual([
-      ["simctl", "list", "devices", "available", "--json"],
-      ["simctl", "bootstatus", "watch-fixture", "-b"],
-    ]);
-    const builds = commands.filter((command) => command.tool === "xcodebuild");
-    expect(builds).toHaveLength(1);
-    const build = builds[0];
-    if (!build) {
-      throw new Error("Missing voice cleanup xcodebuild command");
-    }
-    expect(build.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
-      "-only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests",
-      "-only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests",
-      "-only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests",
-      "-only-testing:OpenClawTests/TalkModeManagerTests",
-      "-only-testing:OpenClawTests/ManagedDocumentEnvelopeTests",
-      "-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests",
-      "-only-testing:OpenClawTests/OpenClawTypographyTests",
-    ]);
-    expect(build.args).toEqual(expect.arrayContaining(["-configuration", "Debug", "test"]));
-    expect(build.args).toContain(appBuild?.destination);
-    expect(build.settings).toBe(appBuild?.settings);
-    expect(build.args).toEqual(expect.arrayContaining(["-collect-test-diagnostics", "never"]));
-    expect(build.args.some((arg) => arg.startsWith("CODE_SIGN"))).toBe(false);
-  });
+  it.each([
+    ["smoke", "false"],
+    ["tests", "true"],
+  ])(
+    "executes cleanup and sibling suites with normal Debug signing: %s, main=%s",
+    (phase, main) => {
+      const { result, commands } = runSimulatorStep("voice", [prepareStep, buildStep, voiceStep], {
+        IOS_CI_PHASE: phase,
+        IOS_MAIN_TIER: main,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const appBuild = commands.find((command) => command.tool === "pnpm");
+      expect(appBuild?.destination).toBe("platform=iOS Simulator,id=watch-fixture");
+      expect(appBuild?.settings).toBe("ARCHS = arm64\nCOMPILER_INDEX_STORE_ENABLE = NO\n");
+      expect(
+        commands.filter((command) => command.tool === "xcrun").map((command) => command.args),
+      ).toEqual([
+        ["simctl", "list", "devices", "available", "--json"],
+        ["simctl", "bootstatus", "watch-fixture", "-b"],
+      ]);
+      const builds = commands.filter((command) => command.tool === "xcodebuild");
+      expect(builds).toHaveLength(1);
+      const build = builds[0];
+      if (!build) {
+        throw new Error("Missing voice cleanup xcodebuild command");
+      }
+      expect(build.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
+        "-only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests",
+        "-only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests",
+        "-only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests",
+        "-only-testing:OpenClawTests/TalkModeManagerTests",
+        "-only-testing:OpenClawTests/ManagedDocumentEnvelopeTests",
+        "-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests",
+        "-only-testing:OpenClawTests/OpenClawTypographyTests",
+      ]);
+      expect(build.args).toEqual(expect.arrayContaining(["-configuration", "Debug", "test"]));
+      expect(build.args).toContain(appBuild?.destination);
+      expect(build.settings).toBe(appBuild?.settings);
+      expect(build.args).toEqual(expect.arrayContaining(["-collect-test-diagnostics", "never"]));
+      expect(build.args.some((arg) => arg.startsWith("CODE_SIGN"))).toBe(false);
+    },
+  );
 });
 
 describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {

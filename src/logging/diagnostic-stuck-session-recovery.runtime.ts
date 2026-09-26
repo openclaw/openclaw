@@ -20,6 +20,7 @@ import {
 import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
+import { isRepeatedModelRequestStalled } from "./diagnostic-session-attention.js";
 import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   formatRecoveryOutcome,
@@ -59,6 +60,7 @@ function isActiveRunProgressStale(params: {
   queueDepth?: number;
   staleAbortMs: number;
   allowActiveAbort?: boolean;
+  repeatedRequestNoProgressAbortMs?: number;
   /**
    * When false, staleness is evaluated even with a zero queued backlog.
    * Run-handle recovery keeps the gate so an unqueued active run is not
@@ -78,6 +80,11 @@ function isActiveRunProgressStale(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
+  if (params.repeatedRequestNoProgressAbortMs !== undefined) {
+    // Mechanical bytes cannot renew a semantic stall. New output or an owned
+    // wait can invalidate the evidence while recovery's runtime is loading.
+    return isRepeatedModelRequestStalled(activity, params.repeatedRequestNoProgressAbortMs);
+  }
   // A retry can start after recovery was queued. Recheck its current owner and
   // deadline here before an earlier classification is allowed to abort it.
   if (
@@ -265,6 +272,7 @@ export async function recoverStuckDiagnosticSession(
         queueDepth: params.queueDepth,
         staleAbortMs: staleActiveProgressAbortMs,
         allowActiveAbort: params.allowActiveAbort,
+        repeatedRequestNoProgressAbortMs: params.repeatedRequestNoProgressAbortMs,
       });
       if (!reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
@@ -329,6 +337,7 @@ export async function recoverStuckDiagnosticSession(
         queueDepth: params.queueDepth,
         staleAbortMs: staleActiveProgressAbortMs,
         allowActiveAbort: params.allowActiveAbort,
+        repeatedRequestNoProgressAbortMs: params.repeatedRequestNoProgressAbortMs,
         // Maintenance retains its backlog gate after the safety window;
         // other abandoned reply ownership must expire even without a queue.
         requireQueueBacklog: maintenancePhase ? undefined : false,

@@ -12,9 +12,8 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
+const TELEGRAM_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
-const TELEGRAM_WEBHOOK_CONNECT_GRACE_MS = 120_000;
 
 const TELEGRAM_ACCOUNT_STATUS_FIELDS = [
   "mode",
@@ -53,28 +52,33 @@ function isTelegramPollingBacklogStallError(lastError: unknown): boolean {
   );
 }
 
-function collectTelegramPollingRuntimeIssues(params: {
+function collectTelegramRuntimeIssues(params: {
   account: TelegramAccountStatus;
   accountId: string;
   issues: ChannelStatusIssue[];
   now: number;
 }) {
   const { account, accountId, issues, now } = params;
-  if (account.running !== true || normalizeOptionalString(account.mode) !== "polling") {
+  const mode = normalizeOptionalString(account.mode);
+  if (account.running !== true || (mode !== "polling" && mode !== "webhook")) {
     return;
   }
 
   const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
-  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt) ?? null;
-  const fix = `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`;
+  const fix =
+    mode === "polling"
+      ? `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`
+      : `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`;
 
   if (account.connected === false) {
-    const withinStartupGrace =
-      lastStartAt != null && now - lastStartAt < TELEGRAM_POLLING_CONNECT_GRACE_MS;
+    const withinStartupGrace = lastStartAt != null && now - lastStartAt < TELEGRAM_CONNECT_GRACE_MS;
     if (!withinStartupGrace) {
-      const message = isTelegramPollingBacklogStallError(account.lastError)
-        ? "Telegram isolated polling spool backlog is stalled while Bot API polling is still succeeding"
-        : "Telegram polling is running but has not completed a successful getUpdates call since startup";
+      const message =
+        mode === "webhook"
+          ? "Telegram webhook listener is running but setWebhook has not completed since startup"
+          : isTelegramPollingBacklogStallError(account.lastError)
+            ? "Telegram isolated polling spool backlog is stalled while Bot API polling is still succeeding"
+            : "Telegram polling is running but has not completed a successful getUpdates call since startup";
       issues.push({
         channel: "telegram",
         accountId,
@@ -86,7 +90,8 @@ function collectTelegramPollingRuntimeIssues(params: {
     return;
   }
 
-  if (account.connected === true && lastTransportActivityAt != null) {
+  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt) ?? null;
+  if (mode === "polling" && account.connected === true && lastTransportActivityAt != null) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
       const lifecycleAgeMs = Math.max(0, now - lastStartAt);
       if (lifecycleAgeMs <= TELEGRAM_POLLING_STALE_TRANSPORT_MS) {
@@ -109,57 +114,20 @@ function collectTelegramPollingRuntimeIssues(params: {
   }
 }
 
-function collectTelegramWebhookRuntimeIssues(params: {
-  account: TelegramAccountStatus;
-  accountId: string;
-  issues: ChannelStatusIssue[];
-  now: number;
-}) {
-  const { account, accountId, issues, now } = params;
-  if (account.running !== true || normalizeOptionalString(account.mode) !== "webhook") {
-    return;
-  }
-
-  if (account.connected !== false) {
-    return;
-  }
-
-  const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
-  const withinStartupGrace =
-    lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
-  if (withinStartupGrace) {
-    return;
-  }
-
-  issues.push({
-    channel: "telegram",
-    accountId,
-    kind: "runtime",
-    message: appendTelegramRuntimeError(
-      "Telegram webhook listener is running but setWebhook has not completed since startup",
-      account.lastError,
-    ),
-    fix: `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`,
-  });
-}
-
 function readTelegramGroupMembershipAuditSummary(
   value: unknown,
 ): TelegramGroupMembershipAuditSummary {
   if (!isRecord(value)) {
     return {};
   }
-  const unresolvedGroups =
-    typeof value.unresolvedGroups === "number" && Number.isFinite(value.unresolvedGroups)
-      ? value.unresolvedGroups
-      : undefined;
+  const unresolvedGroups = asFiniteNumber(value.unresolvedGroups);
   const hasWildcardUnmentionedGroups =
     typeof value.hasWildcardUnmentionedGroups === "boolean"
       ? value.hasWildcardUnmentionedGroups
       : undefined;
   const groupsRaw = value.groups;
   const groups = Array.isArray(groupsRaw)
-    ? (groupsRaw
+    ? groupsRaw
         .map((entry) => {
           if (!isRecord(entry)) {
             return null;
@@ -175,7 +143,7 @@ function readTelegramGroupMembershipAuditSummary(
           const matchSource = normalizeOptionalString(entry.matchSource);
           return { chatId, ok, status, error, matchKey, matchSource };
         })
-        .filter(Boolean) as TelegramGroupMembershipAuditSummary["groups"])
+        .filter((entry) => entry !== null)
     : undefined;
   return { unresolvedGroups, hasWildcardUnmentionedGroups, groups };
 }
@@ -195,13 +163,7 @@ export function collectTelegramStatusIssues(
     }
     const now = Date.now();
 
-    collectTelegramPollingRuntimeIssues({
-      account,
-      accountId,
-      issues,
-      now,
-    });
-    collectTelegramWebhookRuntimeIssues({
+    collectTelegramRuntimeIssues({
       account,
       accountId,
       issues,

@@ -6,6 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
   redactSupportString,
   type SupportRedactionContext,
@@ -153,7 +154,17 @@ export function createUpdateFailureFact(
   const context = { env, stateDir: resolveStateDir(env) };
   const line = (value: string, limit: number) => redactSupportDiagnosticLine(value, context, limit);
   // Redact credentials and complete email addresses before replacing their host suffixes.
-  const diagnostic = fact.message ? line(fact.message, Number.MAX_SAFE_INTEGER) : undefined;
+  // Protocol-1 candidate refusals carry field facts in multiline text; retain them before truncation.
+  const configDiagnostic =
+    fact.code === "invalid-config" && fact.message
+      ? redactPublicSupportDiagnosticLine(fact.message, context)
+      : undefined;
+  const diagnostic =
+    configDiagnostic && configDiagnostic !== "[redacted-diagnostic]"
+      ? configDiagnostic
+      : fact.message
+        ? line(fact.message, Number.MAX_SAFE_INTEGER)
+        : undefined;
   const message = fact.errorName
     ? diagnostic
         ?.replace(
