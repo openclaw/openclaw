@@ -281,6 +281,74 @@ describe("scheduled Codex app authority", () => {
     expect(statusPage).toBe(2);
   });
 
+  it("keeps the capture deadline monotonic when the wall clock rewinds", async () => {
+    // The capture budget must be measured with performance.now() (monotonic).
+    // A wall-clock-based remaining budget grows when Date.now() rewinds
+    // (NTP correction / sleep resume), letting the app/installed RPC outlive
+    // its configured budget. Model the two clocks independently: performance.now()
+    // advances monotonically while Date.now() jumps backward between the deadline
+    // seed and the first bounded RPC dispatch.
+    const budgetMs = 5_000;
+    let monotonicMs = 0;
+    let dateNowCallCount = 0;
+    const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      // The first Date.now() call seeds deadlineMs (before the wall clock
+      // rewinds). Subsequent calls read the remaining budget after a clock
+      // correction rewound the wall clock by 90s. A wall-clock remaining
+      // budget would balloon to ~95s; a monotonic budget must stay near 5s.
+      dateNowCallCount += 1;
+      return dateNowCallCount === 1 ? monotonicMs : monotonicMs - 90_000;
+    });
+    const request = vi.fn(async (method: string, _requestParams: unknown) => {
+      if (method === "app/installed") {
+        return { apps: [] };
+      }
+      if (method === "config/read") {
+        return { config: {} };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const capturedTimeoutMs: number[] = [];
+    const wrappedRequest = vi.fn(
+      (method: string, requestParams: unknown, options: { timeoutMs?: number } = {}) => {
+        if (method === "app/installed") {
+          capturedTimeoutMs.push(options.timeoutMs ?? -1);
+        }
+        return request(method, requestParams);
+      },
+    );
+
+    // The deadline seeds at monotonic 500ms; the remaining budget is read after
+    // the wall clock rewinds. performance.now() stays at 500 (monotonic), so a
+    // monotonic budget reads remaining = 5500 - 500 = 5000. A wall-clock budget
+    // reads remaining = 5500 - (-89500) = 95000 (amplified by the 90s rewind).
+    monotonicMs = 500;
+    await expect(
+      captureScheduledCodexAppAuthority({
+        client: { request: wrappedRequest } as never,
+        threadId: "thread-rewind",
+        policyContext: policyContext(),
+        auth: {
+          kind: "prepared-profile",
+          profileId: "openai:work",
+          accountId: "acct-1",
+        },
+        timeoutMs: budgetMs,
+      }),
+    ).rejects.toThrow();
+    performanceNowSpy.mockRestore();
+    dateNowSpy.mockRestore();
+
+    // Monotonic budget: the RPC timeout stays near 5s despite the 90s wall-clock
+    // rewind. A wall-clock budget would have reported ~95_000ms here.
+    expect(capturedTimeoutMs.length).toBeGreaterThan(0);
+    for (const timeoutMs of capturedTimeoutMs) {
+      expect(timeoutMs).toBeLessThan(budgetMs + 1_000);
+      expect(timeoutMs).toBeGreaterThan(budgetMs - 2_000);
+    }
+  });
+
   it("maps a real app-server request timeout to the no-save creator diagnostic", async () => {
     const timeout = Object.assign(new Error("mcpServerStatus/list timed out"), {
       code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
