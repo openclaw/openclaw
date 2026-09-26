@@ -249,8 +249,9 @@ export function createRoomHistoryTracker(
     limit: number,
     entry: HistoryEntry,
     threadRootId?: string,
-    slot?: ReservedHistorySlot,
+    reservedSlot?: ReservedHistorySlot,
   ): PreparedTriggerResult {
+    let slot = reservedSlot;
     const queue = getScopedQueue(roomId, threadRootId);
     if (slot) {
       const rel = slot.slotIdx - queue.baseIndex;

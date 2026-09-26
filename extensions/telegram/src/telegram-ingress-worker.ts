@@ -137,11 +137,14 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     },
     ackSpooledUpdate(requestId, result) {
       try {
-        worker.postMessage({
-          type: "spool-ack",
-          requestId,
-          result,
-        } satisfies TelegramIngressWorkerCommand);
+        worker.postMessage(
+          {
+            type: "spool-ack",
+            requestId,
+            result,
+          } satisfies TelegramIngressWorkerCommand,
+          [],
+        );
       } catch {
         // Worker may have exited after the parent committed the queue write.
       }
@@ -149,7 +152,7 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     async stop() {
       await stopTelegramIngressWorker({
         requestStop: () => {
-          worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand);
+          worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);
         },
         task: taskPromise,
         terminate: () => worker.terminate(),

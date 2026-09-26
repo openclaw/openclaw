@@ -343,7 +343,7 @@ const runtimePort =
     ? null
     : ({
         postMessage(message) {
-          workerPort.postMessage(message);
+          workerPort.postMessage(message, []);
         },
         onMessage(listener) {
           workerPort.on("message", listener);

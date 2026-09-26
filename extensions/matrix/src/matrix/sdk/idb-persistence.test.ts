@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import {
@@ -159,7 +160,11 @@ describe("Matrix IndexedDB persistence", () => {
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.deleteDatabase(cryptoDatabaseName);
       request.addEventListener("success", () => resolve(), { once: true });
-      request.addEventListener("error", () => reject(request.error), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(toErrorObject(request.error, "IndexedDB deletion failed")),
+        { once: true },
+      );
       request.addEventListener(
         "blocked",
         () => reject(new Error("Failed restore left its IndexedDB connection open")),

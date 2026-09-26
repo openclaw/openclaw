@@ -280,7 +280,7 @@ export async function startTelegramWebhook(opts: {
   let shutdownPromise: Promise<void> | undefined;
   let unregisterRoute: (() => void) | undefined;
   let unregisterTarget: (() => void) | undefined;
-  let ownedBot: Awaited<ReturnType<typeof createTelegramBot>> | undefined;
+  let ownedBot: Awaited<ReturnType<typeof createTelegramBot>> | undefined = undefined;
   let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
   const shutdownAbortController = new AbortController();
   const telegramAccountConfig = opts.config
