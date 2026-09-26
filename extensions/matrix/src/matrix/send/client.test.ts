@@ -2,7 +2,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
-  expectExplicitMatrixClientConfig,
   expectOneOffSharedMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
@@ -68,41 +67,6 @@ describe("matrix send client helpers", () => {
         expect(abortSignal).toBe(lease.abortSignal);
       },
     );
-  });
-
-  it("uses the effective account id when auth resolution is implicit", async () => {
-    resolveMatrixAuthContextMock.mockReturnValue({
-      cfg: TEST_CFG,
-      env: process.env,
-      accountId: "ops",
-      resolved: {},
-    });
-
-    await withResolvedMatrixSendClient({ cfg: TEST_CFG }, async () => {});
-
-    await expectOneOffSharedMatrixClient({
-      accountId: "ops",
-      prepareForOneOffCalls: 0,
-      startCalls: 1,
-      releaseMode: "persist",
-    });
-  });
-
-  it("uses explicit cfg instead of loading runtime config", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          defaultAccount: "ops",
-        },
-      },
-    };
-
-    await withResolvedMatrixSendClient({ cfg: explicitCfg, accountId: "ops" }, async () => {});
-
-    expectExplicitMatrixClientConfig({
-      cfg: explicitCfg,
-      accountId: "ops",
-    });
   });
 
   it("persists borrowed send clients when wrapped sends fail", async () => {

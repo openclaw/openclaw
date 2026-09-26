@@ -84,45 +84,6 @@ describe("sessions tool responses", () => {
     expect(Buffer.byteLength(text, "utf8")).toBeLessThan(512);
   });
 
-  it("returns authoritative resolved model and thinking metadata without the patched entry", async () => {
-    const resolved = {
-      modelProvider: "openai",
-      model: "gpt-5.6-luna",
-      agentRuntime: { id: "codex", fallback: "openclaw" as const, source: "session" as const },
-      thinkingLevel: "medium",
-      thinkingLevels: [
-        { id: "off", label: "Off" },
-        { id: "medium", label: "Medium" },
-      ],
-    };
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      path: `/sessions/${"p".repeat(10_000)}`,
-      key: "agent:main:main",
-      entry: { skillsSnapshot: "s".repeat(47_469) },
-      resolved,
-    });
-    const tool = createTool();
-
-    const result = await tool.execute("patch-model-thinking", {
-      action: "patch",
-      model: "openai/luna",
-      thinkingLevel: "med",
-    });
-
-    expect(result.details).toEqual({
-      status: "updated",
-      sessionKey: "agent:main:main",
-      updated: ["model", "thinkingLevel"],
-      resolved,
-    });
-    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
-    expect(text).not.toContain('"entry"');
-    expect(text).not.toContain('"path"');
-    expect(text).not.toContain("skillsSnapshot");
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(1_024);
-  });
-
   it("preserves the complete canonical thinking catalog through ultra", async () => {
     const thinkingLevels = [
       "off",

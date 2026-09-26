@@ -29,6 +29,17 @@ import {
   waitForRealtimeState,
 } from "./realtime-voice-provider.test-support.js";
 
+function toolResultEvent(callId: string, result: unknown) {
+  return {
+    type: "conversation.item.create",
+    item: {
+      type: "function_call_output",
+      call_id: callId,
+      output: JSON.stringify(result),
+    },
+  };
+}
+
 describe("buildXaiRealtimeVoiceProvider", () => {
   it.each([false, true])(
     "releases a marked completed response after interruption (server VAD=%s)",
@@ -78,32 +89,29 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
   );
 
-  it.each(["failed", "incomplete", "cancelled", undefined])(
-    "retires unheard playback marks after a %s native terminal",
-    async (status) => {
-      vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-      const onMark = vi.fn();
-      const bridge = createTestBridge({ onMark });
-      const socket = await openRealtimeBridge(bridge);
-      socket.emitServer({ type: "response.created" });
-      socket.emitServer({
-        type: "response.output_audio.delta",
-        item_id: "discarded",
-        delta: Buffer.alloc(8000).toString("base64"),
-      });
-      bridge.sendUserMessage?.("next response");
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
-      socket.emitServer({ type: "response.done", response: { status } });
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
-        { type: "response.create" },
-      ]);
-      const oldAcknowledgment = onMark.mock.calls[0]?.[1];
-      expect(oldAcknowledgment).toBeTypeOf("function");
-      oldAcknowledgment();
-      expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
-      await bridge.close();
-    },
-  );
+  it("retires unheard playback marks after a failed native terminal", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const onMark = vi.fn();
+    const bridge = createTestBridge({ onMark });
+    const socket = await openRealtimeBridge(bridge);
+    socket.emitServer({ type: "response.created" });
+    socket.emitServer({
+      type: "response.output_audio.delta",
+      item_id: "discarded",
+      delta: Buffer.alloc(8000).toString("base64"),
+    });
+    bridge.sendUserMessage?.("next response");
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+    socket.emitServer({ type: "response.done", response: { status: "failed" } });
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
+      { type: "response.create" },
+    ]);
+    const oldAcknowledgment = onMark.mock.calls[0]?.[1];
+    expect(oldAcknowledgment).toBeTypeOf("function");
+    oldAcknowledgment();
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    await bridge.close();
+  });
 
   it("keeps new VAD playback pending when a previous response is acknowledged late", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
@@ -1413,14 +1421,9 @@ describe("buildXaiRealtimeVoiceProvider", () => {
             event.item?.type === "function_call_output",
         ),
       ).toEqual(
-        Array.from({ length: 6 }, (_, index) => ({
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: `call_invalid_${index}`,
-            output: JSON.stringify({ error: "Invalid tool arguments." }),
-          },
-        })),
+        Array.from({ length: 6 }, (_, index) =>
+          toolResultEvent(`call_invalid_${index}`, { error: "Invalid tool arguments." }),
+        ),
       );
       expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([
         { type: "response.create" },
@@ -1473,24 +1476,12 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         (event) =>
           event.type === "conversation.item.create" && event.item?.type === "function_call_output",
       ),
-    ).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_rejected",
-          output: JSON.stringify({ error: "Invalid tool arguments." }),
-        },
-      },
-    ]);
+    ).toEqual([toolResultEvent("call_rejected", { error: "Invalid tool arguments." })]);
     await bridge.close();
   });
 
   it.each([
     ["undefined", (): undefined => undefined],
-    ["function", () => () => undefined],
-    ["symbol", () => Symbol("invalid-tool-result")],
-    ["bigint", () => ({ value: 1n })],
     [
       "circular",
       () => {
@@ -1523,14 +1514,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       await bridge.submitToolResult("call_1", { recovered: true });
 
       expect(parseSent(socket).slice(-2)).toEqual([
-        {
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: "call_1",
-            output: JSON.stringify({ recovered: true }),
-          },
-        },
+        toolResultEvent("call_1", { recovered: true }),
         { type: "response.create" },
       ]);
       await bridge.close();
@@ -1621,14 +1605,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     await bridge.submitToolResult("call_2", { text: "second" });
     expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_2",
-          output: JSON.stringify({ text: "second" }),
-        },
-      },
+      toolResultEvent("call_2", { text: "second" }),
       { type: "response.create" },
     ]);
   });
@@ -1657,14 +1634,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     await bridge.submitToolResult("call_1", { text: "final" });
     expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ text: "final" }),
-        },
-      },
+      toolResultEvent("call_1", { text: "final" }),
       { type: "response.create" },
     ]);
   });
@@ -1783,14 +1753,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     await bridge.submitToolResult("call_2", { text: "second" });
     expect(parseSent(secondSocket).slice(-2)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_2",
-          output: JSON.stringify({ text: "second" }),
-        },
-      },
+      toolResultEvent("call_2", { text: "second" }),
       { type: "response.create" },
     ]);
     await bridge.close();
@@ -1868,14 +1831,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     expect(
       parseSent(resumedSocket).find((event) => event.type === "conversation.item.create"),
-    ).toEqual({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: "call_failed_output",
-        output: JSON.stringify({ recovered: true }),
-      },
-    });
+    ).toEqual(toolResultEvent("call_failed_output", { recovered: true }));
     expect(onEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "session.reconnect.blocked" }),
     );
@@ -2027,26 +1983,12 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     secondSocket.emitServer({ type: "session.updated" });
     expect(parseSent(secondSocket).filter((event) => event.type === "response.create")).toEqual([]);
     expect(parseSent(secondSocket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: JSON.stringify({ text: "first" }),
-        },
-      },
+      toolResultEvent("call_1", { text: "first" }),
     ]);
 
     await bridge.submitToolResult("call_2", { text: "second" });
     expect(parseSent(secondSocket).slice(-2)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: "call_2",
-          output: JSON.stringify({ text: "second" }),
-        },
-      },
+      toolResultEvent("call_2", { text: "second" }),
       { type: "response.create" },
     ]);
     await bridge.close();

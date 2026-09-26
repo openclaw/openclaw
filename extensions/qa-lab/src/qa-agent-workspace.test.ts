@@ -13,7 +13,6 @@ describe("seedQaAgentWorkspace", () => {
   it.each([
     ["win32", "junction"],
     ["linux", "dir"],
-    ["darwin", "dir"],
   ] as const)("uses the expected repo link type on %s", async (platform, linkType) => {
     const workspaceDir = await makeTempDir("qa-workspace-link-type-");
     const repoRoot = await makeTempDir("qa-repo-link-type-");

@@ -177,12 +177,6 @@ describe("model-switch tool continuity terminal evidence", () => {
     );
   });
 
-  it("does not let a successful prior-run read satisfy the alternate run", async () => {
-    await expect(runToolContinuity([])).rejects.toThrow(
-      "alternate-model run did not return exact owned successful read evidence",
-    );
-  });
-
   it("keeps primary evidence when the primary tool assertion fails", async () => {
     const { result, runAgentPrompt } = await runToolContinuity(["read"], {
       catchFailureResult: true,

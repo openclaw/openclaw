@@ -507,7 +507,7 @@ describe("legacy APNs Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(result.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 

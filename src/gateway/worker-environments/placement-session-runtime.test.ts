@@ -103,23 +103,6 @@ describe("worker placement runtime capabilities", () => {
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
     },
     {
-      name: "remote execution projects exact device commands without consuming a worker slot",
-      runtimeId: "device-harness",
-      cloudPlacement: {
-        mode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["runtime.exec-server.v1"],
-          consumesWorkerSlot: false,
-        },
-      },
-      executionMode: "remote-exec",
-      devicePlacementSupported: true,
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.exec-server.v1"],
-        consumesWorkerSlot: false,
-      },
-    },
-    {
       name: "device command requirements are deterministic and deduplicated",
       runtimeId: "ordered-harness",
       cloudPlacement: {

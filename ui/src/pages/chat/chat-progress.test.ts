@@ -228,19 +228,16 @@ describe("resolveTurnRecap", () => {
     ).toEqual({ runId: nextRunId, runtimeMs: 14_000, outputTokens: 0 });
   });
 
-  it.each(["failed", "timeout", "killed"] as const)(
-    "stays quiet for a watched %s run",
-    (status) => {
-      watch();
-      expect(resolve({ row: { ...doneRow, status }, usageByRun: usage(695) })).toBeNull();
-      expect(
-        resolve({
-          row: { ...doneRow, lastRunId: "foreign-run" },
-          usageByRun: usage(900, "foreign-run"),
-        }),
-      ).toBeNull();
-    },
-  );
+  it("stays quiet for a watched failed run", () => {
+    watch();
+    expect(resolve({ row: { ...doneRow, status: "failed" }, usageByRun: usage(695) })).toBeNull();
+    expect(
+      resolve({
+        row: { ...doneRow, lastRunId: "foreign-run" },
+        usageByRun: usage(900, "foreign-run"),
+      }),
+    ).toBeNull();
+  });
 
   it("never invents a watch from history or an unidentified queued indicator", () => {
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();

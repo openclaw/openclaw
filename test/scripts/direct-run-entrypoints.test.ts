@@ -177,13 +177,30 @@ function expectShimLoader(
 }
 
 describe("script direct-run entrypoints", () => {
-  it.skipIf(process.platform === "win32")(
-    "lets the Vitest implementation finish cleanup beyond the shim force-kill window",
-    async () => {
-      await withShimFixture("scripts/run-vitest.mjs", async (fixture) => {
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      "scripts/run-vitest.mjs",
+      "scripts/check-changed.mjs",
+      "scripts/run-tsgo.mjs",
+      "scripts/run-oxlint.mjs",
+      "scripts/run-tsgo-core-test-shards.mjs",
+    ] as const)(
+    "lets %s finish implementation cleanup beyond the shim force-kill window",
+    async (wrapper) => {
+      await withShimFixture(wrapper, async (fixture) => {
         const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
         const ownerPath = path.join(fixtureRoot, "owner.pid");
         const settledPath = path.join(fixtureRoot, "cleanup-settled");
+        const clockPath = path.join(fixtureRoot, "supervisor-clock.mjs");
+        // Scale both owners equally: a competing 5s or 10s cutoff must still fail.
+        // Readiness and the test harness retain real time.
+        writeFileSync(
+          clockPath,
+          `const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay, ...args) =>
+  realSetTimeout(callback, delay / 20, ...args);\n`,
+        );
         writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
         writeFileSync(
           implementationPath,
@@ -194,12 +211,21 @@ process.once("SIGTERM", () => {
     fs.writeFileSync(${JSON.stringify(settledPath)}, "settled");
     clearInterval(keepAlive);
     process.exitCode = 143;
-  }, 5500);
+  }, 11000);
 });
 fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
 `,
         );
-        const completion = runNode([wrapperPath], process.env, fixtureRoot);
+        const completion = runNode(
+          [wrapperPath],
+          {
+            ...process.env,
+            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(clockPath).href}`]
+              .filter(Boolean)
+              .join(" "),
+          },
+          fixtureRoot,
+        );
         const owner = await waitForPidFile(ownerPath, 10_000);
         process.kill(owner, "SIGTERM");
         const result = await completion;
