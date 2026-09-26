@@ -10,9 +10,20 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+
+export type AcpSessionStoreEntry = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  storePath: string;
+  sessionKey: string;
+  storeSessionKey: string;
+  entry?: SessionEntry;
+  acp?: SessionAcpMeta;
+  storeReadFailed?: boolean;
+};
 
 /** Join the logical ACP key to its canonical SQLite entry without renaming ACP metadata. */
 function resolveStoreEntryForSessionKey(params: {

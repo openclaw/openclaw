@@ -38,21 +38,12 @@ import {
 } from "./session-meta-keys.js";
 import { clearLegacyEmbeddedAcpMetadata } from "./session-meta-legacy-cleanup.js";
 import { readAcpSessionMetaForEntry, rowToAcpSessionMeta } from "./session-meta-readonly.js";
-import { readSessionEntryFromStore } from "./session-meta-store.js";
+import { readSessionEntryFromStore, type AcpSessionStoreEntry } from "./session-meta-store.js";
 
 /** ACP metadata joined with its legacy session-store row and config context. */
 export { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 
-export type AcpSessionStoreEntry = {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  storePath: string;
-  sessionKey: string;
-  storeSessionKey: string;
-  entry?: SessionEntry;
-  acp?: SessionAcpMeta;
-  storeReadFailed?: boolean;
-};
+export type { AcpSessionStoreEntry } from "./session-meta-store.js";
 
 function bindAcpSessionMeta(params: {
   sessionKey: string;

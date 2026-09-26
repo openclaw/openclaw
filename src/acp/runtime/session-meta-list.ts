@@ -13,8 +13,7 @@ import {
   resolveReadableAcpSessionRow,
 } from "./session-meta-keys.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
-import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
-import type { AcpSessionStoreEntry } from "./session-meta.js";
+import { resolveSessionStorePathForAcp, type AcpSessionStoreEntry } from "./session-meta-store.js";
 
 /** Join ACP metadata through the existing shared-state and physical session readers. */
 export async function listAcpSessionEntries(params: {
