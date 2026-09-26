@@ -1,4 +1,5 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -53,6 +54,21 @@ type BuzzProbeResult = {
   rooms: Array<{ id: string; name: string }>;
 };
 
+function matchesBuzzToolContextRoom(
+  target: string,
+  toolContext?: ChannelThreadingToolContext,
+): boolean {
+  const currentTarget = toolContext?.currentMessagingTarget ?? toolContext?.currentChannelId;
+  if (!currentTarget) {
+    return false;
+  }
+  try {
+    return parseBuzzTarget(target) === parseBuzzTarget(currentTarget);
+  } catch {
+    return false;
+  }
+}
+
 export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbeResult>({
   base: {
     id: "buzz",
@@ -71,6 +87,22 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       threads: true,
     },
     threading: {
+      matchesToolContextTarget: ({ target, toolContext }) =>
+        matchesBuzzToolContextRoom(target, toolContext),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentTarget = context.To?.trim() || undefined;
+        return {
+          currentChannelId: currentTarget,
+          currentMessagingTarget: currentTarget,
+          currentMessageId: context.CurrentMessageId,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+          replyToMode: context.ReplyToMode ?? "all",
+          hasRepliedRef,
+        };
+      },
+      resolveAutoThreadId: ({ to, toolContext }) =>
+        matchesBuzzToolContextRoom(to, toolContext) ? toolContext?.currentThreadTs : undefined,
       resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
         if (replyDelivery?.replyToMode === "off") {
           return { threadId: null, replyToId: null };
