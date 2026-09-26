@@ -1,4 +1,3 @@
-// QA Lab plugin module implements Discord scenario support helpers.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,8 +7,10 @@ import {
   handleDiscordMessageAction,
   requestDiscord as requestDiscordLive,
 } from "@openclaw/discord/api.js";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +19,7 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
+import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
@@ -730,9 +732,7 @@ async function waitForDiscordVoiceState(params: {
     } catch (error) {
       lastError = formatErrorMessage(error);
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   const stateDetails = lastState
     ? `last voice state channel=${lastState.channel_id ?? "none"} user=${lastState.user_id ?? "unknown"}`
@@ -780,9 +780,7 @@ async function waitForDiscordMessageText(params: {
     if (normalized && params.textIncludes.every((text) => normalized.text.includes(text))) {
       return normalized;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   throw new Error(
     `timed out after ${params.timeoutMs}ms waiting for Discord message ${params.messageId} text`,
@@ -805,9 +803,7 @@ async function waitForDiscordMessageDeleted(params: {
       }
       throw error;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   throw new Error(
     `timed out after ${params.timeoutMs}ms waiting for Discord message ${params.messageId} deletion`,
@@ -1177,9 +1173,7 @@ async function observeStatusReactionTimeline(params: {
     if (params.expectedSequence.every((emoji) => seenSequence.includes(emoji))) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    await sleep(250);
   }
   return {
     expectedSequence: params.expectedSequence,
@@ -1277,9 +1271,7 @@ async function pollChannelMessages(params: {
         return { message: observedMessage, afterSnowflake };
       }
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Discord message`);
 }
@@ -1305,9 +1297,7 @@ async function pollThreadReplyMessage(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   return undefined;
 }
@@ -1443,36 +1433,19 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
 async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   let lastStatus:
-    | {
-        running?: boolean;
-        connected?: boolean;
-        restartPending?: boolean;
-        lastConnectedAt?: number;
-        lastDisconnect?: unknown;
-        lastError?: string;
-      }
+    | Pick<
+        ChannelAccountSnapshot,
+        | "running"
+        | "connected"
+        | "restartPending"
+        | "lastConnectedAt"
+        | "lastDisconnect"
+        | "lastError"
+      >
     | undefined;
   while (Date.now() - startedAt < 45_000) {
     try {
-      const payload = (await gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            running?: boolean;
-            connected?: boolean;
-            restartPending?: boolean;
-            lastConnectedAt?: number;
-            lastDisconnect?: unknown;
-            lastError?: string;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.discord ?? [];
+      const accounts = await readLiveQaChannelAccounts(gateway, "discord");
       const match = accounts.find((entry) => entry.accountId === accountId);
       lastStatus = match
         ? {
@@ -1490,9 +1463,7 @@ async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: 
     } catch {
       // retry
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   const details = lastStatus
     ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
@@ -1535,9 +1506,7 @@ async function assertDiscordApplicationCommandsRegistered(params: {
     if (missing.length === 0) {
       return { commandNames: lastNames };
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(
     `missing Discord native command(s): ${params.expectedCommandNames

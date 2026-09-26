@@ -471,6 +471,7 @@ const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 /** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
+  onSubscriptionChange?: (connId: string) => void,
 ): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -481,6 +482,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized || isConnectionActive?.(normalized) === false) {
         return;
       }
+      onSubscriptionChange?.(normalized);
       connIds.add(normalized);
     },
     unsubscribe: (connId: string) => {
@@ -488,6 +490,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized) {
         return;
       }
+      onSubscriptionChange?.(normalized);
       connIds.delete(normalized);
     },
     getAll: () => (connIds.size > 0 ? connIds : empty),
@@ -497,6 +500,7 @@ export function createSessionEventSubscriberRegistry(
 /** Create the per-session message subscriber registry. */
 export function createSessionMessageSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
+  onSubscriptionChange?: (connId: string) => void,
 ): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   // Booleans retain committed approval mode; records own unsettled replays.
@@ -556,6 +560,7 @@ export function createSessionMessageSubscriberRegistry(
       ) {
         return undefined;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states =
         connections.get(normalizedConnId) ??
         new Map<string, boolean | ProvisionalSubscriptionState>();
@@ -594,6 +599,7 @@ export function createSessionMessageSubscriberRegistry(
         }
         const committed = state.lastSuccess?.includeApprovals ?? state.base;
         if (committed === undefined) {
+          onSubscriptionChange?.(normalizedConnId);
           states.delete(normalizedSessionKey);
           setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
           setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
@@ -620,6 +626,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states = connections.get(normalizedConnId);
       states?.delete(normalizedSessionKey);
       if (states?.size === 0) {
@@ -633,6 +640,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId) {
         return;
       }
+      onSubscriptionChange?.(normalizedConnId);
       const states = connections.get(normalizedConnId);
       if (!states) {
         return;

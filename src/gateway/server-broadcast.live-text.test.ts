@@ -605,6 +605,7 @@ describe("connection live-text delivery", () => {
       message: { content: "A".repeat(4096) },
     };
     let sharingRole = "owner";
+    const delivered = vi.fn();
     const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([peer.client]),
       prepareSessionEventProjection: (event, value) => {
@@ -612,7 +613,7 @@ describe("connection live-text delivery", () => {
           return undefined;
         }
         const source = value as typeof payload;
-        return () => ({ ...source, session: { sharingRole } });
+        return () => ({ payload: { ...source, session: { sharingRole } }, delivered });
       },
     });
     const stateVersion = { presence: 7 };
@@ -634,6 +635,7 @@ describe("connection live-text delivery", () => {
       Buffer.byteLength(JSON.stringify(replacement)),
     );
     expect(peer.frames).toHaveLength(1);
+    expect(delivered).not.toHaveBeenCalled();
 
     sharingRole = "viewer";
     peer.client.preparedRecipientProfileId = "current-profile";
@@ -648,6 +650,7 @@ describe("connection live-text delivery", () => {
       recipientProfileId: "current-profile",
     });
     expect(getBufferedAmount(peer.client.connId)).toBe(0);
+    expect(delivered).toHaveBeenCalledOnce();
   });
 
   it.each([0, 1])(
@@ -751,8 +754,11 @@ describe("connection live-text delivery", () => {
     (dropIfSlow) => {
       vi.useFakeTimers();
       const peer = createBufferedPeer("sibling-pressure", MAX_BUFFERED_BYTES - 8192);
+      const delivered = vi.fn();
       const { broadcast } = createGatewayBroadcaster({
         clients: new GatewayClientRegistry([peer.client]),
+        prepareSessionEventProjection: (event, payload) =>
+          event === "session.message" ? () => ({ payload, delivered }) : undefined,
       });
       broadcast("tick", {});
       broadcast("chat", text("A".repeat(4096)), {
@@ -765,9 +771,10 @@ describe("connection live-text delivery", () => {
       expect(peer.frames).toHaveLength(2);
       expect(peer.socket.bufferedAmount).toBeLessThan(MAX_BUFFERED_BYTES);
 
-      broadcast("tick", { marker: "over shared budget" }, { dropIfSlow });
+      broadcast("session.message", { marker: "over shared budget" }, { dropIfSlow });
 
       expect(peer.frames).toHaveLength(2);
+      expect(delivered).not.toHaveBeenCalled();
       if (dropIfSlow) {
         expect(peer.socket.close).not.toHaveBeenCalled();
         expect(peer.socket.terminate).not.toHaveBeenCalled();

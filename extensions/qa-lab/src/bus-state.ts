@@ -26,10 +26,8 @@ import type {
   QaBusReactToMessageInput,
   QaBusSearchMessagesInput,
   QaBusSnapshotConversation,
-  QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
-  QaBusWaitForInput,
 } from "./runtime-api.js";
 
 const DEFAULT_BOT_ID = "openclaw";
@@ -56,15 +54,15 @@ export function createQaBusState() {
   const acknowledgedPollCursors = new Map<string, number>();
   let cursor = 0;
   let assertWritable = () => {};
-  const waiters = createQaBusWaiterStore(() =>
+  const getSnapshot = () =>
     buildQaBusSnapshot({
       cursor,
       conversations,
       threads,
       messages,
       events,
-    }),
-  );
+    });
+  const waiters = createQaBusWaiterStore(getSnapshot);
 
   const pushEvent = (event: QaBusEventSeed): QaBusEvent => {
     cursor += 1;
@@ -173,15 +171,7 @@ export function createQaBusState() {
       // miss events; terminal reset also fences late waiter timers.
       waiters.reset(undefined, terminal);
     },
-    getSnapshot() {
-      return buildQaBusSnapshot({
-        cursor,
-        conversations,
-        threads,
-        messages,
-        events,
-      });
-    },
+    getSnapshot,
     addInboundMessage(input: QaBusInboundMessageInput, messageId?: string) {
       const accountId = normalizeAccountId(input.accountId);
       const message = createMessage({
@@ -333,16 +323,8 @@ export function createQaBusState() {
     poll(input: QaBusPollInput = {}) {
       return pollQaBusEvents({ events, cursor, input });
     },
-    async waitFor(input: QaBusWaitForInput) {
-      return await waiters.waitFor(input);
-    },
-    async waitForCursorAdvance(
-      afterCursor: number,
-      timeoutMs: number,
-      shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
-    ) {
-      return await waiters.waitForCursorAdvance(afterCursor, timeoutMs, shouldResolve);
-    },
+    waitFor: waiters.waitFor.bind(waiters),
+    waitForCursorAdvance: waiters.waitForCursorAdvance.bind(waiters),
   };
 }
 

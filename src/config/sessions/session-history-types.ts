@@ -22,6 +22,7 @@ import type { SessionTranscriptWorkerReadError } from "./session-transcript-work
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryPage = {
+  windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
@@ -65,6 +66,7 @@ export type SessionHistoryMessage = Record<string, unknown> & {
 };
 
 export type PaginatedSessionHistory = {
+  windowReset?: boolean;
   items: SessionHistoryMessage[];
   messages: SessionHistoryMessage[];
   nextCursor?: string;

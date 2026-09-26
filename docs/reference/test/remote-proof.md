@@ -206,6 +206,11 @@ Private mirrors disable Git hooks and fsmonitor; source enumeration also disable
 fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
 and cannot make a reusable cache. Ordinary fresh-capsule behavior is unchanged.
 
+Different worktrees share a short allocation lock. A busy allocator prints
+`[crabbox] waiting for source mirror allocation...` and waits up to 120 seconds
+before falling back to a fresh capsule. Per-mirror validation, cold preparation,
+and eviction's payload deletion run under the slot lock without holding allocation.
+
 The sync root admits at most 32 mirror slots. Allocation evicts the least
 recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
 protected and count toward the limit. If no slot can be safely reclaimed, the run
@@ -213,6 +218,18 @@ uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
 `staging recover <id>` can remove one under its exclusive lock. Automatic abandoned
 staging recovery leaves idle mirrors available for reuse. Interrupted commands
 retain the existing witness, claim, and diagnostic recovery requirements.
+An eviction records disposal before deleting bytes and keeps its slot reserved
+until deletion finishes. If interrupted, `staging inspect` reports the recorded
+disposal as a recovery candidate; automatic recovery or `staging recover <id>`
+can resume it after acquiring the exclusive slot lock. Replaced directories and
+unknown metadata remain protected. Concurrent allocators recheck capacity after
+deletion; a slot being disposed still counts toward the 32-slot limit.
+A separate disposal receipt survives the final directory and lock removal, so
+recovery can finish interrupted namespace cleanup even after the payload receipt
+is gone. Recovery preserves an already-recorded disposal instead of rewriting it.
+Slots whose producer already removed the payload also receive a cleanup record;
+that record requires the payload root to stay absent and never authorizes deleting
+a replacement root. Both forms block slot reuse until cleanup completes.
 Private Git objects reaching 256 MiB trigger a cold rebuild on the next reuse,
 bounding retained object history without pruning objects behind saved indexes.
 

@@ -161,6 +161,11 @@ function frameWithSequence(
   return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}${recipient}}`;
 }
 
+export type SessionEventProjection = {
+  payload: unknown;
+  delivered?: () => void;
+};
+
 export function createGatewayBroadcaster(params: {
   clients: GatewayClientRegistry;
   // Reused arrays are immutable snapshots; the projection still checks each recipient's authority.
@@ -171,7 +176,7 @@ export function createGatewayBroadcaster(params: {
     event: string,
     payload: unknown,
     scope: { sessionKeys: readonly string[]; agentId?: string },
-  ) => ((client: GatewayWsClient) => unknown) | undefined;
+  ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
   canReceiveSessionEvent?: (
     client: GatewayWsClient,
@@ -237,7 +242,9 @@ export function createGatewayBroadcaster(params: {
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], string> | undefined;
-    let projectSession: ((client: GatewayWsClient) => unknown) | undefined;
+    let projectSession:
+      | ((client: GatewayWsClient) => SessionEventProjection | undefined)
+      | undefined;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
@@ -512,6 +519,7 @@ export function createGatewayBroadcaster(params: {
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
           : getFrameBase();
       let frame: string;
+      let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
@@ -564,9 +572,10 @@ export function createGatewayBroadcaster(params: {
           }
           payloadFragment = serializeFrameField(
             "payload",
-            projected,
+            projected.payload,
             messageStrings?.capture || messageStrings?.values.size ? messageStrings : undefined,
           );
+          delivered = projected.delivered;
           if (messageStrings) {
             messageStrings.capture = false;
           }
@@ -625,6 +634,8 @@ export function createGatewayBroadcaster(params: {
         }
       };
       try {
+        // Publish the baseline before send can reenter; failures retire this transport.
+        delivered?.();
         state.socket.send(frame, sent);
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));

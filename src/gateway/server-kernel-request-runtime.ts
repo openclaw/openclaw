@@ -86,6 +86,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       await gatewayRequestContext.scopeUpgradeCoordinator?.close();
       const projection = await projectionReady.catch(() => undefined);
       await shutdownRuntime.flushPendingSessionsChangedEvents(gatewayRequestContext);
+      if (projection) {
+        await shutdownRuntime.drainSessionEventPublications(projection);
+      }
       projectionLifetime.detach?.();
       projection?.dispose();
     },
