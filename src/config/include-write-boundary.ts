@@ -1,8 +1,15 @@
 // Resolves which authored $include file owns a config mutation, at any depth.
+import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isRecord } from "../utils.js";
-import { isInternalIncludeWriteTarget, type ConfigIncludeOwnership } from "./includes.js";
+import {
+  INCLUDE_KEY,
+  isInternalIncludeWriteTarget,
+  type ConfigIncludeOwnership,
+} from "./includes.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 /** Authored include boundary that can absorb a whole config mutation. */
 export type IncludeWriteBoundary = {
@@ -51,6 +58,40 @@ export function collectChangedConfigPaths(base: unknown, next: unknown): Changed
   collectInto(base, next, [], paths);
   const rootChanged = paths.some((entry) => entry.length === 0);
   return { paths: rootChanged ? [] : paths, rootChanged };
+}
+
+export function getLegacyTopLevelIncludeBoundary(params: {
+  snapshot: ConfigFileSnapshot;
+  changed: ChangedConfigPaths;
+}): IncludeWriteBoundary | null {
+  // Synthetic/legacy snapshots and invalid include repair have no completed
+  // provenance event, so retain the parsed-directive fallback at this boundary.
+  if (!isRecord(params.snapshot.parsed) || params.changed.rootChanged) {
+    return null;
+  }
+  const topLevelKeys = new Set(
+    params.changed.paths.map((changedPath) => changedPath[0]).filter((key) => key !== undefined),
+  );
+  if (topLevelKeys.size !== 1) {
+    return null;
+  }
+  const key = expectDefined([...topLevelKeys][0], "changed top-level key at 0");
+  const authoredSection = params.snapshot.parsed[key];
+  if (!isRecord(authoredSection)) {
+    return null;
+  }
+  const includeValue = authoredSection[INCLUDE_KEY];
+  if (Object.keys(authoredSection).length !== 1 || typeof includeValue !== "string") {
+    return null;
+  }
+
+  const rootDir = nodePath.dirname(params.snapshot.path);
+  return {
+    boundaryPath: [key],
+    includePath: nodePath.normalize(
+      nodePath.isAbsolute(includeValue) ? includeValue : nodePath.resolve(rootDir, includeValue),
+    ),
+  };
 }
 
 function isPathPrefix(prefix: readonly string[], candidate: readonly string[]): boolean {
