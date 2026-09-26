@@ -222,6 +222,47 @@ machine-hours per eight-hour window, or 4.56 hours if that rate persists all day
 Use each run's actual eligible count; requested vCPU cost and machine wall time
 are separate measures.
 
+### Resource packing qualification
+
+Normalize CPU time by observed capacity, not the runner label. The September 23
+compact Node logs report eight available CPUs and 30.95 GiB on the requested
+32-class. Their average busy cores are `(time user + sys) / time real` for the
+test step; start/end load averages are not CPU utilization.
+
+| Run                                                                               | Active 32-class rows | 32-class machine-minutes | Average busy cores | Test CPU utilization |
+| --------------------------------------------------------------------------------- | -------------------: | -----------------------: | -----------------: | -------------------: |
+| [Main baseline](https://github.com/openclaw/openclaw/actions/runs/35810905247)    |                   40 |                   236.22 |           3.52 / 8 |                44.0% |
+| [PR baseline](https://github.com/openclaw/openclaw/actions/runs/35812268295)      |                   40 |                   251.58 |           3.54 / 8 |                44.2% |
+| [Later green main](https://github.com/openclaw/openclaw/actions/runs/35843129782) |                   40 |                   316.62 |           3.66 / 8 |                45.8% |
+
+These averages are weighted by test-step wall time. Complete jobs pagination
+includes a row omitted by the earlier 39-row main estimate. The later run took
+22:50 from creation to the last job's completion; its longest 32-class row took
+881 seconds. A green CI conclusion does not establish the 15-minute performance
+objective or the proposed 720-second main row budget.
+
+None of the 156 compact rows across these runs emitted a numeric cgroup memory
+peak. The workflow tries `/sys/fs/cgroup/memory.peak`, but its echoed shell command
+is not a measurement. Start/end free memory cannot establish peak usage or
+per-worker RSS. The historical cohort measurements below do not supply current
+per-row memory envelopes.
+
+Keeping measured test CPU work unchanged, ideal packing on eight CPUs at 100%
+utilization, with zero setup or scheduling overhead, would reduce total
+Blacksmith machine-minutes by at most 44.8%, 27.7%, and 42.5%, respectively, if
+only the 32-class rows change. These conditional CPU-only bounds retain all
+other classes' observed machine-minutes; they neither qualify a packing density
+nor rule out combined savings from other classes or reduced CPU work.
+
+Resource packing must consume the completed time-packed rows, preserve their
+child execution contracts, and qualify combined CPU, memory, and wall time.
+The current executor admits at most two ordinary child plans, gives Gateway
+configs exclusive admission, and reduces memory-gated groups to two workers
+when plans overlap. Four to six concurrent heavy groups are not qualified by
+these measurements. A resource-packing change needs current process-tree memory
+peaks and a successful combined workload before changing those admission rules;
+this measurement review changes no planner or runtime policy.
+
 ### Worker ceilings
 
 Current serial self-hosted Node jobs sample the shared worker scheduler after
