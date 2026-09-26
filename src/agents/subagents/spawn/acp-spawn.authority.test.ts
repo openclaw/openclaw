@@ -15,6 +15,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../../acp/runtime/registry.js";
+import * as acpSessionEntry from "../../../acp/runtime/session-meta-entry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
 import {
   clearConfigCache,
@@ -265,16 +266,21 @@ describe("pending ACP spawn authority", () => {
       }
       const lateMetadata = vi.fn();
       if (stage === "metadata") {
-        const patch = sessionAccessor.patchSessionEntryWithKey;
+        const update = acpSessionEntry.updateAcpSessionStoreEntry;
         let held = false;
-        vi.spyOn(sessionAccessor, "patchSessionEntryWithKey").mockImplementation(
-          async (...args) => {
-            const patched = await patch(...args);
-            if (!held && ensuredSessions.length > 0 && childKey) {
+        vi.spyOn(acpSessionEntry, "updateAcpSessionStoreEntry").mockImplementation(
+          async (params) => {
+            const updated = await update(params);
+            if (
+              !held &&
+              params.mutation.kind === "touch" &&
+              params.scope.sessionKey === childKey &&
+              ensuredSessions.includes(childKey)
+            ) {
               held = true;
               await pause(childKey);
             }
-            return patched;
+            return updated;
           },
         );
       }

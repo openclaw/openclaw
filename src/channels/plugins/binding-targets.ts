@@ -58,14 +58,14 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   reason: "new" | "reset";
   commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
-  let resolved = resolveStatefulBindingTargetBySessionKey({
+  let resolved = await resolveStatefulBindingTargetBySessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
   if (!resolved) {
     await ensureStatefulTargetBuiltinsRegistered();
-    resolved = resolveStatefulBindingTargetBySessionKey({
+    resolved = await resolveStatefulBindingTargetBySessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,

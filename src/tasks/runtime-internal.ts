@@ -55,7 +55,6 @@ export {
   findTaskByRunId,
   finalizeTaskRecordByRunId,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
   listTaskRecordPage,
   listTaskRecords,

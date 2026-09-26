@@ -54,8 +54,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
-const { callGatewayMock, loadSessionEntryByKeyMock } =
-  await import("./openclaw-tools.sessions.mocks.test-support.js");
+const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-support.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const continuations = observeSessionSendContinuations();
@@ -280,8 +279,6 @@ describe("sessions tools", () => {
     resetGatewayWorkAdmission();
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
-    loadSessionEntryByKeyMock.mockReset();
-    loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
     await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
@@ -309,7 +306,6 @@ describe("sessions tools", () => {
   registerSessionsSendResumeTests({
     getSessionTool,
     callGatewayMock,
-    loadSessionEntryByKeyMock,
   });
 
   it("sessions_send notify queues next-turn context without starting or steering work", async () => {

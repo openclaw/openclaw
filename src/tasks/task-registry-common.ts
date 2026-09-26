@@ -15,10 +15,6 @@ import {
   type TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
-export function isActiveTaskStatus(status: TaskStatus): boolean {
-  return status === "queued" || status === "running";
-}
-
 export function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind }) {
   const ownerKey = params.ownerKey.trim();
   if (!ownerKey && params.scopeKind !== "system") {

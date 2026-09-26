@@ -3,9 +3,14 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
+import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
+import {
+  createSupersededActorError,
+  isSupersededActorError,
+} from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import {
   discardPersistedManagerRuntimeState,
@@ -17,7 +22,7 @@ import type {
   AcpCloseSessionResult,
   AcpSessionManagerDeps,
   EnsureManagerRuntimeHandle,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { requireReadySessionMeta, resolveAcpSessionResolutionError } from "./manager.utils.js";
@@ -29,21 +34,27 @@ export async function runManagerCloseSession(params: {
   agentId: string;
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor: () => boolean;
 }): Promise<AcpCloseSessionResult> {
   const { input, sessionKey, agentId } = params;
-  if (!params.isCurrentActor()) {
-    throw createSupersededActorError(sessionKey);
-  }
-  input.assertActive?.();
-  const resolution = params.resolveSession({
+  const expectedControlBinding = input.expectedControlBinding;
+  const assertCurrent = () => {
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
+    input.assertActive?.();
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
     cfg: input.cfg,
     sessionKey,
     agentId,
+    assertCurrent,
   });
+  assertCurrent();
   const resolutionError = resolveAcpSessionResolutionError(resolution);
   if (resolutionError) {
     if (input.requireAcpSession ?? true) {
@@ -54,6 +65,22 @@ export async function runManagerCloseSession(params: {
       metaCleared: false,
     };
   }
+  const assertControlBinding = (entry: SessionEntry | undefined) => {
+    if (expectedControlBinding && !matchesAcpSessionControlBinding(entry, expectedControlBinding)) {
+      throw createSupersededActorError(sessionKey);
+    }
+  };
+  const refreshControlBinding = async () => {
+    const current = await params.resolveSession({
+      cfg: input.cfg,
+      sessionKey,
+      agentId,
+      assertCurrent,
+    });
+    assertCurrent();
+    assertControlBinding(current.kind === "ready" ? current.entry : undefined);
+  };
+  assertControlBinding(resolution.kind === "ready" ? resolution.entry : undefined);
   const meta = requireReadySessionMeta(resolution);
   const currentIdentity = resolveSessionIdentityFromMeta(meta);
   const shouldSkipRuntimeClose =
@@ -73,14 +100,13 @@ export async function runManagerCloseSession(params: {
       agentId,
       logPrefix: "acp close fast-reset",
     });
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
+    assertCurrent();
     params.runtimeHandles.clear(params);
   } else {
     try {
       const { runtime: ensuredRuntime, handle } = await params.ensureRuntimeHandle({
-        assertActive: input.assertActive,
+        assertActive: assertCurrent,
+        expectedControlBinding,
         cfg: input.cfg,
         sessionKey,
         agentId,
@@ -91,15 +117,17 @@ export async function runManagerCloseSession(params: {
         throw createSupersededActorError(sessionKey);
       }
       input.assertActive?.();
+      if (expectedControlBinding) {
+        await refreshControlBinding();
+      }
+      assertCurrent();
       await ensuredRuntime.close({
         handle,
         reason: input.reason,
         discardPersistentState: input.discardPersistentState,
       });
       runtimeClosed = true;
-      if (!params.isCurrentActor()) {
-        throw createSupersededActorError(sessionKey);
-      }
+      assertCurrent();
       params.runtimeHandles.clear(params);
     } catch (error) {
       const acpError = toAcpRuntimeError({
@@ -107,7 +135,7 @@ export async function runManagerCloseSession(params: {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP close failed before completion.",
       });
-      if (!params.isCurrentActor()) {
+      if (!params.isCurrentActor() || isSupersededActorError(acpError)) {
         throw acpError;
       }
       input.assertActive?.();
@@ -120,6 +148,10 @@ export async function runManagerCloseSession(params: {
           (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
           isRecoverableManagerAcpxExitError(acpError.message))
       ) {
+        if (expectedControlBinding) {
+          await refreshControlBinding();
+        }
+        assertCurrent();
         if (input.discardPersistentState) {
           input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
@@ -131,9 +163,7 @@ export async function runManagerCloseSession(params: {
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           });
-          if (!params.isCurrentActor()) {
-            throw acpError;
-          }
+          assertCurrent();
         }
         // Treat unavailable backends as terminal for this cached handle so a
         // later operation cannot reuse an unusable runtime.
@@ -148,8 +178,11 @@ export async function runManagerCloseSession(params: {
     }
   }
 
+  assertCurrent();
   if (input.discardPersistentState && !input.clearMeta) {
     await discardPersistedManagerRuntimeState({
+      assertCommitAllowed: assertCurrent,
+      expectedControlBinding,
       cfg: input.cfg,
       sessionKey,
       agentId,
@@ -161,9 +194,12 @@ export async function runManagerCloseSession(params: {
   if (!params.isCurrentActor()) {
     throw createSupersededActorError(sessionKey);
   }
+  assertCurrent();
   const metaCleared = Boolean(input.clearMeta);
   if (metaCleared) {
     await params.writeSessionMeta({
+      assertCommitAllowed: assertCurrent,
+      expectedControlBinding,
       cfg: input.cfg,
       sessionKey,
       agentId,
@@ -171,6 +207,7 @@ export async function runManagerCloseSession(params: {
       mutate: () => null,
       failOnError: true,
     });
+    assertCurrent();
   }
 
   return {

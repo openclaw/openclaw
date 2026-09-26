@@ -561,7 +561,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
   const acpManagerModule = await import("../acp/control-plane/manager.js");
   const getAcpSessionManager = vi
     .spyOn(acpManagerModule, "getAcpSessionManager")
-    .mockReturnValue({ resolveSession: () => null } as never);
+    .mockReturnValue({ resolveSessionAsync: async () => null } as never);
   const { defaultRuntime } = await import("../runtime.js");
   const prepareInitialRun = createDeferredCore();
   const preparedRuntime = vi.fn<(params: { cwd?: string; workspaceDir?: string }) => void>();

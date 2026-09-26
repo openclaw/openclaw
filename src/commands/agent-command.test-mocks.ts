@@ -46,7 +46,7 @@ vi.mock("../cli/deps.js", () => ({
 
 const acpManagerMock = vi.hoisted(() => ({
   current: {
-    resolveSession: vi.fn(() => null),
+    resolveSessionAsync: vi.fn(async () => null),
   } as unknown,
 }));
 
@@ -54,7 +54,7 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
-        resolveSession: vi.fn(() => null),
+        resolveSessionAsync: vi.fn(async () => null),
       };
     }),
     setAcpSessionManagerForTests: vi.fn((manager: unknown) => {

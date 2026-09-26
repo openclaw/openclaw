@@ -17,7 +17,6 @@ import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.j
 import {
   findTaskByRunId,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listTaskRecordPage,
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
@@ -76,8 +75,6 @@ it("publishes requester membership through create, update, restore, atomic publi
   const task = createTask({});
   const originalKey = task.requesterSessionKey;
   expect(await taskIds({ sessionKey: originalKey })).toEqual([task.taskId]);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: originalKey })).toBe(false);
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: task.childSessionKey! })).toBe(true);
 
   const store = getTaskRegistryStore();
   configureTaskRegistryRuntime({
@@ -189,7 +186,6 @@ it("preserves owner-or-child ACP generation history when requester candidates ar
   expect(
     await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
   ).toBe("pruned");
-  expect(hasActiveTaskForChildSessionKey({ sessionKey: key })).toBe(false);
 });
 
 function createEqualTimeRunTasks() {

@@ -10,6 +10,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   listOpenIncognitoAgentDatabases,
   retainOpenClawAgentDatabaseReadCandidates,
@@ -83,11 +84,23 @@ function isNativeSessionEntryRead(scope: SessionEntryReadScope, agentId: string 
   );
 }
 
-/** Retain a readonly logical source through an asynchronous, data-only consumer. */
+export type SessionEntryReadWorkerOwner = {
+  kind: "native" | "file" | "unresolved";
+  assertCurrent: () => void;
+  scope?: SessionEntryReadOnlyWorkerScope;
+  onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
+  refreshBeforeDispatch?: (assertRetainedTarget: () => void) => Promise<void>;
+  revalidateTarget?: () => Promise<void>;
+};
+
+/** Retain the original logical source through its asynchronous consumer and owned effects. */
 export async function withSessionEntryReadOnlyInWorker<T>(
   input: SessionEntryReadScope,
   assertCallerCurrent: () => void,
-  consume: (read: Result<SessionEntry | undefined, unknown>) => Promise<T>,
+  consume: (
+    read: Result<SessionEntry | undefined, unknown>,
+    owner: SessionEntryReadWorkerOwner,
+  ) => Promise<T>,
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
@@ -95,13 +108,13 @@ export async function withSessionEntryReadOnlyInWorker<T>(
   if (isNativeSessionEntryRead(scope, agentId)) {
     const read = loadSessionEntryReadOnlyResultInScope(scope);
     assertCallerCurrent();
-    const result = await consume(read);
+    const result = await consume(read, { kind: "native", assertCurrent: assertCallerCurrent });
     assertCallerCurrent();
     return result;
   }
   return await withSessionEntryReadOnlyWorkerSource(scope, assertCallerCurrent, async (source) => {
     if (!source.ok) {
-      return await consume(source);
+      return await consume(source, { kind: "unresolved", assertCurrent: assertCallerCurrent });
     }
     const owner = source.value;
     const read = await owner.reader.readEntryResult({
@@ -109,15 +122,19 @@ export async function withSessionEntryReadOnlyInWorker<T>(
       continuation: owner.continuation,
     });
     owner.assertCurrent();
-    return await consume(read);
+    return await consume(read, owner);
   });
 }
 
 type SessionEntryReadOnlyWorkerSource = {
+  kind: "file";
   scope: SessionEntryReadOnlyWorkerScope;
   reader: SessionHistoryWorkerDatabase;
   continuation?: CanonicalSessionReaderContinuation;
   assertCurrent: () => void;
+  onRegistryChange: (change: AgentDatabaseRegistryChange) => void;
+  refreshBeforeDispatch: (assertRetainedTarget: () => void) => Promise<void>;
+  revalidateTarget: () => Promise<void>;
 };
 
 /** Diagnostic identities name the default agent store, not a logical store locator. */
@@ -236,6 +253,7 @@ async function withSessionEntryReadOnlyWorkerSource<T>(
           assertReadCurrent();
           const result = await consumeRead(
             ok({
+              kind: "file",
               scope: {
                 ...scope,
                 agentId: target.logicalAgentId,
@@ -245,6 +263,9 @@ async function withSessionEntryReadOnlyWorkerSource<T>(
               },
               reader: owner,
               assertCurrent: assertReadCurrent,
+              onRegistryChange: route.onRegistryChange,
+              refreshBeforeDispatch: route.refreshBeforeDispatch,
+              revalidateTarget: route.revalidateTarget,
               continuation: continuations.find(
                 (item) =>
                   item.path === database.path && item.owner.receipt.agentId === database.agentId,

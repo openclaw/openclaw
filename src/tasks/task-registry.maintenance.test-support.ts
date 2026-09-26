@@ -255,10 +255,20 @@ function installMaintenanceRuntime(
   );
 }
 
-function createPreparedMaintenanceRead(): TaskRegistryMaintenanceRead {
+function createPreparedMaintenanceRead(
+  currentTasks: Map<string, TaskRecord>,
+): TaskRegistryMaintenanceRead &
+  NonNullable<Awaited<ReturnType<TaskRegistryAcpMaintenanceRuntime["prepareTaskRegistryRead"]>>> {
   return {
     assertOwnerCurrent() {},
     assertCurrent() {},
+    isTaskCurrent: () => true,
+    isChildSessionCurrent: () => true,
+    getTaskById: (taskId) => currentTasks.get(taskId),
+    listTaskRecordsForChildSessionKey: (sessionKey) =>
+      [...currentTasks.values()].filter(
+        (task) => task.childSessionKey?.trim() === sessionKey.trim(),
+      ),
   };
 }
 
@@ -329,7 +339,7 @@ export function createTaskRegistryMaintenanceHarness(params: {
 
   const runtime: TaskRegistryMaintenanceRuntime = {
     listAcpSessionEntries: async () => [],
-    readAcpSessionEntry: () =>
+    readAcpSessionEntryAsync: async () =>
       acpEntry !== undefined
         ? ({
             cfg: {},
@@ -375,19 +385,10 @@ export function createTaskRegistryMaintenanceHarness(params: {
         ? { agentId, rest: rest.join(":") }
         : null;
     },
-    hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
-      const normalized = sessionKey.trim().toLowerCase();
-      return Array.from(currentTasks.values()).some(
-        (task) =>
-          task.taskId !== excludeTaskId &&
-          (task.status === "queued" || task.status === "running") &&
-          task.childSessionKey?.trim().toLowerCase() === normalized,
-      );
-    },
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => currentTasks.get(taskId),
     getTaskRegistryMaintenanceTask: (taskId: string) => currentTasks.get(taskId),
-    prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
+    prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(currentTasks),
     listTaskRecords: () => Array.from(currentTasks.values()),
     getTaskRegistryMaintenanceSnapshot: () =>
       createMaintenanceSnapshot(Array.from(currentTasks.values())),
@@ -458,11 +459,7 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   runtimeAuthoritative?: boolean;
   sessionBindings?: SessionBindingRecord[];
   loadCloseAcpSession?: TaskRegistryMaintenanceRuntime["loadCloseAcpSession"];
-  closeAcpSession?: (params: {
-    cfg: AcpSessionStoreEntry["cfg"];
-    sessionKey: string;
-    reason: string;
-  }) => Promise<void>;
+  closeAcpSession?: acpCleanup.CloseAcpSession;
   unbindSessionBindings?: (params: {
     targetSessionKey?: string;
     bindingId?: string;
@@ -481,7 +478,10 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   installMaintenanceRuntime(
     {
       listAcpSessionEntries: params.listAcpSessionEntries ?? (async () => params.acpEntries ?? []),
-      readAcpSessionEntry: () => params.acpEntry ?? emptyAcpEntry,
+      readAcpSessionEntryAsync: async ({ sessionKey }) =>
+        params.acpEntry ??
+        params.acpEntries?.find((entry) => entry.sessionKey === sessionKey) ??
+        emptyAcpEntry,
       listSessionBindingsBySession: () => params.sessionBindings ?? [],
       loadCloseAcpSession: params.loadCloseAcpSession ?? (async () => params.closeAcpSession),
       unbindSessionBindings: params.unbindSessionBindings,
@@ -493,19 +493,10 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       getAgentRunContext: () => undefined,
       isBackgroundExecSessionActive: params.isBackgroundExecSessionActive,
       hasActiveAcpTurn: params.hasActiveAcpTurn ?? (() => false),
-      hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
-        const normalized = sessionKey.trim().toLowerCase();
-        return Array.from(params.currentTasks.values()).some(
-          (task) =>
-            task.taskId !== excludeTaskId &&
-            (task.status === "queued" || task.status === "running") &&
-            task.childSessionKey?.trim().toLowerCase() === normalized,
-        );
-      },
       ensureTaskRegistryReady: () => {},
       getTaskById: (taskId: string) => params.currentTasks.get(taskId),
       getTaskRegistryMaintenanceTask: (taskId: string) => params.currentTasks.get(taskId),
-      prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
+      prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(params.currentTasks),
       listTaskRecords: listSnapshotTasks,
       getTaskRegistryMaintenanceSnapshot: () => createMaintenanceSnapshot(listSnapshotTasks()),
       markTaskLostById: (patch: {

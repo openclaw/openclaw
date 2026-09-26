@@ -6,6 +6,7 @@ import {
 } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../../agents/subagents/completion/session-followup-completion.types.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
 import type { PreparedDetachedTaskRun } from "../../tasks/detached-task-runtime.js";
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   findTaskViewByRunIdAsync:
     vi.fn<(runId: string, assertCurrent: () => void) => Promise<TaskRecord | undefined>>(),
   findTaskByRunId: vi.fn(),
+  readAcpSessionMetaAsync: vi.fn<() => Promise<SessionAcpMeta | undefined>>(),
   registerSubagentRun: vi.fn(),
   adoptPausedSubagentRunForFollowUp: vi.fn(),
   prepareParentSubagentResume: vi.fn(),
@@ -45,7 +47,9 @@ vi.mock("../../tasks/detached-task-runtime-state.js", () => ({
 vi.mock("../../tasks/task-run-owner.js", () => ({
   getTaskRunOwner: (task: TaskRecord) => mocks.owners.get(task.taskId),
 }));
-vi.mock("../../acp/runtime/session-meta.js", () => ({ readAcpSessionMeta: vi.fn() }));
+vi.mock("../../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMetaAsync: mocks.readAcpSessionMetaAsync,
+}));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: vi.fn(),
 }));
@@ -186,6 +190,59 @@ describe("prepareAgentRunTaskTracking", () => {
       await Promise.allSettled([lookup.promise, preparation]);
     }
   });
+
+  it.each(["current", "current with read failure", "retired", "retired with read failure"])(
+    "retains admission through the ACP metadata lookup (%s)",
+    async (admission) => {
+      const started = createDeferred();
+      const lookup = createDeferred<SessionAcpMeta | undefined>();
+      const readFailure = new Error("metadata unavailable");
+      mocks.readAcpSessionMetaAsync.mockImplementation(() => {
+        started.resolve();
+        return lookup.promise;
+      });
+      let current = true;
+      const preparation = prepareAgentRunTaskTracking(
+        parameters({
+          client: pluginClient(),
+          resolvedSessionKey: "agent:main:acp:manual-child",
+          request: { message: "Continue the ACP child", acpTurnSource: "manual_spawn" },
+          assertResumeAdmissionCurrent: () => {
+            if (!current) {
+              throw new Error("admission retired");
+            }
+          },
+        }),
+      );
+      const settled = Promise.allSettled([preparation]);
+      try {
+        await Promise.race([started.promise, preparation]);
+        expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
+        current = admission === "current" || admission === "current with read failure";
+        if (
+          admission === "current with read failure" ||
+          admission === "retired with read failure"
+        ) {
+          lookup.reject(readFailure);
+        } else {
+          lookup.resolve(undefined);
+        }
+        if (admission === "current with read failure") {
+          await expect(preparation).rejects.toBe(readFailure);
+          expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
+        } else if (current) {
+          await expect(preparation).resolves.toEqual({ taskTrackingMode: "plugin_subagent" });
+          expect(mocks.registerSubagentRun).toHaveBeenCalledOnce();
+        } else {
+          await expect(preparation).rejects.toThrow("admission retired");
+          expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
+        }
+      } finally {
+        lookup.resolve(undefined);
+        await settled;
+      }
+    },
+  );
 
   it("rejects lost admission during the lookup before registering plugin work", async () => {
     const lookup = delayLookup();

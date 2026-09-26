@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listAcpSessionEntries, readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { listAcpSessionEntries, readAcpSessionEntryAsync } from "../acp/runtime/session-meta.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
+import { createAcpTaskBackingDetail } from "./task-backing-records.js";
 import { loadTaskAcpSessionCloser, type CloseAcpSession } from "./task-registry-acp-cleanup.js";
 import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
+import { updateTask } from "./task-registry-mutation.js";
 import {
   configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
@@ -30,7 +32,7 @@ function createCleanupEffects() {
   const unbind = vi.spyOn(getSessionBindingService(), "unbind").mockResolvedValue([]);
   vi.mocked(loadTaskAcpSessionCloser).mockReset().mockResolvedValue(close);
   vi.mocked(listAcpSessionEntries).mockReset().mockResolvedValue([]);
-  vi.mocked(readAcpSessionEntry).mockReset().mockReturnValue(null);
+  vi.mocked(readAcpSessionEntryAsync).mockReset().mockResolvedValue(null);
   return { close, unbind };
 }
 
@@ -57,7 +59,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.mocked(loadTaskAcpSessionCloser).mockReset();
   vi.mocked(listAcpSessionEntries).mockReset();
-  vi.mocked(readAcpSessionEntry).mockReset();
+  vi.mocked(readAcpSessionEntryAsync).mockReset();
   configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -81,6 +83,10 @@ describe("task maintenance ACP cleanup authority", () => {
           }),
         );
         vi.mocked(listAcpSessionEntries).mockResolvedValue(entries);
+        vi.mocked(readAcpSessionEntryAsync).mockImplementation(
+          async ({ sessionKey }) =>
+            entries.find((entry) => entry.sessionKey === sessionKey) ?? null,
+        );
         const retireStore = async () => {
           await Promise.resolve();
           configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
@@ -119,7 +125,7 @@ describe("task maintenance ACP cleanup authority", () => {
         parentSessionKey,
         mode: "oneshot",
       });
-      vi.mocked(readAcpSessionEntry).mockReturnValue(entry);
+      vi.mocked(readAcpSessionEntryAsync).mockResolvedValue(entry);
       using deliveries = captureTaskDeliveryWork();
       createTaskFixture("acp", {
         ownerKey: parentSessionKey,
@@ -145,8 +151,150 @@ describe("task maintenance ACP cleanup authority", () => {
         agentId: entry.agentId,
         sessionKey: entry.sessionKey,
         reason: "terminal-task-cleanup",
+        assertActive: expect.any(Function),
+        expectedControlBinding: {
+          sessionId: entry.entry!.sessionId,
+          lifecycleRevision: entry.entry!.lifecycleRevision,
+          sessionStartedAt: entry.entry!.sessionStartedAt,
+          ownerKey: parentSessionKey,
+        },
       });
       expect(unbind).not.toHaveBeenCalled();
     });
   });
+
+  it.each(["requester", "backing instance", "status"] as const)(
+    "preserves the original terminal task when its %s changes during the ACP read",
+    async (change) => {
+      await withAcpCleanupState(async ({ close, unbind }) => {
+        const entry = createAcpSessionStoreEntry({
+          sessionKey: "agent:main:acp:reassigned",
+          parentSessionKey,
+          mode: "oneshot",
+        });
+        using deliveries = captureTaskDeliveryWork();
+        const task = createTaskFixture("acp", {
+          ownerKey: parentSessionKey,
+          requesterSessionKey: parentSessionKey,
+          childSessionKey: entry.sessionKey,
+          runId: "same-run",
+          task: "Completed task before reassignment",
+          status: "succeeded",
+          cleanupAfter: Date.now() + 86_400_000,
+          notifyPolicy: "silent",
+          detail: createAcpTaskBackingDetail("original", 1),
+        });
+        await deliveries.settle();
+        vi.mocked(readAcpSessionEntryAsync).mockImplementationOnce(async () => {
+          await Promise.resolve();
+          expect(
+            updateTask(
+              task.taskId,
+              change === "requester"
+                ? { requesterSessionKey: "agent:main:other" }
+                : change === "backing instance"
+                  ? { detail: createAcpTaskBackingDetail("replacement", 2) }
+                  : { status: "running" },
+            ),
+          ).not.toBeNull();
+          return entry;
+        });
+
+        await runTaskRegistryMaintenance();
+
+        expect(close).not.toHaveBeenCalled();
+        expect(unbind).not.toHaveBeenCalled();
+        await deliveries.settle();
+      });
+    },
+  );
+
+  it("keeps a successor's bindings when new work starts while terminal close settles", async () => {
+    await withAcpCleanupState(async ({ close, unbind }) => {
+      const entry = createAcpSessionStoreEntry({
+        sessionKey: "agent:main:acp:successor",
+        parentSessionKey,
+        mode: "oneshot",
+      });
+      vi.mocked(readAcpSessionEntryAsync).mockResolvedValue(entry);
+      using deliveries = captureTaskDeliveryWork();
+      createTaskFixture("acp", {
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        childSessionKey: entry.sessionKey,
+        runId: "original",
+        task: "Completed ACP task",
+        status: "succeeded",
+        cleanupAfter: Date.now() + 86_400_000,
+        notifyPolicy: "silent",
+      });
+      await deliveries.settle();
+      close.mockImplementationOnce(async ({ assertActive }) => {
+        assertActive();
+        await Promise.resolve();
+        createTaskFixture("acp", {
+          ownerKey: parentSessionKey,
+          requesterSessionKey: parentSessionKey,
+          childSessionKey: entry.sessionKey,
+          runId: "successor",
+          task: "New ACP task",
+          notifyPolicy: "silent",
+        });
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(unbind).not.toHaveBeenCalled();
+      expect(() => close.mock.calls[0]![0].assertActive()).toThrow("no longer active");
+      await deliveries.settle();
+    });
+  });
+
+  it.each(["owner", "lifecycle", "navigation parent"] as const)(
+    "rechecks the session binding before unbinding after a %s change",
+    async (change) => {
+      await withAcpCleanupState(async ({ close, unbind }) => {
+        const entry = createAcpSessionStoreEntry({
+          sessionKey: "agent:main:acp:binding-change",
+          parentSessionKey,
+          mode: "oneshot",
+        });
+        vi.mocked(readAcpSessionEntryAsync).mockResolvedValue(entry);
+        using deliveries = captureTaskDeliveryWork();
+        createTaskFixture("acp", {
+          ownerKey: parentSessionKey,
+          requesterSessionKey: parentSessionKey,
+          childSessionKey: entry.sessionKey,
+          runId: "completed-binding",
+          task: "Completed ACP task",
+          status: "succeeded",
+          cleanupAfter: Date.now() + 86_400_000,
+          notifyPolicy: "silent",
+        });
+        await deliveries.settle();
+        close.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          vi.mocked(readAcpSessionEntryAsync).mockResolvedValue({
+            ...entry,
+            acp: undefined,
+            entry: {
+              ...entry.entry!,
+              acp: undefined,
+              ...(change === "owner"
+                ? { spawnedBy: "agent:main:other", parentSessionKey }
+                : change === "lifecycle"
+                  ? { lifecycleRevision: "replacement" }
+                  : { parentSessionKey: "agent:main:other" }),
+            },
+          });
+        });
+
+        await runTaskRegistryMaintenance();
+
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(unbind).toHaveBeenCalledTimes(change === "navigation parent" ? 1 : 0);
+      });
+    },
+  );
 });

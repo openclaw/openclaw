@@ -1,4 +1,5 @@
-import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import * as acpRuntime from "openclaw/plugin-sdk/acp-runtime";
+import type { AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -233,18 +234,30 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     sessionKey: string;
     session: AcpSessionStoreEntry;
   }> = [];
+  const readAcpSessionEntryAsync = acpRuntime.readAcpSessionEntryAsync;
 
   for (const binding of acpBindings) {
+    if (typeof readAcpSessionEntryAsync !== "function") {
+      throw new Error(
+        "ACP thread binding reconciliation requires asynchronous metadata reads. Upgrade the OpenClaw host.",
+      );
+    }
     const sessionKey = binding.targetSessionKey.trim();
     if (!sessionKey) {
       staleBindings.push(binding);
       continue;
     }
-    const session = readAcpSessionEntry({
+    const session = await readAcpSessionEntryAsync({
       cfg: params.cfg,
       sessionKey,
       agentId: binding.agentId,
     });
+    if (
+      getThreadBindingManager(manager.accountId) !== manager ||
+      manager.getByThreadId(binding.threadId) !== binding
+    ) {
+      continue;
+    }
     if (!session) {
       staleBindings.push(binding);
       continue;

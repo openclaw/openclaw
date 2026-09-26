@@ -7,10 +7,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
@@ -20,6 +19,7 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
+import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
 const ACP_AGENT_ID = "codex";
 
@@ -50,9 +50,9 @@ function readStoredAcpSessionEntry(params: {
 }
 
 describe("ACP session metadata SQLite store", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("reads metadata under external state ownership without write admission", async () => {
@@ -83,9 +83,9 @@ describe("ACP session metadata SQLite store", () => {
           lastActivityAt: 100,
         }),
       });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       claimOpenClawStateOwnership("test-supervisor", { env: externalEnv });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const before = fs.readFileSync(databasePath);
 
       expect(readAcpSessionMeta({ cfg, databasePath, env, sessionKey })).toMatchObject({

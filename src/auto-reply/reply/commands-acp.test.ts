@@ -10,13 +10,9 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
   createAcpTestSessionBinding as createSessionBinding,
   type AcpTestSessionBinding as FakeBinding,
@@ -30,6 +26,9 @@ const hoisted = vi.hoisted(() => {
   const getAcpRuntimeBackendMock = vi.fn();
   const listAcpSessionEntriesMock = vi.fn();
   const readAcpSessionEntryMock = vi.fn();
+  const readAcpSessionEntryAsyncMock = vi.fn<
+    typeof import("../../acp/runtime/session-meta.js").readAcpSessionEntryAsync
+  >(async (input) => readAcpSessionEntryMock(input));
   const upsertAcpSessionMetaMock = vi.fn();
   const resolveSessionStorePathForAcpMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
@@ -57,6 +56,7 @@ const hoisted = vi.hoisted(() => {
     getAcpRuntimeBackendMock,
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
+    readAcpSessionEntryAsyncMock,
     upsertAcpSessionMetaMock,
     resolveSessionStorePathForAcpMock,
     loadSessionStoreMock,
@@ -116,6 +116,7 @@ vi.mock("../../acp/runtime/registry.js", () => ({
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
+  readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsyncMock,
   upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
 }));
@@ -169,202 +170,6 @@ function configureInMemoryTaskRegistryStoreForTests(): void {
       close: () => {},
     },
   });
-}
-
-function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
-  const trimmed = raw?.trim().replace(/^telegram:/i, "");
-  if (!trimmed) {
-    return undefined;
-  }
-  const topicMatch = /^(.*):topic:\d+$/i.exec(trimmed);
-  return (topicMatch?.[1] ?? trimmed).trim() || undefined;
-}
-
-function parseDiscordConversationIdForTest(
-  targets: Array<string | undefined | null>,
-): string | undefined {
-  for (const rawTarget of targets) {
-    const target = rawTarget?.trim();
-    if (!target) {
-      continue;
-    }
-    const mentionMatch = /^<#(\d+)>$/.exec(target);
-    if (mentionMatch?.[1]) {
-      return mentionMatch[1];
-    }
-    if (/^channel:/i.test(target)) {
-      return target;
-    }
-  }
-  return undefined;
-}
-
-function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): string | undefined {
-  const sessionKey = raw?.trim().toLowerCase() ?? "";
-  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
-  return match?.[1] ? `channel:${match[1]}` : undefined;
-}
-
-function setMinimalAcpCommandRegistryForTests(): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-          conversationBindings: {
-            defaultTopLevelPlacement: "current",
-            buildBoundReplyPayload: ({
-              operation,
-              conversation,
-            }: {
-              operation: "acp-spawn";
-              conversation: { conversationId: string };
-            }) =>
-              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
-                ? { delivery: { pin: { enabled: true } } }
-                : null,
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const chatId = [originatingTo, commandTo, fallbackTo]
-                .map((candidate) => parseTelegramChatIdForTest(candidate))
-                .find(Boolean);
-              if (!chatId) {
-                return null;
-              }
-              if (threadId) {
-                return {
-                  conversationId: `${chatId}:topic:${threadId}`,
-                  parentConversationId: chatId,
-                };
-              }
-              if (chatId.startsWith("-")) {
-                return null;
-              }
-              return { conversationId: chatId, parentConversationId: chatId };
-            },
-          },
-        },
-      },
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
-          conversationBindings: {
-            defaultTopLevelPlacement: "child",
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              threadParentId,
-              parentSessionKey,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              threadParentId?: string;
-              parentSessionKey?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              if (threadId) {
-                const parentConversationId =
-                  (threadParentId?.trim()
-                    ? `channel:${threadParentId.trim().replace(/^channel:/i, "")}`
-                    : undefined) ??
-                  parseDiscordParentChannelFromSessionKeyForTest(parentSessionKey) ??
-                  parseDiscordConversationIdForTest([originatingTo, commandTo, fallbackTo]);
-                return {
-                  conversationId: threadId,
-                  ...(parentConversationId && parentConversationId !== threadId
-                    ? { parentConversationId }
-                    : {}),
-                };
-              }
-              const conversationId = parseDiscordConversationIdForTest([
-                originatingTo,
-                commandTo,
-                fallbackTo,
-              ]);
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = [originatingTo, commandTo, fallbackTo]
-                .map((candidate) => candidate?.trim())
-                .find((candidate) => candidate && candidate.length > 0);
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-          conversationBindings: {
-            defaultTopLevelPlacement: "child",
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const roomId = [originatingTo, commandTo, fallbackTo]
-                .map((candidate) => candidate?.trim().replace(/^room:/i, ""))
-                .find((candidate) => candidate && candidate.length > 0);
-              if (!threadId || !roomId) {
-                return null;
-              }
-              return {
-                conversationId: threadId,
-                parentConversationId: roomId,
-              };
-            },
-          },
-        },
-      },
-    ]),
-  );
 }
 
 const baseCfg = {
@@ -738,6 +543,9 @@ describe("/acp command", () => {
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
+    hoisted.readAcpSessionEntryAsyncMock
+      .mockReset()
+      .mockImplementation(async (input) => hoisted.readAcpSessionEntryMock(input));
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue({
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -869,7 +677,7 @@ describe("/acp command", () => {
           meta,
         };
       },
-      resolveSession: (input: { sessionKey: string }) => {
+      resolveSessionAsync: async (input: { sessionKey: string }) => {
         const entry = hoisted.readAcpSessionEntryMock({
           sessionKey: input.sessionKey,
         }) as { acp?: Record<string, unknown> } | null;
@@ -1200,7 +1008,7 @@ describe("/acp command", () => {
     );
     const { createTestAdmittedRunContext } =
       await import("../../agents/admitted-run-context.test-support.js");
-    const { closeOpenClawStateDatabaseByPath } =
+    const { closeOpenClawStateDatabaseByPathAsync } =
       await import("../../state/openclaw-state-db-cache.js");
 
     hoisted.upsertAcpSessionMetaMock.mockImplementation((input) =>
@@ -1208,6 +1016,9 @@ describe("/acp command", () => {
     );
     hoisted.readAcpSessionEntryMock.mockImplementation((input) =>
       sessionMeta.readAcpSessionEntry({ ...input, cfg, databasePath }),
+    );
+    hoisted.readAcpSessionEntryAsyncMock.mockImplementation((input) =>
+      sessionMeta.readAcpSessionEntryAsync({ ...input, cfg, databasePath }),
     );
     const manager = new AcpSessionManager();
     acpManagerTesting.setAcpSessionManagerForTests(manager);
@@ -1243,7 +1054,9 @@ describe("/acp command", () => {
       expect(hoisted.runTurnMock).toHaveBeenCalledTimes(1);
     } finally {
       acpManagerTesting.resetAcpSessionManagerForTests();
-      expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+      const { closeOpenClawAgentDatabasesAsync } = await import("../../state/openclaw-agent-db.js");
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
       await fs.rm(directory, { recursive: true, force: true });
     }
   });

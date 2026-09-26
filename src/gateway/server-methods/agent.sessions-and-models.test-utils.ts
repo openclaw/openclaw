@@ -2774,7 +2774,7 @@ describe("gateway agent handler", () => {
         resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-confirmed";
         mockSpawnedChildSessionEntry(childSessionKey, root);
-        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
         await invokeAgent(
@@ -2806,7 +2806,7 @@ describe("gateway agent handler", () => {
         // in-process backend ACP spawn path. That caller never creates a
         // replacement `acp` row, so CLI tracking must stay on to avoid losing the
         // run entirely.
-        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
         await invokeAgent(
@@ -2841,7 +2841,7 @@ describe("gateway agent handler", () => {
         resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-missing-meta";
         mockSpawnedChildSessionEntry(childSessionKey, root);
-        mocks.readAcpSessionMeta.mockReturnValue(undefined);
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(undefined);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
         await invokeAgent(
@@ -2870,54 +2870,48 @@ describe("gateway agent handler", () => {
       });
     });
 
-    it("keeps dispatch and CLI tracking when ACP metadata read fails", async () => {
+    it("rejects ACP metadata read failures before dispatch and permits retry after recovery", async () => {
       await withTestDir({ prefix: "openclaw-gateway-acp-meta-throw-" }, async (root) => {
         useTestStateDir(root);
         resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-meta-throw";
         mockSpawnedChildSessionEntry(childSessionKey, root);
         const metadataError = new Error("state db unavailable");
-        mocks.readAcpSessionMeta.mockImplementation(() => {
-          throw metadataError;
-        });
+        mocks.readAcpSessionMetaAsync.mockRejectedValue(metadataError);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
         const context = makeContext();
+        const client = backendGatewayClient();
+        const commandCallCount = mocks.agentCommand.mock.calls.length;
+        const request = {
+          message: "acp manual spawn metadata throw",
+          sessionKey: childSessionKey,
+          acpTurnSource: "manual_spawn" as const,
+          idempotencyKey: "acp-manual-spawn-meta-throw",
+        };
 
-        await invokeAgent(
-          {
-            message: "acp manual spawn metadata throw",
-            sessionKey: childSessionKey,
-            acpTurnSource: "manual_spawn",
-            idempotencyKey: "acp-manual-spawn-meta-throw",
-          },
-          { reqId: "acp-manual-spawn-meta-throw", context, client: backendGatewayClient() },
-        );
-        await waitForAgentCommandCall();
+        const respond = await invokeAgent(request, {
+          reqId: "acp-manual-spawn-meta-throw",
+          context,
+          client,
+        });
+        expectRespondError(respond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message: metadataError.message,
+        });
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(findTaskByRunId(request.idempotencyKey)).toBeUndefined();
 
-        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
-        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
-          runtime: "cli",
-          runId: "acp-manual-spawn-meta-throw",
-          childSessionKey,
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
+        await invokeAgent(request, {
+          reqId: "acp-manual-spawn-meta-retry",
+          context,
+          client,
         });
-        await waitForAssertion(() => {
-          expectRecordFields(findTaskByRunId("acp-manual-spawn-meta-throw"), {
-            runtime: "cli",
-            childSessionKey,
-            status: "succeeded",
-            terminalSummary: "completed",
-          });
-        });
-        const warnMock = context.logGateway.warn as ReturnType<typeof vi.fn>;
-        expect(
-          warnMock.mock.calls.some(([message]) => {
-            return (
-              typeof message === "string" &&
-              message.includes("failed to read ACP session metadata") &&
-              message.includes("falling back to cli task tracking")
-            );
-          }),
-        ).toBe(true);
+        await waitForAgentCommandCallAfter(commandCallCount);
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(findTaskByRunId(request.idempotencyKey)).toBeUndefined();
       });
     });
 
@@ -2929,7 +2923,7 @@ describe("gateway agent handler", () => {
         mockSpawnedChildSessionEntry(childSessionKey, root);
         // Metadata is present but the turn lacks acpTurnSource, so the spawn
         // control plane does not own this row; CLI tracking must stay on.
-        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
         await invokeAgent(
@@ -2959,7 +2953,7 @@ describe("gateway agent handler", () => {
         const runId = "acp-plugin-subagent-run";
         await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
         mockSpawnedChildSessionEntry(childSessionKey, root);
-        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        mocks.readAcpSessionMetaAsync.mockResolvedValue(confirmedAcpMeta);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");

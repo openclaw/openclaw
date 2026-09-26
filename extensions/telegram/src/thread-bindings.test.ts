@@ -5,7 +5,7 @@ import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
+const readAcpSessionEntryAsyncMock = vi.hoisted(() => vi.fn());
 const createForumTopicMock = vi.hoisted(() =>
   vi.fn<typeof import("./send-forum-topics.js").createForumTopicTelegram>(),
 );
@@ -18,10 +18,10 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
     "openclaw/plugin-sdk/acp-runtime",
   );
-  readAcpSessionEntryMock.mockImplementation(actual.readAcpSessionEntry);
+  readAcpSessionEntryAsyncMock.mockImplementation(actual.readAcpSessionEntryAsync);
   return {
     ...actual,
-    readAcpSessionEntry: readAcpSessionEntryMock,
+    readAcpSessionEntryAsync: readAcpSessionEntryAsyncMock,
   };
 });
 
@@ -60,12 +60,12 @@ describe("telegram thread bindings", () => {
   } = fixture;
 
   beforeEach(async () => {
-    readAcpSessionEntryMock.mockReset();
+    readAcpSessionEntryAsyncMock.mockReset();
     createForumTopicMock.mockReset();
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
     );
-    readAcpSessionEntryMock.mockImplementation(acpRuntime.readAcpSessionEntry);
+    readAcpSessionEntryAsyncMock.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
   });
 
   it("joins concurrent startup before exposing hydrated bindings", async () => {
@@ -875,21 +875,31 @@ describe("telegram thread bindings", () => {
     });
 
     await manager.stop();
-    readAcpSessionEntryMock.mockReturnValue({
-      cfg: {} as never,
-      storePath: "/tmp/acp-store.json",
-      sessionKey: "agent:main:acp:stale-1",
-      storeSessionKey: "agent:main:acp:stale-1",
-      entry: undefined,
-      acp: undefined,
-      storeReadFailed: false,
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    readAcpSessionEntryAsyncMock.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return {
+        cfg: {} as never,
+        storePath: "/tmp/acp-store.json",
+        sessionKey: "agent:main:acp:stale-1",
+        storeSessionKey: "agent:main:acp:stale-1",
+        entry: undefined,
+        acp: undefined,
+        storeReadFailed: false,
+      };
     });
 
-    const reloaded = await createTelegramThreadBindingManager({
+    const pending = createTelegramThreadBindingManager({
       accountId: "default",
       persist: true,
       enableSweeper: false,
     });
+    await entered.promise;
+    expect(getTelegramThreadBindingManager("default")).toBeNull();
+    release.resolve();
+    const reloaded = await pending;
 
     expect(reloaded.getByConversationId("cleanup-me")).toBeUndefined();
     expect((await storedBindings()).map((binding) => binding.conversationId)).not.toContain(
@@ -925,7 +935,7 @@ describe("telegram thread bindings", () => {
     expect(reloaded.getByConversationId("plugin-binding-convo")?.targetSessionKey).toBe(
       "plugin-binding:openclaw-codex-app-server:still-valid",
     );
-    expect(readAcpSessionEntryMock).not.toHaveBeenCalled();
+    expect(readAcpSessionEntryAsyncMock).not.toHaveBeenCalled();
   });
 
   it("keeps ACP bindings when the session store cannot be read during startup cleanup", async () => {
@@ -946,7 +956,7 @@ describe("telegram thread bindings", () => {
     });
 
     await manager.stop();
-    readAcpSessionEntryMock.mockReturnValue({
+    readAcpSessionEntryAsyncMock.mockReturnValue({
       cfg: {} as never,
       storePath: "/tmp/acp-store.json",
       sessionKey: "agent:main:acp:read-failed",

@@ -1,3 +1,7 @@
+import type {
+  AcpSessionEntryMutationInput,
+  AcpSessionEntryMutationResult,
+} from "../acp/runtime/session-meta-entry.types.js";
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
   TranscriptArchivePublishPlan,
@@ -73,6 +77,10 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
+  "session.entry.acp": {
+    input: AcpSessionEntryMutationInput;
+    output: AcpSessionEntryMutationResult;
+  };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit & {
       initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };

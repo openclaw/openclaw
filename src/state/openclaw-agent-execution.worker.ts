@@ -326,6 +326,7 @@ function openAgentDatabaseBackend(
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
+  let acpEntry: typeof import("../acp/runtime/session-meta-entry.worker.js") | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -457,6 +458,9 @@ function openAgentDatabaseBackend(
         { operationLabel: "session.entry.create-with-transcript" },
       );
     }
+    if (command.type === "session.entry.acp" && acpEntry) {
+      return acpEntry.mutateAcpSessionEntryInWorker(openWriter(), options, command.input, admit);
+    }
     if (command.type === "session.entries.replace" && replacements) {
       const opened = openWriter();
       const replace = replacements.commitSessionEntryReplacementsInDatabase;
@@ -534,6 +538,11 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (command.type === "session.entry.acp") {
+        return import("../acp/runtime/session-meta-entry.worker.js").then((module) => {
+          acpEntry = module;
+        });
+      }
       if (command.type === "session.entry.read") {
         return import("../config/sessions/session-accessor.sqlite-entry-read.js").then((module) => {
           entryReader = module;

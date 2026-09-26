@@ -19,9 +19,11 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../runtime/registry.js";
+import type { AcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
 
@@ -94,6 +96,7 @@ type AcpTurnLifecycleEvent = {
 
 /** Input for closing, resetting, or cleaning up an ACP session. */
 export type AcpCloseSessionInput = {
+  expectedControlBinding?: AcpSessionControlBinding;
   /** Source authority for new backend effects, independent of accepted-write settlement. */
   assertActive?: () => void;
   cfg: OpenClawConfig;
@@ -172,12 +175,14 @@ export type TurnLatencyStats = {
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   loadSessionEntry: typeof readAcpSessionEntry;
+  loadSessionEntryAsync: typeof readAcpSessionEntryAsync;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
 };
 
 export type WriteManagerSessionMeta = (params: {
+  expectedControlBinding?: AcpSessionControlBinding;
   assertCommitAllowed?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -198,8 +203,16 @@ export type ResolveManagerSession = (params: {
   agentId: string;
 }) => AcpSessionResolution;
 
+export type ResolveManagerSessionAsync = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => void;
+}) => Promise<AcpSessionResolution>;
+
 export type EnsureManagerRuntimeHandle = (params: {
   assertActive?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -243,6 +256,7 @@ export type WithManagerSessionActor = <T>(
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
   loadSessionEntry: readAcpSessionEntry,
+  loadSessionEntryAsync: readAcpSessionEntryAsync,
   upsertSessionMeta: upsertAcpSessionMeta,
   getRuntimeBackend: getAcpRuntimeBackend,
   requireRuntimeBackend: requireAcpRuntimeBackend,

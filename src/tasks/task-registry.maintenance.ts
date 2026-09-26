@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
-import { listAcpSessionEntries, readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { listAcpSessionEntries, readAcpSessionEntryAsync } from "../acp/runtime/session-meta.js";
 import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js";
 import {
   formatSubagentRecoveryWedgedReason,
@@ -43,7 +43,6 @@ import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
   ensureTaskRegistryReady,
   getTaskById,
-  hasActiveTaskForChildSessionKey,
   listTaskRecords,
   markTaskLostById,
   maybeDeliverTaskTerminalUpdate,
@@ -757,8 +756,8 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   }
   const acpRuntime: TaskRegistryAcpMaintenanceRuntime = {
     listAcpSessionEntries,
-    readAcpSessionEntry,
-    hasActiveTaskForChildSessionKey,
+    readAcpSessionEntryAsync,
+    prepareTaskRegistryRead,
     listSessionBindingsBySession: (sessionKey) =>
       getSessionBindingService().listBySession(sessionKey),
     unbindSessionBindings: (input) => getSessionBindingService().unbind(input),

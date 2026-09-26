@@ -50,7 +50,7 @@ import type {
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   SetManagerSessionState,
   SessionAcpMeta,
   WriteManagerSessionMeta,
@@ -69,7 +69,7 @@ export async function runManagerTurn(params: {
   deps: AcpSessionManagerDeps;
   runtimeHandles: ManagerRuntimeHandleCache;
   activeTurnBySession: Map<string, ActiveTurnState>;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
@@ -99,32 +99,6 @@ export async function runManagerTurn(params: {
   }
   const turnStartedAt = Date.now();
   const actorKey = acpSessionActorKey(params);
-  const taskContext =
-    input.mode === "prompt"
-      ? resolveBackgroundTaskContext({
-          deps: params.deps,
-          cfg: input.cfg,
-          sessionKey,
-          agentId,
-          requestId: input.requestId,
-          text: input.text,
-        })
-      : null;
-  const taskRecord = taskContext
-    ? createBackgroundTaskRecord(
-        taskContext,
-        turnStartedAt,
-        input.admittedRunContext.operationalRunInstance.instanceId,
-      )
-    : undefined;
-  let taskExecutionBinding: Promise<void> | undefined;
-  let taskProgressSummary = "";
-  const initialResolution = params.resolveSession({
-    cfg: input.cfg,
-    sessionKey,
-    agentId,
-  });
-  const initialMeta = requireReadySessionMeta(initialResolution);
   const assertSignalAdmission = resolveAdmittedRunActiveAssertion(
     input.admittedRunContext,
     input.signal,
@@ -139,91 +113,167 @@ export async function runManagerTurn(params: {
     input.signal?.throwIfAborted();
     assertSignalAdmission?.();
   };
-  await recordSessionHumanDirectMessage(
-    {
-      sessionKey,
-      agentId,
-      entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
-      actor: { actorType: input.provenance },
-      channel: "acp",
-      runId: input.requestId,
-    },
-    { assertCurrent: assertSignalCurrent },
-  );
   assertSignalCurrent();
-  // ACP children bypass the subagent registry; terminal outcomes are projected into
-  // the signal log here so changesSince histories are not spawn-only for ACP runs.
-  const spawnedByWatcher =
-    initialResolution.kind === "ready"
-      ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
-      : undefined;
-  const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
-    configuredPrimaryBackend: input.cfg.acp?.backend,
-    resolvedPrimaryBackend: initialMeta.backend,
-    fallbackBackends: input.cfg.acp?.fallbacks,
-  });
-  const backendAttempts: BackendAttempt[] = [];
-  const recordBackendFailure = async (error: AcpRuntimeError) => {
-    await taskExecutionBinding;
-    if (!params.isCurrentActor()) {
-      throw createSupersededActorError(sessionKey);
-    }
-    const failedBackends = backendAttempts
-      .map((attempt) => `${attempt.backend}: ${attempt.error}`)
-      .join(" | ");
-    const errorToRecord =
-      backendAttempts.length > 1
-        ? new AcpRuntimeError(
-            error.code,
-            `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
-            { detailCode: error.detailCode },
-          )
-        : error;
-    params.recordTurnCompletion({
-      startedAt: turnStartedAt,
-      errorCode: errorToRecord.code,
-    });
-    if (taskContext) {
-      const failureStatus = resolveBackgroundTaskFailureStatus(errorToRecord);
+  const taskContext =
+    input.mode === "prompt"
+      ? await resolveBackgroundTaskContext({
+          deps: params.deps,
+          assertCurrent: assertSignalCurrent,
+          cfg: input.cfg,
+          sessionKey,
+          agentId,
+          requestId: input.requestId,
+          text: input.text,
+        })
+      : null;
+  assertSignalCurrent();
+  const taskRecord = taskContext
+    ? createBackgroundTaskRecord(
+        taskContext,
+        turnStartedAt,
+        input.admittedRunContext.operationalRunInstance.instanceId,
+      )
+    : undefined;
+  let taskExecutionBinding: Promise<void> | undefined;
+  let taskProgressSummary = "";
+  // Liveness starts with the durable task, including metadata and signal preparation.
+  // This release cannot erase a successor that replaced this actor during an await.
+  const releaseActiveTurn = taskContext ? markAcpTurnActive(params) : undefined;
+
+  try {
+    let initialResolution: Awaited<ReturnType<ResolveManagerSessionAsync>>;
+    let initialMeta: SessionAcpMeta;
+    try {
+      initialResolution = await params.resolveSession({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        assertCurrent: assertSignalCurrent,
+      });
+      assertSignalCurrent();
+      initialMeta = requireReadySessionMeta(initialResolution);
+      await recordSessionHumanDirectMessage(
+        {
+          sessionKey,
+          agentId,
+          entry: initialResolution.kind === "ready" ? initialResolution.entry : undefined,
+          actor: { actorType: input.provenance },
+          channel: "acp",
+          runId: input.requestId,
+        },
+        { assertCurrent: assertSignalCurrent },
+      );
+      assertSignalCurrent();
+    } catch (error) {
+      const cancelled = input.signal?.aborted === true;
+      const acpError = toAcpRuntimeError({
+        error,
+        fallbackCode: cancelled ? "ACP_TURN_FAILED" : "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: cancelled
+          ? "ACP operation aborted."
+          : "Could not prepare ACP session runtime.",
+      });
+      const failureStatus = cancelled ? "cancelled" : resolveBackgroundTaskFailureStatus(acpError);
       if (taskRecord) {
         markBackgroundTaskTerminal(taskRecord, {
           status: failureStatus,
           endedAt: Date.now(),
           lastEventAt: Date.now(),
-          error: formatAcpErrorChain(errorToRecord),
-          progressSummary: taskProgressSummary || null,
-          terminalSummary: failureStatus === "timed_out" ? taskProgressSummary || null : null,
+          ...(cancelled ? {} : { error: formatAcpErrorChain(acpError) }),
+          progressSummary: null,
+          terminalSummary: null,
         });
       }
-      if (spawnedByWatcher) {
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        ...(cancelled ? {} : { errorCode: acpError.code }),
+      });
+      if (taskContext && params.isCurrentActor()) {
         await recordSubagentTerminalState(
           {
             childSessionKey: sessionKey,
             runId: taskContext.runId,
-            requesterSessionKey: spawnedByWatcher,
-            outcomeStatus: failureStatus === "timed_out" ? "timeout" : "error",
+            requesterSessionKey: taskContext.requesterSessionKey,
+            outcomeStatus:
+              failureStatus === "cancelled"
+                ? "cancelled"
+                : failureStatus === "timed_out"
+                  ? "timeout"
+                  : "error",
           },
           assertActorCurrent,
         );
-        assertActorCurrent();
       }
+      throw acpError;
     }
-    await params.setSessionState({
-      cfg: input.cfg,
-      sessionKey,
-      agentId,
-      isCurrentActor: params.isCurrentActor,
-      state: "error",
-      lastError: formatAcpErrorChain(errorToRecord),
+    // ACP children bypass the subagent registry; terminal outcomes are projected into
+    // the signal log here so changesSince histories are not spawn-only for ACP runs.
+    const spawnedByWatcher =
+      initialResolution.kind === "ready"
+        ? (initialResolution.entry?.spawnedBy ?? initialResolution.entry?.parentSessionKey)
+        : undefined;
+    const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
+      configuredPrimaryBackend: input.cfg.acp?.backend,
+      resolvedPrimaryBackend: initialMeta.backend,
+      fallbackBackends: input.cfg.acp?.fallbacks,
     });
-    throw errorToRecord;
-  };
+    const backendAttempts: BackendAttempt[] = [];
+    const recordBackendFailure = async (error: AcpRuntimeError) => {
+      await taskExecutionBinding;
+      if (!params.isCurrentActor()) {
+        throw createSupersededActorError(sessionKey);
+      }
+      const failedBackends = backendAttempts
+        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .join(" | ");
+      const errorToRecord =
+        backendAttempts.length > 1
+          ? new AcpRuntimeError(
+              error.code,
+              `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+              { detailCode: error.detailCode },
+            )
+          : error;
+      params.recordTurnCompletion({
+        startedAt: turnStartedAt,
+        errorCode: errorToRecord.code,
+      });
+      if (taskContext) {
+        const failureStatus = resolveBackgroundTaskFailureStatus(errorToRecord);
+        if (taskRecord) {
+          markBackgroundTaskTerminal(taskRecord, {
+            status: failureStatus,
+            endedAt: Date.now(),
+            lastEventAt: Date.now(),
+            error: formatAcpErrorChain(errorToRecord),
+            progressSummary: taskProgressSummary || null,
+            terminalSummary: failureStatus === "timed_out" ? taskProgressSummary || null : null,
+          });
+        }
+        if (spawnedByWatcher) {
+          await recordSubagentTerminalState(
+            {
+              childSessionKey: sessionKey,
+              runId: taskContext.runId,
+              requesterSessionKey: spawnedByWatcher,
+              outcomeStatus: failureStatus === "timed_out" ? "timeout" : "error",
+            },
+            assertActorCurrent,
+          );
+          assertActorCurrent();
+        }
+      }
+      await params.setSessionState({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        isCurrentActor: params.isCurrentActor,
+        state: "error",
+        lastError: formatAcpErrorChain(errorToRecord),
+      });
+      throw errorToRecord;
+    };
 
-  // Liveness spans the whole task, not one backend attempt. The release belongs to
-  // this turn so a retired actor cannot erase a successor after reset overlap.
-  const releaseActiveTurn = taskContext ? markAcpTurnActive(params) : undefined;
-
-  try {
     for (const [backendIdx, currentBackend] of candidateBackends.entries()) {
       if (backendIdx > 0) {
         await params.runtimeHandles.close({
@@ -245,11 +295,13 @@ export async function runManagerTurn(params: {
         const resolution =
           backendIdx === 0 && attempt === 0
             ? initialResolution
-            : params.resolveSession({
+            : await params.resolveSession({
                 cfg: input.cfg,
                 sessionKey,
                 agentId,
+                assertCurrent: assertSignalCurrent,
               });
+        assertSignalCurrent();
         const resolvedMeta = requireReadySessionMeta(resolution);
         assertModelAllowed(resolvedMeta.runtimeOptions?.model);
         let runtime: AcpRuntime | undefined;
