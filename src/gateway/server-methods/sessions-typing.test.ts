@@ -4,6 +4,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { clearSessionTypingState } from "./session-typing-state.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -73,10 +74,12 @@ async function callTyping(params: {
 }
 
 beforeEach(() => {
+  clearSessionTypingState();
   mocks.presence = [];
 });
 
 afterEach(() => {
+  clearSessionTypingState();
   vi.useRealTimers();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
