@@ -1253,11 +1253,13 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
-  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
+  it("allows plugin channel keys in messages.queue.byChannel schema lookup", () => {
     const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
     expect(lookup?.path).toBe("messages.queue.byChannel");
-    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
-    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
+    expect(lookup?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: expect.anything(),
+    });
   });
 
   it("includes reload metadata when a resolver is provided", () => {

@@ -293,18 +293,18 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unknown queue byChannel providers", () => {
+  it("accepts plugin queue byChannel providers", () => {
     const res = validateConfigObject({
       messages: {
         queue: {
           byChannel: {
-            unknown: "steer",
+            buzz: "collect",
           },
         },
       },
     });
 
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
   });
 
   it("accepts string values for agents defaults model inputs", () => {

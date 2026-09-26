@@ -55,6 +55,15 @@ describe("resolveQueueSettingsCore", () => {
     });
   });
 
+  it("resolves plugin channel queue overrides", () => {
+    expect(
+      resolveQueueSettings({
+        cfg: { messages: { queue: { byChannel: { buzz: "collect" } } } } as OpenClawConfig,
+        channel: "buzz",
+      }).mode,
+    ).toBe("collect");
+  });
+
   it("uses explicit steer mode from config", () => {
     expect(
       resolveQueueSettingsCore({

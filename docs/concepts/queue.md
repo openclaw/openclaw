@@ -71,6 +71,8 @@ Configure globally or per channel via `messages.queue`:
 }
 ```
 
+`byChannel` accepts any configured channel ID, including channels supplied by installed plugins.
+
 ## Queue options
 
 Per-session `/queue` options apply to queued delivery. The `debounce` option also sets the Codex steering quiet window in `steer` mode:
