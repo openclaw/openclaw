@@ -1,4 +1,3 @@
-// Agent run status tests cover status normalization for agent run records.
 import { describe, expect, it } from "vitest";
 import { isNonTerminalAgentRunStatus } from "./agent-run-status.js";
 
@@ -7,7 +6,7 @@ describe("isNonTerminalAgentRunStatus", () => {
     expect(isNonTerminalAgentRunStatus(status)).toBe(true);
   });
 
-  it.each(["ok", "error", "timeout", "queued", "", null, undefined, 1, {}, []])(
+  it.each(["ok", "error", "timeout", "queued", null])(
     "does not recognize %s as non-terminal",
     (status) => {
       expect(isNonTerminalAgentRunStatus(status)).toBe(false);

@@ -247,3 +247,10 @@ export type CreateChannelIngressQueueOptions = {
 };
 
 export type ChannelIngressRow = Selectable<ChannelIngressEvents>;
+
+export type ChannelIngressListInput = {
+  queueName: string;
+  status: "pending" | "claimed" | "failed";
+  limit?: number | "all";
+  orderBy?: "received" | "id";
+};

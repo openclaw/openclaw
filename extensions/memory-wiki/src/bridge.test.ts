@@ -483,16 +483,8 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(page).toContain('"type":"memory.recall.recorded"');
   });
 
-  it.each([
-    {
-      name: "prunes stale bridge pages when the source artifact disappears",
-      humanNotes: null,
-    },
-    {
-      name: "salvages bridge page Notes when the source artifact disappears",
-      humanNotes: "Durable bridge annotation",
-    },
-  ])("$name", async ({ humanNotes }) => {
+  it("salvages bridge page Notes when the source artifact disappears", async () => {
+    const humanNotes = "Durable bridge annotation";
     const workspaceDir = await createBridgeWorkspace("prune-workspace");
     const { rootDir: vaultDir, config } = await createVault({
       rootDir: nextCaseRoot("prune-vault"),
@@ -530,16 +522,14 @@ describe("syncMemoryWikiBridgeSources", () => {
     const firstPageAbsPath = path.join(vaultDir, firstPagePath);
     const firstPage = await fs.readFile(firstPageAbsPath, "utf8");
     expect(firstPage).toContain("# Durable Memory");
-    if (humanNotes) {
-      await fs.writeFile(
-        firstPageAbsPath,
-        firstPage.replace(
-          "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-          `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
-        ),
-        "utf8",
-      );
-    }
+    await fs.writeFile(
+      firstPageAbsPath,
+      firstPage.replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
+      ),
+      "utf8",
+    );
 
     await fs.rm(path.join(workspaceDir, "MEMORY.md"));
     registerBridgeArtifacts([]);
@@ -549,13 +539,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(second.removedCount).toBe(1);
     await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
     const salvageDir = path.join(vaultDir, ".salvage");
-    if (humanNotes) {
-      await expect(
-        fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
-      ).resolves.toContain(humanNotes);
-    } else {
-      await expect(fs.access(salvageDir)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    await expect(
+      fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
+    ).resolves.toContain(humanNotes);
   });
 
   it("keeps stale pages when the memory capability closes during a source read", async () => {

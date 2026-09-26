@@ -104,34 +104,6 @@ function coerceTextInputValue(
   return numberCandidate ?? value;
 }
 
-function stringConstraintMessage(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): string {
-  return isSupportedConfigValueValid(
-    schema,
-    coerceTextInputValue(value, schema, currentValue, editHint),
-  )
-    ? ""
-    : t("configForm.invalidString");
-}
-
-function shouldClearOptionalEmpty(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  isRequired: boolean,
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): boolean {
-  return (
-    value === "" &&
-    !isRequired &&
-    Boolean(stringConstraintMessage(value, schema, currentValue, editHint))
-  );
-}
-
 function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
   return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
 }
@@ -240,6 +212,15 @@ export function renderTextInput(
     isPhonePresentation ? "phone" : "plain",
     isStructuredSecretRef ? (rawAvailable ? "secret-raw" : "secret-file") : "scalar",
   ].join(":");
+  const textInputState = (raw: string, editHint: ScalarEditHint) => {
+    const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
+    const valid = isSupportedConfigValueValid(schema, candidate);
+    const clearOptional = raw === "" && !params.isRequired && !valid;
+    return {
+      candidate: clearOptional ? undefined : candidate,
+      message: valid || clearOptional ? "" : t("configForm.invalidString"),
+    };
+  };
   const revalidate = (target: HTMLInputElement) => {
     if (effectiveRedacted) {
       setControlValidity(target, "");
@@ -252,18 +233,9 @@ export function renderTextInput(
       );
       return;
     }
-    const raw = target.value;
-    const editHint = scalarEditHintForInput(target, initialBranch);
-    const optionalEmpty = shouldClearOptionalEmpty(
-      raw,
-      schema,
-      params.isRequired === true,
-      effectiveValue,
-      editHint,
-    );
     setControlValidity(
       target,
-      optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue, editHint),
+      textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
   // Input and change may run before the patched draft is rendered.
@@ -291,38 +263,23 @@ export function renderTextInput(
     }
     const editHint = beginScalarEdit(target, initialBranch);
     const raw = target.value;
-    const rawMessage = stringConstraintMessage(raw, schema, effectiveValue, editHint);
-    if (!rawMessage && !isPhonePresentation) {
+    const rawState = textInputState(raw, editHint);
+    if (!rawState.message && !isPhonePresentation) {
       setControlValidity(target, "");
-      commit(coerceTextInputValue(raw, schema, effectiveValue, editHint));
+      commit(rawState.candidate);
       finishScalarEdit(target);
       return;
     }
     const normalized = raw.trim();
-    if (
-      shouldClearOptionalEmpty(
-        normalized,
-        schema,
-        params.isRequired === true,
-        effectiveValue,
-        editHint,
-      )
-    ) {
-      target.value = normalized;
-      setControlValidity(target, "");
-      commit(undefined);
-      finishScalarEdit(target);
-      return;
-    }
-    const normalizedMessage = stringConstraintMessage(normalized, schema, effectiveValue, editHint);
-    if (normalizedMessage) {
-      setControlValidity(target, rawMessage);
+    const normalizedState = textInputState(normalized, editHint);
+    if (normalizedState.message) {
+      setControlValidity(target, rawState.message);
       finishScalarEdit(target);
       return;
     }
     target.value = normalized;
     setControlValidity(target, "");
-    commit(coerceTextInputValue(normalized, schema, effectiveValue, editHint));
+    commit(normalizedState.candidate);
     finishScalarEdit(target);
   };
 
@@ -364,7 +321,6 @@ export function renderTextInput(
           revalidate(target);
           return;
         }
-        const raw = target.value;
         if (inputType === "number") {
           applyNumericInputState(
             target,
@@ -374,22 +330,9 @@ export function renderTextInput(
           );
           return;
         }
-        const editHint = beginScalarEdit(target, initialBranch);
-        if (
-          shouldClearOptionalEmpty(
-            raw,
-            schema,
-            params.isRequired === true,
-            effectiveValue,
-            editHint,
-          )
-        ) {
-          setControlValidity(target, "");
-          commitScalarValue(target, undefined);
-        } else if (
-          setControlValidity(target, stringConstraintMessage(raw, schema, effectiveValue, editHint))
-        ) {
-          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
+        const state = textInputState(target.value, beginScalarEdit(target, initialBranch));
+        if (setControlValidity(target, state.message)) {
+          commitScalarValue(target, state.candidate);
         }
       }}
       @change=${(event: Event) => {

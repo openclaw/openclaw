@@ -5,6 +5,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
+type WizardProps = Parameters<typeof renderChannelWizard>[0];
+
+function wizardProps(
+  wizard: WizardProps["wizard"],
+  overrides: Partial<WizardProps> = {},
+): WizardProps {
+  return {
+    wizard,
+    channelLabel: (channelId) => channelId,
+    multiselectValues: [],
+    onToggleMultiselect: vi.fn(),
+    textValue: "",
+    secretVisible: false,
+    onTextInput: vi.fn(),
+    onToggleSecretVisibility: vi.fn(),
+    onAnswer: vi.fn(),
+    onClose: vi.fn(),
+    whatsappQrDataUrl: null,
+    whatsappMessage: null,
+    whatsappConnected: null,
+    whatsappBusy: false,
+    onWhatsAppStart: vi.fn(),
+    onWhatsAppWait: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("renderChannelWizard", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -30,8 +57,8 @@ describe("renderChannelWizard", () => {
       document.body.append(container);
       const renderStep = (validationError: string | null) =>
         render(
-          renderChannelWizard({
-            wizard: {
+          renderChannelWizard(
+            wizardProps({
               phase: "step",
               channel: "matrix",
               step: {
@@ -43,23 +70,8 @@ describe("renderChannelWizard", () => {
               stepIndex: 1,
               busy: false,
               validationError,
-            },
-            channelLabel: (channelId) => channelId,
-            multiselectValues: [],
-            onToggleMultiselect: vi.fn(),
-            textValue: "",
-            secretVisible: false,
-            onTextInput: vi.fn(),
-            onToggleSecretVisibility: vi.fn(),
-            onAnswer: vi.fn(),
-            onClose: vi.fn(),
-            whatsappQrDataUrl: null,
-            whatsappMessage: null,
-            whatsappConnected: null,
-            whatsappBusy: false,
-            onWhatsAppStart: vi.fn(),
-            onWhatsAppWait: vi.fn(),
-          }),
+            }),
+          ),
           container,
         );
       renderStep(null);
@@ -95,36 +107,24 @@ describe("renderChannelWizard", () => {
     document.body.append(container);
     const renderSensitiveStep = (secretVisible: boolean, textValue: string) =>
       render(
-        renderChannelWizard({
-          wizard: {
-            phase: "step",
-            channel: "twitch",
-            step: {
-              id: "client-secret",
-              type: "text",
-              message: "Twitch Client Secret",
-              sensitive: true,
+        renderChannelWizard(
+          wizardProps(
+            {
+              phase: "step",
+              channel: "twitch",
+              step: {
+                id: "client-secret",
+                type: "text",
+                message: "Twitch Client Secret",
+                sensitive: true,
+              },
+              stepIndex: 1,
+              busy: false,
+              validationError: null,
             },
-            stepIndex: 1,
-            busy: false,
-            validationError: null,
-          },
-          channelLabel: (channelId) => channelId,
-          multiselectValues: [],
-          onToggleMultiselect: vi.fn(),
-          textValue,
-          secretVisible,
-          onTextInput,
-          onToggleSecretVisibility,
-          onAnswer: vi.fn(),
-          onClose: vi.fn(),
-          whatsappQrDataUrl: null,
-          whatsappMessage: null,
-          whatsappConnected: null,
-          whatsappBusy: false,
-          onWhatsAppStart: vi.fn(),
-          onWhatsAppWait: vi.fn(),
-        }),
+            { textValue, secretVisible, onTextInput, onToggleSecretVisibility },
+          ),
+        ),
         container,
       );
 
@@ -157,36 +157,24 @@ describe("renderChannelWizard", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderChannelWizard({
-        wizard: {
-          phase: "step",
-          channel: "imessage",
-          step: {
-            id: "selected-channels",
-            type: "note",
-            title: "Selected channels",
-            message: "iMessage — Local iMessage/SMS through the imsg bridge.",
+      renderChannelWizard(
+        wizardProps(
+          {
+            phase: "step",
+            channel: "imessage",
+            step: {
+              id: "selected-channels",
+              type: "note",
+              title: "Selected channels",
+              message: "iMessage — Local iMessage/SMS through the imsg bridge.",
+            },
+            stepIndex: 1,
+            busy: false,
+            validationError: null,
           },
-          stepIndex: 1,
-          busy: false,
-          validationError: null,
-        },
-        channelLabel: () => "iMessage",
-        multiselectValues: [],
-        onToggleMultiselect: vi.fn(),
-        textValue: "",
-        secretVisible: false,
-        onTextInput: vi.fn(),
-        onToggleSecretVisibility: vi.fn(),
-        onAnswer: vi.fn(),
-        onClose: vi.fn(),
-        whatsappQrDataUrl: null,
-        whatsappMessage: null,
-        whatsappConnected: null,
-        whatsappBusy: false,
-        onWhatsAppStart: vi.fn(),
-        onWhatsAppWait: vi.fn(),
-      }),
+          { channelLabel: () => "iMessage" },
+        ),
+      ),
       container,
     );
 
@@ -200,28 +188,16 @@ describe("renderChannelWizard", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
-      renderChannelWizard({
-        wizard: {
-          phase: "error",
-          channel: "slack",
-          message: "Setup failed",
-        },
-        channelLabel: () => "Slack",
-        multiselectValues: [],
-        onToggleMultiselect: vi.fn(),
-        textValue: "",
-        secretVisible: false,
-        onTextInput: vi.fn(),
-        onToggleSecretVisibility: vi.fn(),
-        onAnswer: vi.fn(),
-        onClose: vi.fn(),
-        whatsappQrDataUrl: null,
-        whatsappMessage: null,
-        whatsappConnected: null,
-        whatsappBusy: false,
-        onWhatsAppStart: vi.fn(),
-        onWhatsAppWait: vi.fn(),
-      }),
+      renderChannelWizard(
+        wizardProps(
+          {
+            phase: "error",
+            channel: "slack",
+            message: "Setup failed",
+          },
+          { channelLabel: () => "Slack" },
+        ),
+      ),
       container,
     );
 

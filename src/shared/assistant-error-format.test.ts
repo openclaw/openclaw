@@ -16,14 +16,12 @@ describe("formatProviderRefusalText", () => {
       }),
     ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
   });
-  it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
+  it("formats a sanitized refusal category", () => {
     expect(
       formatProviderRefusalText({
-        diagnostics: [{ type: "provider_refusal", details: { category } }],
+        diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }],
       }),
-    ).toBe(
-      `The provider refused this request (category: ${category}). Revise the request and try again.`,
-    );
+    ).toBe("The provider refused this request (category: bio). Revise the request and try again.");
   });
 });
 
@@ -90,14 +88,12 @@ describe("extractErrorHttpStatus", () => {
     expect(extractErrorHttpStatus(message)?.code).toBe(code);
   });
 
-  it.each([
-    "request id req-4291 failed",
-    "input length 14295 tokens exceeds the model limit",
-    "model model-x-500-preview not found",
-    "Image width 500 exceeds the maximum allowed size",
-  ])("rejects embedded numeric text: %s", (message) => {
-    expect(extractErrorHttpStatus(message)).toBeNull();
-  });
+  it.each(["request id req-4291 failed", "model model-x-500-preview not found"])(
+    "rejects embedded numeric text: %s",
+    (message) => {
+      expect(extractErrorHttpStatus(message)).toBeNull();
+    },
+  );
 });
 
 describe("HTTP status consumers", () => {

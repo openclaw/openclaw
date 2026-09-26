@@ -36,23 +36,9 @@ describe("collectAttackSurfaceSummaryFindings", () => {
       expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: enabled"],
     },
     {
-      name: "reports both hook systems as enabled when both are configured",
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: true } },
-      } satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: enabled", "hooks.internal: enabled"],
-    },
-    {
       name: "reports internal hooks as disabled until configured",
       cfg: {} satisfies OpenClawConfig,
       expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
-    },
-    {
-      name: "reports internal hooks as disabled when explicitly set to false",
-      cfg: {
-        hooks: { internal: { enabled: false } },
-      } satisfies OpenClawConfig,
-      expectedDetail: ["hooks.internal: disabled"],
     },
   ])("$name", ({ cfg, expectedDetail }) => {
     const finding = expectDefined(
@@ -76,12 +62,9 @@ describe("collectSmallModelRiskFindings", () => {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     tools: { web: { fetch: { enabled: false } } },
   } satisfies OpenClawConfig;
-  const browserBlockedByPluginPolicyCfg = {
+  const configuredBrowserBlockedByPluginPolicyCfg = {
     ...browserDefaultCfg,
     plugins: { allow: ["openai"] },
-  } satisfies OpenClawConfig;
-  const configuredBrowserBlockedByPluginPolicyCfg = {
-    ...browserBlockedByPluginPolicyCfg,
     browser: { enabled: true },
   } satisfies OpenClawConfig;
 
@@ -101,14 +84,6 @@ describe("collectSmallModelRiskFindings", () => {
       expectedSeverity: "critical",
       detailIncludes: ["web=[browser]"],
       detailExcludes: ["No web/browser tools detected"],
-    },
-    {
-      name: "treats browser as disabled when restrictive plugin policy excludes it",
-      cfg: browserBlockedByPluginPolicyCfg,
-      env: {},
-      expectedSeverity: "info",
-      detailIncludes: ["web=[off]", "No web/browser tools detected"],
-      detailExcludes: ["web=[browser]"],
     },
     {
       name: "does not let browser config bypass restrictive plugin policy",

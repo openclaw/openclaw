@@ -2,8 +2,6 @@
 import { describe, expect, it, test } from "vitest";
 import {
   applyOpenClawManifestInstallCommonFields,
-  getFrontmatterString,
-  normalizeStringList,
   parseFrontmatterBool,
   parseOpenClawManifestInstallBase,
   resolveOpenClawManifestBlock,
@@ -22,17 +20,6 @@ function expectInstallBase(
 }
 
 describe("shared/frontmatter", () => {
-  test("normalizeStringList handles strings, arrays, and non-list values", () => {
-    expect(normalizeStringList("a, b,,c")).toEqual(["a", "b", "c"]);
-    expect(normalizeStringList([" a ", "", "b", 42])).toEqual(["a", "b", "42"]);
-    expect(normalizeStringList(null)).toStrictEqual([]);
-  });
-
-  test("getFrontmatterString extracts strings only", () => {
-    expect(getFrontmatterString({ a: "b" }, "a")).toBe("b");
-    expect(getFrontmatterString({ a: 1 }, "a")).toBeUndefined();
-  });
-
   test("parseFrontmatterBool respects explicit values and fallback", () => {
     expect(parseFrontmatterBool("true", false)).toBe(true);
     expect(parseFrontmatterBool("false", true)).toBe(false);

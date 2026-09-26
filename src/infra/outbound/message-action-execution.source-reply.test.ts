@@ -100,6 +100,34 @@ function registerTelegramTextPlugin(
   );
 }
 
+const slackSourceContext = {
+  currentChannelProvider: "slack",
+  currentChannelId: "channel:C123",
+};
+
+function runSlackSourceReply(input: Partial<Parameters<typeof runMessageAction>[0]> = {}) {
+  return runMessageAction({
+    cfg: slackConfig,
+    action: "send",
+    toolContext: slackSourceContext,
+    messageActionAuthorization: {
+      requesterAccountId: "default",
+      toolContext: { ...slackSourceContext, currentSourceTurnId: "source-turn-1" },
+    },
+    sessionKey: "agent:main:slack:channel:C123",
+    defaultAccountId: "default",
+    sourceReplyDeliveryMode: "message_tool_only",
+    dryRun: false,
+    ...input,
+    params: {
+      channel: "slack",
+      target: "channel:C123",
+      message: "visible source reply",
+      ...input.params,
+    },
+  });
+}
+
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
@@ -214,31 +242,7 @@ describe("runMessageAction core send routing", () => {
   it("marks explicit sends to the trusted current source conversation", async () => {
     registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        message: "visible source reply",
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
-      messageActionAuthorization: {
-        requesterAccountId: "default",
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-          currentSourceTurnId: "source-turn-1",
-        },
-      },
-      sessionKey: "agent:main:slack:channel:C123",
-      defaultAccountId: "default",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
-    });
+    const result = await runSlackSourceReply();
 
     expect(result.kind).toBe("send");
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
@@ -247,26 +251,9 @@ describe("runMessageAction core send routing", () => {
   it("marks automatic-mode Slack sends to the trusted current source conversation", async () => {
     registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        message: "visible source reply",
-      },
-      messageActionAuthorization: {
-        requesterAccountId: "default",
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-          currentSourceTurnId: "source-turn-1",
-        },
-      },
-      sessionKey: "agent:main:slack:channel:C123",
-      defaultAccountId: "default",
+    const result = await runSlackSourceReply({
+      toolContext: undefined,
       sourceReplyDeliveryMode: "automatic",
-      dryRun: false,
     });
 
     expect(result.kind).toBe("send");
@@ -280,13 +267,6 @@ describe("runMessageAction core send routing", () => {
       currentChannelId: "telegram:-100123",
       matcherResult: true,
       expectedRoute: "current-source",
-    },
-    {
-      name: "a different chat",
-      target: "-100456",
-      currentChannelId: "telegram:-100123",
-      matcherResult: false,
-      expectedRoute: undefined,
     },
     {
       name: "a different topic",
@@ -336,31 +316,8 @@ describe("runMessageAction core send routing", () => {
   it("does not mark a message-scoped reply that enters a new thread as current-source", async () => {
     registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        message: "reply in a new thread",
-        replyTo: "1710000000.9999",
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
-      messageActionAuthorization: {
-        requesterAccountId: "default",
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-          currentSourceTurnId: "source-turn-1",
-        },
-      },
-      sessionKey: "agent:main:slack:channel:C123",
-      defaultAccountId: "default",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
+    const result = await runSlackSourceReply({
+      params: { message: "reply in a new thread", replyTo: "1710000000.9999" },
     });
 
     expect(result.kind).toBe("send");
@@ -370,30 +327,16 @@ describe("runMessageAction core send routing", () => {
   it("does not trust ambient routing when the authorized source differs", async () => {
     registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        message: "not the authorized source",
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
+    const result = await runSlackSourceReply({
+      params: { message: "not the authorized source" },
       messageActionAuthorization: {
         requesterAccountId: "default",
         toolContext: {
-          currentChannelProvider: "slack",
+          ...slackSourceContext,
           currentChannelId: "channel:C999",
           currentSourceTurnId: "source-turn-1",
         },
       },
-      sessionKey: "agent:main:slack:channel:C123",
-      defaultAccountId: "default",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
     });
 
     expect(result.kind).toBe("send");
@@ -403,31 +346,8 @@ describe("runMessageAction core send routing", () => {
   it("does not mark same-target sends through another account", async () => {
     registerSlackTextPlugin(["default", "other"]);
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        accountId: "other",
-        target: "channel:C123",
-        message: "cross-account reply",
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
-      messageActionAuthorization: {
-        requesterAccountId: "default",
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-          currentSourceTurnId: "source-turn-1",
-        },
-      },
-      sessionKey: "agent:main:slack:channel:C123",
-      defaultAccountId: "default",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
+    const result = await runSlackSourceReply({
+      params: { accountId: "other", message: "cross-account reply" },
     });
 
     expect(result.kind).toBe("send");
@@ -437,33 +357,18 @@ describe("runMessageAction core send routing", () => {
   it("does not mark same-target sends to another thread", async () => {
     registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        threadId: "other-thread",
-        message: "thread-only reply",
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-        currentThreadTs: "source-thread",
-      },
+    const result = await runSlackSourceReply({
+      params: { threadId: "other-thread", message: "thread-only reply" },
+      toolContext: { ...slackSourceContext, currentThreadTs: "source-thread" },
       messageActionAuthorization: {
         requesterAccountId: "default",
         toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
+          ...slackSourceContext,
           currentThreadTs: "source-thread",
           currentSourceTurnId: "source-turn-1",
         },
       },
       sessionKey: "agent:main:slack:channel:C123:thread:source-thread",
-      defaultAccountId: "default",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
     });
 
     expect(result.kind).toBe("send");

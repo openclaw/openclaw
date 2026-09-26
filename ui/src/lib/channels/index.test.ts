@@ -247,32 +247,6 @@ describe("channels controller WhatsApp wait", () => {
 });
 
 describe("channels controller WhatsApp provider selection", () => {
-  it("selects WhatsApp for QR login start and wait requests", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "channels.status") {
-        return createChannelsSnapshot("refreshed");
-      }
-      return { connected: true, message: "connected" };
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-
-    await channels.startWhatsApp(false);
-    await channels.waitWhatsApp();
-
-    expect(request).toHaveBeenCalledWith(
-      "web.login.start",
-      expect.objectContaining({ channel: "whatsapp" }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "web.login.wait",
-      expect.objectContaining({ channel: "whatsapp" }),
-    );
-    channels.dispose();
-  });
-
   it("carries the provider session key from login start into wait", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "web.login.start") {
@@ -291,6 +265,10 @@ describe("channels controller WhatsApp provider selection", () => {
     await channels.startWhatsApp(false);
     await channels.waitWhatsApp();
 
+    expect(request).toHaveBeenCalledWith(
+      "web.login.start",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
     expect(request).toHaveBeenCalledWith(
       "web.login.wait",
       expect.objectContaining({ channel: "whatsapp", sessionKey: "opaque-session" }),

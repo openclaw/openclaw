@@ -618,6 +618,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               cfg: nextConfig,
               log: params.logHooks,
               signal: restartAbortController.signal,
+              scheduler: params.scheduler,
               onSkipped: () =>
                 params.logHooks.info(
                   "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",
