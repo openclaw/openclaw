@@ -192,6 +192,8 @@ describe("Security: Group Mention Policy", () => {
       account: { accountId: "default" },
       api: { scry: async () => ({}) },
       channelNest: "chat/~host/general",
+      senderShip: "~nec",
+      isOwner: () => false,
       botShipName: "~zod",
       botNickname: null,
       rawText: "follow up",
