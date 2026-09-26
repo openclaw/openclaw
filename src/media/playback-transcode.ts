@@ -16,7 +16,12 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
-import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
+import {
+  probePlaybackMediaFileDescriptor,
+  toMediaProbeResult,
+  type MediaProbeResult,
+  type PlaybackMediaProbeResult,
+} from "./media-probe.js";
 import { resolveNativePlaybackCodecCompatibility } from "./playback-codec-policy.js";
 import { getMediaDir, PLAYBACK_TRANSCODE_SUBDIR, writePlaybackTranscodeCache } from "./store.js";
 
@@ -109,7 +114,6 @@ type PlaybackSourceParams = {
   sourceStat: PlaybackSourceStat;
   mimeType: string;
   kind: PlaybackMediaKind;
-  probe?: PlaybackMediaProbeResult | null;
 };
 
 type PlaybackTranscodeResolution =
@@ -123,15 +127,17 @@ type PlaybackTranscodeResolution =
       extension: `.${string}`;
     };
 
-type PlaybackInspection =
-  | { mode: "native" }
-  | { mode: "fallback" }
-  | {
-      mode: "transcode";
-      durationMs: number;
-      audioStreamIndex?: number;
-      videoStreamIndex?: number;
-    };
+type PlaybackInspection = MediaProbeResult &
+  (
+    | { mode: "native" }
+    | { mode: "fallback" }
+    | {
+        mode: "transcode";
+        durationMs: number;
+        audioStreamIndex?: number;
+        videoStreamIndex?: number;
+      }
+  );
 
 const PLAYBACK_TRANSCODE_CACHE_VERSION = "v2";
 const MAX_PLAYBACK_TRANSCODE_JOBS = 2;
@@ -239,9 +245,6 @@ async function probePlaybackSource(
 async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<PlaybackInspection> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
-  if (!containerMode) {
-    return { mode: "fallback" };
-  }
   const source = playbackSourceIdentity(params);
   const sourceCacheKey = createPlaybackTranscodeCacheKey(source);
   const cacheKey = playbackInspectionCacheKey({
@@ -254,43 +257,43 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     return cached;
   }
   const computeInspection = async (): Promise<PlaybackInspection> => {
+    const probe = await probePlaybackSource(source, params.kind);
+    const metadata = toMediaProbeResult(probe);
     const mimeType = normalizeMimeType(params.mimeType);
     const needsCodecProbe = Boolean(mimeType && policy.codecProbeInputFormats[mimeType]);
-    if (containerMode === "native" && !needsCodecProbe) {
-      const inspection = { mode: "native" } as const;
-      cachePlaybackInspection(cacheKey, inspection);
-      return inspection;
-    }
-
-    const probe =
-      params.probe !== undefined ? params.probe : await probePlaybackSource(source, params.kind);
     if (containerMode === "native") {
-      const nativeCodecs = probe
-        ? resolveNativePlaybackCodecCompatibility(params.kind, params.mimeType, probe)
-        : undefined;
-      if (nativeCodecs === true) {
-        const inspection = { mode: "native" } as const;
-        cachePlaybackInspection(cacheKey, inspection);
+      const nativeCodecs = !needsCodecProbe
+        ? true
+        : probe
+          ? resolveNativePlaybackCodecCompatibility(params.kind, params.mimeType, probe)
+          : undefined;
+      if (nativeCodecs !== false) {
+        const inspection = { ...metadata, mode: "native" } as const;
+        if (probe && nativeCodecs === true) {
+          cachePlaybackInspection(cacheKey, inspection);
+        }
         return inspection;
       }
-      if (nativeCodecs === undefined) {
-        return { mode: "native" };
-      }
     }
 
-    if (source.size > maxBytesForKind(params.kind)) {
-      return { mode: "fallback" };
+    if (!containerMode || source.size > maxBytesForKind(params.kind)) {
+      const inspection = { ...metadata, mode: "fallback" } as const;
+      if (probe) {
+        cachePlaybackInspection(cacheKey, inspection);
+      }
+      return inspection;
     }
 
     const maxDurationMs = PLAYBACK_TRANSCODE_MAX_DURATION_SECS * 1000;
     const primaryStreamIndex =
       params.kind === "audio" ? probe?.audioStreamIndex : probe?.videoStreamIndex;
     if (!probe?.durationMs || primaryStreamIndex === undefined) {
-      return { mode: "fallback" };
+      return { ...metadata, mode: "fallback" };
     }
     const inspection: PlaybackInspection =
       probe.durationMs <= maxDurationMs
         ? {
+            ...metadata,
             mode: "transcode",
             durationMs: probe.durationMs,
             ...(probe.audioStreamIndex !== undefined
@@ -300,13 +303,10 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
               ? { videoStreamIndex: probe.videoStreamIndex }
               : {}),
           }
-        : { mode: "fallback" };
+        : { ...metadata, mode: "fallback" };
     cachePlaybackInspection(cacheKey, inspection);
     return inspection;
   };
-  if (params.probe !== undefined) {
-    return await computeInspection();
-  }
   const existingJob = playbackInspectionJobs.get(cacheKey);
   if (existingJob) {
     return await existingJob;
@@ -320,16 +320,12 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
   });
 }
 
-/** Resolves source-aware playback metadata and caches codec classification by file identity. */
-export async function resolvePlaybackModeForSource(
+/** Shares display metadata and playback classification by file identity. */
+export async function resolvePlaybackMetadataForSource(
   params: PlaybackSourceParams,
-): Promise<PlaybackMode | undefined> {
-  const inspection = await inspectPlaybackSource(params);
-  return inspection.mode === "transcode"
-    ? "transcode"
-    : inspection.mode === "native"
-      ? "native"
-      : undefined;
+): Promise<MediaProbeResult & { playback?: PlaybackMode }> {
+  const { mode, durationMs, width, height } = await inspectPlaybackSource(params);
+  return { playback: mode === "fallback" ? undefined : mode, durationMs, width, height };
 }
 
 /** Replaces the original container suffix for a transcoded response filename. */
@@ -581,8 +577,15 @@ export async function resolvePlaybackTranscode(
   params: PlaybackSourceParams,
 ): Promise<PlaybackTranscodeResolution> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
-  if (!resolvePlaybackMode(params.mimeType, policy)) {
+  const containerMode = resolvePlaybackMode(params.mimeType, policy);
+  if (!containerMode) {
     return { kind: "fallback" };
+  }
+  if (
+    containerMode === "native" &&
+    !policy.codecProbeInputFormats[normalizeMimeType(params.mimeType) ?? ""]
+  ) {
+    return { kind: "passthrough" };
   }
   const maxBytes = maxBytesForKind(params.kind);
   const source = playbackSourceIdentity(params);

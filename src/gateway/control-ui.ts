@@ -25,15 +25,11 @@ import {
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
-import {
-  probePlaybackMediaFileDescriptor,
-  toMediaProbeResult,
-  type MediaProbeResult,
-} from "../media/media-probe.js";
+import type { MediaProbeResult } from "../media/media-probe.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
 import {
   replacePlaybackFileExtension,
-  resolvePlaybackModeForSource,
+  resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
@@ -470,26 +466,20 @@ async function resolveAssistantMediaAvailability(
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
     await using mediaOwner = opened;
     const mediaKind = kindFromMime(mimeType);
-    const playbackProbe =
-      mediaKind === "audio" || mediaKind === "video"
-        ? await probePlaybackMediaFileDescriptor(mediaOwner.handle.fd, mediaKind)
-        : null;
-    const playback =
+    const playbackMetadata =
       mimeType && (mediaKind === "audio" || mediaKind === "video")
-        ? await resolvePlaybackModeForSource({
-            sourcePath: opened.realPath,
-            sourceStat: opened.stat,
+        ? await resolvePlaybackMetadataForSource({
+            sourcePath: mediaOwner.realPath,
+            sourceStat: mediaOwner.stat,
             mimeType,
             kind: mediaKind,
-            probe: playbackProbe,
           })
         : undefined;
     return {
       available: true,
       ...(mimeType ? { mimeType } : {}),
-      ...(playback ? { playback } : {}),
-      sizeBytes: opened.stat.size,
-      ...toMediaProbeResult(playbackProbe),
+      sizeBytes: mediaOwner.stat.size,
+      ...playbackMetadata,
       ...createAssistantMediaTicket({
         source,
         agentId,

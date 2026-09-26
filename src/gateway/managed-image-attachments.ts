@@ -34,11 +34,10 @@ import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
-import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
 import {
   replacePlaybackFileExtension,
-  resolvePlaybackModeForSource,
+  resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
@@ -1492,14 +1491,13 @@ export async function createManagedOutgoingMediaBlocks(params: {
         let playback: "native" | "transcode" | undefined;
         if (mediaKind === "audio" || mediaKind === "video") {
           await using opened = await openLocalFileSafely({ filePath: savedOriginal.path });
-          const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
-          playback = await resolvePlaybackModeForSource({
+          const metadata = await resolvePlaybackMetadataForSource({
             sourcePath: opened.realPath,
             sourceStat: opened.stat,
             mimeType: savedOriginalContentType,
             kind: mediaKind,
-            probe,
           });
+          playback = metadata.playback;
         }
         const block = buildManagedMediaBlock(record, playback);
         const readScope = captureChannelReadScope();

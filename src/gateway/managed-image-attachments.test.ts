@@ -63,11 +63,8 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
-type PlaybackModeForSourceResolver = (
-  ...args: Parameters<
-    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
-  >
-) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+type PlaybackMetadataForSourceResolver =
+  (typeof import("../media/playback-transcode.js"))["resolvePlaybackMetadataForSource"];
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveSharedSecretHttpOperatorScopesMock = vi.fn();
@@ -75,8 +72,7 @@ const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
-const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
-const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
+const resolvePlaybackMetadataForSourceMock = vi.fn<PlaybackMetadataForSourceResolver>();
 const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
   kind: "passthrough",
 }));
@@ -110,10 +106,10 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  resolvePlaybackModeForSourceMock.mockReset();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
+  resolvePlaybackMetadataForSourceMock.mockReset();
+  resolvePlaybackMetadataForSourceMock.mockImplementation(async ({ mimeType }) => ({
+    playback: mimeType === "audio/x-caf" ? "transcode" : "native",
+  }));
 });
 
 vi.mock("../config/config.js", () => ({
@@ -142,18 +138,14 @@ vi.mock("./session-transcript-readers.js", () => ({
   }),
 }));
 
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probePlaybackMediaFileDescriptorMock,
-}));
-
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
+  resolvePlaybackMetadataForSourceMock.mockImplementation(async ({ mimeType }) => ({
+    playback: mimeType === "audio/x-caf" ? "transcode" : "native",
+  }));
   return {
     ...actual,
-    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
+    resolvePlaybackMetadataForSource: resolvePlaybackMetadataForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
@@ -1655,7 +1647,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     const sourcePath = path.join(stateDir, "workspace", "voice.mp3");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    resolvePlaybackModeForSourceMock.mockRejectedValueOnce(
+    resolvePlaybackMetadataForSourceMock.mockRejectedValueOnce(
       new Error("synthetic playback inspection failure"),
     );
 

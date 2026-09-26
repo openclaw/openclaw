@@ -49,11 +49,6 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
-type PlaybackModeForSourceResolver = (
-  ...args: Parameters<
-    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
-  >
-) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
 type FileHandleRead = (
   target: Uint8Array,
   offset: number,
@@ -65,7 +60,6 @@ type FileHandleRead = (
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
 const runFfprobeMock = vi.hoisted(() => vi.fn(async () => "{}"));
-const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
 );
@@ -78,12 +72,8 @@ vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
   return {
     ...actual,
-    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
@@ -119,10 +109,6 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
   runFfprobeMock.mockReset();
   runFfprobeMock.mockResolvedValue("{}");
-  resolvePlaybackModeForSourceMock.mockReset();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
@@ -1019,29 +1005,55 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("reports assistant audio size, type, and probed duration metadata", async () => {
-    runFfprobeMock.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2.345" } }));
+  it("shares assistant audio metadata probes, retries failures, and reinspects replacements", async () => {
+    const probe = (duration: string) =>
+      JSON.stringify({
+        format: { duration },
+        streams: [{ index: 0, codec_type: "audio", codec_name: "mp3" }],
+      });
+    runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe unavailable"));
+    runFfprobeMock.mockResolvedValue(probe("2.345"));
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-audio-meta-",
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "voice.mp3");
         const contents = Buffer.from("ID3audio-fixture");
         await fs.writeFile(filePath, contents);
-        const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
-          method: "GET",
-          auth: { mode: "token", token: "test-token", allowTailscale: false },
-        });
+        const readMetadata = async () => {
+          const { res, handled, end } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const metadata = responseJson(end);
+          expect(metadata).toMatchObject({
+            available: true,
+            mimeType: "audio/mpeg",
+            playback: "native",
+            sizeBytes: contents.byteLength,
+          });
+          return metadata;
+        };
+        expect(await readMetadata()).not.toHaveProperty("durationMs");
+        expect(runFfprobeMock).toHaveBeenCalledOnce();
+        for (let batch = 0; batch < 2; batch++) {
+          const metadata = await Promise.all(Array.from({ length: 10 }, readMetadata));
+          for (const entry of metadata) {
+            expect(entry).toMatchObject({ durationMs: 2345 });
+          }
+          expect(runFfprobeMock).toHaveBeenCalledTimes(2);
+        }
 
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(responseJson(end)).toMatchObject({
-          available: true,
-          mimeType: "audio/mpeg",
-          playback: "native",
-          sizeBytes: contents.byteLength,
-          durationMs: 2345,
-        });
+        const original = await fs.stat(filePath);
+        const replacement = path.join(tmpRoot, "replacement.mp3");
+        await fs.writeFile(replacement, contents);
+        await fs.utimes(replacement, original.atime, original.mtime);
+        await fs.rename(replacement, filePath);
+        runFfprobeMock.mockResolvedValue(probe("4.567"));
+        expect(await readMetadata()).toMatchObject({ durationMs: 4567 });
+        expect(runFfprobeMock).toHaveBeenCalledTimes(3);
         expect(runFfprobeMock).toHaveBeenCalledWith(expect.any(Array), {
           stdinFileDescriptor: expect.any(Number),
         });
@@ -1050,6 +1062,12 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("marks exotic assistant media metadata for playback transcoding", async () => {
+    runFfprobeMock.mockResolvedValueOnce(
+      JSON.stringify({
+        format: { duration: "1" },
+        streams: [{ index: 0, codec_type: "audio", codec_name: "pcm_s16le" }],
+      }),
+    );
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-transcode-meta-",
       fn: async (tmpRoot) => {

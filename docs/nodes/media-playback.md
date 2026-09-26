@@ -108,6 +108,9 @@ duration/dimensions for media facts and the Control UI `?meta=1` availability
 probe. Video dimensions account for non-square pixels and quarter-turn display
 rotation; image dimensions account for EXIF orientation. Probing is best-effort:
 a missing or failed probe leaves fields absent instead of rejecting the attachment.
+The Gateway shares concurrent metadata inspections for the same local file and
+reuses successful results while that file is unchanged. Replacing or editing the
+file triggers a fresh inspection; failed probes remain retryable.
 
 Gateway-managed assistant attachments use these per-file caps:
 
