@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startSignalIngressMonitor } from "../signal-ingress.js";
@@ -318,6 +319,7 @@ describe("signal reply session init conflict retry", () => {
       channelId: "signal",
       accountId: "default",
       stateDir,
+      now: () => Date.now(),
     });
     const timestamp = 1_700_000_000_777;
     const event = createSignalReceiveEvent({
@@ -342,16 +344,25 @@ describe("signal reply session init conflict retry", () => {
           runTrackedTask: tracked.runTrackedTask,
         }),
       );
+      const dispatched = createDeferred<Awaited<ReturnType<typeof handler>>>();
       const monitor = await startSignalIngressMonitor({
         accountId: "default",
         queue,
-        dispatch: async (incoming, lifecycle) => await handler(incoming, lifecycle),
+        dispatch: (incoming, lifecycle) => {
+          const handling = handler(incoming, lifecycle);
+          dispatched.resolve(handling);
+          return handling;
+        },
         runtime: { error: vi.fn(), log: vi.fn() },
       });
       monitors.push({ monitor, tracked, abort });
-      return { monitor, tracked };
+      return { monitor, tracked, dispatched };
     };
-    const finishOuterAttempt = async (tracked: ReturnType<typeof createTrackedTaskHarness>) => {
+    const finishOuterAttempt = async ({
+      tracked,
+      dispatched,
+    }: Awaited<ReturnType<typeof createIntegratedMonitor>>) => {
+      await dispatched.promise;
       await vi.advanceTimersByTimeAsync(10);
       expect(tracked.tasks).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(7_000);
@@ -378,13 +389,14 @@ describe("signal reply session init conflict retry", () => {
     try {
       const first = await createIntegratedMonitor();
       await first.monitor.receive(event);
-      await finishOuterAttempt(first.tracked);
+      await finishOuterAttempt(first);
       const firstAttempt = await pendingAttempt(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
       await first.monitor.stop();
 
       vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
       const blocked = await createIntegratedMonitor();
+      await blocked.monitor.waitForIdle();
       await vi.advanceTimersByTimeAsync(10);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
       expect(blocked.tracked.tasks).toHaveLength(0);
@@ -392,7 +404,7 @@ describe("signal reply session init conflict retry", () => {
 
       vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
       const second = await createIntegratedMonitor();
-      await finishOuterAttempt(second.tracked);
+      await finishOuterAttempt(second);
       const secondAttempt = await pendingAttempt(2);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(8);
       await second.monitor.stop();
@@ -410,20 +422,21 @@ describe("signal reply session init conflict retry", () => {
 
       vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
       const threshold = await createIntegratedMonitor();
-      await finishOuterAttempt(threshold.tracked);
+      await finishOuterAttempt(threshold);
       const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(12);
       await threshold.monitor.stop();
 
       vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
       const beyond = await createIntegratedMonitor();
-      await finishOuterAttempt(beyond.tracked);
+      await finishOuterAttempt(beyond);
       const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
       await beyond.monitor.stop();
 
       vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
       const blockedRestart = await createIntegratedMonitor();
+      await blockedRestart.monitor.waitForIdle();
       await vi.advanceTimersByTimeAsync(10);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
       expect(blockedRestart.tracked.tasks).toHaveLength(0);
@@ -437,14 +450,13 @@ describe("signal reply session init conflict retry", () => {
       const failures = [...stopped, ...settled].flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
+      vi.useRealTimers();
       try {
         await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         await fs.rm(stateDir, { recursive: true, force: true });
       } catch (error) {
         failures.push(error);
-      } finally {
-        vi.useRealTimers();
       }
       if (failures.length > 0) {
         throw new AggregateError(failures, "Signal ingress cleanup failed");

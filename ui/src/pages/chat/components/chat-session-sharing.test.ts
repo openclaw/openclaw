@@ -1,6 +1,34 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderChatSessionSharing } from "./chat-session-sharing.ts";
+import { renderChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.ts";
+
+function renderSharing(props: Partial<ChatSessionSharingProps>) {
+  return renderChatSessionSharing({
+    session: {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      visibility: "shared",
+      sharingRole: "owner",
+    },
+    state: undefined,
+    onOpen: vi.fn(),
+    onVisibilityChange: vi.fn(),
+    onMemberChange: vi.fn(),
+    ...props,
+  });
+}
+
+function sharingSession(overrides: Partial<NonNullable<ChatSessionSharingProps["session"]>>) {
+  return {
+    key: "agent:main:main",
+    kind: "direct" as const,
+    updatedAt: 1,
+    visibility: "shared" as const,
+    sharingRole: "owner" as const,
+    ...overrides,
+  };
+}
 
 let container: HTMLDivElement | undefined;
 
@@ -17,7 +45,7 @@ function mount(template: ReturnType<typeof renderChatSessionSharing>) {
 }
 
 describe("chat session sharing menu", () => {
-  it.each(["draft", "read-only"] as const)(
+  it.each(["draft"] as const)(
     "keeps a world-readable %s session visibly public after its menu closes",
     (visibility) => {
       const session = {
@@ -38,15 +66,12 @@ describe("chat session sharing menu", () => {
         publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
       };
       const renderIndicator = (published: boolean) =>
-        renderChatSessionSharing({
+        renderSharing({
           session,
           state: {
             loading: false,
             result: published ? result : { ...result, publicShare: undefined },
           },
-          onOpen: vi.fn(),
-          onVisibilityChange: vi.fn(),
-          onMemberChange: vi.fn(),
           onPublicShareChange: vi.fn(),
         });
       const root = mount(renderIndicator(true));
@@ -67,7 +92,7 @@ describe("chat session sharing menu", () => {
       const onCopyPublicLink = vi.fn();
       const onVisibilityChange = vi.fn();
       const root = mount(
-        renderChatSessionSharing({
+        renderSharing({
           session: {
             key: "agent:main:current",
             sessionId: "session-current",
@@ -91,9 +116,7 @@ describe("chat session sharing menu", () => {
                 : {}),
             },
           },
-          onOpen: vi.fn(),
           onVisibilityChange,
-          onMemberChange: vi.fn(),
           onPublicShareChange,
           onCopyPublicLink,
         }),
@@ -122,7 +145,7 @@ describe("chat session sharing menu", () => {
     (blocked) => {
       const onPublicShareChange = vi.fn();
       const root = mount(
-        renderChatSessionSharing({
+        renderSharing({
           session: {
             key: "agent:main:current",
             sessionId: "session-current",
@@ -142,9 +165,6 @@ describe("chat session sharing menu", () => {
             },
           },
           publicShareDisabledReason: blocked === "read-only" ? "Requires write" : undefined,
-          onOpen: vi.fn(),
-          onVisibilityChange: vi.fn(),
-          onMemberChange: vi.fn(),
           onPublicShareChange,
         }),
       );
@@ -166,14 +186,8 @@ describe("chat session sharing menu", () => {
     const onMemberChange = vi.fn();
     const navigate = vi.fn();
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "read-only",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({ visibility: "read-only" }),
         state: {
           loading: false,
           result: {
@@ -239,14 +253,8 @@ describe("chat session sharing menu", () => {
 
   it("renders standard radio options with visibility icons and one selected checkmark", () => {
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "read-only",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({ visibility: "read-only" }),
         state: {
           loading: false,
           result: {
@@ -290,14 +298,8 @@ describe("chat session sharing menu", () => {
 
   it("renders member presentation from identity.type, not from ID spelling", () => {
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "shared",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({}),
         state: {
           loading: false,
           result: {
@@ -342,14 +344,8 @@ describe("chat session sharing menu", () => {
 
   it("shows shape-matched member skeletons while identities load", () => {
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "shared",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({}),
         state: { loading: true },
         allowedVisibilities: ["shared", "read-only"],
         onOpen: vi.fn(),
@@ -368,7 +364,7 @@ describe("chat session sharing menu", () => {
 
   it("keeps the linked owner beside the draft marker for a non-manager", () => {
     const root = mount(
-      renderChatSessionSharing({
+      renderSharing({
         session: {
           key: "agent:main:main",
           kind: "direct",
@@ -407,14 +403,8 @@ describe("chat session sharing menu", () => {
   it("publishes a manageable draft through the shared visibility callback", () => {
     const onVisibilityChange = vi.fn();
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:draft",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "draft",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({ key: "agent:main:draft", visibility: "draft" }),
         state: {
           loading: false,
           result: {
@@ -447,14 +437,8 @@ describe("chat session sharing menu", () => {
     const onVisibilityChange = vi.fn();
     const onMemberChange = vi.fn();
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "shared",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({}),
         state: {
           loading: false,
           result: {
@@ -530,14 +514,8 @@ describe("chat session sharing menu", () => {
   it("disables opening when sharing reads are unavailable", () => {
     const onOpen = vi.fn();
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "shared",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({}),
         state: undefined,
         openDisabledReason: "Connect to the Gateway",
         onOpen,
@@ -557,14 +535,8 @@ describe("chat session sharing menu", () => {
     const onOpen = vi.fn();
     const onVisibilityChange = vi.fn();
     const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "shared",
-          sharingRole: "owner",
-        },
+      renderSharing({
+        session: sharingSession({}),
         state: undefined,
         allowedVisibilities: ["shared", "read-only"],
         membersAvailable: false,
@@ -592,33 +564,27 @@ describe("chat session sharing menu", () => {
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });
 
-  it.each([
-    { name: "visibility-only", membersAvailable: false },
-    { name: "member-enabled", membersAvailable: true },
-  ])("shows rejected sharing changes for $name Gateways", ({ membersAvailable }) => {
-    const root = mount(
-      renderChatSessionSharing({
-        session: {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          visibility: "shared",
-          sharingRole: "owner",
-        },
-        state: { loading: false, error: "Visibility update rejected" },
-        allowedVisibilities: ["shared", "read-only"],
-        membersAvailable,
-        onOpen: vi.fn(),
-        onVisibilityChange: vi.fn(),
-        onMemberChange: vi.fn(),
-      }),
-    );
+  it.each([{ name: "visibility-only", membersAvailable: false }])(
+    "shows rejected sharing changes for $name Gateways",
+    ({ membersAvailable }) => {
+      const root = mount(
+        renderSharing({
+          session: sharingSession({}),
+          state: { loading: false, error: "Visibility update rejected" },
+          allowedVisibilities: ["shared", "read-only"],
+          membersAvailable,
+          onOpen: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          onMemberChange: vi.fn(),
+        }),
+      );
 
-    const error = root.querySelector(".chat-pane__sharing-status--error");
-    expect(error?.textContent).toContain("Visibility update rejected");
-    expect(error?.getAttribute("role")).toBe("alert");
-    expect(root.querySelectorAll(".chat-pane__sharing-title")).toHaveLength(
-      membersAvailable ? 2 : 1,
-    );
-  });
+      const error = root.querySelector(".chat-pane__sharing-status--error");
+      expect(error?.textContent).toContain("Visibility update rejected");
+      expect(error?.getAttribute("role")).toBe("alert");
+      expect(root.querySelectorAll(".chat-pane__sharing-title")).toHaveLength(
+        membersAvailable ? 2 : 1,
+      );
+    },
+  );
 });

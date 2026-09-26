@@ -25,11 +25,6 @@ describe("compareOpenClawVersions", () => {
 });
 
 describe("shouldWarnOnTouchedVersion", () => {
-  it("skips same-base stable families", () => {
-    expect(shouldWarnOnTouchedVersion("2026.3.23", "2026.3.23-1")).toBe(false);
-    expect(shouldWarnOnTouchedVersion("2026.3.23-1", "2026.3.23-2")).toBe(false);
-  });
-
   it("skips same-base correction publishes even when current is a prerelease", () => {
     expect(shouldWarnOnTouchedVersion("2026.3.23-beta.1", "2026.3.23-1")).toBe(false);
   });

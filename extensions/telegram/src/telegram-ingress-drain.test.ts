@@ -1,13 +1,12 @@
 // Telegram ingress drain adapter: dispatch result propagation.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { GrammyError } from "grammy";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSpooledReplayDeferredParticipant,
@@ -27,12 +26,10 @@ import {
 import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.test-support.js";
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-ingress-drain-"));
-  try {
-    return await fn(stateDir);
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-telegram-ingress-drain-", applyEnv: false },
+    ({ stateDir }) => fn(stateDir),
+  );
 }
 
 const cfg = {
@@ -382,6 +379,7 @@ describe("createTelegramIngressMonitor", () => {
         payload,
         { laneKey: testCase.laneKey },
       );
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);

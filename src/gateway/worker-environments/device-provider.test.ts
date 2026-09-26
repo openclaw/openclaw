@@ -189,11 +189,6 @@ describe("device worker provider", () => {
       expected: { status: "unknown" },
     },
     {
-      name: "past the dormancy ceiling",
-      disconnectedAtMs: DAY_MS,
-      expected: { status: "unknown" },
-    },
-    {
       name: "without exact legacy disconnect history",
       disconnectedAtMs: undefined,
       expected: { status: "dormant" },

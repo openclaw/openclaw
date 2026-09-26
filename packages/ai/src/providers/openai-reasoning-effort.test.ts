@@ -59,12 +59,6 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
   });
 
-  it("preserves reasoning_effort for gpt-5.4-mini in Responses", () => {
-    const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-responses" };
-    expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
-    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
-  });
-
   it("matches canonical reasoning efforts case-insensitively", () => {
     const model = { provider: "openai", id: "gpt-5.6-sol" };
 

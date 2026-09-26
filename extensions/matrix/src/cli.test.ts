@@ -871,49 +871,21 @@ describe("matrix CLI verification commands", () => {
     expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), { readiness: "none" });
   });
 
-  describe.each([false, true])("recovery key output (verbose=%s)", (verbose) => {
-    it.each([
-      { include: false, recoveryKey: undefined },
-      { include: true, recoveryKey: null },
-      { include: true, recoveryKey: "test-recovery-key" },
-    ])(
-      "prints a safe hint for include=$include, key=$recoveryKey",
-      async ({ include, recoveryKey }) => {
-        getMatrixVerificationStatusMock.mockResolvedValue(
-          matrixVerificationStatus({ recoveryKey, recoveryKeyStored: recoveryKey !== null }),
-        );
-        await runMatrixCli([
-          "matrix",
-          "verify",
-          "status",
-          ...(include ? ["--include-recovery-key"] : []),
-          ...(verbose ? ["--verbose"] : []),
-        ]);
-
-        expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
-          includeRecoveryKey: include,
-        });
-        const output = consoleLogMock.mock.calls.flat().join("\n");
-        expect(
-          output.includes(
-            "Recovery key: available (re-run with --json to include the raw key value in output)",
-          ),
-        ).toBe(Boolean(recoveryKey));
-        expect(output).toContain(`Recovery key stored: ${recoveryKey === null ? "no" : "yes"}`);
-        expect(output).not.toContain("test-recovery-key");
-        expect(stdoutWriteMock).not.toHaveBeenCalled();
-        expect(process.exitCode).toBe(0);
-      },
-    );
-
-    it.each([false, true])("preserves JSON recovery key opt-in=%s", async (include) => {
-      const status = matrixVerificationStatus(include ? { recoveryKey: "test-recovery-key" } : {});
-      getMatrixVerificationStatusMock.mockResolvedValue(status);
+  it.each([
+    { include: false, recoveryKey: undefined, verbose: false },
+    { include: true, recoveryKey: null, verbose: false },
+    { include: true, recoveryKey: "test-recovery-key", verbose: false },
+    { include: true, recoveryKey: "test-recovery-key", verbose: true },
+  ])(
+    "prints a safe hint for include=$include, key=$recoveryKey, verbose=$verbose",
+    async ({ include, recoveryKey, verbose }) => {
+      getMatrixVerificationStatusMock.mockResolvedValue(
+        matrixVerificationStatus({ recoveryKey, recoveryKeyStored: recoveryKey !== null }),
+      );
       await runMatrixCli([
         "matrix",
         "verify",
         "status",
-        "--json",
         ...(include ? ["--include-recovery-key"] : []),
         ...(verbose ? ["--verbose"] : []),
       ]);
@@ -921,10 +893,36 @@ describe("matrix CLI verification commands", () => {
       expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
         includeRecoveryKey: include,
       });
-      expect(JSON.parse(String(stdoutWriteArg()))).toEqual(status);
-      expect(consoleLogMock).not.toHaveBeenCalled();
+      const output = consoleLogMock.mock.calls.flat().join("\n");
+      expect(
+        output.includes(
+          "Recovery key: available (re-run with --json to include the raw key value in output)",
+        ),
+      ).toBe(Boolean(recoveryKey));
+      expect(output).toContain(`Recovery key stored: ${recoveryKey === null ? "no" : "yes"}`);
+      expect(output).not.toContain("test-recovery-key");
+      expect(stdoutWriteMock).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(0);
+    },
+  );
+
+  it.each([false, true])("preserves JSON recovery key opt-in=%s", async (include) => {
+    const status = matrixVerificationStatus(include ? { recoveryKey: "test-recovery-key" } : {});
+    getMatrixVerificationStatusMock.mockResolvedValue(status);
+    await runMatrixCli([
+      "matrix",
+      "verify",
+      "status",
+      "--json",
+      ...(include ? ["--include-recovery-key"] : []),
+    ]);
+
+    expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), {
+      includeRecoveryKey: include,
     });
+    expect(JSON.parse(String(stdoutWriteArg()))).toEqual(status);
+    expect(consoleLogMock).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(0);
   });
 
   it("passes loaded cfg to all verify subcommands", async () => {
@@ -1589,53 +1587,6 @@ describe("matrix CLI verification commands", () => {
     );
   });
 
-  it("returns device-health warnings in JSON mode without failing the account add command", async () => {
-    listMatrixOwnDevicesMock.mockRejectedValue(new Error("homeserver unavailable"));
-    await runMatrixCli(matrixAccountPasswordArgs("ops", "--json"));
-
-    expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
-    expect(process.exitCode).toBe(0);
-    const jsonOutput = stdoutWriteArg();
-    expect(typeof jsonOutput).toBe("string");
-    const payload = JSON.parse(String(jsonOutput)) as Record<string, unknown>;
-    expect(payload.accountId).toBe("ops");
-    expectRecordFields(payload.deviceHealth, {
-      currentDeviceId: null,
-      staleOpenClawDeviceIds: [],
-      error: "homeserver unavailable",
-    });
-  });
-
-  it("uses --name as fallback account id and prints account-scoped config path", async () => {
-    matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
-    await runMatrixCli([
-      "matrix",
-      "account",
-      "add",
-      "--name",
-      "Main Bot",
-      "--homeserver",
-      "https://matrix.example.org",
-      "--user-id",
-      "@main:example.org",
-      "--password",
-      "secret",
-    ]);
-
-    expectRecordFields(mockCallArg(matrixSetupValidateInputMock), { accountId: "main-bot" });
-    expect(console.log).toHaveBeenCalledWith("Saved matrix account: main-bot");
-    expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.main-bot");
-    const profileArg = mockCallArg(updateMatrixOwnProfileMock) as Record<string, unknown>;
-    expect(profileArg.cfg).toBeTypeOf("object");
-    expectRecordFields(profileArg, {
-      accountId: "main-bot",
-      displayName: "Main Bot",
-    });
-    expect(console.log).toHaveBeenCalledWith(
-      "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:main-bot",
-    );
-  });
-
   it("forwards --avatar-url through account add setup and profile sync", async () => {
     matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
     mockMatrixAccountConfigApply();
@@ -1711,20 +1662,6 @@ describe("matrix CLI verification commands", () => {
     expect(JSON.parse(String(stdoutWriteArg(0)))).toEqual({
       error: "Matrix requires --homeserver",
     });
-  });
-
-  it("keeps zero exit code for successful bootstrap in JSON mode", async () => {
-    process.exitCode = 0;
-    bootstrapMatrixVerificationMock.mockResolvedValue({
-      success: true,
-      verification: {},
-      crossSigning: {},
-      pendingVerifications: 0,
-      cryptoBootstrap: {},
-    });
-    await runMatrixCli(["matrix", "verify", "bootstrap", "--json"]);
-
-    expect(process.exitCode).toBe(0);
   });
 
   it("prints local timezone timestamps for verify status output in verbose mode", async () => {

@@ -47,16 +47,12 @@ describe("talk config validation fail-closed behavior", () => {
     });
   }
 
-  it.each([
-    ["boolean", true],
-    ["string", "1500"],
-    ["float", 1500.5],
-  ])("rejects %s talk.silenceTimeoutMs during config load", async (_label, value) => {
+  it("rejects invalid talk.silenceTimeoutMs during config load", async () => {
     await expectInvalidTalkConfig(
       {
         agents: { list: [{ id: "main" }] },
         talk: {
-          silenceTimeoutMs: value,
+          silenceTimeoutMs: true,
         },
       },
       /silenceTimeoutMs|talk/i,

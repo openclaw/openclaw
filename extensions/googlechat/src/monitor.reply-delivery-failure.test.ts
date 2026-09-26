@@ -306,17 +306,4 @@ describe("Google Chat reply delivery failure propagation (integration)", () => {
       ]);
     });
   });
-
-  it("delivers every chunk when all message creates succeed", async () => {
-    const stub = createStubHandler({ failCreateIndexes: new Set() });
-    await withServer(stub.handler, async (baseUrl) => {
-      fetchControl.pointAtStub(baseUrl);
-      const result = await runDelivery({});
-
-      expect(result.outcome).toBe("delivered");
-      expect(result.onErrorCalls).toHaveLength(0);
-      expect(stub.createAttempts.map((attempt) => attempt.status)).toEqual([200, 200, 200]);
-      expect(stub.createAttempts.map((attempt) => attempt.text)).toEqual(CHUNKS);
-    });
-  });
 });

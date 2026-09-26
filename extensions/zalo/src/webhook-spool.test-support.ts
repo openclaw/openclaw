@@ -1,12 +1,6 @@
 // Zalo tests share isolated durable-ingress state and Bot API envelopes.
-import fs from "node:fs/promises";
-import path from "node:path";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
 import type { zaloWebhookIngressRuntime } from "./webhook-spool.js";
 
@@ -37,32 +31,17 @@ export function createZaloWebhookTestEvent(params?: {
 export async function withZaloWebhookTestQueue<T>(
   fn: (queue: ZaloWebhookTestQueue) => Promise<T>,
 ): Promise<T> {
-  const createdDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-ingress-"),
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-zalo-ingress-" },
+    ({ stateDir }) =>
+      fn(
+        createChannelIngressQueueForTests<ZaloWebhookTestPayload>({
+          channelId: "zalo",
+          accountId: "default",
+          stateDir,
+        }),
+      ),
   );
-  const stateDir = await fs.realpath(createdDir);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  const queue = createChannelIngressQueueForTests<ZaloWebhookTestPayload>({
-    channelId: "zalo",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    return await fn(queue);
-  } finally {
-    try {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
-  }
 }
 
 export async function waitForZaloWebhookVerdict(

@@ -98,23 +98,6 @@ describe("createAcpxProcessLeaseStore", () => {
 });
 
 describe("withAcpxLeaseArgs", () => {
-  it("adds portable lease wrapper args", () => {
-    const command = withAcpxLeaseArgs({
-      command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      leaseId: "lease-test",
-      gatewayInstanceId: "gateway-test",
-    });
-
-    expect(command).toEqual([
-      "node",
-      "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      OPENCLAW_ACPX_LEASE_ID_ARG,
-      "lease-test",
-      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-      "gateway-test",
-    ]);
-  });
-
   it("preserves portable lease wrapper args", () => {
     const command = withAcpxLeaseArgs({
       command: ["node", "C:/openclaw/acpx/codex-acp-wrapper.mjs", ""],

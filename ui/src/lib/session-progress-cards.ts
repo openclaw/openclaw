@@ -419,34 +419,24 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       if (!changed) {
         return;
       }
+      const matchesTarget = (target: ProgressCardGetParams) =>
+        uiSessionEventMatches(
+          {
+            hello: gateway.snapshot.hello,
+            assistantAgentId: target.agentId,
+            sessionKey: target.sessionKey,
+          },
+          changed.key,
+          changed.agentId,
+        );
       for (const [key, { target }] of lifetimes) {
-        if (
-          uiSessionEventMatches(
-            {
-              hello: gateway.snapshot.hello,
-              assistantAgentId: target.agentId,
-              sessionKey: target.sessionKey,
-            },
-            changed.key,
-            changed.agentId,
-          )
-        ) {
+        if (matchesTarget(target)) {
           lifetimes.delete(key);
         }
       }
       let removed = false;
       for (const [key, entry] of entries) {
-        if (
-          uiSessionEventMatches(
-            {
-              hello: gateway.snapshot.hello,
-              assistantAgentId: entry.target.agentId,
-              sessionKey: entry.target.sessionKey,
-            },
-            changed.key,
-            changed.agentId,
-          )
-        ) {
+        if (matchesTarget(entry.target)) {
           retireRefresh(entry);
           entries.delete(key);
           removed = true;

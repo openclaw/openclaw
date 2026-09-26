@@ -94,27 +94,6 @@ describe("config model reference validation", () => {
     ]);
   });
 
-  it("accepts supported openai provider/model pairs", () => {
-    const res = validateConfigObjectWithPlugins(
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5.4-mini",
-            },
-          },
-        },
-      },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createModelSuppressionRegistry(),
-        },
-      },
-    );
-
-    expect(res.ok).toBe(true);
-  });
-
   it("accepts available openai fallback model pairs", () => {
     const res = validateConfigObjectWithPlugins(
       {

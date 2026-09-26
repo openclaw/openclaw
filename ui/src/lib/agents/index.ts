@@ -253,7 +253,6 @@ export function createAgentCapability(
   };
   const files = new Map<string, AgentFilesStatus>();
   const fileRequests = new Map<string, Promise<AgentsFilesListResult | null>>();
-  const fileRequestOwners = new Map<string, symbol>();
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
   let listRevision = 0;
@@ -355,12 +354,10 @@ export function createAgentCapability(
     status.loading = true;
     status.error = null;
     publish();
-    const owner = Symbol("agent-files-request-owner");
-    fileRequestOwners.set(agentId, owner);
-    const request = scope.client
+    const request: Promise<AgentsFilesListResult | null> = scope.client
       .request<AgentsFilesListResult | null>("agents.files.list", { agentId })
       .then((result) => {
-        const current = lifecycle.isCurrent(scope) && fileRequestOwners.get(agentId) === owner;
+        const current = lifecycle.isCurrent(scope) && fileRequests.get(agentId) === request;
         if (current && result) {
           status.list = result;
           status.error = null;
@@ -368,16 +365,15 @@ export function createAgentCapability(
         return current ? status.list : null;
       })
       .catch((err: unknown) => {
-        if (lifecycle.isCurrent(scope) && fileRequestOwners.get(agentId) === owner) {
+        if (lifecycle.isCurrent(scope) && fileRequests.get(agentId) === request) {
           status.error = formatUiError(err);
         }
         return null;
       })
       .finally(() => {
-        const currentRequest = fileRequestOwners.get(agentId) === owner;
+        const currentRequest = fileRequests.get(agentId) === request;
         if (currentRequest) {
           fileRequests.delete(agentId);
-          fileRequestOwners.delete(agentId);
         }
         if (currentRequest && lifecycle.isCurrent(scope)) {
           status.loading = false;
@@ -405,7 +401,6 @@ export function createAgentCapability(
     if (connectionChanged && (clientChanged || !connected)) {
       retireAgentsRequest();
       fileRequests.clear();
-      fileRequestOwners.clear();
       for (const status of files.values()) {
         status.loading = false;
       }
@@ -447,7 +442,6 @@ export function createAgentCapability(
       for (const agentId of normalizedIds) {
         changed = files.delete(agentId) || changed;
         changed = fileRequests.delete(agentId) || changed;
-        changed = fileRequestOwners.delete(agentId) || changed;
       }
       if (changed) {
         publish();
@@ -466,7 +460,6 @@ export function createAgentCapability(
       // A confirmed file result supersedes lists already in flight. Retain the
       // full canonical list so their awaiting callers can still read it.
       fileRequests.delete(agentId);
-      fileRequestOwners.delete(agentId);
       const entry = { ...file };
       delete entry.content;
       const entries = status.list.files;
@@ -490,7 +483,6 @@ export function createAgentCapability(
       stopGateway();
       listeners.clear();
       fileRequests.clear();
-      fileRequestOwners.clear();
       files.clear();
       retireAgentsRequest();
     },
