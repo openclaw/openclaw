@@ -185,6 +185,9 @@ installation's `dist`. Stop the matching Gateway before rebuilding its files.
 
 Doctor and deep status provide read-only `schtasks /Query` hints for extra Scheduled Tasks, including Node hosts. Discovery shares one 60-second budget across the inventory query, Startup directory scan, and launcher inspection. If it expires, completed discoveries remain available and Doctor reports that some services could not be inspected. Review the registered command and purpose before choosing removal through the service's owner.
 
+Doctor recognizes the waiting VBS launcher shipped with 2026.9.3 during an owned
+service refresh. Custom launcher behavior still preserves the existing definition.
+
 Doctor compares task definitions using Task Scheduler's defaults. An omitted
 `Enabled` element means `true` for both the task and its logon trigger, so XML
 export differences do not cause drift warnings or failed refresh verification.

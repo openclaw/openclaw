@@ -279,6 +279,8 @@ export async function auditScheduledTaskDefinition(
         sourcePath
     ) {
       const legacy = `CreateObject("WScript.Shell").Run """${sourcePath.replaceAll('"', '""')}""", 0, False`;
+      // 2026.9.3 emitted this waiting launcher before the supervisor environment marker.
+      const releasedWaiting = `WScript.Quit CreateObject("WScript.Shell").Run("""${sourcePath.replaceAll('"', '""')}""", 0, True)`;
       const generated = buildHiddenLauncherScript({
         scriptPath: sourcePath,
         taskSupervisor: command?.environment?.OPENCLAW_SERVICE_KIND === "gateway",
@@ -291,7 +293,7 @@ export async function auditScheduledTaskDefinition(
       });
       if (
         installedLauncher !== undefined &&
-        ![legacy, generated].some(
+        ![legacy, releasedWaiting, generated].some(
           (candidate) => normalize(candidate) === normalize(installedLauncher),
         )
       ) {
