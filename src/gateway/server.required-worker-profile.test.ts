@@ -14,6 +14,7 @@ import {
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createRequiredWorkerSessionPreparation } from "./server-worker-required-profile.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
+import * as sessionWorktreePreparation from "./session-worktree-preparation.js";
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -380,9 +381,13 @@ test.each(["missing", "different", "matching"] as const)(
   },
 );
 
-test.each(["failed", "reclaimed"] as const)(
-  "required %s recovery retains the recorded profile and exact placement fence",
-  async (state) => {
+test.each([
+  ["failed", false],
+  ["reclaimed", false],
+  ["failed", true],
+] as const)(
+  "required %s recovery (late=%s) retains the recorded profile and exact placement fence",
+  async (state, late) => {
     const { storePath } = await createSessionStoreDir();
     const config = await getGatewayConfigModule();
     await config.writeConfigFile({
@@ -456,6 +461,9 @@ test.each(["failed", "reclaimed"] as const)(
       throw reached;
     });
     const freshDispatch = vi.fn();
+    const freshWorkspace = vi
+      .spyOn(sessionWorktreePreparation, "prepareSessionWorktree")
+      .mockRejectedValue(new Error("fresh workspace setup reached"));
     const prepare = createRequiredWorkerSessionPreparation({
       getConfig: config.getRuntimeConfig,
       placements,
@@ -471,26 +479,35 @@ test.each(["failed", "reclaimed"] as const)(
       }),
       dispatch: { dispatch: freshDispatch, waitForInitialPlacement: vi.fn() } as never,
     });
-    await expect(prepare(identity)).rejects.toBe(reached);
-    expect(recoveredDispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...identity,
-        profileId: "dedicated-native",
-        requiredProfile: "dedicated-native",
-        deviceId: "original-node",
-        inheritedProfile: { providerId: "device", profileSnapshot },
-        expectedPlacement: {
-          state,
-          generation: terminal.generation,
-          environmentId: terminal.environmentId,
-          activeOwnerEpoch: terminal.activeOwnerEpoch,
-        },
-      }),
-      undefined,
-      expect.any(Function),
-      expect.any(AbortSignal),
-    );
+    if (late) {
+      // The initial admission read predates failure; every re-read sees the real
+      // persisted previously-active failure after lifecycle acquisition yields.
+      vi.spyOn(placements, "get").mockReturnValueOnce(undefined);
+      await expect(prepare(identity)).rejects.toThrow("Required worker placement is not ready");
+      expect(recoveredDispatch).not.toHaveBeenCalled();
+    } else {
+      await expect(prepare(identity)).rejects.toBe(reached);
+      expect(recoveredDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...identity,
+          profileId: "dedicated-native",
+          requiredProfile: "dedicated-native",
+          deviceId: "original-node",
+          inheritedProfile: { providerId: "device", profileSnapshot },
+          expectedPlacement: {
+            state,
+            generation: terminal.generation,
+            environmentId: terminal.environmentId,
+            activeOwnerEpoch: terminal.activeOwnerEpoch,
+          },
+        }),
+        undefined,
+        expect.any(Function),
+        expect.any(AbortSignal),
+      );
+    }
     expect(freshDispatch).not.toHaveBeenCalled();
+    expect(freshWorkspace).not.toHaveBeenCalled();
     expect(managedWorktrees.findLiveByOwner("session", identity.sessionKey)).toBeUndefined();
     expect(placements.get(identity.sessionId)).toEqual(terminal);
   },

@@ -242,6 +242,7 @@ export function createRequiredWorkerSessionPreparation(options: {
         !placement ||
         placement.state === "local" ||
         (placement.state === "failed" &&
+          placement.activeOwnerEpoch === null &&
           isFailedWorkerPlacementEnvironmentGone({
             placement,
             environmentService: options.environments,
