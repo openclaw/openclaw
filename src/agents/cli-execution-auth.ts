@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 
@@ -65,9 +66,17 @@ export function resolveCliExecutionAuthProfileId(params: {
   if (!hasExplicitSelection && params.sessionBinding && !sessionAuthProfileId) {
     return undefined;
   }
+  // Binding affinity keeps native --resume valid, but it must yield when the bound
+  // profile is currently unusable (billing disable, block, or cooldown). A failover
+  // for those reasons does not clear the binding
+  // (isCliSessionInvalidatingFailoverReason only invalidates on session_expired), so
+  // retaining it would re-run every turn on a known-bad profile. Falling through to
+  // the automatic order lets a healthy profile take over. User pins are unaffected:
+  // an explicit selection must fail closed rather than run as another account.
   const retainedProfileId = hasExplicitSelection
     ? selectedAuthProfileId
     : sessionAuthProfileId &&
+        !isProfileInCooldown(store, sessionAuthProfileId) &&
         (store.profiles[sessionAuthProfileId] ||
           nativeAuthProfileIds?.includes(sessionAuthProfileId))
       ? sessionAuthProfileId
