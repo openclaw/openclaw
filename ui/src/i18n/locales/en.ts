@@ -4544,6 +4544,7 @@ export const en: TranslationMap & {
       timeoutHelp: "Optional. Leave blank to use the gateway default timeout for this run.",
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
+      promptPreview: "Preview rendered Markdown",
       deliveryModeLabel: "Mode",
       announceDefault: "Announce summary",
       webhookPost: "Webhook POST",

@@ -105,7 +105,10 @@ suite.define(() => {
             .locator("#cron-payload-text")
             .fill("Summarize the fictional garden inventory.");
           if (keyboardName) {
-            for (let field = 0; field < 4; field++) {
+            // The prompt preview's <summary> is a focusable disclosure between the
+            // textarea and the Action select, adding one tab stop before Name.
+            await page.locator(".cron-payload-preview__summary").waitFor({ state: "visible" });
+            for (let field = 0; field < 5; field++) {
               await page.keyboard.press("Tab");
             }
             expect(

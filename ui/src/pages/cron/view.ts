@@ -40,6 +40,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { renderPromptPreview } from "./prompt-preview.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderJobsFilterPopover } from "./view-jobs-filter.ts";
@@ -1231,10 +1232,9 @@ function renderPromptSection(
           ></textarea>
         `,
   });
-  const actionLabel = t("cron.form.action");
   const actionRow = ctx.payloadLocked
     ? renderFieldRow({
-        label: actionLabel,
+        label: t("cron.form.action"),
         controlId: inputIdForField("payloadKind"),
         control: html`
           <input
@@ -1246,13 +1246,12 @@ function renderPromptSection(
         `,
       })
     : renderCronSelectField(props, "payloadKind", {
-        label: actionLabel,
+        label: t("cron.form.action"),
         options: [
           { value: "systemEvent", label: t("cron.form.systemEvent") },
           { value: "agentTurn", label: t("cron.form.agentTurn") },
         ],
       });
-  const modelLabel = t("cron.form.model");
   const modelError = props.fieldErrors.payloadModel;
   const modelOptions = uniqueStrings(props.modelSuggestions).map((value) => {
     const provider = providerIdFromModelRef(value);
@@ -1261,14 +1260,14 @@ function renderPromptSection(
   const agentTurnRows = ctx.isAgentTurn
     ? html`
         ${renderFieldRow({
-          label: modelLabel,
+          label: t("cron.form.model"),
           controlId: "",
           help: t("cron.form.modelHelp"),
           error: modelError,
           errorId: errorIdForField("payloadModel"),
           control: renderModelPicker({
             id: "cron-payload-model-picker",
-            label: modelLabel,
+            label: t("cron.form.model"),
             value: props.form.payloadModel,
             options: [{ value: "", label: t("quickSettings.model.default") }, ...modelOptions],
             custom: {
@@ -1291,7 +1290,8 @@ function renderPromptSection(
         })}
       `
     : nothing;
-  return renderSettingsSection({}, html`${promptRow}${actionRow}${agentTurnRows}`);
+  const preview = renderPromptPreview(ctx, payloadText);
+  return renderSettingsSection({}, html`${promptRow}${preview}${actionRow}${agentTurnRows}`);
 }
 
 function renderGeneralSection(props: CronProps) {

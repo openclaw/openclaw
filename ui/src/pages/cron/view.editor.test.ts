@@ -353,6 +353,32 @@ describe("cron view editor", () => {
     );
   });
 
+  it("renders a Markdown preview of the agent-turn prompt but not for other payload kinds", () => {
+    const agentTurn = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText: "# Heading\n\ntext" },
+    });
+    const preview = agentTurn.querySelector(".cron-payload-preview__body");
+    expect(preview?.querySelector("h1")?.textContent).toBe("Heading");
+
+    const empty = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText: "" },
+    });
+    expect(empty.querySelector(".cron-payload-preview")).toBeNull();
+
+    const systemEvent = renderView({
+      createOpen: true,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        payloadKind: "systemEvent",
+        sessionTarget: "main",
+        payloadText: "# Heading",
+      },
+    });
+    expect(systemEvent.querySelector(".cron-payload-preview")).toBeNull();
+  });
+
   it("waits for scheduler status before presenting trigger capability", () => {
     const pending = renderView({ createOpen: true, status: null });
 

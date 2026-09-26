@@ -657,6 +657,24 @@
   outline-offset: 1px;
 }
 
+/* Read-only Markdown preview shown alongside the agent-turn prompt textarea. */
+.cron-payload-preview {
+  margin-top: var(--space-2);
+}
+
+.cron-payload-preview__summary {
+  cursor: var(--cursor-action);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-payload-preview__body {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
 .cron-inline-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
