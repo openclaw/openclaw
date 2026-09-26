@@ -135,7 +135,8 @@ it.each([
     expect(mocks.attempt).toHaveBeenCalledTimes(1);
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
     expect(outbound).toHaveBeenCalledTimes(1);
-    expect(outbound).toHaveBeenCalledWith(
+    // The internal delivery seam takes an optional trailing options argument.
+    expect(outbound.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         channel: "slack",
         to: "channel:C-SUPERVISED",
