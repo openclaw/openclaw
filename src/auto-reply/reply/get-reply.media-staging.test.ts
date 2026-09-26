@@ -17,6 +17,21 @@ import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import "./get-reply.test-runtime-mocks.js";
 
+const privateSelection = {
+  skillId: "00000000-0000-0000-0000-000000000001",
+  revision: "0".repeat(64),
+  name: "private-proof",
+  ownerProfileId: "private-profile",
+};
+const privateSnapshot = { prompt: "", skills: [], librarySelections: [privateSelection] };
+vi.mock("../../skills/runtime/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(async () => ({
+    snapshot: privateSnapshot,
+    shouldRefresh: false,
+    snapshotVersion: 0,
+  })),
+}));
+
 const mocks = vi.hoisted(() => ({
   initSessionState: vi.fn(),
   resolveReplySessionPreprocessingState: vi.fn(),
@@ -51,7 +66,7 @@ beforeAll(async () => {
   });
 });
 
-it.each(["remote preprocessing", "local staging"] as const)(
+it.each(["remote preprocessing", "remote preprocessing (new)", "local staging"] as const)(
   "cancels %s before downstream work and waits for staging cleanup",
   async (phase) => {
     await withOpenClawTestState(
@@ -85,9 +100,18 @@ it.each(["remote preprocessing", "local staging"] as const)(
         vi.mocked(runPreparedReply).mockReset().mockResolvedValue({ text: "must not reply" });
         mocks.createInternalHookEvent.mockClear();
         mocks.triggerInternalHook.mockClear();
+        const remotePreprocessing = phase !== "local staging";
         const ctx = buildGetReplyGroupCtx({
           media: [{ path: "/remote/photo.jpg", contentType: "image/jpeg" }],
-          MediaRemoteHost: phase === "remote preprocessing" ? "user@gateway-host" : undefined,
+          MediaRemoteHost: remotePreprocessing ? "user@gateway-host" : undefined,
+          ...(phase === "remote preprocessing (new)"
+            ? {
+                SessionCreation: {
+                  via: "operator" as const,
+                  skillLibrarySelections: [privateSelection],
+                },
+              }
+            : {}),
         });
         mocks.initSessionState.mockReset().mockResolvedValue(
           createGetReplySessionState({
@@ -97,7 +121,10 @@ it.each(["remote preprocessing", "local staging"] as const)(
           }),
         );
         mocks.resolveReplySessionPreprocessingState.mockReset().mockReturnValue({
-          sessionEntry: undefined,
+          sessionEntry:
+            phase === "remote preprocessing"
+              ? { skillLibrarySelections: [privateSelection] }
+              : undefined,
           sessionKey: ctx.SessionKey,
           storePath: state.path("sessions.json"),
         });
@@ -127,7 +154,12 @@ it.each(["remote preprocessing", "local staging"] as const)(
         const joined = reply.then(replySettlement, replySettlement);
         try {
           await vi.waitFor(() => expect(stageSandboxMedia).toHaveBeenCalledOnce());
-          const preprocessingCalls = phase === "remote preprocessing" ? 0 : 1;
+          if (remotePreprocessing) {
+            expect(stageSandboxMedia).toHaveBeenCalledWith(
+              expect.objectContaining({ skillsSnapshot: privateSnapshot }),
+            );
+          }
+          const preprocessingCalls = remotePreprocessing ? 0 : 1;
           expect(applyMediaUnderstanding).toHaveBeenCalledTimes(preprocessingCalls);
           expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(preprocessingCalls);
           controller.abort(reason);

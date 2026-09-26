@@ -11,6 +11,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
@@ -22,6 +23,7 @@ import {
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import {
   explicitOriginTargetsAcpSession,
   explicitOriginTargetsPluginBinding,
@@ -30,6 +32,7 @@ import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 function isPdfOffloadedRef(ref: OffloadedRef): boolean {
@@ -61,6 +64,8 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  skillLibrarySelections?: SkillSnapshot["librarySelections"];
+  existingSkillsSnapshot?: SkillSnapshot;
   abortSignal: AbortSignal;
   assertWorkAdmissionCurrent: () => void;
 }): Promise<MediaFact[]> {
@@ -97,11 +102,28 @@ async function prestageMediaPathOffloads(params: {
     if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
       return refsByManagedPath(mediaPathRefs);
     }
+    const skillsSnapshot = params.skillLibrarySelections?.length
+      ? (
+          await (
+            await import("../../skills/runtime/session-snapshot.js")
+          ).resolveReusableWorkspaceSkillSnapshot({
+            workspaceDir,
+            config: params.cfg,
+            agentId: params.agentId,
+            existingSnapshot: params.existingSkillsSnapshot,
+            librarySelections: params.skillLibrarySelections,
+            assertCurrent: params.assertWorkAdmissionCurrent,
+          })
+        ).snapshot
+      : undefined;
+    params.abortSignal.throwIfAborted();
+    params.assertWorkAdmissionCurrent();
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir,
+      skillsSnapshot,
     });
     if (!sandbox) {
       return refsByManagedPath(mediaPathRefs);
@@ -134,6 +156,7 @@ async function prestageMediaPathOffloads(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
+        skillsSnapshot,
         abortSignal: params.abortSignal,
       });
     } catch (stageErr) {
@@ -199,8 +222,9 @@ export async function prepareChatSendAttachments(params: {
   admission: AdmittedChatSend;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  client?: GatewayRequestHandlerOptions["client"];
 }) {
-  const { request, session, admission, respond, context } = params;
+  const { request, session, admission, respond, context, client } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
   const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
   const {
@@ -257,12 +281,26 @@ export async function prepareChatSendAttachments(params: {
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
+          const stagingEntry =
+            admission.initialSessionEntry ?? admission.admittedSessionEntry ?? session.entry;
+          const selectedSkills = stagingEntry
+            ? (stagingEntry.skillLibrarySelections ??
+              stagingEntry.skillsSnapshot?.librarySelections)
+            : request.systemInputProvenance
+              ? undefined
+              : prepareSkillLibrarySessionCreation(
+                  client,
+                  context.getRuntimeConfig ?? cfg,
+                  resolveOperatorSessionCreation(client),
+                ).skillLibrarySelections;
           mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,
             includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,
+            skillLibrarySelections: selectedSkills,
+            existingSkillsSnapshot: stagingEntry?.skillsSnapshot,
             abortSignal: activeRunAbort.controller.signal,
             assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
           });
