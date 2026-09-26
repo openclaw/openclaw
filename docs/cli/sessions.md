@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for listing, archiving, deleting, and maintaining stored sessions"
+summary: "CLI reference for listing, searching, archiving, deleting, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
+  - You want to full-text search past session transcripts from a terminal
   - You want to archive or delete sessions from a headless Gateway
 title: "Sessions"
 ---
@@ -492,6 +493,86 @@ Example truncate response (`--max-lines 200`):
   "kept": 200
 }
 ```
+
+## Search session transcripts
+
+Find where a topic, decision, or value was discussed. `openclaw sessions
+search <query>` is the first-class wrapper around the `sessions.search` Gateway
+RPC — the same full-text search the Control UI transcript search uses — and
+requires a running Gateway.
+
+```bash
+openclaw sessions search "deploy plan"
+openclaw sessions search "timeout" --limit 25
+openclaw sessions search "release checklist" --session "agent:main:main"
+openclaw sessions search "api key" --agent work --session "agent:work:main" --json
+```
+
+- `<query>`: full-text query over stored transcripts (1–4096 characters).
+- `--session <key>`: restrict the search to a session key; repeatable. Blank
+  values are rejected instead of being dropped, so an unset shell variable
+  (`--session "$SESSION_KEY"`) cannot silently widen the search to the agent's
+  whole store.
+- `--agent <id>`: agent that owns the listed session keys. The gateway scopes
+  agent searches to explicit `--session` keys, so `--agent` requires at least
+  one `--session`.
+- `--limit <n>`: max hits to return (1–25; gateway default 10). The flag is
+  registered on `search` itself and on the parent `sessions` command, so both
+  spellings work: `openclaw sessions search <query> --limit 5` and
+  `openclaw sessions --limit 5 search <query>`.
+- `--url` / `--token` / `--password`: Gateway connection overrides.
+- `--timeout <ms>`: optional client-side RPC timeout in milliseconds. When the
+  flag is omitted the command uses its bounded default request deadline instead
+  of waiting indefinitely on a connected but unresponsive Gateway.
+- `--json`: print the raw `SessionsSearchResult` payload.
+
+Human output prints one block per hit: session key, role, ISO timestamp, FTS
+score, and a sanitized one-line snippet. Visibility and incognito-session
+filtering are enforced gateway-side, so results only cover sessions the
+connecting operator is allowed to read. A single call searches one agent's
+stored transcripts, and the Gateway owns that selection for an unscoped query:
+it resolves the agent from the configured agents and the persisted owner of the
+session key, and it rejects ambiguous multi-agent configurations instead of
+guessing. Use `--agent <id>` together with at least one `--session <key>` (or
+agent-prefixed session keys) when you need a specific agent. Because results
+never merge across agents, an empty result is not proof that the term is absent
+from every agent's transcripts. The command exits non-zero when the Gateway is
+unreachable or rejects the query; an empty result set is a normal exit with
+`No matching sessions found`.
+
+### sessions.search RPC
+
+`openclaw gateway call sessions.search --params '<json>'` accepts:
+
+| Field         | Type             | Required | Description                                |
+| ------------- | ---------------- | -------- | ------------------------------------------ |
+| `query`       | string           | yes      | Full-text query (1–4096 characters).       |
+| `sessionKeys` | string[] (1–200) | no       | Restrict the search to these session keys. |
+| `agentId`     | string           | no       | Agent id; requires `sessionKeys`.          |
+| `limit`       | integer 1–25     | no       | Max hits to return (default 10).           |
+
+Example response:
+
+```json
+{
+  "results": [
+    {
+      "sessionKey": "agent:main:main",
+      "sessionId": "6f1c…",
+      "messageId": "m-9",
+      "role": "user",
+      "timestamp": 1757700000000,
+      "snippet": "we should redeploy the gateway tonight",
+      "score": 8.25
+    }
+  ],
+  "indexing": false,
+  "archivedTranscriptsExcluded": 0
+}
+```
+
+`indexing: true` means the first-use transcript index reconcile is still
+running and results may be incomplete.
 
 ## Related
 
