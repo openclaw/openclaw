@@ -6,46 +6,78 @@ import Testing
 @MainActor
 struct ExecApprovalPromptLayoutTests {
     @Test func `queued prompt expires without later presentation`() async throws {
-        let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
-        defer { ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation) }
+        try await TestIsolation.withIsolatedState {
+            let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+            defer { ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation) }
 
-        let decision = await ExecApprovalsPromptPresenter.prompt(
-            ExecApprovalPromptRequest(command: "/usr/bin/printf ok"),
-            timeoutMs: 1)
+            let decision = await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(command: "/usr/bin/printf ok"),
+                timeoutMs: 1)
 
-        #expect(decision == nil)
-        #expect(ExecApprovalsPromptPresenter.pendingPromptCountForTesting == 0)
+            #expect(decision == nil)
+            #expect(ExecApprovalsPromptPresenter.pendingPromptCountForTesting == 0)
+        }
     }
 
     @Test func `active prompt expiry releases presentation for the next request`() async throws {
-        for command in ["/usr/bin/printf first", "/usr/bin/printf second"] {
-            let decision = await ExecApprovalsPromptPresenter.prompt(
-                ExecApprovalPromptRequest(command: command),
-                timeoutMs: 20)
+        try await TestIsolation.withIsolatedState {
+            for command in ["/usr/bin/printf first", "/usr/bin/printf second"] {
+                let decision = await ExecApprovalsPromptPresenter.prompt(
+                    ExecApprovalPromptRequest(command: command),
+                    timeoutMs: 20)
 
-            #expect(decision == nil)
-            let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
-            ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+                #expect(decision == nil)
+                let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+                ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+            }
         }
     }
 
     @Test func `cancelling an active prompt releases presentation for the next request`() async throws {
-        let prompt = Task {
-            await ExecApprovalsPromptPresenter.prompt(
-                ExecApprovalPromptRequest(command: "/usr/bin/printf cancelled"))
-        }
-        defer { prompt.cancel() }
-        await Task.yield()
-        try await Task.sleep(for: .milliseconds(20))
-        prompt.cancel()
+        try await TestIsolation.withIsolatedState {
+            let prompt = Task {
+                await ExecApprovalsPromptPresenter.prompt(
+                    ExecApprovalPromptRequest(command: "/usr/bin/printf cancelled"))
+            }
+            defer { prompt.cancel() }
+            await Task.yield()
+            try await Task.sleep(for: .milliseconds(20))
+            prompt.cancel()
 
-        #expect(await prompt.value == nil)
-        let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
-        ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
-        let nextDecision = await ExecApprovalsPromptPresenter.prompt(
-            ExecApprovalPromptRequest(command: "/usr/bin/printf next"),
-            timeoutMs: 20)
-        #expect(nextDecision == nil)
+            #expect(await prompt.value == nil)
+            let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+            let nextDecision = await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(command: "/usr/bin/printf next"),
+                timeoutMs: 20)
+            #expect(nextDecision == nil)
+        }
+    }
+
+    @Test func `queued prompt rechecks eligibility before presentation`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+            var eligible = true
+            var eligibilityChecks = 0
+            let prompt = Task {
+                await ExecApprovalsPromptPresenter.prompt(
+                    ExecApprovalPromptRequest(command: "/usr/bin/printf stale"),
+                    timeoutMs: 100,
+                    isStillEligible: {
+                        eligibilityChecks += 1
+                        return eligible
+                    })
+            }
+            #expect(await Self.waitForPendingPromptCount(1))
+
+            eligible = false
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+
+            #expect(await prompt.value == nil)
+            #expect(eligibilityChecks == 1)
+            let nextReservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: nextReservation)
+        }
     }
 
     @Test func `allowed decisions omit durable approval even when ask allows it`() {
@@ -240,6 +272,16 @@ struct ExecApprovalPromptLayoutTests {
             ExecApprovalsPromptPresenter.sanitizedContextValue(spoofed) ==
                 "safe\\u{202E}txt\\u{A}next")
         #expect(ExecApprovalsPromptPresenter.sanitizedContextValue(" \n\t ") == nil)
+    }
+
+    private static func waitForPendingPromptCount(_ count: Int) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ExecApprovalsPromptPresenter.pendingPromptCountForTesting != count,
+              ContinuousClock.now < deadline
+        {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        return ExecApprovalsPromptPresenter.pendingPromptCountForTesting == count
     }
 
     private func descendants(of view: NSView) -> [NSView] {
