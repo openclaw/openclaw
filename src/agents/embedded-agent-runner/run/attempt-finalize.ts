@@ -28,6 +28,7 @@ import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-typ
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
+import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
 import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
   resolveAttemptTrajectoryTerminal,
@@ -212,7 +213,11 @@ export async function completeEmbeddedAttemptAfterTurn(
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
     if (attempt.onContextEngineTurnCandidate) {
       const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const terminalEntryId = sessionManager.getLeafId() ?? undefined;
+      // A post-turn custom entry (e.g. the cache-TTL marker) owns the leaf after a
+      // durable turn, and side artifact anchors resolve to undefined for it: the
+      // terminal identity must be the nearest materialized message entry on the
+      // leaf chain, not the leaf itself (#156425).
+      const terminalEntryId = resolveTerminalMessageEntryId(sessionManager) ?? undefined;
       const terminal =
         admission && terminalEntryId
           ? readActiveTranscriptEntryAnchor({
