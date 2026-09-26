@@ -203,7 +203,7 @@ describe("sanitizeRedactedFormForSubmit", () => {
     );
   });
 
-  it("prunes empty object parents when they are absent from original raw config", () => {
+  it("prunes parents emptied by omitted placeholders when absent from original raw config", () => {
     const form = {
       gateway: {
         remote: {
@@ -220,6 +220,29 @@ describe("sanitizeRedactedFormForSubmit", () => {
       ui: { theme: "dark" },
     });
   });
+
+  it("keeps an authored empty sibling while removing unrestorable redacted descendants", () => {
+    const originalForm = {
+      talk: { providers: { generated: { nested: { apiKey: "__OPENCLAW_REDACTED__" } } } },
+    };
+    const form = {
+      talk: { providers: { ...originalForm.talk.providers, "custom-1": {} } },
+    };
+
+    expect(sanitizeRedactedFormForSubmit(form, originalForm, {})).toEqual({
+      talk: { providers: { "custom-1": {} } },
+    });
+  });
+
+  it.each([{}, { providers: {} }])(
+    "preserves an explicitly emptied secret-bearing subtree: %j",
+    (talk) => {
+      const originalForm = {
+        talk: { providers: { generated: { apiKey: "__OPENCLAW_REDACTED__" } } },
+      };
+      expect(sanitizeRedactedFormForSubmit({ talk }, originalForm, {})).toEqual({ talk });
+    },
+  );
 
   it("does not reindex arrays when a loaded scalar array sentinel is unrestorable", () => {
     const form = {
