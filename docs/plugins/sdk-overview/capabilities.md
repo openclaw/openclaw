@@ -116,6 +116,45 @@ cap. The provider must return one embedding per input chunk in the same order as
 `batch.chunks`; omit the flag when the provider expects file-local batches or
 cannot preserve input ordering across a larger source-wide job.
 
+## Versioned decision data
+
+The focused `openclaw/plugin-sdk/decisions` entrypoint provides additive V2 data
+types and pure validation/conversion helpers for adapters and saved decision fixtures.
+These helpers do not run a provider, collect evidence, choose a model or issue host
+authority. The existing V1 `api.runtime.decisions.evaluate` and
+`registerDecisionProvider` contracts remain unchanged. V2 execution is a separate
+integration; importing V2 data types does not make a V2 runtime available.
+
+`DecisionContentV2` distinguishes text, JSON, image data and stable-ID lists.
+Answers can preserve explicit Boolean decisions separately from P(true), nullable
+choices, fractional scores, native sort/tags, per-question errors and reported
+usage. Missing estimates and costs stay missing. Independent estimates are not
+normalized; categorical distributions retain their declared constraints. Data
+and validation results are never permission to execute an action.
+
+`validateDecisionBatchV2` and `validateDecisionResultV2` enforce the bounded data
+contract. Result validation optionally accepts the route's declared decision
+capabilities. Structural validation alone cannot prove that a provider supports
+an operation, an input modality or a reasoning mode.
+
+The four explicit codecs are `decisionBatchV1ToV2`,
+`decisionBatchV2ToV1`, `decisionResultV1ToV2` and
+`decisionResultV2ToV1`. Unsupported or unrepresentable data returns
+`undefined` instead of being coerced. Malformed batch input throws
+`DecisionContractError`. They preserve values rather than performing inference,
+thresholding, argmax, probability normalization or accounting estimates.
+
+For example, an explicit V2 JSON string cannot become V1 text without losing its
+evidence kind. Rich answers, abstention or accounting that V1 cannot represent
+also cannot be silently downgraded. Compatible conversions may share readonly
+input data; they do not promise an independent deep copy.
+
+Canonical decision metadata can omit unknown question capabilities rather than
+inventing them. Explicit invalid/empty declarations are still rejected. Legacy
+provider-defined probability semantics, confidence declarations and Boolean
+criteria requirements have distinct metadata fields; a metadata declaration is
+not proof of successful inference or provider health.
+
 ## Decision models (contract version 1)
 
 Start with [Decision models](/concepts/decision-models) for model choices,

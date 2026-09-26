@@ -7,7 +7,13 @@ const questionTypes = z
   .min(1)
   .max(5)
   .refine((values) => new Set(values).size === values.length);
-const probabilitySemantics = z.enum(["boolean", "categorical", "independent", "none"]);
+const probabilitySemantics = z.enum([
+  "boolean",
+  "categorical",
+  "independent",
+  "provider-defined",
+  "none",
+]);
 const question = z
   .object({
     /** Meaning of the supplied numbers, not a claim of calibrated accuracy. */
@@ -17,6 +23,7 @@ const question = z
     minOptions: positiveInteger.optional(),
     maxOptions: positiveInteger.optional(),
     maxImageOptions: positiveInteger.optional(),
+    requiresCriteria: z.boolean().optional(),
   })
   .refine(
     (value) =>
@@ -84,7 +91,9 @@ export const ModelInferenceCapabilitiesSchema = z.object({
         .min(1)
         .max(2)
         .refine((values) => new Set(values).size === values.length),
-      questions,
+      /** Absent means undeclared kinds/semantics, not an invented support claim. */
+      questions: questions.optional(),
+      confidence: z.enum(["provider-specific", "none"]).optional(),
       reasoning: reasoning.optional(),
       /** Support only. A request still needs explicit shared policy for extra egress/billing. */
       grounding: z
@@ -115,7 +124,8 @@ export const ModelInferenceCapabilitiesSchema = z.object({
       billing: billing.optional(),
     })
     .refine((value) => {
-      const supported = (kind: z.infer<typeof questionType>) => value.questions[kind] !== undefined;
+      const supported = (kind: z.infer<typeof questionType>) =>
+        value.questions === undefined || value.questions[kind] !== undefined;
       return (
         (value.reasoning?.questionTypes?.every(supported) ?? true) &&
         (value.grounding?.questionTypes?.every(supported) ?? true) &&

@@ -45,6 +45,51 @@ function catalog(inference: unknown) {
 }
 
 describe("route inference capabilities", () => {
+  it("retains a decision route with unknown question kinds without filling limits or prices", () => {
+    const inference = {
+      chat: false,
+      decision: { protocol: "decision-v1", input: ["text"] },
+    };
+    const providerCatalog = catalog(inference)?.providers?.fixture;
+    if (!providerCatalog) {
+      throw new Error("Missing legacy route");
+    }
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "fixture",
+      providerCatalog,
+      source: "manifest",
+    });
+    expect(row?.inference).toEqual(inference);
+    expect(row).not.toHaveProperty("cost");
+    expect(row).not.toHaveProperty("contextWindow");
+    expect(row).not.toHaveProperty("maxTokens");
+  });
+
+  it("preserves a five-level score subset instead of advertising arbitrary rubric support", () => {
+    const inference = {
+      chat: false,
+      decision: {
+        protocol: "fixture-scale",
+        input: ["text"],
+        questions: {
+          score: { probabilities: "none", abstention: false, minOptions: 5, maxOptions: 5 },
+        },
+        billing: { unit: "requests", source: "provider-docs" },
+      },
+    };
+    const providerCatalog = catalog(inference)?.providers?.fixture;
+    if (!providerCatalog) {
+      throw new Error("Missing scale route");
+    }
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "fixture",
+      providerCatalog,
+      source: "manifest",
+    });
+    expect(row?.inference).toEqual(inference);
+    expect(row?.inference?.decision?.questions).not.toHaveProperty("choice");
+  });
+
   it("preserves independent probabilities, abstention and task-specific reasoning without inventing chat or prices", () => {
     const normalized = catalog({ chat: false, decision });
     const providerCatalog = normalized?.providers?.fixture;
@@ -109,6 +154,19 @@ describe("route inference capabilities", () => {
     { decision },
     { chat: false, decision: { ...decision, protocol: "https://fixture.invalid/decide" } },
     { chat: false, decision: { ...decision, questions: {} } },
+    { chat: false, decision: { ...decision, questions: null } },
+    { chat: false, decision: { ...decision, questions: [] } },
+    { chat: false, decision: { ...decision, questions: { unknown: {} } } },
+    { chat: false, decision: { ...decision, questions: { boolean: {} } } },
+    {
+      chat: false,
+      decision: {
+        ...decision,
+        questions: {
+          choice: { probabilities: "independent", abstention: true, minOptions: 5, maxOptions: 4 },
+        },
+      },
+    },
     { chat: false, decision: { ...decision, input: ["text", "text"] } },
     { chat: false, decision: { ...decision, reasoning: { modes: ["off"], default: "on" } } },
     {
