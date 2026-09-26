@@ -556,11 +556,10 @@ export function publishSessionSharingEntryChange(
     publishTrackedCacheUpdate(
       database,
       () => {
-        const entries = state.entries;
         if (current !== undefined) {
-          entries.set(update.sessionKey, current);
+          state.entries.set(update.sessionKey, current);
         } else {
-          entries.delete(update.sessionKey);
+          state.entries.delete(update.sessionKey);
         }
       },
       () => stageIncognitoSharingPublication(database.db, update.sessionKey),
