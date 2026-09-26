@@ -367,7 +367,9 @@ describe("fixed-store session bootstrap", () => {
       sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
         async (_target, update, options) => {
           entered.resolve();
-          expect(await update(currentEntry)).toEqual(expectedPatch);
+          expect(await update(currentEntry, { existingEntry: currentEntry })).toEqual(
+            expectedPatch,
+          );
           expect(options?.assertCommitAllowed).toBe(assertCurrent);
           return committed.promise;
         },
