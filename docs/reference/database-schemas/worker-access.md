@@ -34,6 +34,15 @@ asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, coordinator custody, transaction/commit grants,
 and settlement of accepted write-capable work.
 
+Published agent and shared-state database timers dispatch periodic WAL checkpoints
+and bounded page reclamation through those same writers. The existing timer keeps
+its cadence and page budget, releases writer custody between units, and installs
+the worker's checkpoint health only while its original database owner is current.
+Native checkpoint work, file-size diagnostics, and Linux split-brain inspection
+run in the worker. Host admission and physical-identity checks remain on the host.
+Existing worker-local maintenance and synchronous offline/close checkpoints retain
+their owners; durability, schemas, retention, and update behavior are unchanged.
+
 Worker authority requests wait for the retained host owner's grant or refusal;
 host scheduling delays do not expire that authority. The host still checks current
 authority before granting, and broker failure joins worker exit before releasing

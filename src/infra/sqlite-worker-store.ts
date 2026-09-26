@@ -11,6 +11,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
+  type SqliteWorkerStateLifecycle,
 } from "./sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -55,7 +56,7 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
-  requireStateLifecycle = false,
+  requireStateLifecycle: SqliteWorkerStateLifecycle = false,
 ): Promise<T> {
   return withCallerErrors(
     resolveSqliteWorkerBroker().runOperation(

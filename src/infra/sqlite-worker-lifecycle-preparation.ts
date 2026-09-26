@@ -102,6 +102,7 @@ export async function acquireSqliteWorkerLifecycle(params: {
   databasePath: string;
   actorId: string;
   deadlineNs: bigint;
+  maxPollIntervalMs?: number;
   runtime: StateDatabaseCoordinatorRuntime;
   onUnsettled(): void;
 }) {
@@ -148,7 +149,7 @@ export async function acquireSqliteWorkerLifecycle(params: {
       deadlineMs:
         performance.now() + Number(params.deadlineNs - process.hrtime.bigint()) / 1_000_000,
       pollIntervalMs: 25,
-      maxPollIntervalMs: 250,
+      maxPollIntervalMs: params.maxPollIntervalMs ?? 250,
       sleep: (ms) => sleepWithAbort(ms, controller.signal),
       shouldRetry: (error) =>
         error instanceof StateDatabaseCoordinatorContentionError &&
