@@ -203,7 +203,7 @@ function writePersistedInstalledPluginIndexRow(
 
 function writePersistedInstalledPluginIndexToSqlite(
   index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions = {},
+  options: InstalledPluginIndexStoreOptions,
   lease: InstalledPluginIndexWriteLease,
   preserveAdmissions = false,
 ): InstalledPluginIndexWriteReceipt {
