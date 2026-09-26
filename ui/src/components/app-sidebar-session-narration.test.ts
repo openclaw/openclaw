@@ -104,8 +104,8 @@ describe("SidebarSessionNarrationController", () => {
 
   it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
     const visibility = browserVisibility();
-    const subscribed = createDeferred<void>();
-    const released = createDeferred<void>();
+    const subscribed = createDeferred();
+    const released = createDeferred();
     const wireKeys = new Set<string>();
     let releases = 0;
     const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
