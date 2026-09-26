@@ -1,5 +1,10 @@
 import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import {
+  isMessagePresentationInteractiveBlock,
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+} from "../../interactive/payload.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
@@ -38,13 +43,21 @@ export function buildRecoverablePendingFinalDeliveryText(
     if (deliveryPayloads.length === 0) {
       continue;
     }
+    const replayablePayload = downgradeRichTextOnlyForRecovery(recoveryPayload) ?? recoveryPayload;
+    const replayableDeliveryPayloads =
+      replayablePayload === recoveryPayload
+        ? deliveryPayloads
+        : normalizeReplyPayloadsForDelivery([replayablePayload]);
+    if (replayableDeliveryPayloads.length === 0) {
+      continue;
+    }
     if (
-      hasUnsupportedDurableRecoveryShape(recoveryPayload) ||
-      deliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
+      hasUnsupportedDurableRecoveryShape(replayablePayload) ||
+      replayableDeliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
     ) {
       return undefined;
     }
-    sendablePayloads.push(...deliveryPayloads);
+    sendablePayloads.push(...replayableDeliveryPayloads);
   }
   if (
     sendablePayloads.length > 1 &&
@@ -84,6 +97,85 @@ export function resolvePendingFinalDeliveryCompletion(
           : {}),
       }
     : undefined;
+}
+
+/**
+ * Downgrades rich-text-only payloads (visible formatting in `presentation`)
+ * to plain text for durable recovery. Buttons/selects (`presentation`
+ * interactive blocks, or the deprecated `interactive`), threads,
+ * media, voice/video, and delivery directives stay unrecoverable: stripping
+ * them would lose actions, not just formatting.
+ *
+ * A nonempty `text` field alone is not trusted to carry the presentation's
+ * substance: when `presentationTextMode` is not `"fallback"` (the authored
+ * complete plain rendering), the complete shared presentation fallback
+ * (`renderMessagePresentationFallbackText` — titles, text/context blocks,
+ * chart/table) is used, exactly as Telegram delivery does in
+ * `extensions/telegram/src/interactive-fallback.ts`. This preserves the full
+ * visible reply instead of silently dropping titles/text/context.
+ */
+function downgradeRichTextOnlyForRecovery(payload: ReplyPayload): ReplyPayload | undefined {
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  if (presentation === undefined) {
+    return undefined;
+  }
+  if (!payload.text?.trim()) {
+    return undefined;
+  }
+  if (
+    payload.sensitiveMedia === true ||
+    payload.trustedLocalMedia === true ||
+    payload.interactive !== undefined ||
+    payload.btw !== undefined ||
+    payload.delivery !== undefined ||
+    payload.channelData !== undefined ||
+    payload.location !== undefined ||
+    payload.replyToId !== undefined ||
+    payload.replyToTag === true ||
+    payload.replyToCurrent === true ||
+    payload.audioAsVoice === true ||
+    payload.videoAsNote === true ||
+    payload.spokenText !== undefined ||
+    payload.ttsSupplement !== undefined ||
+    hasDurableMedia(payload)
+  ) {
+    return undefined;
+  }
+  // Buttons and select menus live in `presentation` now; `interactive` is only
+  // the deprecated representation. Replaying text:"Pick one" while dropping
+  // its controls would present an incomplete reply as recovered.
+  if (presentation.blocks.some(isMessagePresentationInteractiveBlock)) {
+    return undefined;
+  }
+  const { presentation: _presentation, ...plainPayload } = payload;
+  if (payload.presentationTextMode === "fallback") {
+    return plainPayload;
+  }
+  const currentText = payload.text.trim();
+  // Render presentation alone, then apply the same equality/suffix dedup
+  // Telegram delivery uses in `canonicalizeTelegramPresentationPayload`:
+  // an already-materialized fallback must not be appended again.
+  const presentationFallback = renderMessagePresentationFallbackText({ presentation });
+  const fallbackText = presentationFallback.trim();
+  const completeFallback = !fallbackText
+    ? currentText
+    : currentText === fallbackText || currentText.endsWith(`\n\n${fallbackText}`)
+      ? currentText
+      : [currentText, fallbackText].join("\n\n");
+  // A presentation text line shaped like a MEDIA: directive would become a
+  // delivery instruction on replay. Recovery cannot preserve it literally,
+  // so such payloads stay transport-only.
+  if (/^\s*MEDIA:/im.test(presentationFallback)) {
+    return undefined;
+  }
+  if (!completeFallback.trim()) {
+    return plainPayload;
+  }
+  const { presentationTextMode: _presentationTextMode, ...strippedPayload } = plainPayload;
+  return {
+    ...strippedPayload,
+    text: completeFallback,
+  };
 }
 
 function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {

@@ -196,6 +196,182 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
     ).toBeUndefined();
   });
 
+  it("recovers rich-text-only presentation as plain text instead of losing the reply", () => {
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "## Clienti — Rossi\n| Cliente | Saldo |\n| Rossi | 1.00 € |",
+          presentation: { blocks: [{ type: "text", text: "styled" }] },
+        },
+      ]),
+    ).toContain("Clienti");
+    // Buttons still block: stripping them would lose actions, not just formatting.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Pick one",
+          presentation: { blocks: [{ type: "text", text: "styled" }] },
+          interactive: { blocks: [{ type: "buttons", buttons: [] }] },
+        },
+      ]),
+    ).toBeUndefined();
+    // Media + presentation still blocks: media directives must not cross payloads.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Chart",
+          mediaUrl: "/tmp/a.png",
+          presentation: { blocks: [{ type: "text", text: "styled" }] },
+        },
+      ]),
+    ).toBeUndefined();
+    // Empty text with only styling has nothing worth replaying.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        { text: "   ", presentation: { blocks: [{ type: "text", text: "styled" }] } },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("refuses presentation buttons/selects without the deprecated interactive field", () => {
+    // Buttons and selects live in `presentation` now; replaying the text
+    // while dropping the controls would present a lossy reply as recovered.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Pick one",
+          presentation: { blocks: [{ type: "buttons", buttons: [{ label: "A" }] }] },
+        },
+      ]),
+    ).toBeUndefined();
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Choose",
+          presentation: {
+            blocks: [{ type: "select", placeholder: "Choose", options: [{ label: "A" }] }],
+          },
+        },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("mirrors chart/table substance into recovery without an authored fallback", () => {
+    // Without `presentationTextMode: "fallback"` the text field may be just a
+    // title, so the complete shared presentation fallback joins the record —
+    // titles, text/context, chart/table — exactly as Telegram delivery does.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Quarterly results",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Sales",
+                headers: ["Region", "Total"],
+                rows: [["North", 10]],
+              },
+            ],
+          },
+        },
+      ]),
+    ).toBe("Quarterly results\n\nSales (table)\n- Region: North; Total: 10");
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Shares",
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Split",
+                segments: [{ label: "A", value: 1 }],
+              },
+            ],
+          },
+        },
+      ]),
+    ).toBe("Shares\n\nSplit (pie chart)\n- A: 1");
+  });
+
+  it("preserves presentation titles, text, and context during recovery", () => {
+    // Regression for ClawSweeper P1: a summary `text` plus distinct presentation
+    // title/text/context must all survive as the complete visible reply.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Summary",
+          presentation: {
+            title: "Report",
+            blocks: [
+              { type: "text", text: "Actual answer" },
+              { type: "context", text: "Context note" },
+            ],
+          },
+        },
+      ]),
+    ).toBe("Summary\n\nReport\n\nActual answer\n\nContext note");
+  });
+
+  it("does not duplicate presentation content already present in text", () => {
+    // Regression for ClawSweeper P2: mirrors the equality/suffix dedup
+    // Telegram delivery applies in `canonicalizeTelegramPresentationPayload`.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Answer",
+          presentation: { blocks: [{ type: "text", text: "Answer" }] },
+        },
+      ]),
+    ).toBe("Answer");
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Intro\n\nAnswer",
+          presentation: { blocks: [{ type: "text", text: "Answer" }] },
+        },
+      ]),
+    ).toBe("Intro\n\nAnswer");
+  });
+
+  it("keeps presentation MEDIA directive lines transport-only", () => {
+    // Regression for ClawSweeper P2: a literal `MEDIA:...` display line in
+    // presentation would be reinterpreted as a delivery instruction.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Example",
+          presentation: {
+            blocks: [{ type: "text", text: "MEDIA:/tmp/example.png" }],
+          },
+        },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("trusts text as complete with an authored fallback presentation", () => {
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "North: 10",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Sales",
+                headers: ["Region", "Total"],
+                rows: [["North", 10]],
+              },
+            ],
+          },
+        },
+      ]),
+    ).toBe("North: 10");
+  });
+
   it("separates implicit delivery threading from explicit reply semantics", () => {
     expect(
       buildRecoverablePendingFinalDeliveryText([
