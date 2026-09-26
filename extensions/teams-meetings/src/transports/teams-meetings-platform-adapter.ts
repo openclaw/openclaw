@@ -10,7 +10,6 @@ import {
   teamsMeetingStatusScript,
   teamsMeetingTranscriptScript,
 } from "./teams-meetings-page-scripts.js";
-import { TEAMS_MEETINGS_NODE_COMMAND } from "./teams-meetings-platform-constants.js";
 import {
   isRecoverableTeamsMeetingTab,
   isSameTeamsMeetingUrl,
@@ -80,7 +79,7 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
         ? "Microsoft Teams guest in Chrome on a paired node"
         : "Microsoft Teams guest in the OpenClaw Chrome profile",
   },
-  nodeCommandName: TEAMS_MEETINGS_NODE_COMMAND,
+  nodeCommandName: "teamsmeetings.chrome",
   nodeConfigPath: "plugins.entries.teams-meetings.config.chromeNode.node",
   urls: {
     validateAndNormalize: normalizeTeamsMeetingUrl,

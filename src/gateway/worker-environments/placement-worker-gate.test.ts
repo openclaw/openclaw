@@ -40,8 +40,8 @@ describe("worker session placement gate", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-    let placement = store.startDispatch({ ...SESSION, executionMode });
+  async function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
+    let placement = await store.startDispatch({ ...SESSION, executionMode });
     placement = store.transition({
       sessionId: SESSION.sessionId,
       from: "requested",
@@ -80,8 +80,8 @@ describe("worker session placement gate", () => {
     });
   }
 
-  function preclaim(runId: string) {
-    const placement = activate();
+  async function preclaim(runId: string) {
+    const placement = await activate();
     return store.claimTurn({
       sessionId: placement.sessionId,
       agentId: placement.agentId,
@@ -220,7 +220,7 @@ describe("worker session placement gate", () => {
   });
 
   it("fails a Gateway-owned pending result before owner revocation", async () => {
-    const placement = activate("remote-exec");
+    const placement = await activate("remote-exec");
     const claim = await store.claimTurn({
       sessionId: placement.sessionId,
       agentId: placement.agentId,
@@ -245,7 +245,7 @@ describe("worker session placement gate", () => {
   });
 
   it("preserves a staged Gateway-owned result during owner revocation", async () => {
-    const placement = activate("remote-exec");
+    const placement = await activate("remote-exec");
     const claim = await store.claimTurn({
       sessionId: placement.sessionId,
       agentId: placement.agentId,

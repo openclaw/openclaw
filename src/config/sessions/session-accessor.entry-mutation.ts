@@ -414,15 +414,16 @@ export async function createSessionEntryWithTranscript<TError = string>(
   // The resolved path is a physical locator, not the original logical store selector.
   // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
   const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshotInDatabase(
     creationDatabase,
     captured.sessionKey,
+    options.label,
   );
   return await withSessionEntryCreationPublication<SessionEntryCreateWithTranscriptResult<TError>>(
     { database: creationDatabase, agentId, sessionKey: normalizedKey, bind: options.bindCreation },
     async (operation) => {
       options.onPhase?.("entry");
-      const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
+      const created = await createEntry(context);
       if (!created.ok) {
         return { ok: false, error: created.error, phase: "entry" };
       }

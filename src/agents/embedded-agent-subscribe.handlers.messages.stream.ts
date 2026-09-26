@@ -264,7 +264,9 @@ export function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
-export function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): boolean {
+export function hasMessageToolOnlySourceDelivery(
+  ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+): boolean {
   return (
     ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
     (ctx.state.messageToolOnlySourceReplyDelivered ||

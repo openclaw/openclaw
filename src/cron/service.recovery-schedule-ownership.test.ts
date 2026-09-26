@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { cronTaskRecordToRunLogEntry } from "../tasks/cron-task-record.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
+import { cronRunRecordStoreKey } from "./run-history-detail.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
-import { cronTaskRecordStoreKey, cronTaskRecordToRunLogEntry } from "./task-run-detail.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const MINUTE = 60_000;
@@ -66,7 +67,7 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
 function readHistory(harness: Harness) {
-  return readCronTaskRunHistoryPage({
+  return readCronRunHistoryPageForTests({
     storeKey: cronStoreKey(harness.storePath),
     jobId: harness.job.id,
   }).entries;
@@ -77,7 +78,7 @@ function readTasks(harness: Harness) {
   return listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
     runtime: "cron",
     sourceId: harness.job.id,
-  }).filter((task) => cronTaskRecordStoreKey(task) === storeKey);
+  }).filter((task) => cronRunRecordStoreKey(task) === storeKey);
 }
 
 function rejectCronRowWrite(jobId: string) {

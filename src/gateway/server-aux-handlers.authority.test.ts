@@ -418,7 +418,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       sessionId: identity.sessionId,
       ownerEpoch: 7,
     });
-    let placement = placements.startDispatch(identity);
+    let placement = await placements.startDispatch(identity);
     placement = placements.transition({
       sessionId: identity.sessionId,
       from: "requested",

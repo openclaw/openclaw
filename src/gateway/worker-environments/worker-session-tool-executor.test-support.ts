@@ -188,8 +188,8 @@ async function createWorkerSessionToolTestFixture(
   );
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database });
-  activate(SOURCE);
-  activate(TARGET);
+  await activate(SOURCE);
+  await activate(TARGET);
   const sourceClaim = await placements.claimTurn({
     sessionId: SOURCE.sessionId,
     agentId: SOURCE.agentId,
@@ -279,7 +279,7 @@ async function createWorkerSessionToolTestFixture(
   dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
     spawnState.order.push("dispatch");
     expect(placements.get(CHILD.sessionId)).toBeUndefined();
-    activate({
+    await activate({
       ...CHILD,
       sessionKey: request.sessionKey,
     });
@@ -340,14 +340,14 @@ async function createWorkerSessionToolTestFixture(
       },
     } as never,
   });
-  function activate(session: {
+  async function activate(session: {
     agentId: string;
     environmentId: string;
     ownerEpoch: number;
     sessionId: string;
     sessionKey: string;
-  }): void {
-    let placement = placements.startDispatch(session);
+  }): Promise<void> {
+    let placement = await placements.startDispatch(session);
     placement = placements.transition({
       sessionId: session.sessionId,
       from: "requested",

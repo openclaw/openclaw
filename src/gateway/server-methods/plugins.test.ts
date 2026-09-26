@@ -483,6 +483,7 @@ describe("plugin management Gateway handlers", () => {
           description: "Long-term memory.",
           icon: "database",
           order: 0,
+          pinnedPackages: ["@openclaw/bundled-memory", "memory-plus"],
         },
       ],
       items: [
@@ -500,7 +501,18 @@ describe("plugin management Gateway handlers", () => {
       ],
     });
     managementMocks.list.mockResolvedValue({
-      plugins: [],
+      plugins: [
+        {
+          id: "bundled-memory",
+          name: "Bundled Memory",
+          origin: "bundled",
+          packageName: "@openclaw/bundled-memory",
+          categories: ["memory"],
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
       diagnostics: [],
       mutationAllowed: true,
     });
@@ -512,12 +524,16 @@ describe("plugin management Gateway handlers", () => {
     expect(catalogMocks.browse).not.toHaveBeenCalled();
     expect(result.response).toMatchObject({
       items: [
+        expect.objectContaining({
+          catalog: expect.objectContaining({ categoryRanks: { memory: 0 } }),
+        }),
         {
           catalog: {
             featured: true,
             featuredRank: 1,
             trending: true,
             trendingRank: 0,
+            categoryRanks: { memory: 1 },
           },
         },
       ],

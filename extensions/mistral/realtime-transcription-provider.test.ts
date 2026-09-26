@@ -2,11 +2,12 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -80,7 +81,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   });
 
   it("normalizes nested provider config", () => {
-    const provider = buildMistralRealtimeTranscriptionProvider();
+    const provider = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    });
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
@@ -107,7 +110,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
   });
 
   it("normalizes pasted API key artifacts for realtime auth headers", () => {
-    const provider = buildMistralRealtimeTranscriptionProvider();
+    const provider = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    });
     const resolved = provider.resolveConfig?.({
       cfg: {} as OpenClawConfig,
       rawConfig: {
@@ -124,14 +129,18 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
 
   it("requires an API key when creating sessions", () => {
     vi.stubEnv("MISTRAL_API_KEY", "");
-    const provider = buildMistralRealtimeTranscriptionProvider();
+    const provider = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    });
     expect(() => provider.createSession({ providerConfig: {} })).toThrow("Mistral API key missing");
   });
 
   it("connects through the public session boundary with the configured URL params", async () => {
     const requests: URL[] = [];
     const { baseUrl } = await createRealtimeServer((url) => requests.push(url));
-    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+    const session = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    }).createSession({
       providerConfig: {
         apiKey: "fixture-value",
         baseUrl,
@@ -335,7 +344,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     const { baseUrl, closed } = await createRealtimeServer(() => {}, events);
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+    const session = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    }).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onPartial,
       onTranscript,
@@ -386,7 +397,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       const onPartial = vi.fn();
       const onTranscript = vi.fn();
       const onError = vi.fn();
-      const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      const session = buildMistralRealtimeTranscriptionProvider({
+        createRealtimeTranscriptionWebSocketSession,
+      }).createSession({
         providerConfig: { apiKey: "fixture-value", baseUrl },
         onPartial,
         onTranscript,
@@ -443,7 +456,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     ]);
     const onError = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+    const session = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    }).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
       onTranscript,
@@ -474,7 +489,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     const onTranscript = vi.fn();
     let lastPartialLength = 0;
     let partialCalls = 0;
-    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+    const session = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    }).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
       onPartial: (partial) => {
@@ -513,7 +530,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
-    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+    const session = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    }).createSession({
       providerConfig: { apiKey: "fixture-value", baseUrl },
       onError,
       onPartial,

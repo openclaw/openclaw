@@ -1,7 +1,7 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 // Zalo test support covers monitor.reply once.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,

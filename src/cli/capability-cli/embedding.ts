@@ -1,11 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 async function closeEmbeddingProviderWithRetry(provider: {
   close?: () => Promise<void> | void;
@@ -96,18 +94,17 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const result = await runMemoryEmbeddingCreate({
+        return runMemoryEmbeddingCreate({
           texts: opts.text as string[],
           agent: resolveCapabilityAgentOption(command, opts.agent),
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   registerLocalProvidersCommand(
     embedding,

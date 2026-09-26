@@ -9,8 +9,10 @@ import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-s
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -250,8 +252,8 @@ beforeEach(async () => {
   context = requestContext();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseByPath(path.join(gatewayRoot, "state.sqlite"));
+afterEach(async () => {
+  await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
@@ -264,7 +266,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     sessionId: identity.sessionId,
     ownerEpoch: identity.generation,
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: identity.sessionId,
     sessionKey,
     agentId: "main",

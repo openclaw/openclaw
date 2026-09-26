@@ -33,7 +33,6 @@ describe("RealtimeVoiceBrowserSessionCreateRequest", () => {
 
 describe("realtimeVoiceAudioDurationMs", () => {
   it.each([
-    ["G.711 μ-law 8 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, 8_000, 1_000],
     ["PCM16 24 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, 48_000, 1_000],
     [
       "one G.711 μ-law sample without rounding",

@@ -21,6 +21,7 @@ import {
   PORTABLE_PLUGIN_ICON_PATH,
 } from "../plugins/portable-icon-paths.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../plugins/public-surface-runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import {
@@ -59,6 +60,7 @@ export async function linkUpdateCandidatePluginTrees(
   params: {
     targetStateDir: string;
     candidateRoot: string;
+    assertCurrent: () => void;
     onProgress?: () => void | Promise<void>;
   },
 ): Promise<{ linked: number; copied: number }> {
@@ -191,29 +193,56 @@ export async function linkUpdateCandidatePluginTrees(
     }
   }
   await targets.assertBindings();
+  params.assertCurrent();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const preparedDirectories = new Set([privateRoot]);
-  let destinationRoot: Awaited<ReturnType<typeof openRoot>> | undefined;
+  const preparingDirectories = new Map<string, Promise<void>>();
+  const prepareDirectory = async (directory: string, mode: number) => {
+    if (preparedDirectories.has(directory)) {
+      return;
+    }
+    let preparing = preparingDirectories.get(directory);
+    if (!preparing) {
+      params.assertCurrent();
+      preparing = fs.mkdir(directory, { recursive: true, mode }).then(() => {
+        preparedDirectories.add(directory);
+        preparingDirectories.delete(directory);
+      });
+      preparingDirectories.set(directory, preparing);
+    }
+    await preparing;
+  };
+  let destinationRoot: ReturnType<typeof openRoot> | undefined;
   const copyEntry = async (
     entry: Extract<UpdateCandidatePluginTreeEntry, { kind: "file" }>,
     destination: string,
   ) => {
-    destinationRoot ??= await openRoot(privateRoot);
+    const root = await (destinationRoot ??= openRoot(privateRoot));
     // copyIn owns portable create-only publication; recheck the inventory before
     // its private stage is published.
-    await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
+    await root.copyIn(path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
       // The entry loop already prepares each destination parent.
       mkdir: false,
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",
-      assertBeforeMutation: () =>
-        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
+      assertBeforeMutation: () => {
+        params.assertCurrent();
+        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
+      },
     });
     await assertEntry(entry);
-    await relocateRuntimeEntry(destination, entry.path, destination, "file", relocations);
+    await relocateRuntimeEntry(
+      destination,
+      entry.path,
+      destination,
+      "file",
+      relocations,
+      params.assertCurrent,
+    );
     if ((entry.mode & 0o600) !== 0o600) {
+      params.assertCurrent();
       await fs.chmod(destination, entry.mode);
     }
   };
@@ -233,31 +262,33 @@ export async function linkUpdateCandidatePluginTrees(
   };
   const counts = { linked: 0, copied: 0 };
   const directories: Array<Extract<UpdateCandidatePluginTreeEntry, { kind: "directory" }>> = [];
-  for (const entry of plan.entries) {
+  const materialize = async (entry: UpdateCandidatePluginTreeEntry) => {
     await assertEntry(entry);
     const destination = destinationFor(entry.path);
     const directory = entry.kind === "directory" ? destination : path.dirname(destination);
     // A file may precede its parent's inventory entry; reuse only completed creation.
-    if (!preparedDirectories.has(directory)) {
-      await fs.mkdir(directory, {
-        recursive: true,
-        mode: entry.kind === "directory" ? entry.mode | 0o700 : 0o700,
-      });
-      preparedDirectories.add(directory);
-    }
+    await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
     if (entry.kind === "directory") {
       directories.push(entry);
-      continue;
+      return;
     }
     if (entry.kind === "symlink") {
+      params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
-      await relocateRuntimeEntry(destination, entry.path, destination, "symlink", relocations);
+      await relocateRuntimeEntry(
+        destination,
+        entry.path,
+        destination,
+        "symlink",
+        relocations,
+        params.assertCurrent,
+      );
       assertUpdateCandidatePluginLinkTarget(
         destination,
         path.resolve(path.dirname(destination), await fs.readlink(destination)),
         { privateRoot, candidateRoot },
       );
-      continue;
+      return;
     }
     if (
       pluginFiles.has(entry.path) ||
@@ -266,8 +297,9 @@ export async function linkUpdateCandidatePluginTrees(
     ) {
       await copyEntry(entry, destination);
       counts.copied += 1;
-      continue;
+      return;
     }
+    params.assertCurrent();
     try {
       await fs.link(entry.path, destination);
     } catch (error) {
@@ -276,7 +308,7 @@ export async function linkUpdateCandidatePluginTrees(
       }
       await copyEntry(entry, destination);
       counts.copied += 1;
-      continue;
+      return;
     }
     // The private name must reference the inventoried inode, never a newer file.
     const linked = await fs.lstat(destination, { bigint: true });
@@ -292,6 +324,38 @@ export async function linkUpdateCandidatePluginTrees(
     assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
     linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
     counts.linked += 1;
+  };
+  const files: Array<Extract<UpdateCandidatePluginTreeEntry, { kind: "file" }>> = [];
+  const inodes = new Set<string>();
+  const drain = async () => {
+    const result = await runTasksWithConcurrency({
+      tasks: files.map((entry) => () => materialize(entry)),
+      limit: 4,
+      errorMode: "stop",
+    });
+    // Cleanup must never race an admitted filesystem write, including on failure.
+    if (result.hasError) {
+      throw result.firstError;
+    }
+    files.length = 0;
+    inodes.clear();
+  };
+  for (const entry of plan.entries) {
+    const inode = `${entry.dev}:${entry.ino}`;
+    // A link changes its inode's ctime even when the next occurrence needs a copy.
+    // Keep shared inodes and directory/symlink barriers in inventory order.
+    if (files.length && (entry.kind !== "file" || files.length === 4 || inodes.has(inode))) {
+      await drain();
+    }
+    if (entry.kind === "file") {
+      files.push(entry);
+      inodes.add(inode);
+    } else {
+      await materialize(entry);
+    }
+  }
+  if (files.length) {
+    await drain();
   }
   await targets.assertBindings();
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({
@@ -299,11 +363,13 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot,
     hostLinks,
     aliases: targets.aliases,
+    assertBeforeMutation: params.assertCurrent,
   });
   for (const alias of privateAliases) {
     await verifyUpdateCandidatePluginTree(alias, { privateRoot, candidateRoot, hostLinks });
   }
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
+    params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
   }
   return counts;

@@ -7,12 +7,10 @@ import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { defaultRuntime } from "../../runtime.js";
 import type { VideoGenerationResolution } from "../../video-generation/types.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -276,11 +274,11 @@ export function registerVideoCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { parseOptionalFiniteNumber, parseOptionalTimeoutMs, resolveCapabilityAgentOption } =
           await import("./shared.js");
-        const result = await runVideoGenerate({
+        return runVideoGenerate({
           prompt: String(opts.prompt),
           agent: resolveCapabilityAgentOption(command, opts.agent),
           model: opts.model as string | undefined,
@@ -293,9 +291,8 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           watermark: opts.watermark === true ? true : undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   video
     .command("describe")
@@ -304,17 +301,16 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--agent <id>", "Agent whose model and auth state should be used")
     .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const result = await runVideoDescribe({
+        return runVideoDescribe({
           file: String(opts.file),
           agent: resolveCapabilityAgentOption(command, opts.agent),
           model: opts.model as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   registerLocalProvidersCommand(
     video,

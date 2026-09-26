@@ -235,7 +235,7 @@ test.each([false, true])(
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } });
     const placements = createWorkerSessionPlacementStore({ database });
     const harness = createHarness(database, placements, { workspacePath: dir, destroyFails });
-    seedProvisioningPlacement(placements, harness.ready.environmentId);
+    await seedProvisioningPlacement(placements, harness.ready.environmentId);
     await writeSessionStore({
       entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
     });

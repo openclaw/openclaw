@@ -174,25 +174,6 @@ function clearCompactionTimer(host: ToolStreamHost) {
   }
 }
 
-function scheduleCompactionClear(
-  host: ToolStreamHost,
-  delayMs: number,
-  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
-) {
-  host.compactionClearTimer = window.setTimeout(() => {
-    const current = host.compactionStatus;
-    if (expected?.phase && current?.phase !== expected.phase) {
-      return;
-    }
-    if (expected?.runId && current?.runId !== expected.runId) {
-      return;
-    }
-    host.compactionStatus = null;
-    host.compactionClearTimer = null;
-    host.requestUpdate?.();
-  }, delayMs);
-}
-
 function setCompactionStatus(
   host: ToolStreamHost,
   runId: string,
@@ -213,7 +194,15 @@ function setCompactionStatus(
     completedAt: completed ? Date.now() : null,
   };
   if (!completed) {
-    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, { phase, runId });
+    host.compactionClearTimer = window.setTimeout(() => {
+      const current = host.compactionStatus;
+      if (current?.phase !== phase || (runId && current?.runId !== runId)) {
+        return;
+      }
+      host.compactionStatus = null;
+      host.compactionClearTimer = null;
+      host.requestUpdate?.();
+    }, COMPACTION_ACTIVE_STALE_TIMEOUT_MS);
   }
 }
 

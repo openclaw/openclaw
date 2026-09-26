@@ -814,6 +814,8 @@ describe("frozen bundle committed contract", () => {
     "ancestor",
     "NODE_PATH",
     "donor link",
+    "range pin",
+    "tag pin",
     "wrong version",
     "owned pnpm",
     "nested parser",
@@ -840,8 +842,15 @@ describe("frozen bundle committed contract", () => {
     for (const file of ["package.json", "pnpm-lock.yaml"]) {
       copyFileSync(path.join(repoRoot, file), path.join(tooling, file));
     }
-    const pin = JSON.parse(readFileSync(path.join(tooling, "package.json"), "utf8")).devDependencies
-      .typescript;
+    const manifestPath = path.join(tooling, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const pin = manifest.devDependencies.typescript;
+    const unpinned = shape === "range pin" || shape === "tag pin";
+    if (unpinned) {
+      manifest.devDependencies.typescript = shape === "range pin" ? `^${pin}` : "next";
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      mkdirSync(path.join(tooling, "node_modules"));
+    }
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const poison = path.join(outer, "poison-executed");
     const parser =
@@ -854,7 +863,7 @@ describe("frozen bundle committed contract", () => {
             : shape === "owned pnpm"
               ? path.join(tooling, `node_modules/.pnpm/typescript@${pin}/node_modules/typescript`)
               : path.join(tooling, "node_modules/typescript");
-    if (shape !== "missing" && shape !== "authorization off") {
+    if (shape !== "missing" && shape !== "authorization off" && !unpinned) {
       const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
       cpSync(path.dirname(installedParser), parser, { recursive: true, dereference: true });
       const executableParser =
@@ -963,7 +972,9 @@ describe("frozen bundle committed contract", () => {
       );
     } else {
       expectRejected(result, "trusted TypeScript parser");
-      const nativeErrors: Record<string, string> = {
+      const admissionErrors: Record<string, string> = {
+        "range pin": "parser is not pinned",
+        "tag pin": "parser is not pinned",
         "nested parser": "parser package is outside trusted tooling: typescript",
         "native missing": `Cannot find module '${nativeName}/package.json'`,
         "native wrong version": `parser package metadata does not match: ${nativeName}`,
@@ -971,8 +982,8 @@ describe("frozen bundle committed contract", () => {
         "native binary symlink": "native parser executable is outside trusted tooling",
         "native lock integrity missing": `parser package lock does not match: ${nativeName}`,
       };
-      if (shape in nativeErrors) {
-        expect(result.stderr).toContain(nativeErrors[shape]);
+      if (shape in admissionErrors) {
+        expect(result.stderr).toContain(admissionErrors[shape]);
       }
     }
   });

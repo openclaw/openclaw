@@ -207,6 +207,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/feishu/src/monitor.dedupe-lifecycle.test.ts",
   "extensions/feishu/src/monitor.helpers.test.ts",
   "extensions/feishu/src/monitor.lifecycle.test.ts",
+  "extensions/feishu/src/monitor.post-replay.test.ts",
   "extensions/feishu/src/monitor.reaction.test.ts",
   "extensions/feishu/src/monitor.startup.test.ts",
   "extensions/feishu/src/monitor.webhook-e2e.test.ts",

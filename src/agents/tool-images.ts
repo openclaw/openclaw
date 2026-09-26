@@ -116,20 +116,19 @@ function fileNameFromPathLike(pathLike: string): string | undefined {
   try {
     const url = new URL(value);
     const candidate = url.pathname.split("/").findLast(Boolean);
-    return candidate && candidate.length > 0 ? candidate : undefined;
+    return candidate;
   } catch {
     // Not a URL; continue with path-like parsing.
   }
 
   const normalized = value.replaceAll("\\", "/");
   const candidate = normalized.split("/").findLast(Boolean);
-  return candidate && candidate.length > 0 ? candidate : undefined;
+  return candidate;
 }
 
 function inferImageFileName(params: {
   block: ImageContentBlock;
   label?: string;
-  mediaPathHint?: string;
 }): string | undefined {
   const explicitKeys = ["fileName", "filename", "path", "url"] as const;
   for (const key of explicitKeys) {
@@ -146,13 +145,6 @@ function inferImageFileName(params: {
   const name = Reflect.get(params.block, "name");
   if (typeof name === "string" && name.trim().length > 0) {
     return name.trim();
-  }
-
-  if (params.mediaPathHint) {
-    const candidate = fileNameFromPathLike(params.mediaPathHint);
-    if (candidate) {
-      return candidate;
-    }
   }
 
   if (typeof params.label === "string" && params.label.startsWith("read:")) {
@@ -180,17 +172,7 @@ async function resizeImageBase64IfNeeded(params: {
   height?: number;
 }> {
   const buf = Buffer.from(params.base64, "base64");
-  const headerMeta = readImageMetadataFromHeader(buf);
-  if (imageWithinLimits(buf, headerMeta, params.maxDimensionPx, params.maxBytes)) {
-    return {
-      base64: params.base64,
-      mimeType: params.mimeType,
-      resized: false,
-      width: headerMeta.width,
-      height: headerMeta.height,
-    };
-  }
-  const meta = headerMeta ?? (await getImageMetadata(buf));
+  const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
   const width = meta?.width;
   const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;

@@ -35,12 +35,6 @@ type DesktopSessionMetadata = {
   pullRequest?: SessionCatalogPullRequestSummary;
 };
 
-type DesktopPullRequestMetadata = {
-  prNumber?: unknown;
-  state?: unknown;
-  dismissed?: unknown;
-};
-
 function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -59,11 +53,10 @@ function desktopPullRequestSummary(
   const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
   const dismissed = new Set<number>();
   if (Array.isArray(metadata.prs)) {
-    for (const value of metadata.prs) {
-      if (!isRecord(value)) {
+    for (const entry of metadata.prs) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const entry: DesktopPullRequestMetadata = value;
       const number = pullRequestNumber(entry.prNumber);
       if (!number) {
         continue;

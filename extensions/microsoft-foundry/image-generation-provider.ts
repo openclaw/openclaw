@@ -1,7 +1,6 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
-// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   ImageGenerationProvider,
@@ -32,9 +31,9 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
-import { extractFoundryEndpoint } from "./shared-runtime.js";
 import {
   DEFAULT_API,
+  extractFoundryEndpoint,
   isFoundryMaiImageModel,
   isFoundryProviderApi,
   PROVIDER_ID,

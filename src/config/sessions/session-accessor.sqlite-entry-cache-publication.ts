@@ -62,6 +62,7 @@ type PlaceholderReceipt = {
 
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
+  pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionSharingEntry>;
   changedKeys: string[];

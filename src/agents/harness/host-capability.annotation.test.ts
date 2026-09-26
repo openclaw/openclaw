@@ -689,7 +689,7 @@ describe("host-owned current admission annotation", () => {
         sessionId: f.target.sessionId,
         ownerEpoch: 7,
       });
-      let placement = placements.startDispatch(f.target);
+      let placement = await placements.startDispatch(f.target);
       placement = placements.transition({
         sessionId: f.target.sessionId,
         from: "requested",

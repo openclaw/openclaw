@@ -44,6 +44,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
+  type SqliteWorkerStateLifecycle,
 } from "./sqlite-worker-contract.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
@@ -357,7 +358,7 @@ export class SqliteWorkerBroker {
     stateContext?: SqliteWorkerStateContext,
     assertCurrent?: (commandType: PropertyKey) => void,
     createAdmission?: SqliteWorkerAdmissionFactory,
-    requireStateLifecycle = false,
+    requireStateLifecycle: SqliteWorkerStateLifecycle = false,
   ): Promise<T> {
     return runSqliteWorkerClientOperation(
       this.draining ? undefined : this.stores.get(store),
