@@ -1,14 +1,14 @@
 # Auto QA evidence ledger
 
-Maintain one Markdown ledger in the user-requested report. Resume its existing numbering; never replace, reset, or inflate a running campaign.
+Keep candidate states in the existing task record or one Markdown ledger when the user requests a report. Resume existing numbering; never replace, reset, or inflate a running campaign.
 
-Record campaign-wide facts:
+Record campaign-wide facts for activities in scope:
 
-- The operator's current requested target and minimum soak duration; update the active target without erasing earlier historical progress.
+- The operator's explicit target, if any, requested soak duration, and overall budget, separate from each wave's work/time budget; update the active target without erasing earlier historical progress. Wave limits trigger integration and replanning. Keep unmet targets visible when the operator's overall budget or an evidence or authority gap stops work.
 - Exact current `origin/main` SHA and refresh time.
 - The single refresh coordinator; native-operation pauses and proof that each post-merge fetched baseline contains the recorded merge SHA.
-- At least ten named, meaningfully distinct active subsystem lanes.
-- Independently observed child PID, durable supervisor, exact-checkout guard, and observation time for each currently running CLI worker; completed and stale waves are separate historical evidence.
+- Each selected lane's question, named output, deadline, and actual worker status; choose concurrency from useful independent work and available capacity, with no worker floor.
+- Exact-checkout guard and observation time for each read-only worker; completed and stale waves are separate historical evidence. Record what remains unresolved before assigning a follow-up.
 - Owned gateway ports, isolated state, health, CPU/memory/load, and remote lease state.
 - Actual live provider, configured `agents.list`, selected existing agent, and selected model without credential material; record separate delivered-final and persisted-session evidence.
 - Soak start, elapsed time, pass/fail/skip counts, and whether completion was actually reached.

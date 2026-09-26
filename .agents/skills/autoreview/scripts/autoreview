@@ -1200,6 +1200,7 @@ class EngineInterrupted(BaseException):
     def __init__(self, code: int) -> None:
         super().__init__(code)
         self.code = code
+        self.stdout = ""
 
 
 _OWNED_PROCESS_LOCK = threading.RLock()
@@ -1577,6 +1578,13 @@ def run_with_heartbeat(
                         stderr = timeout_output_text(drain_timeout.stderr)
                     return deadline.completed_process(args, stdout, stderr)
                 emit_heartbeat(label, started, proc)
+    except EngineInterrupted as exc:
+        terminate_process_group(proc)
+        try:
+            exc.stdout, _stderr = proc.communicate(timeout=_TIMED_OUT_STREAM_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired as drain_timeout:
+            exc.stdout = timeout_output_text(drain_timeout.output)
+        raise
     finally:
         if not deadline.terminated:
             terminate_process_group(proc)
@@ -1613,6 +1621,7 @@ def run_with_stream(
             **process_group_popen_kwargs(),
         )
         register_owned_process(proc)
+    stdout_parts: list[str] = []
     try:
         return collect_streamed_process(
             proc,
@@ -1622,7 +1631,11 @@ def run_with_stream(
             heartbeat_seconds=heartbeat_seconds,
             deadline=deadline,
             stream_display=stream_display,
+            stdout_parts=stdout_parts,
         )
+    except EngineInterrupted as exc:
+        exc.stdout = "".join(stdout_parts)
+        raise
     finally:
         if not deadline.terminated:
             terminate_process_group(proc)
@@ -1638,10 +1651,11 @@ def collect_streamed_process(
     heartbeat_seconds: float,
     deadline: EngineRuntimeDeadline,
     stream_display: Callable[[str, str], str | None] | None,
+    stdout_parts: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     started = time.monotonic()
     events: queue.Queue[tuple[str, str | None]] = queue.Queue()
-    stdout_parts: list[str] = []
+    stdout_parts = [] if stdout_parts is None else stdout_parts
     stderr_parts: list[str] = []
 
     def read_stream(name: str, stream: Any) -> None:
@@ -3209,9 +3223,18 @@ def capture_evidence_inputs(args: argparse.Namespace, repo: Path) -> EvidenceInp
     chunks = list(args.prompt or [])
     datasets = []
     files = []
+    captured: dict[tuple[str, str], EvidenceFile] = {}
     for label, paths in (("--prompt-file", args.prompt_file), ("--dataset", args.dataset)):
         for raw_path in paths or []:
             record = capture_evidence_file(repo, raw_path, label)
+            key = (label, record.raw_path)
+            if key in captured:
+                if captured[key] != record:
+                    raise SystemExit("evidence changed while being captured")
+                continue
+            # Validate every supplied path before sharing its frozen representation.
+            # Equal contents at different paths or in different roles remain distinct.
+            captured[key] = record
             files.append(record)
             rel = str(record.path.relative_to(repo.resolve()))
             if label == "--prompt-file":
@@ -3245,6 +3268,7 @@ def split_review_datasets(
 ) -> list[list[ReviewDataset]]:
     batches: list[list[ReviewDataset]] = []
     pending: list[ReviewDataset] = []
+    pending_bytes = 0
     for dataset in datasets:
         # Keep loader-owned paths separate from evidence text: source may itself
         # contain headings that look like dataset boundaries.
@@ -3269,9 +3293,12 @@ def split_review_datasets(
         offset = 0
         for fragment in fragments:
             part = ReviewDataset(dataset.path, fragment, offset)
-            if pending and utf8_size(render_datasets([*pending, part])) > limit:
+            part_bytes = utf8_size(render_datasets([part]))
+            if pending and pending_bytes + 2 + part_bytes > limit:
                 batches.append(pending)
                 pending = []
+                pending_bytes = 0
+            pending_bytes += part_bytes + (2 if pending else 0)
             pending.append(part)
             offset += utf8_size(fragment)
     return [*batches, pending] if pending else [[]]
@@ -3757,6 +3784,7 @@ def mixed_capacity_error(record: MixedPath, required: int, limit: int) -> MixedC
 def build_mixed_change_passes(
     branch: str, target: str, target_ref: str | None, captured: CapturedBundle,
     extra_prompt: str, datasets: list[ReviewDataset], max_prompt_bytes: int,
+    max_passes: int | None = None,
 ) -> list[ReviewPass]:
     rendered = render_datasets(datasets)
     full = mixed_bundle_chunk(captured)
@@ -3783,6 +3811,8 @@ def build_mixed_change_passes(
         limit = max_prompt_bytes - overhead
         while limit >= 4:
             pieces = split_review_bundle(data[start:end].decode("utf-8"), limit)
+            if max_passes is not None and len(chunks) + len(pieces) > max_passes:
+                raise MixedContextCapacityError("candidate exceeds retained plan's pass count")
             owned = []
             position = start
             for piece in pieces:
@@ -3828,21 +3858,10 @@ def build_mixed_review_passes(
         ))
         if required > max_prompt_bytes:
             raise mixed_capacity_error(record, required, max_prompt_bytes)
-    try:
-        return build_mixed_change_passes(
-            branch, target, target_ref, captured, extra_prompt, datasets, max_prompt_bytes,
-        )
-    except MixedContextCapacityError:
-        if not datasets:
-            raise
-    minimum_evidence = max(
-        utf8_size(render_datasets([ReviewDataset(item.path, "", utf8_size(item.content))])) + 4
-        for item in datasets
-    )
-    evidence_limit = max_prompt_bytes // 2
-    while True:
-        evidence_limit = max(evidence_limit, minimum_evidence)
-        batches = split_review_datasets(datasets, evidence_limit)
+    def build_batch_plan(limit: int, max_passes: int | None = None) -> list[ReviewPass] | None:
+        batches = split_review_datasets(datasets, limit)
+        if max_passes is not None and len(batches) > max_passes:
+            return None
         passes = []
         for index, batch in enumerate(batches, 1):
             instructions = extra_prompt + (
@@ -3853,15 +3872,38 @@ def build_mixed_review_passes(
             try:
                 batch_passes = build_mixed_change_passes(
                     branch, target, target_ref, captured, instructions, batch, max_prompt_bytes,
+                    None if max_passes is None else max_passes - len(passes),
                 )
             except MixedContextCapacityError:
-                if evidence_limit == minimum_evidence:
+                # Preserve source sizing diagnostics when the baseline cannot fit.
+                if max_passes is None and limit == minimum_evidence:
                     raise
-                break
+                return None
             passes.extend(item._replace(evidence_batch=index) for item in batch_passes)
-        else:
-            return passes
+        return passes
+
+    try:
+        baseline = build_mixed_change_passes(
+            branch, target, target_ref, captured, extra_prompt, datasets, max_prompt_bytes,
+        )
+    except MixedContextCapacityError:
+        if not datasets:
+            raise
+        baseline = None
+    if not datasets:
+        return baseline
+    minimum_evidence = max(
+        utf8_size(render_datasets([ReviewDataset(item.path, "", utf8_size(item.content))])) + 4
+        for item in datasets
+    )
+    evidence_limit = max_prompt_bytes // 2
+    while baseline is None:
+        evidence_limit = max(evidence_limit, minimum_evidence)
+        baseline = build_batch_plan(evidence_limit)
         evidence_limit //= 2
+    return optimize_evidence_plan(
+        baseline, max_prompt_bytes, utf8_size(captured.text), datasets, build_batch_plan,
+    )
 
 
 def build_change_review_prompts(
@@ -3872,6 +3914,7 @@ def build_change_review_prompts(
     extra_prompt: str,
     datasets: str,
     max_prompt_bytes: int = MAX_REVIEW_PROMPT_BYTES,
+    max_passes: int | None = None,
 ) -> list[str] | None:
     full_prompt = render_review_prompt(
         branch,
@@ -3902,6 +3945,8 @@ def build_change_review_prompts(
         return None
     while content_limit >= 4:
         chunks = split_review_bundle(bundle, content_limit)
+        if max_passes is not None and len(chunks) > max_passes:
+            return None
         prompts = [
             render_review_prompt(
                 branch,
@@ -3963,8 +4008,10 @@ def build_review_prompts(
             "review prompt files leave too little room for change chunks; "
             "reduce the review instructions or move source evidence to datasets"
         )
-    while True:
-        batches = split_review_datasets(datasets, evidence_limit)
+    def build_batch_plan(limit: int, max_passes: int | None = None) -> list[str] | None:
+        batches = split_review_datasets(datasets, limit)
+        if max_passes is not None and len(batches) > max_passes:
+            return None
         prompts: list[str] = []
         for index, batch in enumerate(batches, 1):
             batch_prompt = extra_prompt
@@ -3973,12 +4020,19 @@ def build_review_prompts(
             change_prompts = build_change_review_prompts(
                 branch, target, target_ref, bundle, batch_prompt,
                 render_datasets(batch), max_prompt_bytes,
+                None if max_passes is None else max_passes - len(prompts),
             )
             if change_prompts is None:
-                break
+                return None
             prompts.extend(change_prompts)
-        else:
-            return prompts
+        return prompts
+
+    while True:
+        baseline = build_batch_plan(evidence_limit)
+        if baseline is not None:
+            return optimize_evidence_plan(
+                baseline, available, utf8_size(bundle), datasets, build_batch_plan,
+            )
         # Actual continuation headers may need more room than the initial
         # evidence allocation leaves. Rebatch before sending any partial pass.
         evidence_limit //= 2
@@ -3986,6 +4040,40 @@ def build_review_prompts(
             raise SystemExit(
                 "unable to partition the review bundle within the aggregate prompt limit"
             )
+
+
+def review_plan_bytes(prompts: list[str] | list[ReviewPass]) -> int:
+    return sum(utf8_size(item.prompt if isinstance(item, ReviewPass) else item) for item in prompts)
+
+
+def optimize_evidence_plan(
+    baseline: list[str] | list[ReviewPass], available: int, change_bytes: int,
+    datasets: list[ReviewDataset],
+    build_batch_plan: Callable[[int, int], list[str] | list[ReviewPass] | None],
+) -> list[str] | list[ReviewPass]:
+    if not datasets or len(baseline) == 1:
+        return baseline
+    minimum = max(utf8_size(render_datasets([ReviewDataset(item.path, "", utf8_size(item.content))])) + 4
+                  for item in datasets)
+    evidence_bytes = utf8_size(render_datasets(datasets))
+    minimum = max(minimum, (evidence_bytes + len(baseline) - 1) // len(baseline))
+    # Explore nearby packing boundaries, never relevance guesses. Every candidate
+    # retains the full change/evidence cross-product and intact source authority.
+    first_chunks = max(1, (change_bytes + available - 1) // max(available, 1))
+    limits = {evidence_bytes}
+    for chunks in range(first_chunks, first_chunks + 4):
+        limits.add(available - (change_bytes + chunks - 1) // chunks)
+    best, best_bytes = baseline, review_plan_bytes(baseline)
+    for limit in sorted(limits):
+        if not minimum <= limit < available:
+            continue
+        candidate = build_batch_plan(limit, len(baseline))
+        if candidate is None or len(candidate) > len(baseline):
+            continue
+        candidate_bytes = review_plan_bytes(candidate)
+        if candidate_bytes <= best_bytes and (candidate_bytes, len(candidate)) < (best_bytes, len(best)):
+            best, best_bytes = candidate, candidate_bytes
+    return best
 
 
 def prepare_review_prompts(
@@ -5091,9 +5179,8 @@ def codex_command(
     cmd.extend(auth_config)
     if force_file_auth:
         cmd.extend(["-c", 'cli_auth_credentials_store="file"'])
-    cmd.append("exec")
-    if args.stream_engine_output:
-        cmd.append("--json")
+    # Capture terminal usage even when live display is disabled.
+    cmd.extend(["exec", "--json"])
     cmd.extend(
         [
             *codex_exec_isolation_flags(),
@@ -5160,21 +5247,30 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     force_file_auth=file_auth_linked,
                     auth_config=auth_config,
                 )
-                result = run_with_heartbeat(
-                    cmd,
-                    review_root,
-                    input_text=prompt,
-                    label="codex",
-                    max_runtime_seconds=getattr(args, "engine_timeout_seconds", None),
-                    stream_output=args.stream_engine_output,
-                    stream_display=CodexStreamDisplay(suppress_diagnostics=command_auth) if args.stream_engine_output else None,
-                    env=codex_runtime_env(
-                        repo,
-                        runtime_root,
-                        cmd[0],
-                        file_auth_linked=file_auth_linked,
-                    ),
-                )
+                result = None
+                interrupted_stdout = ""
+                try:
+                    result = run_with_heartbeat(
+                        cmd,
+                        review_root,
+                        input_text=prompt,
+                        label="codex",
+                        max_runtime_seconds=getattr(args, "engine_timeout_seconds", None),
+                        stream_output=args.stream_engine_output,
+                        stream_display=CodexStreamDisplay(suppress_diagnostics=command_auth) if args.stream_engine_output else None,
+                        env=codex_runtime_env(
+                            repo,
+                            runtime_root,
+                            cmd[0],
+                            file_auth_linked=file_auth_linked,
+                        ),
+                    )
+                except EngineInterrupted as exc:
+                    interrupted_stdout = exc.stdout
+                    raise
+                finally:
+                    record_codex_usage(args, result.stdout if result is not None else interrupted_stdout,
+                                       completed=result is not None and result.returncode == 0)
                 try:
                     output = output_path.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
@@ -6083,6 +6179,55 @@ def format_codex_usage(usage: dict[str, Any]) -> str:
     return "codex usage: " + " ".join(parts) if parts else "codex usage: unavailable"
 
 
+def record_codex_usage(args: argparse.Namespace, stdout: str, *, completed: bool = True) -> None:
+    attempts = getattr(args, "review_usage", None)
+    if attempts is None:
+        args.review_usage = attempts = []
+    latest = None
+    terminal_usage = False
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, RecursionError):
+            terminal_usage = False
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            terminal_usage = False
+            continue
+        if event.get("type") == "turn.started" or event.get("type") == "turn.failed":
+            terminal_usage = False
+        if event.get("type") != "turn.completed":
+            continue
+        usage = event.get("usage")
+        # Codex emits cumulative thread totals, or all-zero defaults with no sample.
+        # Keep the last observed total; zero defaults cannot prove free inference.
+        terminal_usage = False
+        fields = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
+        if (isinstance(usage, dict)
+                and all(type(usage.get(key)) is int and usage[key] >= 0 for key in fields)
+                and any(usage[key] for key in fields)):
+            latest = {key: usage[key] for key in fields}
+            terminal_usage = True
+    attempts.append({"tokens": latest, "complete": completed and terminal_usage})
+
+
+def review_usage_summary(args: argparse.Namespace) -> dict[str, Any] | None:
+    attempts = getattr(args, "review_usage", [])
+    if not attempts:
+        return None
+    reported = [attempt["tokens"] for attempt in attempts if attempt["tokens"] is not None]
+    return {
+        "attempts": len(attempts),
+        "reported_attempts": len(reported),
+        "unknown_attempts": len(attempts) - len(reported),
+        "partial_attempts": sum(attempt["tokens"] is not None and not attempt["complete"] for attempt in attempts),
+        "complete": all(attempt["complete"] for attempt in attempts),
+        "tokens": {key: sum(usage[key] for usage in reported) for key in (
+            "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens",
+        )} if reported else None,
+    }
+
+
 def claude_tool_name(rule: str) -> str:
     match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)(?:\(|$)", rule)
     if not match:
@@ -6566,6 +6711,16 @@ def positive_float(value: str) -> float:
     return parsed
 
 
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bundle-driven AI code review.")
     parser.add_argument("--mode", choices=["auto", "local", "uncommitted", "branch", "commit"], default="auto")
@@ -6582,6 +6737,12 @@ def parse_args() -> argparse.Namespace:
         "--fallback-model",
         action="append",
         help="Claude fallback model chain or claude=a,b. Repeatable.",
+    )
+    parser.add_argument(
+        "--max-review-passes",
+        type=positive_int,
+        default=os.environ.get("AUTOREVIEW_MAX_REVIEW_PASSES"),
+        help="Optional planned-pass budget. Refuse before any model runs when the complete review exceeds it. Not a token cap.",
     )
     parser.add_argument(
         "--engine-timeout-seconds",
@@ -6913,6 +7074,16 @@ def apply_finding_threshold_prompt(args: argparse.Namespace, extra_prompt: str) 
     return threshold_prompt + ("\n\n" + extra_prompt if extra_prompt.strip() else "")
 
 
+def check_review_plan(args: argparse.Namespace, prompts: list[str] | list[ReviewPass]) -> None:
+    print(f"review plan: {len(prompts)} passes; {review_plan_bytes(prompts)} total prompt bytes", flush=True)
+    limit = getattr(args, "max_review_passes", None)
+    if limit is not None and len(prompts) > limit:
+        raise SystemExit(
+            f"planned review has {len(prompts)} passes; --max-review-passes allows {limit}. "
+            "Narrow the target/evidence or raise the explicit pass budget; no reviewer was started."
+        )
+
+
 def dry_run_preflight(
     args: argparse.Namespace,
     reviewers: list[argparse.Namespace],
@@ -6953,10 +7124,11 @@ def dry_run_preflight(
         try:
             with PreparationProgress("bundle/evidence preparation"):
                 threshold_extra_prompt = apply_finding_threshold_prompt(args, evidence.prompt)
-                prepare_review_prompts(
+                prompts = prepare_review_prompts(
                     repo, target, target_ref, captured, threshold_extra_prompt,
                     evidence.datasets, max_prompt_bytes_for_reviewers(reviewers),
                 )
+                check_review_plan(args, prompts)
             with PreparationProgress("evidence verification"):
                 verify_evidence(repo, evidence.files)
                 verify_mixed_sources(repo, captured.mixed)
@@ -7100,6 +7272,7 @@ def run_review_passes(
     evidence: list[EvidenceFile] | None = None,
 ) -> list[tuple[str, ReviewResult]]:
     chunk_reports: list[tuple[str, ReviewResult]] = []
+    args.review_usage = reviewers[0].review_usage = []
     for index, prompt in enumerate(prompts, start=1):
         if len(prompts) > 1:
             print(
@@ -7193,6 +7366,8 @@ def write_review_status(args: argparse.Namespace, status: str, exit_code: int,
         "reviewer_exit_code": failure.returncode if failure else None,
         "timed_out": failure.timed_out if failure else False,
     }
+    if usage := review_usage_summary(args):
+        envelope["usage"] = usage
     atomic_write_text(Path(args.status_output).expanduser(), json.dumps(envelope, indent=2) + "\n")
 
 
@@ -7258,6 +7433,7 @@ def main_impl() -> int:
             max_prompt_bytes_for_reviewers(reviewers),
         )
     print(f"bundle: {utf8_size(captured.text)} bytes; review passes: {len(prompts)}", flush=True)
+    check_review_plan(args, prompts)
     with PreparationProgress("pre-review verification") as progress:
         current_snapshot = source_tree_snapshot(repo, progress)
         verify_evidence(repo, evidence.files)
@@ -7279,11 +7455,16 @@ def main_impl() -> int:
     except ReviewerUnavailable as exc:
         write_review_status(args, "reviewer_unavailable", 1, exc)
         raise
+    finally:
+        if usage := review_usage_summary(args):
+            print("review usage: " + json.dumps(usage, sort_keys=True), flush=True)
     chunk_reports = [(label, result.report) for label, result in pass_results]
     if len(chunk_reports) == 1 and not captured.mixed:
         report = chunk_reports[0][1]
     else:
         report = merge_chunk_reports(chunk_reports)
+    if usage := review_usage_summary(args):
+        report["usage"] = usage
     missing = missing_required_findings(report, args.require_finding)
     if missing:
         report["missing_required_findings"] = missing

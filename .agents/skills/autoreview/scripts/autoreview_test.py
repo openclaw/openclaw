@@ -1091,6 +1091,137 @@ class AutoreviewInputTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), payload.hex())
 
 
+class AutoreviewEfficiencyTests(unittest.TestCase):
+    @staticmethod
+    def usage_event(multiplier=1):
+        return json.dumps({"type": "turn.completed", "usage": {
+            "input_tokens": 100 * multiplier, "cached_input_tokens": 20 * multiplier,
+            "output_tokens": 30 * multiplier, "reasoning_output_tokens": 10 * multiplier,
+        }})
+
+    def test_usage_keeps_last_cumulative_snapshot_and_sums_fresh_attempts(self):
+        args = argparse.Namespace()
+        AUTOREVIEW.record_codex_usage(args, self.usage_event() + "\n" + self.usage_event(2))
+        AUTOREVIEW.record_codex_usage(args, self.usage_event(3))
+        self.assertEqual(AUTOREVIEW.review_usage_summary(args), {
+            "attempts": 2, "reported_attempts": 2, "unknown_attempts": 0,
+            "partial_attempts": 0, "complete": True,
+            "tokens": {"input_tokens": 500, "cached_input_tokens": 100,
+                       "output_tokens": 150, "reasoning_output_tokens": 50},
+        })
+
+    def test_usage_missing_or_invalid_terminal_snapshot_is_unknown(self):
+        for invalid in ("", "malformed", '{"type":"turn.failed","error":{}}',
+                        '{"type":"turn.completed","usage":{}}',
+                        self.usage_event().replace('100', 'true'),
+                        self.usage_event().replace('100', '-1')):
+            with self.subTest(invalid=invalid):
+                args = argparse.Namespace()
+                AUTOREVIEW.record_codex_usage(args, invalid)
+                self.assertEqual(AUTOREVIEW.review_usage_summary(args), {
+                    "attempts": 1, "reported_attempts": 0, "unknown_attempts": 1,
+                    "partial_attempts": 0, "complete": False, "tokens": None,
+                })
+                AUTOREVIEW.record_codex_usage(args, self.usage_event())
+                summary = AUTOREVIEW.review_usage_summary(args)
+                self.assertEqual(summary["unknown_attempts"], 1)
+                self.assertFalse(summary["complete"])
+                self.assertEqual(summary["tokens"]["input_tokens"], 100)
+        args = argparse.Namespace()
+        AUTOREVIEW.record_codex_usage(args, self.usage_event() + '\n{"type":"turn.completed"}')
+        summary = AUTOREVIEW.review_usage_summary(args)
+        self.assertFalse(summary["complete"])
+        self.assertEqual(summary["partial_attempts"], 1)
+        self.assertEqual(summary["tokens"]["input_tokens"], 100)
+
+    def test_failed_or_timed_out_attempt_keeps_observed_lower_bound(self):
+        for suffix in ('\n{"type":"turn.failed"}', '\n{"type":"turn.started"}', ""):
+            with self.subTest(suffix=suffix):
+                args = argparse.Namespace()
+                AUTOREVIEW.record_codex_usage(args, self.usage_event() + suffix, completed=False)
+                summary = AUTOREVIEW.review_usage_summary(args)
+                self.assertFalse(summary["complete"])
+                self.assertEqual(summary["partial_attempts"], 1)
+                self.assertEqual(summary["tokens"]["input_tokens"], 100)
+
+    def test_codex_zero_default_without_usage_sample_is_unknown(self):
+        for earlier in ("", self.usage_event() + "\n"):
+            with self.subTest(earlier=bool(earlier)):
+                args = argparse.Namespace()
+                AUTOREVIEW.record_codex_usage(args, earlier + self.usage_event(0))
+                summary = AUTOREVIEW.review_usage_summary(args)
+                self.assertFalse(summary["complete"])
+                self.assertEqual(summary["unknown_attempts"], 0 if earlier else 1)
+                self.assertEqual(summary["partial_attempts"], 1 if earlier else 0)
+                self.assertEqual(summary["tokens"]["input_tokens"] if earlier else summary["tokens"],
+                                 100 if earlier else None)
+
+    def test_malformed_usage_cannot_break_report_acceptance(self):
+        for event in ('{"type":[]}', '[' * 2000 + ']' * 2000,
+                      '{"n":' + '9' * 10000 + '}', 'not json'):
+            with self.subTest(event=event[:20]):
+                args = argparse.Namespace()
+                AUTOREVIEW.record_codex_usage(args, event)
+                self.assertIsNone(AUTOREVIEW.review_usage_summary(args)["tokens"])
+        args = argparse.Namespace()
+        event = json.loads(self.usage_event())
+        event["usage"]["cache_write_input_tokens"] = 80
+        AUTOREVIEW.record_codex_usage(args, json.dumps(event))
+        self.assertTrue(AUTOREVIEW.review_usage_summary(args)["complete"])
+
+    def test_interruption_retains_observed_usage_with_and_without_live_display(self):
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming), tempfile.TemporaryDirectory() as tempdir:
+                def interrupt(*_args):
+                    raise AUTOREVIEW.EngineInterrupted(130)
+
+                script = f"import time; print({self.usage_event()!r}, flush=True); time.sleep(5)"
+                with mock.patch.object(AUTOREVIEW, "emit_heartbeat", side_effect=interrupt), \
+                        self.assertRaises(AUTOREVIEW.EngineInterrupted) as caught:
+                    AUTOREVIEW.run_with_heartbeat(
+                        [sys.executable, "-c", script], Path(tempdir), label="usage-fixture",
+                        heartbeat_seconds=0.2, stream_output=streaming, stream_display=interrupt,
+                    )
+                args = argparse.Namespace()
+                AUTOREVIEW.record_codex_usage(args, caught.exception.stdout, completed=False)
+                summary = AUTOREVIEW.review_usage_summary(args)
+                self.assertEqual(summary["tokens"]["input_tokens"], 100)
+                self.assertEqual(summary["partial_attempts"], 1)
+                self.assertFalse(summary["complete"])
+
+    def test_planner_reduces_repeated_context_without_more_passes(self):
+        bundle = "# Commit Diff\n" + "+change\n" * 75_000
+        datasets = [AUTOREVIEW.ReviewDataset("evidence.txt", "evidence π\r\n" * (800_000 // 13))]
+        with mock.patch.object(AUTOREVIEW, "current_branch", return_value="topic"):
+            with mock.patch.object(AUTOREVIEW, "optimize_evidence_plan", side_effect=lambda plan, *args: plan):
+                legacy = AUTOREVIEW.build_review_prompts(Path("."), "commit", "HEAD", bundle, "", datasets)
+            planned = AUTOREVIEW.build_review_prompts(Path("."), "commit", "HEAD", bundle, "", datasets)
+        self.assertLessEqual(len(planned), len(legacy))
+        self.assertLess(AUTOREVIEW.review_plan_bytes(planned), AUTOREVIEW.review_plan_bytes(legacy))
+        # Full cross-product and byte-offset reconstruction are exercised by the
+        # hardening suite; this fixture measures the formerly repeated context.
+        self.assertTrue(all(AUTOREVIEW.utf8_size(prompt) <= AUTOREVIEW.MAX_REVIEW_PROMPT_BYTES
+                            for prompt in planned))
+
+    def test_planner_retains_legacy_when_bytes_or_passes_would_regress(self):
+        baseline = ["a" * 100, "b" * 100]
+        for candidate in (["x", "y", "z"], ["x" * 201], ["x" * 300, "y"]):
+            with self.subTest(candidate=candidate):
+                planned = AUTOREVIEW.optimize_evidence_plan(
+                    baseline, 200, 100, [AUTOREVIEW.ReviewDataset("evidence", "z" * 100)],
+                    lambda _limit, _max_passes: candidate,
+                )
+                self.assertEqual(planned, baseline)
+
+    def test_explicit_pass_budget_requires_a_positive_integer(self):
+        for value in ("0", "-1", "1.5"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(sys, "argv", ["autoreview", "--max-review-passes", value]), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    AUTOREVIEW.parse_args()
+
+
 class AutoreviewCompatibilityTests(unittest.TestCase):
     def test_default_reviewer_uses_sol_high_with_luna_access_retry(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(sys, "argv", ["autoreview"]):
@@ -1421,12 +1552,12 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 self.assertIn('model_reasoning_effort="high"', command)
                 if model == "gpt-6-sol":
                     return subprocess.CompletedProcess(
-                        command, 1, "",
+                        command, 1, AutoreviewEfficiencyTests.usage_event(),
                         "The model `gpt-6-sol` does not exist or you do not have access to it.",
                     )
                 output_path = Path(command[command.index("--output-last-message") + 1])
                 output_path.write_text(json.dumps({**FINAL_REPORT, "review_completion": "complete"}))
-                return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, AutoreviewEfficiencyTests.usage_event(2), "")
 
             with mock.patch.object(AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"), \
                     mock.patch.object(AUTOREVIEW, "ensure_codex_isolation_supported", return_value="/usr/bin/codex"), \
@@ -1438,6 +1569,11 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 self.assertTrue(result.complete)
                 self.assertEqual(result.report["findings"], [])
             self.assertEqual(events, ["gpt-6-sol", "gpt-6-luna"])
+            usage = AUTOREVIEW.review_usage_summary(args)
+            self.assertEqual(usage["attempts"], 2)
+            self.assertEqual(usage["tokens"]["input_tokens"], 300)
+            self.assertEqual(usage["partial_attempts"], 1)
+            self.assertFalse(usage["complete"])
 
     def test_codex_runs_outside_repo_with_bundle_only_workspace(self) -> None:
         args = argparse.Namespace(

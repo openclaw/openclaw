@@ -91,6 +91,8 @@ target. The reviewer cannot read unchanged repository files from its empty
 sandbox; supply relevant source or dependency evidence when the diff is insufficient.
 `--prompt-file` also accepts an absolute path inside the repository; the same
 sensitive-path, symlink, and mutation checks apply. `--dataset` stays repo-relative.
+Repeated paths in the same evidence role share one validated capture. Equal
+content at different paths and prompt-file versus dataset roles stay distinct.
 
 The default threshold is **P0 only**: material blockers to normal operation or
 safety. Use `--max-priority P1`, `P2`, or `P3` when the caller requests a wider
@@ -224,6 +226,9 @@ Review files have no size/count cap and are never truncated. Large diffs and
 datasets are partitioned automatically. Intact instructions and required mixed
 source context must still fit the per-pass prompt budget. A failed pass does not
 produce a partial clean verdict.
+The planner compares a bounded set of evidence allocations and keeps the existing
+plan unless total prompt bytes improve without more passes, or equal bytes need
+fewer passes. Every change is still reviewed against every evidence batch.
 
 Each pass is an independent assignment, not a continuing conversation. Its
 private completion field must confirm a finished assessment; deferring to
@@ -233,6 +238,12 @@ Do not edit inputs during a review: the helper verifies captured sources before
 sending and publishing results. Long reviews are normal; advancing heartbeats
 mean progress. Use `--stream-engine-output` for visibility, not extra reviewer
 runs. `--dry-run` checks preparation and startup without contacting a reviewer.
+Both dry runs and execution print planned pass count and total prompt bytes.
+Use `--max-review-passes N` (or `AUTOREVIEW_MAX_REVIEW_PASSES`) to reject the whole
+plan before any reviewer starts when it exceeds an explicit campaign budget.
+There is no default pass ceiling. `--engine-timeout-seconds` remains an optional
+deadline per process attempt. Pass counts, prompt bytes, and deadlines are not
+token hard caps; they do not bound model reasoning or tool use.
 
 ## Results
 
@@ -258,6 +269,18 @@ machine-readable outcome. It preserves the existing exit codes and
 `findings`, `filtered`, `incorrect`, or `incomplete`; a launched reviewer that
 fails or returns an invalid report reports `reviewer_unavailable` with exit 1.
 A failed later pass never publishes a partial review report.
+
+Codex runs collect usage with live display on or off. The final report, status
+sidecar, and terminal summary include `usage`: process attempts, reported,
+unknown and partial attempt counts, `complete`, and observed token totals.
+Each fresh attempt contributes its last valid cumulative snapshot once, including
+access retries and failed passes. Cached input and reasoning output are subsets
+of input and output, not extra totals to add. These are observed tokens, not a
+billing estimate or a cache-hit promise. Missing telemetry, including Codex's
+all-zero defaults when no sample exists, is unknown, never measured zero;
+`tokens: null` means no attempt supplied usable totals. When `complete` is false,
+available totals are a lower bound. Interrupted runs print retained usage but
+still publish no status or review report. Other engines do not yet aggregate usage.
 
 ```json
 {
