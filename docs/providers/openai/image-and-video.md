@@ -127,10 +127,9 @@ For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When
 an `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
 access token and sends image requests through the Codex Responses backend; it
 does not first try `OPENAI_API_KEY` or silently fall back to an API key.
-That Responses request runs on the first `openai/*` model in
-`agents.defaults.model` (primary, then fallbacks), or `openai/gpt-6-astra` when
-none is configured. If your ChatGPT plan rejects the default model, configure an
-`openai/*` model your plan supports as the primary or a fallback.
+That Responses request runs on `gpt-6-astra`. If your ChatGPT plan rejects that
+model, OpenClaw retries with each `openai/*` model in `agents.defaults.model`
+(primary, then fallbacks), so configure a model your plan supports there.
 Configure `models.providers.openai` explicitly with an API key, custom base
 URL, or Azure endpoint when you want the direct OpenAI Images API route
 instead. If that custom image endpoint is on a trusted LAN/private address,

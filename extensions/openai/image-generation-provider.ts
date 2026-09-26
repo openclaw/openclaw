@@ -481,24 +481,27 @@ async function resolveOptionalApiKeyForProvider(
   }
 }
 
-// ChatGPT plans do not all offer the Codex default model, so the Responses call that
-// hosts the image_generation tool prefers the OpenAI model the user already runs.
-function resolveCodexImageResponsesModel(cfg: OpenClawConfig | undefined): string {
+// ChatGPT plans do not all offer the Codex default model. The default stays first so
+// working installs keep their route; configured OpenAI models are the recovery order
+// when the account rejects the model that hosts the image_generation tool.
+function resolveCodexImageResponsesModels(
+  cfg: OpenClawConfig | undefined,
+): [string, ...string[]] {
   const agentModel = cfg?.agents?.defaults?.model;
-  const configuredRefs = [
+  const retryModels = new Set<string>();
+  for (const ref of [
     resolveAgentModelPrimaryValue(agentModel),
     ...resolveAgentModelFallbackValues(agentModel),
-  ];
-  for (const ref of configuredRefs) {
+  ]) {
     const modelRef = ref?.trim();
-    if (modelRef?.startsWith(OPENAI_MODEL_REF_PREFIX)) {
-      const modelId = modelRef.slice(OPENAI_MODEL_REF_PREFIX.length);
-      if (modelId) {
-        return modelId;
-      }
+    const modelId = modelRef?.startsWith(OPENAI_MODEL_REF_PREFIX)
+      ? modelRef.slice(OPENAI_MODEL_REF_PREFIX.length)
+      : undefined;
+    if (modelId && modelId !== DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL) {
+      retryModels.add(modelId);
     }
   }
-  return DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL;
+  return [DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL, ...retryModels];
 }
 
 async function logCodexImageAuthSelected(params: {
@@ -516,9 +519,7 @@ async function logCodexImageAuthSelected(params: {
       params.authMode,
     )} transport=codex-responses requestedModel=${sanitizeLogValue(
       model,
-    )} responsesModel=${sanitizeLogValue(
-      resolveCodexImageResponsesModel(params.req.cfg),
-    )} timeoutMs=${params.timeoutMs}`,
+    )} responsesModel=${DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL} timeoutMs=${params.timeoutMs}`,
   );
 }
 
@@ -529,6 +530,7 @@ async function generateOpenAICodexImage(params: {
   const [
     {
       assertOkOrThrowHttpError,
+      isModelNotFoundErrorMessage,
       postJsonRequest,
       resolveProviderHttpRequestConfig,
       sanitizeConfiguredModelProviderRequest,
@@ -588,9 +590,7 @@ async function generateOpenAICodexImage(params: {
       detail: "auto",
     })),
   ];
-  const responsesModel = resolveCodexImageResponsesModel(req.cfg);
-  const results: ImageGenerationResult[] = [];
-  for (let index = 0; index < count; index += 1) {
+  const requestImage = async (responsesModel: string): Promise<ImageGenerationResult> => {
     const requestResult = await postJsonRequest({
       url: `${baseUrl}/responses`,
       headers,
@@ -628,14 +628,41 @@ async function generateOpenAICodexImage(params: {
     const { response, release } = requestResult;
     try {
       await assertOkOrThrowHttpError(response, "OpenAI Codex image generation failed");
-      results.push(
-        await readCodexImageGenerationResponse(response, {
-          model,
-          ...resolveOutputMime(req.outputFormat),
-        }),
-      );
+      return await readCodexImageGenerationResponse(response, {
+        model,
+        ...resolveOutputMime(req.outputFormat),
+      });
     } finally {
       await release();
+    }
+  };
+  const [defaultResponsesModel, ...retryResponsesModels] = resolveCodexImageResponsesModels(
+    req.cfg,
+  );
+  let responsesModel = defaultResponsesModel;
+  const results: ImageGenerationResult[] = [];
+  for (let index = 0; index < count; index += 1) {
+    for (;;) {
+      try {
+        results.push(await requestImage(responsesModel));
+        break;
+      } catch (error) {
+        const nextResponsesModel = retryResponsesModels.shift();
+        if (
+          !nextResponsesModel ||
+          !(error instanceof Error) ||
+          !isModelNotFoundErrorMessage(error.message)
+        ) {
+          throw error;
+        }
+        const { createSubsystemLogger } = await import("openclaw/plugin-sdk/logging-core");
+        createSubsystemLogger("image-generation/openai").info(
+          `codex image responses model unavailable: responsesModel=${sanitizeLogValue(
+            responsesModel,
+          )} retryResponsesModel=${sanitizeLogValue(nextResponsesModel)}`,
+        );
+        responsesModel = nextResponsesModel;
+      }
     }
   }
   const images = results.flatMap((result) => result.images);
