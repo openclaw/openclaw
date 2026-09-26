@@ -32,8 +32,8 @@ vi.mock("./probe.js", () => ({
   })),
 }));
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
+beforeEach(async () => {
+  await installIMessageStateRuntimeForTest();
   resetSystemEventsForTest();
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
 });

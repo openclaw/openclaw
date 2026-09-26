@@ -17,7 +17,7 @@ describe("iMessage approval reaction persistence", () => {
   });
 
   it("joins both persistent target indexes before completion and restores them after reset", async () => {
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
     clearIMessageApprovalReactionTargetsForTest();
     const state = getOptionalIMessageRuntime()?.state;
     if (!state) {
@@ -142,7 +142,7 @@ describe("iMessage approval reaction persistence", () => {
   });
 
   it("rejects persisted targets containing an invalid approval decision", async () => {
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
     clearIMessageApprovalReactionTargetsForTest();
     const store = getOptionalIMessageRuntime()?.state.openKeyedStore({
       namespace: "imessage.approval-reactions",

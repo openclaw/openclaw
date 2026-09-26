@@ -2,6 +2,7 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearCliSession } from "../../agents/cli-session.js";
+import { hasAppliedLiveModelSwitch } from "../../agents/live-model-switch.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import {
   deriveSessionTotalTokens,
@@ -96,6 +97,8 @@ export async function persistSessionUsageUpdate(params: {
   providerUsed?: string;
   /** Session selection can differ from the response model used for billing. */
   runtimeModelSelection?: ModelRef;
+  /** A completed turn can consume a pending switch to the model it actually ran. */
+  completedModelSelection?: ModelRef;
   agentHarnessId?: string;
   contextTokensUsed?: number;
   contextTokensSource?: SessionEntry["contextTokensSource"];
@@ -209,6 +212,19 @@ export async function persistSessionUsageUpdate(params: {
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt,
           };
+          if (
+            entry.liveModelSwitchPending &&
+            params.completedModelSelection &&
+            hasAppliedLiveModelSwitch({
+              cfg,
+              entry: { ...entry, ...patch },
+              sessionKey,
+              agentId,
+              selection: params.completedModelSelection,
+            })
+          ) {
+            patch.liveModelSwitchPending = undefined;
+          }
           if (hasUsage && !preserveUserFacingRunState) {
             patch.inputTokens = params.usage?.input ?? 0;
             patch.outputTokens = params.usage?.output ?? 0;

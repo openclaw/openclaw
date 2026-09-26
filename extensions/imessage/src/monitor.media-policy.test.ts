@@ -124,11 +124,11 @@ async function runChannelInboundEventForMediaPolicyTest(params: RunChannelInboun
 }
 
 describe("iMessage monitor attachment policy", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(
       runChannelInboundEventForMediaPolicyTest as typeof channelInbound.runChannelInboundEvent,
     );
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
     createIMessageRpcClientMock.mockReset();
     stageIMessageAttachmentsMock.mockReset();
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);

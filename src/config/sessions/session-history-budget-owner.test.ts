@@ -180,6 +180,7 @@ it.each([
       ),
     ).toEqual({ current_session_id: currentId });
     // Forget both the handle and process validation, exposing registration as well as lease drift.
+    await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest(state.root);
 
     let capEntryCalls = 0;
@@ -377,6 +378,7 @@ it.each([
     moveRelativeCwd?.();
     // Patch commit reopened A. Remove its handle and validation before allowing
     // the REAL first measurement to return to enforcement/preview.
+    await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest(state.root);
     release.resolve();
     if (trigger === "inspect") {

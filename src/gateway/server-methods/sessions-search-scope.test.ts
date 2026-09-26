@@ -110,12 +110,10 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
       const owner = ensureProfileForEmail("search-owner@example.test").id;
       const agents = ["main", "second", "third", "fourth", "fifth"];
       const cfg: OpenClawConfig = { agents: { list: agents.map((id) => ({ id })) } };
-      for (let index = 0; index < 205; index++) {
-        await seed(
-          expectDefined(agents[index % agents.length], "fixture agent"),
-          `roster-${index}`,
-          owner,
-        );
+      for (const [offset, agentId] of agents.entries()) {
+        for (let index = offset; index < 205; index += agents.length) {
+          await seed(agentId, `roster-${index}`, owner);
+        }
       }
       const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
         updatedAt: 1,

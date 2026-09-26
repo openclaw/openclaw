@@ -927,10 +927,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       );
       const projected = projectSessionActivitySummary({ ...target, cfg, entry: relocatedEntry });
       expect.soft(projected?.state).toBe("stale");
+      const published = createDeferred<ReturnType<typeof loadSessionEntryReadOnly>>();
+      changed.mockImplementation(() => {
+        const entry = loadSessionEntryReadOnly(relocatedScope);
+        if (projectSessionActivitySummary({ ...target, cfg, entry })?.state !== "updating") {
+          published.resolve(entry);
+        }
+      });
       service.ensure(target);
-      await vi.waitFor(() =>
-        expect(loadSessionEntryReadOnly(relocatedScope)?.activitySummary?.coveredMessages).toBe(3),
-      );
+      expect((await published.promise)?.activitySummary?.coveredMessages).toBe(3);
       expect(loadSessionEntryReadOnly(relocatedScope)?.activitySummary?.text).toBe(
         "Recap from the relocated store.",
       );

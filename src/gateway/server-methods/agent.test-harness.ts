@@ -23,6 +23,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryForTests,
@@ -1085,6 +1086,7 @@ export const describe0AfterEach0 = async () => {
   mocks.userTurnStorePath = undefined;
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
   await flushPendingSessionsChangedEvents();
+  await closeOpenClawAgentDatabasesAsync();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
@@ -1119,6 +1121,7 @@ export const describe0AfterEach0 = async () => {
 
 async function resetIntegrationState() {
   await flushPendingSessionsChangedEvents();
+  await closeOpenClawAgentDatabasesAsync();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();
@@ -1146,13 +1149,8 @@ async function resetIntegrationState() {
   vi.useRealTimers();
 }
 
-export const describe1BeforeEach0 = () => {
-  return resetIntegrationState();
-};
-
-export const describe1AfterEach1 = () => {
-  return resetIntegrationState();
-};
+export const describe1BeforeEach0 = resetIntegrationState;
+export const describe1AfterEach1 = resetIntegrationState;
 
 export function prime(sessionId = "existing-session-id", cfg: Record<string, unknown> = {}) {
   mockMainSessionEntry({ sessionId }, cfg);

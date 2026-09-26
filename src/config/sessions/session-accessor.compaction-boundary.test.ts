@@ -5,9 +5,14 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { withSessionCompactionPersistence } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -20,11 +25,15 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("persistCompactionBoundaryWithSessionEntrySync", () => {
   it.each([false, true])(
@@ -114,6 +123,7 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
       agentId: "main",
       sessionId: "session",
       sessionKey: "agent:main:compaction-boundary-rollback",
+      env: { OPENCLAW_STATE_DIR: dir },
       storePath: path.join(dir, "sessions.json"),
     };
     const expected = {
@@ -172,6 +182,7 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
       agentId: "main",
       sessionId: "session",
       sessionKey: "agent:main:compaction-boundary-owner",
+      env: { OPENCLAW_STATE_DIR: dir },
       storePath: path.join(dir, "sessions.json"),
     };
     await upsertSessionEntryCore(scope, {

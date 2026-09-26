@@ -390,6 +390,7 @@ describe("sweepCronRunSessions", () => {
       },
       { sessionId: "ops-run", updatedAt: now - 25 * 3_600_000 },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     unregisterOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
     expect(

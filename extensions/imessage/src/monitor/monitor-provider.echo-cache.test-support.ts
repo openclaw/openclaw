@@ -15,8 +15,8 @@ import { createSentMessageCache } from "./echo-cache.js";
 import { hasPersistedIMessageEcho, rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
   });
 
   afterEach(() => {
@@ -282,7 +282,7 @@ describe("iMessage sent-message echo cache", () => {
     expect(await hasPersistedIMessageEcho({ scope, text: "stale echo" })).toBe(true);
 
     vi.advanceTimersByTime(IMESSAGE_SENT_ECHOES_TTL_MS + 1);
-    installIMessageFailingStateRuntimeForTest();
+    await installIMessageFailingStateRuntimeForTest();
 
     expect(await hasPersistedIMessageEcho({ scope, text: "stale echo" })).toBe(false);
   });

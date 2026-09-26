@@ -39,7 +39,10 @@ import {
   migrateSharedAuthStore,
 } from "../infra/state-migrations.shared-auth-store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -54,11 +57,11 @@ import {
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
 } from "./doctor-auth-flat-profiles.js";
+import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import {
   createAuthProfileMigrationSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
 } from "./doctor-auth-migration-receipts.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
 
 type MigrationReceiptTestApi = {
@@ -70,25 +73,6 @@ const { recordAuthProfileMigrationImported } = (globalThis as Record<PropertyKey
 ] as MigrationReceiptTestApi;
 
 const states: OpenClawTestState[] = [];
-
-function makePrompter(shouldRepair: boolean): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => shouldRepair),
-    confirmAutoFix: vi.fn(async () => shouldRepair),
-    confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
-    confirmRuntimeRepair: vi.fn(async () => shouldRepair),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
-  };
-}
 
 function migrateAuthProfiles(
   params: Partial<Parameters<typeof maybeMigrateAuthProfileJsonStoresToSqlite>[0]> = {},
@@ -220,6 +204,7 @@ function expectNoMigratedArchive(sourcePath: string): void {
 
 afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
@@ -2753,6 +2738,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         model: "gpt-5.5",
       },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
     const database = new DatabaseSync(sqlitePath);
@@ -2797,6 +2783,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       { storePath, sessionKey, env: state.env },
       { sessionId: "retained-codex-window", updatedAt: 10 },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
     const database = new DatabaseSync(sqlitePath);

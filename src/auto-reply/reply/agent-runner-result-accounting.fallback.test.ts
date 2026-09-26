@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import type { NormalizedUsage } from "../../agents/usage.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -11,7 +12,7 @@ import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/stor
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -25,7 +26,7 @@ beforeAll(() => {
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabaseByPathAsync(storePath);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -82,7 +83,7 @@ async function createFixture(selected = diagnostic) {
     context,
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
     replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
-    account: async (route: { provider: string; model: string }) => {
+    account: async (route: { provider: string; model: string; usage?: NormalizedUsage }) => {
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,
         contextTokens: 1_000,
@@ -92,6 +93,70 @@ async function createFixture(selected = diagnostic) {
     },
   };
 }
+
+it.each([
+  {
+    name: "CLI selection",
+    selected: { provider: "claude-cli", model: "claude-opus-4-6" },
+    completed: { provider: "claude-cli", model: "claude-opus-4-6" },
+    pending: true,
+    remainsPending: false,
+  },
+  {
+    name: "newer selection",
+    selected: { provider: diagnostic.provider, model: "newer-model" },
+    completed: diagnostic,
+    pending: true,
+    remainsPending: true,
+  },
+  {
+    name: "provider alias",
+    selected: { provider: "openai", model: "synthetic-model" },
+    completed: { provider: "OpenAI", model: "synthetic-model" },
+    pending: true,
+    remainsPending: false,
+  },
+  {
+    name: "agent default",
+    selected: undefined,
+    completed: diagnostic,
+    pending: true,
+    remainsPending: false,
+  },
+  {
+    name: "no switch",
+    selected: diagnostic,
+    completed: diagnostic,
+    pending: undefined,
+    remainsPending: false,
+  },
+])(
+  "accounts usage with the pending $name",
+  async ({ selected, completed, pending, remainsPending }) => {
+    const fixture = await createFixture();
+    const { context } = fixture;
+    context.cfg.agents = {
+      defaults: { model: { primary: `${diagnostic.provider}/${diagnostic.model}` } },
+    };
+    Object.assign(context.followupRun.run, completed);
+    const entry = context.activeSessionEntry!;
+    Object.assign(entry, {
+      providerOverride: selected?.provider,
+      modelOverride: selected?.model,
+      liveModelSwitchPending: pending,
+    });
+    await fixture.replace(entry);
+
+    await fixture.account({ ...completed, usage: { input: 120, output: 8 } });
+
+    const persisted = fixture.read();
+    expect(persisted).toMatchObject({ inputTokens: 120, outputTokens: 8 });
+    expect(persisted?.liveModelSwitchPending).toBe(remainsPending ? true : undefined);
+    expect(context.activeSessionStore?.[context.sessionKey!]?.liveModelSwitchPending).toBe(
+      remainsPending ? true : undefined,
+    );
+  },
+);
 
 it("does not persist or project a fallback for the selected model's wire identity", async () => {
   const fixture = await createFixture({ provider: "arcee", model: "trinity-large-preview" });

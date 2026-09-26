@@ -64,8 +64,8 @@ function useHost(host: Host, options: { beforeWrite?: () => void; compareError?:
 }
 
 describe("iMessage recovery cursor persistence", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
   });
 
   afterEach(() => {

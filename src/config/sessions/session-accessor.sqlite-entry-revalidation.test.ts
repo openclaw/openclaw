@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -19,6 +20,7 @@ import {
   loadExactSessionEntry,
   patchSessionEntryCore,
   patchSessionEntryTarget,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
@@ -30,10 +32,12 @@ import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:entry-revalidation";
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
+  vi.unstubAllEnvs();
 });
 
 describe("SQLite session entry patch commit revalidation", () => {
@@ -41,13 +45,14 @@ describe("SQLite session entry patch commit revalidation", () => {
   let scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
   let database: ReturnType<typeof openOpenClawAgentDatabase>;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     env = {
       ...process.env,
       OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-entry-revalidation-")),
     };
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     scope = { agentId: "main", env, sessionKey };
-    await upsertSessionEntryCore(scope, {
+    replaceSessionEntrySync(scope, {
       label: "original",
       sessionId: "session-1",
       updatedAt: 10,
@@ -210,17 +215,21 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   it.each([false, true])(
-    "commits an unchanged persisted row after preparation (reopen: %s)",
-    async (reopen) => {
-      const persisted = await patchEntry("ordinary", () => {
-        if (reopen) {
+    "keeps a prepared patch bound to its database owner (retired: %s)",
+    async (retired) => {
+      const patch = patchEntry("ordinary", () => {
+        if (retired) {
           expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
         }
         return { label: "renamed" };
       });
-      expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
+      if (retired) {
+        await expect(patch).rejects.toThrow("Agent database execution admission is closed");
+      } else {
+        await expect(patch).resolves.toMatchObject({ label: "renamed", sessionId: "session-1" });
+      }
       expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
-        label: "renamed",
+        label: retired ? "original" : "renamed",
         sessionId: "session-1",
       });
     },
@@ -320,7 +329,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   );
 
   it.each(["ordinary", "lifecycle"] as const)(
-    "rejects a no-op %s patch after reopening with invalidated unrelated lineage",
+    "rejects a no-op %s patch after its database owner retires with invalidated lineage",
     async (route) => {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:main" },
@@ -333,7 +342,7 @@ describe("SQLite session entry patch commit revalidation", () => {
           expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
           return null;
         }),
-      ).rejects.toThrow("openclaw doctor --fix");
+      ).rejects.toThrow("Agent database execution admission is closed");
       // Test cleanup must not depend on admitting the deliberately invalid store.
       closeOpenClawAgentDatabaseByPath(database.path);
       const cleanup = new DatabaseSync(database.path);

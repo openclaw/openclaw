@@ -1,9 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -13,7 +10,6 @@ import {
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -176,34 +172,23 @@ describe("session sharing group mutations", () => {
         expect(responses[0]?.[0]).toBe(true);
         return responses[0]?.[1];
       };
-      const database = expectDefined(
-        getOpenClawAgentDatabaseIfOpen(scope),
-        "seeded agent database",
-      );
-      const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-        /\bselect\b/i.test(sql) && /\bsession_nodes\b/.test(sql) && /\bentry_json\b/.test(sql)
-          ? "entries"
-          : null,
-      );
+      expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
+      const queries = observeHostDataSql();
       try {
-        expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
-        queries.counts.entries = 0;
-        queries.rowCounts.entries = 0;
         for (let index = 0; index < 3; index++) {
           expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
         }
-        expect(queries.counts.entries).toBe(0);
-        expect(queries.rowCounts.entries).toBe(0);
-
-        await upsertSessionEntryCore(scope, { category: "Personal" });
-        expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
-        await upsertSessionEntryCore(scope, { visibility: "shared" });
-        expect(await readDefaults()).toEqual({
-          defaults: [{ name: "Projects" }, { name: "Personal" }],
-        });
+        expect(queries.queries).toEqual([]);
       } finally {
         queries.restore();
       }
+
+      await upsertSessionEntryCore(scope, { category: "Personal" });
+      expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
+      await upsertSessionEntryCore(scope, { visibility: "shared" });
+      expect(await readDefaults()).toEqual({
+        defaults: [{ name: "Projects" }, { name: "Personal" }],
+      });
     });
   });
 

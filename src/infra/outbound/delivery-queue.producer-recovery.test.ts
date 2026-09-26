@@ -5,12 +5,17 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEventForTest } from "../../audit/message-audit-events.test-support.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { failDurableDelivery, type DurableDeliveryCompletion } from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
@@ -38,7 +43,6 @@ describe("exhausted delivery producer recovery", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
   });
 
   async function enqueue(
@@ -185,18 +189,21 @@ describe("exhausted delivery producer recovery", () => {
       sessionKey: "agent:main:directchat:direct:recipient",
       storePath: path.join(tmpDir(), "sessions.json"),
     };
-    await sessionAccessor.replaceSessionEntry(completion, {
-      sessionId: completion.sessionId,
-      updatedAt: now,
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "pending final",
-        context: { channel: "directchat", to: "recipient" },
-        createdAt: now,
-        intentId: completion.intentId,
-        deliveries: [{ id, state: "queued" }],
+    await sessionAccessor.replaceSessionEntry(
+      { ...completion, env: resolveDeliveryQueueStateEnv(tmpDir()) },
+      {
+        sessionId: completion.sessionId,
+        updatedAt: now,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "pending final",
+          context: { channel: "directchat", to: "recipient" },
+          createdAt: now,
+          intentId: completion.intentId,
+          deliveries: [{ id, state: "queued" }],
+        },
       },
-    });
+    );
     await enqueue(id, false, completion, payloads, maxRetries);
     await queueStorage.reserveDeliveryAttempt(id, 1, tmpDir());
     return completion;
@@ -222,15 +229,25 @@ describe("exhausted delivery producer recovery", () => {
         "No pending",
       );
       expect(
-        sessionAccessor.loadSessionEntry(completion)?.pendingFinalDelivery?.deliveries,
+        sessionAccessor.loadSessionEntry({
+          ...completion,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        })?.pendingFinalDelivery?.deliveries,
       ).toEqual([{ id, state: "queued" }]);
       fault.mockRestore();
+      await closeOpenClawAgentDatabasesAsync(tmpDir());
+      closeOpenClawAgentDatabasesForTest(tmpDir());
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      closeOpenClawAgentDatabasesForTest();
 
       await recover(mode);
       expect(queueStatus(id)).toBe("failed");
-      expect(sessionAccessor.loadSessionEntry(completion)).toMatchObject({
+      expect(
+        sessionAccessor.loadSessionEntry({
+          ...completion,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        }),
+      ).toMatchObject({
         pendingFinalDelivery: { deliveries: [{ id, state: "unknown" }] },
         pendingDeliveryNotice: { intentId: completion.intentId, state: "owed" },
       });
@@ -250,18 +267,21 @@ describe("exhausted delivery producer recovery", () => {
         sessionKey: "agent:main:directchat:direct:recipient",
         storePath: path.join(tmpDir(), "sessions.json"),
       };
-      await sessionAccessor.replaceSessionEntry(completion, {
-        sessionId: completion.sessionId,
-        updatedAt: now,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "pending final",
-          context: { channel: "directchat", to: "recipient" },
-          createdAt: now,
-          intentId: completion.intentId,
-          deliveries: [],
+      await sessionAccessor.replaceSessionEntry(
+        { ...completion, env: resolveDeliveryQueueStateEnv(tmpDir()) },
+        {
+          sessionId: completion.sessionId,
+          updatedAt: now,
+          pendingFinalDelivery: {
+            kind: "replayable",
+            text: "pending final",
+            context: { channel: "directchat", to: "recipient" },
+            createdAt: now,
+            intentId: completion.intentId,
+            deliveries: [],
+          },
         },
-      });
+      );
       // Keep the attempt budget unused to reach completed-owner acknowledgement.
       await enqueue(id, true, completion);
       const claimId = await queueStorage.claimDeliveryPlatformSendAttempt(id, tmpDir());
@@ -323,13 +343,18 @@ describe("exhausted delivery producer recovery", () => {
         },
       });
       vi.restoreAllMocks();
+      await closeOpenClawAgentDatabasesAsync(tmpDir());
+      closeOpenClawAgentDatabasesForTest(tmpDir());
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      closeOpenClawAgentDatabasesForTest();
       await recoverPendingDeliveries(options);
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(audits).toEqual(["suppressed", "failed"]);
       expect(
-        sessionAccessor.loadSessionEntry(completion)?.pendingFinalDelivery?.deliveries,
+        sessionAccessor.loadSessionEntry({
+          ...completion,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        })?.pendingFinalDelivery?.deliveries,
       ).toEqual([{ id, state: "suppressed" }]);
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
     } finally {
@@ -442,6 +467,9 @@ describe("exhausted delivery producer recovery", () => {
     database.db
       .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
       .run("synthetic-older-version");
+    await closeOpenClawAgentDatabasesAsync(tmpDir());
+    closeOpenClawAgentDatabasesForTest(tmpDir());
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
       recoveryState: "settlement_pending",
@@ -479,7 +507,10 @@ describe("exhausted delivery producer recovery", () => {
       });
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
       expect(
-        sessionAccessor.loadSessionEntry(completion)?.pendingFinalDelivery?.deliveries,
+        sessionAccessor.loadSessionEntry({
+          ...completion,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        })?.pendingFinalDelivery?.deliveries,
       ).toEqual([{ id, state: "unknown" }]);
     } finally {
       unsubscribe();

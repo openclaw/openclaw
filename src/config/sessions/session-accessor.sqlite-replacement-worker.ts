@@ -27,12 +27,11 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-function rejectUnknownSessionEntryOutcome(message: string, cause: unknown): never {
+export function rejectUnknownSessionEntryOutcome(message: string, cause: unknown): never {
   if (hasSqliteWorkerOutcomeUnknown(cause)) {
     throw cause;
   }
@@ -237,6 +236,76 @@ export async function initializeSessionTranscriptInWorker(
   );
 }
 
+export function createSessionEntryWorkerCommitPublication(
+  options: { agentId: string; path: string },
+  databaseIdentity: string,
+  identityAgentId: string,
+) {
+  const publication = retainSessionEntryWorkerPublication({
+    agentId: options.agentId,
+    storePath: options.path,
+    databaseIdentity,
+  });
+  let admitted:
+    | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
+    | undefined;
+  return {
+    begin(
+      admission: SqliteWorkerOperationAdmission,
+      retained: RetainedWorkerTransactionAdmission,
+      facts: unknown,
+    ): void {
+      if (
+        !isRecord(facts) ||
+        !isRecord(facts.publication) ||
+        facts.publication.kind !== "session-entry-replacements" ||
+        !Array.isArray(facts.publication.changedKeys) ||
+        !facts.publication.changedKeys.every((key): key is string => typeof key === "string") ||
+        !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
+        !facts.publication.membershipInvalidatedKeys.every(
+          (key): key is string => typeof key === "string",
+        )
+      ) {
+        throw new Error("Session entry commit omitted its publication keys");
+      }
+      admitted = { admission, retained };
+      publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
+    },
+    async settle(
+      fallbackReceipt: SessionEntryReplacementPublication | undefined,
+      onCommitted?: (receipt: SessionEntryReplacementPublication) => void,
+    ): Promise<boolean> {
+      if (!admitted) {
+        return false;
+      }
+      await admitted.retained.settled;
+      const facts = admitted.admission.committed?.facts;
+      let receipt = fallbackReceipt;
+      if (isRecord(facts) && facts.kind === "session-entry-replacements") {
+        // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
+        receipt = facts as SessionEntryReplacementPublication;
+      }
+      const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
+      try {
+        if (receipt) {
+          onCommitted?.(receipt);
+        }
+      } finally {
+        const published = publication.settle(receipt, unknown);
+        if (published) {
+          publishCommittedSessionIdentity(
+            identityAgentId,
+            databaseIdentity,
+            published.previous,
+            published.current,
+          );
+        }
+      }
+      return unknown;
+    },
+  };
+}
+
 export async function commitSessionEntryReplacementsInWorker(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string,
@@ -249,43 +318,12 @@ export async function commitSessionEntryReplacementsInWorker(
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ) {
-  const publication = retainSessionEntryWorkerPublication({
-    agentId: options.agentId,
-    storePath: options.path,
+  const publication = createSessionEntryWorkerCommitPublication(
+    options,
     databaseIdentity,
-  });
-  let committed: SessionEntryReplacementCommitted | undefined;
-  let admitted:
-    | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
-    | undefined;
-  const settle = async () => {
-    if (!admitted) {
-      return committed !== undefined;
-    }
-    await admitted.retained.settled;
-    const facts = admitted.admission.committed?.facts;
-    let receipt: SessionEntryReplacementPublication | undefined;
-    if (isRecord(facts) && facts.kind === "session-entry-replacements") {
-      // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
-      receipt = facts as SessionEntryReplacementPublication;
-    } else if (committed) {
-      receipt = prepareSessionEntryReplacementPublication(committed);
-    }
-    if (receipt) {
-      lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
-    }
-    const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
-    const published = publication.settle(receipt, unknown);
-    if (published) {
-      publishCommittedSessionIdentity(
-        lifecycle.identityAgentId,
-        databaseIdentity,
-        published.previous,
-        published.current,
-      );
-    }
-    return unknown;
-  };
+    lifecycle.identityAgentId,
+  );
+  let admitted = false;
   return await withSessionEntryWorker(
     options,
     databaseIdentity,
@@ -297,12 +335,13 @@ export async function commitSessionEntryReplacementsInWorker(
             (value) => ({ ok: true as const, value }),
             (error: unknown) => ({ ok: false as const, error }),
           );
-          if (outcome.ok) {
-            committed = outcome.value;
-          }
           // Keep the executing scope and FIFO writer through native publication settlement.
           // Close joins this callback; a delayed result cannot borrow a successor owner.
-          if (await settle()) {
+          const unknown = await publication.settle(
+            outcome.ok ? prepareSessionEntryReplacementPublication(outcome.value) : undefined,
+            (receipt) => lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery),
+          );
+          if (unknown || (outcome.ok && !admitted)) {
             rejectUnknownSessionEntryOutcome(
               "Session replacement has no confirmed native completion and commit receipt",
               outcome.ok ? undefined : outcome.error,
@@ -321,21 +360,8 @@ export async function commitSessionEntryReplacementsInWorker(
           return result;
         }),
     (admission, retained, facts) => {
-      if (
-        !isRecord(facts) ||
-        !isRecord(facts.publication) ||
-        facts.publication.kind !== "session-entry-replacements" ||
-        !Array.isArray(facts.publication.changedKeys) ||
-        !facts.publication.changedKeys.every((key): key is string => typeof key === "string") ||
-        !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
-        !facts.publication.membershipInvalidatedKeys.every(
-          (key): key is string => typeof key === "string",
-        )
-      ) {
-        throw new Error("Session replacement commit omitted its publication keys");
-      }
-      admitted = { admission, retained };
-      publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
+      publication.begin(admission, retained, facts);
+      admitted = true;
     },
     retainedExecution,
   );

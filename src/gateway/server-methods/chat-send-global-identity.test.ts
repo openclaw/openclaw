@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
 } from "../../state/openclaw-agent-db.js";
@@ -234,10 +235,12 @@ it.each<{
     for (const row of rows) {
       await seedRow(row);
     }
+    if (scenario.replaceDatabase) {
+      await closeOpenClawAgentDatabasesAsync(state.root);
+    }
     const originalPath = state.path("original.sqlite");
     const replacementPath = state.path("replacement.sqlite");
     if (scenario.replaceDatabase === "symlink") {
-      closeOpenClawAgentDatabaseByPath(storePath);
       fs.renameSync(storePath, originalPath);
       fs.copyFileSync(originalPath, replacementPath);
       fs.symlinkSync(originalPath, storePath);

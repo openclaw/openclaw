@@ -117,8 +117,8 @@ function createRuntime() {
 }
 
 describe("iMessage approval poll durable ingress", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     maybeResolveIMessageApprovalPollVoteMock.mockReset();

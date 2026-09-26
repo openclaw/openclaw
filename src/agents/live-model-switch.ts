@@ -13,6 +13,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { ModelRef } from "./model-ref-shared.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -204,71 +205,33 @@ export function shouldSwitchToLiveModel(params: {
   return persisted;
 }
 
-/**
- * Post-run consolidation: once a completed run has actually executed the
- * persisted selection, the pending live-switch flag is spent. CLI harness runs
- * never pass through the embedded attempt-recovery clear, so without this the
- * flag survives forever and `/status` keeps reporting a switch that already
- * happened. Unlike `shouldSwitchToLiveModel`, runtime/auth-profile drift is
- * ignored here: the selected model demonstrably ran, so keeping the flag would
- * only re-arm mid-run restarts that have nothing left to apply. Compare and
- * clear happen inside one atomic patch so a concurrent `/model` that persists
- * a newer selection is never consumed by this run's result.
- */
-export async function consolidateLiveModelSwitchAfterRun(params: {
-  cfg?: OpenClawConfig | undefined;
-  sessionKey?: string;
+/** Completion ignores runtime/auth drift: the selected model demonstrably ran. */
+export function hasAppliedLiveModelSwitch(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
   agentId?: string;
-  providerUsed?: string;
-  modelUsed?: string;
-}): Promise<void> {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const cfg = params.cfg;
-  const providerUsed = normalizeOptionalString(params.providerUsed);
-  const modelUsed = normalizeOptionalString(params.modelUsed);
-  if (!cfg || !sessionKey || !providerUsed || !modelUsed) {
-    return;
+  selection: ModelRef;
+}): boolean {
+  const provider = normalizeOptionalString(params.selection.provider);
+  const model = normalizeOptionalString(params.selection.model);
+  if (!provider || !model) {
+    return false;
   }
-  // Store selection and default-model resolution both need the owning agent;
-  // derive it from the session key when the caller has none, so agent-scoped
-  // stores are targeted correctly and a completed /model default still
-  // consolidates when config overrides the library-wide defaults.
-  const agentId = resolveSessionAgentId({
-    sessionKey,
-    config: cfg,
-    agentId: params.agentId,
+  const persisted = resolveSelectionFromSessionEntry({
+    cfg: params.cfg,
+    entry: params.entry,
+    agentId: resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+      agentId: params.agentId,
+    }),
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
   });
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  if (!storePath) {
-    return;
-  }
-  await patchSessionEntryCore(
-    { storePath, sessionKey },
-    (entry) => {
-      if (!entry.liveModelSwitchPending) {
-        return null;
-      }
-      const persisted = resolveSelectionFromSessionEntry({
-        cfg,
-        entry,
-        agentId,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
-      const selectionApplied =
-        (providerUsed === persisted.provider && modelUsed === persisted.model) ||
-        isAlreadyAppliedOpenAICodexRuntimePromotion(
-          { provider: providerUsed, model: modelUsed },
-          persisted,
-        );
-      if (!selectionApplied) {
-        return null;
-      }
-      const next = { ...entry };
-      delete next.liveModelSwitchPending;
-      return next;
-    },
-    { replaceEntry: true },
+  return (
+    (provider === persisted.provider && model === persisted.model) ||
+    isAlreadyAppliedOpenAICodexRuntimePromotion({ provider, model }, persisted)
   );
 }
 

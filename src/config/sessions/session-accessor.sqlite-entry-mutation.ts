@@ -1,11 +1,16 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { SessionEntryPatchOptions } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionEntryPatchOptions,
+  SessionEntryTargetPatchScope,
+} from "./session-accessor.sqlite-contract.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
   collectSessionEntryLookupKeys,
+  readLifecycleTargetSnapshot,
+  readSessionEntrySelectionSnapshot,
   readSessionIdentitySnapshot,
   readUnchangedLifecycleTargetSnapshot,
   writeSessionEntry,
@@ -18,6 +23,30 @@ type SessionEntryIdentityChange = {
   previous: Map<string, SessionEntry>;
   current: Map<string, SessionEntry>;
 };
+
+export type SessionEntryPatchSelection =
+  | { sessionKey: string; replaceEntry: boolean }
+  | { target: SessionEntryTargetPatchScope["target"] };
+
+export type SessionEntryPatchCommit = {
+  operationLabel: "session-entry.patch" | "session-entry-target.patch";
+  validateCanonicalKeys: boolean;
+  selection: SessionEntryPatchSelection;
+  prepared: SqliteLifecycleTargetSnapshot;
+  sessionKey: string;
+  writeBase: SessionEntry;
+  next: SessionEntry | undefined;
+  options: Pick<SessionEntryPatchOptions, "consumePendingReset" | "providerReviewMutation">;
+};
+
+export function readSessionEntryPatchSnapshot(
+  database: OpenClawAgentDatabase,
+  selection: SessionEntryPatchSelection,
+): SqliteLifecycleTargetSnapshot {
+  return "target" in selection
+    ? readLifecycleTargetSnapshot(database, selection.target)
+    : readSessionEntrySelectionSnapshot(database, selection.sessionKey, selection.replaceEntry);
+}
 
 /** The caller owns transaction admission and publication after the durable commit. */
 export function replaceSessionEntryInDatabase(
@@ -35,19 +64,8 @@ export function replaceSessionEntryInDatabase(
 /** Revalidate prepared rows and apply the patch on the already-admitted connection. */
 export function applySessionEntryPatchInDatabase(
   database: OpenClawAgentDatabase,
-  params: {
-    operationLabel: "session-entry.patch" | "session-entry-target.patch";
-    validateCanonicalKeys: boolean;
-    readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
-    prepared: SqliteLifecycleTargetSnapshot;
-    sessionKey: string;
-    writeBase: SessionEntry;
-    next: SessionEntry | undefined;
-    options: Pick<
-      SessionEntryPatchOptions,
-      "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    >;
-  },
+  params: SessionEntryPatchCommit,
+  assertCommitAllowed: () => void,
 ): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
   // Canonical validation belongs to the current connection, not the captured rows.
   if (params.validateCanonicalKeys) {
@@ -57,10 +75,10 @@ export function applySessionEntryPatchInDatabase(
   // re-read and deep comparison that owns the conflict error.
   let fresh = readUnchangedLifecycleTargetSnapshot(database, params.prepared);
   if (!fresh) {
-    fresh = params.readSnapshot(database);
+    fresh = readSessionEntryPatchSnapshot(database, params.selection);
     assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   }
-  params.options.assertCommitAllowed?.();
+  assertCommitAllowed();
   if (!params.next) {
     return { entry: cloneSessionEntry(params.writeBase) };
   }

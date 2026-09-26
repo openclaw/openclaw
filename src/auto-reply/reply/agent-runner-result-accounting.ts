@@ -1,7 +1,6 @@
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -311,6 +310,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     modelUsed,
     providerUsed,
     runtimeModelSelection,
+    completedModelSelection:
+      !isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted
+        ? sessionModel
+        : undefined,
     contextTokensUsed,
     contextTokensSource,
     contextBudgetStatus:
@@ -319,18 +322,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   });
-  if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
-    // A completed run that executed the persisted selection consumes the
-    // pending live-switch flag; CLI harness runs never hit the embedded
-    // attempt-recovery clear, so /status would report the switch forever.
-    await consolidateLiveModelSwitchAfterRun({
-      cfg,
-      sessionKey,
-      agentId: followupRun.run.agentId,
-      providerUsed: sessionModel.provider,
-      modelUsed: sessionModel.model,
-    });
-  }
 
   if (compactionCount !== undefined && sessionKey) {
     activeSessionEntry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;

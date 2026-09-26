@@ -13,6 +13,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, vi } from "vitest";
@@ -21,11 +25,13 @@ import { setIMessageRuntime } from "../runtime.js";
 // Vitest runs afterAll hooks in reverse order, so databases close before directory removal.
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
-afterAll(async () => {
-  const { closeOpenClawStateDatabaseAsync } =
-    await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+async function closeIMessageStateRuntimeForTest(): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
-});
+  closeOpenClawStateDatabaseForTest();
+}
+
+afterAll(closeIMessageStateRuntimeForTest);
 
 function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: string } {
   const stateDir = fs.realpathSync(
@@ -46,8 +52,8 @@ export function createIMessagePluginStateSyncStoreForTest<T>(
   });
 }
 
-export function installIMessageStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
+export async function installIMessageStateRuntimeForTest(): Promise<void> {
+  await closeIMessageStateRuntimeForTest();
   imessageTestEnv = createIMessageTestEnv();
   resetPluginStateStoreForTests();
   setIMessageRuntime({
@@ -93,11 +99,8 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
       await clear();
     }
   } else if (!options?.preservePersistentState) {
-    const { closeOpenClawStateDatabaseAsync } =
-      await import("openclaw/plugin-sdk/sqlite-runtime-testing");
     // Drain worker-only stores before rotating the fixture state directory.
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeIMessageStateRuntimeForTest();
     imessageTestEnv = createIMessageTestEnv();
   }
   if (!options?.preservePersistentState) {
@@ -145,8 +148,8 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
   return await import("../monitor-reply-cache.js");
 }
 
-export function installIMessageFailingStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
+export async function installIMessageFailingStateRuntimeForTest(): Promise<void> {
+  await closeIMessageStateRuntimeForTest();
   imessageTestEnv = createIMessageTestEnv();
   setIMessageRuntime({
     state: {

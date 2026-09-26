@@ -9,6 +9,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
@@ -24,7 +25,10 @@ const waitForTransportReadyMock = vi.hoisted(() =>
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const shouldDebounceTextInboundMock = vi.hoisted(() => vi.fn(() => false));
-const directDeliveryProof = vi.hoisted(() => ({ flush: false }));
+const directDeliveryProof = vi.hoisted(() => ({
+  flush: false,
+  onFlushed: undefined as undefined | (() => void),
+}));
 
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitForTransportReadyMock,
@@ -46,7 +50,11 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
           enqueue: async (entry: unknown) => {
             opts.shouldDebounce(entry);
             if (directDeliveryProof.flush) {
-              await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+              try {
+                await opts.onFlush([entry], createTestInboundDebounceFlush).completion;
+              } finally {
+                directDeliveryProof.onFlushed?.();
+              }
             }
           },
         },
@@ -65,12 +73,13 @@ vi.mock("./monitor/abort-handler.js", () => ({
 }));
 
 describe("iMessage plugin payload attachments", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     shouldDebounceTextInboundMock.mockReset().mockReturnValue(false);
     directDeliveryProof.flush = false;
+    directDeliveryProof.onFlushed = undefined;
   });
 
   afterEach(() => {
@@ -142,7 +151,11 @@ describe("iMessage plugin payload attachments", () => {
     "settles direct $kind delivery through actual provider, hooks, and SQLite ($visible)",
     async ({ kind, text, visible }) => {
       directDeliveryProof.flush = true;
-      const messageSent = vi.fn();
+      const flushed = createDeferred<void>();
+      const sent = createDeferred<void>();
+      const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+      directDeliveryProof.onFlushed = () => flushed.resolve();
+      const messageSent = vi.fn(() => sent.resolve());
       const registry = createEmptyPluginRegistry();
       addTestHook({
         registry,
@@ -228,8 +241,11 @@ describe("iMessage plugin payload attachments", () => {
               },
             },
           });
-          await Promise.resolve();
-          await Promise.resolve();
+          await flushed.promise;
+          expect(runtime.error).not.toHaveBeenCalled();
+          if (visible) {
+            await sent.promise;
+          }
         }),
         stop: vi.fn(async () => {}),
       };
@@ -253,17 +269,16 @@ describe("iMessage plugin payload attachments", () => {
           messages: { inbound: { debounceMs: 0 } },
           session: { mainKey: "main" },
         } as never,
-        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+        runtime,
       });
 
+      expect(dispatch).toHaveBeenCalledOnce();
       if (!visible) {
         expect(nativeClient.request).not.toHaveBeenCalled();
         expect(messageSent).not.toHaveBeenCalled();
         return;
       }
-      await vi.waitFor(() => {
-        expect(messageSent).toHaveBeenCalledOnce();
-      });
+      expect(messageSent).toHaveBeenCalledOnce();
       expect(messageSent).toHaveBeenCalledWith(
         expect.objectContaining({ content: text, success: true, messageId: `native-${kind}-guid` }),
         expect.objectContaining({ channelId: "imessage" }),

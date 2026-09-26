@@ -6,6 +6,7 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -88,10 +89,11 @@ describe("committed pending input release", () => {
   beforeEach(async () => {
     await upsertSessionEntryCore(scope(), { sessionId: scope().sessionId, updatedAt: 1 });
   });
-  afterEach(() => {
+  afterEach(async () => {
     for (const receipt of receipts.splice(0)) {
       receipt.finish("interrupted");
     }
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -233,6 +235,7 @@ describe("committed pending input release", () => {
     aggregate.finish("cancelled");
     await replaceTranscriptEvents(scope(), []);
     rotateAgentEventLifecycleGeneration();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     expect(readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
     expect(readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
@@ -421,6 +424,7 @@ describe("committed pending input release", () => {
       const beforeReplay = acceptedOrder();
       const beforeTranscript = transcriptRows();
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const replay = stage(runId, {
         message: {
@@ -602,6 +606,7 @@ describe("committed pending input release", () => {
   it("opens a same-version store without completion tracking and installs it only on private use", async () => {
     const version = database().db.prepare("PRAGMA user_version").get();
     database().db.exec("DROP TABLE session_input_completions");
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const hasCompletionTable = () =>
       Boolean(
@@ -616,6 +621,7 @@ describe("committed pending input release", () => {
     await stagePrivate();
     expect(hasCompletionTable()).toBe(true);
     expect(database().db.prepare("PRAGMA user_version").get()).toEqual(version);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     expect(hasCompletionTable()).toBe(true);
   });
@@ -647,6 +653,7 @@ describe("committed pending input release", () => {
       expect(first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }))).toEqual(cancelled);
       expect(pendingCount()).toBe(0);
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const retry = await stagePrivate();
       expect(retry.completion).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
@@ -661,6 +668,7 @@ describe("committed pending input release", () => {
     first.complete!(buildAgentRunTerminalOutcome({ status: "timeout", stopReason: "restart" }));
     first.finish("interrupted");
     rotateAgentEventLifecycleGeneration();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const retry = await stagePrivate();
     expect(retry.completion).toBeUndefined();
@@ -682,6 +690,7 @@ describe("committed pending input release", () => {
       expect(completionRows()).toMatchObject([{ succeeded: 1, run_id: "announce:private-child" }]);
       // The child delivery save has not happened. A fresh process has only the DB.
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const replay = await stagePrivate();
       expect(replay.completion).toMatchObject({ status: "ok", reason: "completed" });
@@ -705,6 +714,7 @@ describe("committed pending input release", () => {
       }
       expect(completionRows()).toEqual([]);
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const resumed = await stagePrivate();
       expect(resumed.completion).toBeUndefined();

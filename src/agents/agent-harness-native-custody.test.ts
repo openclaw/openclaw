@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { onAgentEventForRun, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { embeddedAgentLog } from "../plugin-sdk/agent-harness-runtime.js";
@@ -455,6 +455,13 @@ describe("native task event custody", () => {
           return operation;
         });
         if (historyOutcome === "unavailable") {
+          expect(
+            loadSessionEntry({
+              agentId: "main",
+              sessionKey: requesterSessionKey,
+              storePath: path.join(state.sessionsDir(), "sessions.json"),
+            }),
+          ).toMatchObject({ sessionId: history.sessionId });
           vi.useFakeTimers();
         }
         const monitor = new fixture.CodexNativeSubagentMonitor(

@@ -62,9 +62,9 @@ function createRpcClient(overrides?: {
 }
 
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
-    installIMessageFailingStateRuntimeForTest();
+    await installIMessageFailingStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});
@@ -219,7 +219,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     "logs one diagnostic per chat for $reason drops (groups scope: $groupScope)",
     async ({ reason, groupScope }) => {
       vi.useRealTimers();
-      installIMessageStateRuntimeForTest();
+      await installIMessageStateRuntimeForTest();
       const runtime = createRuntimeSpies();
       let onNotification:
         | ((message: { method: string; params: unknown }) => void | Promise<void>)
@@ -318,7 +318,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
   it("redacts the conversation identifier in rate-limit suppression warnings", async () => {
     vi.useRealTimers();
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
     const runtime = createRuntimeSpies();
     const sender = "+15550002222";
     const chatId = 456;

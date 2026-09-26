@@ -75,18 +75,30 @@ type SubagentRetirementScope = {
       >)
     | { entry?: never; generation?: never; createdAt?: never; state: "superseded" };
   isSuccessor: (candidate: SubagentRunRecord) => boolean;
-  publication: {
-    entry: SubagentRunRecord;
-    promise: Promise<void>;
-    resolve: () => void;
-    settled: boolean;
-  };
+  completePublication: () => void;
 };
 
-const retirementPublications = new WeakMap<
-  SubagentRunRecord,
-  Set<SubagentRetirementScope["publication"]>
->();
+const retirementPublications = new WeakMap<SubagentRunRecord, Set<Promise<void>>>();
+
+/** Keep provisional cleanup behind all accepted retirement publications for this run. */
+export function retainSubagentRetirementPublication(entry: SubagentRunRecord): () => void {
+  let resolve!: () => void;
+  const publication = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const pending = retirementPublications.get(entry) ?? new Set<Promise<void>>();
+  pending.add(publication);
+  retirementPublications.set(entry, pending);
+  return () => {
+    if (!pending.delete(publication)) {
+      return;
+    }
+    if (pending.size === 0) {
+      retirementPublications.delete(entry);
+    }
+    resolve();
+  };
+}
 
 export function waitForSubagentRetirementPublication(
   entry: SubagentRunRecord,
@@ -95,25 +107,11 @@ export function waitForSubagentRetirementPublication(
   if (!pending?.size) {
     return undefined;
   }
-  return Promise.all([...pending].map((publication) => publication.promise)).then(() => undefined);
+  return Promise.all(pending).then(() => undefined);
 }
 
 export function hasPendingSubagentRetirementPublication(entry: SubagentRunRecord): boolean {
   return Boolean(retirementPublications.get(entry)?.size);
-}
-
-function completeRetirementPublication(scope: SubagentRetirementScope): void {
-  const publication = scope.publication;
-  if (publication.settled) {
-    return;
-  }
-  publication.settled = true;
-  const pending = retirementPublications.get(publication.entry);
-  pending?.delete(publication);
-  if (pending?.size === 0) {
-    retirementPublications.delete(publication.entry);
-  }
-  publication.resolve();
 }
 
 type CompletionAuthority = NonNullable<
@@ -266,15 +264,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     entry: SubagentRunRecord,
     isSuccessor: (candidate: SubagentRunRecord) => boolean,
   ) {
-    let resolvePublication!: () => void;
-    const publication = {
-      entry,
-      promise: new Promise<void>((resolve) => {
-        resolvePublication = resolve;
-      }),
-      resolve: () => resolvePublication(),
-      settled: false,
-    };
     const scope: SubagentRetirementScope = {
       observation: {
         entry,
@@ -283,22 +272,16 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         state: "selected",
       },
       isSuccessor,
-      publication,
+      completePublication: retainSubagentRetirementPublication(entry),
     };
     this.retirementScopes.add(scope);
-    const pending = retirementPublications.get(entry);
-    if (pending) {
-      pending.add(publication);
-    } else {
-      retirementPublications.set(entry, new Set([publication]));
-    }
     return {
       get observation() {
         return scope.observation;
       },
-      completePublication: () => completeRetirementPublication(scope),
+      completePublication: scope.completePublication,
       release: () => {
-        completeRetirementPublication(scope);
+        scope.completePublication();
         scope.observation = { state: "superseded" };
         this.retirementScopes.delete(scope);
       },
@@ -411,7 +394,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       this.releaseCompletionAuthority(entry);
     }
     for (const scope of this.retirementScopes) {
-      completeRetirementPublication(scope);
+      scope.completePublication();
       scope.observation = { state: "superseded" };
     }
     this.retirementScopes.clear();

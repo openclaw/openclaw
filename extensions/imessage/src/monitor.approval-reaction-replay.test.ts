@@ -44,9 +44,9 @@ type IMessageIngressQueue = NonNullable<
 >;
 type IMessageIngressPayload = Parameters<IMessageIngressQueue["enqueue"]>[1];
 
-beforeEach(() => {
+beforeEach(async () => {
   clearIMessageApprovalReactionTargetsForTest();
-  installIMessageStateRuntimeForTest();
+  await installIMessageStateRuntimeForTest();
   resolverMocks.resolveApprovalOverGateway.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReturnValue(false);

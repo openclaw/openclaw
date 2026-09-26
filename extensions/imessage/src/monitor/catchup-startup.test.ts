@@ -39,8 +39,8 @@ describe("registered iMessage account startup", () => {
   let stateDir: string;
   let dbPath: string;
 
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
     stateDir = getIMessageRuntime().state.resolveStateDir();
     dbPath = path.join(stateDir, "synthetic-chat.db");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

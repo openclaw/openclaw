@@ -771,10 +771,11 @@ describe("SQLite lifecycle cleanup races", () => {
       { length: entryCount },
       (_, index) => `agent:main:subagent:maintenance-batch-${String(index).padStart(2, "0")}`,
     );
+    // Setup must not schedule maintenance ahead of the explicit batch below.
     for (const [index, sessionKey] of sessionKeys.entries()) {
       const sessionId = `maintenance-batch-session-${String(index).padStart(2, "0")}`;
       sessionKeyById.set(sessionId, sessionKey);
-      await replaceSessionEntry(
+      replaceSessionEntrySync(
         { sessionKey, storePath },
         { sessionId, updatedAt: index === entryCount - 1 ? Date.now() : index + 1 },
       );

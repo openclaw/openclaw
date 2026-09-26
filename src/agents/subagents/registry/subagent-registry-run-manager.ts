@@ -9,7 +9,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
@@ -23,6 +23,7 @@ import {
   safeRemoveAttachmentsDir,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
+import { retainSubagentRetirementPublication } from "./subagent-registry-memory.js";
 import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -299,9 +300,10 @@ class SubagentRunManager extends SubagentLaunchManager {
         removeQueuedSwarmRun(entry?.schedulerSlotId ?? runId);
       }
       for (const entry of entriesByChildSessionKey.values()) {
+        const completePublication = retainSubagentRetirementPublication(entry);
         // Task finalization removes the suspension blocker before these session-owned
         // writes finish. Join them under one independent root so snapshots stay atomic.
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
+        void runWithGatewayIndependentRootWorkContinuation(async () => {
           await Promise.all([
             persistSubagentSessionTiming(entry, {
               isCurrentGeneration: () =>
@@ -326,13 +328,15 @@ class SubagentRunManager extends SubagentLaunchManager {
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);
-        }, "subagents:session-finalize").catch((err: unknown) => {
-          log.warn("failed to run killed subagent cleanup tail", {
-            err,
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
-          });
-        });
+        }, "subagents:session-finalize")
+          .catch((err: unknown) => {
+            log.warn("failed to run killed subagent cleanup tail", {
+              err,
+              runId: entry.runId,
+              childSessionKey: entry.childSessionKey,
+            });
+          })
+          .finally(completePublication);
         this.options.completeCleanupBookkeeping({
           runId: entry.runId,
           entry,

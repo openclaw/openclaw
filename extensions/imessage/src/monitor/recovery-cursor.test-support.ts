@@ -37,8 +37,8 @@ function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
 }
 
 describe("iMessage recovery cursor", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
   });
 
   it("returns null before anything is recorded", async () => {

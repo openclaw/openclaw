@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
@@ -290,7 +291,11 @@ function openAgentDatabaseBackend(
     });
     return database;
   };
-  const admit = (stage: "transaction" | "commit", publication?: unknown) => {
+  const admit = (
+    stage: "transaction" | "commit",
+    publication?: unknown,
+    patchEntry?: SessionEntry,
+  ) => {
     assertFileIdentity();
     requestSqliteWorkerOperationAdmission({
       stage,
@@ -298,6 +303,7 @@ function openAgentDatabaseBackend(
         identity,
         ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
         ...(publication ? { publication } : {}),
+        ...(patchEntry ? { patchEntry } : {}),
       },
     });
     if (stage === "commit") {
@@ -325,6 +331,10 @@ function openAgentDatabaseBackend(
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
+  let entryPatch:
+    | typeof import("../config/sessions/session-accessor.sqlite-entry-mutation.js")
+    | undefined;
+  let patchWorker: typeof import("../config/sessions/session-entry-patch.worker.js") | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
@@ -377,6 +387,17 @@ function openAgentDatabaseBackend(
     }
     if (command.type === "session.entry.read" && entryReader) {
       return entryReader.readSessionEntryRow(openWriter(), command.input.sessionKey)?.entry;
+    }
+    if (command.type === "session.entry.patchSnapshot" && entryPatch) {
+      return entryPatch.readSessionEntryPatchSnapshot(openWriter(), command.input);
+    }
+    if (command.type === "session.entry.patch" && patchWorker) {
+      return patchWorker.applySessionEntryPatchInWorker(
+        openWriter(),
+        options,
+        command.input,
+        admit,
+      );
     }
     if (command.type === "trajectory.events.append" && trajectory) {
       const opened = openWriter();
@@ -534,6 +555,18 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (
+        command.type === "session.entry.patchSnapshot" ||
+        command.type === "session.entry.patch"
+      ) {
+        return Promise.all([
+          import("../config/sessions/session-accessor.sqlite-entry-mutation.js"),
+          import("../config/sessions/session-entry-patch.worker.js"),
+        ]).then(([patch, worker]) => {
+          entryPatch = patch;
+          patchWorker = worker;
+        });
+      }
       if (command.type === "session.entry.read") {
         return import("../config/sessions/session-accessor.sqlite-entry-read.js").then((module) => {
           entryReader = module;

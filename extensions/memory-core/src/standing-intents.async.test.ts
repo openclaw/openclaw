@@ -20,7 +20,9 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -54,7 +56,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await Promise.allSettled(writerDrains.splice(0).map((drain) => drain()));
     resetGlobalHookRunner();
     resetPluginRuntimeStateForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
@@ -100,12 +104,14 @@ async function holdWriter(beforeRelease?: () => void) {
   return { entered: entered.promise, release: finish.resolve, done, drain };
 }
 
-function failStandingIntentWrites(action: "create" | "list" | "cancel" | "match") {
+async function holdFailingWriter(action: "create" | "list" | "cancel" | "match") {
+  const held = await holdWriter();
   const operation = action === "create" ? "INSERT" : "UPDATE";
   openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
     CREATE TRIGGER fail_standing_intent BEFORE ${operation} ON standing_intents
     BEGIN SELECT RAISE(ABORT, 'fixture standing-intent write rejected'); END;
   `);
+  return held;
 }
 
 async function expectWaiting(work: Promise<unknown>, entered: Promise<void>) {
@@ -303,8 +309,7 @@ describe("standing-intent admitted operations", () => {
     "propagates rejected %s writes without changing rows",
     async (action) => {
       const existing = await seed(action === "list");
-      failStandingIntentWrites(action);
-      const held = await holdWriter();
+      const held = await holdFailingWriter(action);
       const tool = createStandingIntentTool({
         agentId: "main",
         provider: "webchat",
@@ -351,8 +356,7 @@ describe("standing-intent admitted operations", () => {
   it("keeps rejected prompt matching fail-open without spending its fire budget", async () => {
     const existing = await seed();
     const { runner, logger } = await registerHooks();
-    failStandingIntentWrites("match");
-    const held = await holdWriter();
+    const held = await holdFailingWriter("match");
     const work = keep(
       runner.runBeforePromptBuild(
         { prompt: "launch", messages: [] },

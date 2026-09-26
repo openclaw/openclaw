@@ -75,7 +75,7 @@ function seedCatchupCursor(
 describe("runIMessageCatchup", () => {
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
   });
 
   afterEach(async () => {

@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+} from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -295,7 +298,7 @@ describe("qualified session accessor projection", () => {
     const scope = { cfg, agentId: "main", sessionKey: "global" };
     const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     expect(target.readSource).toBeDefined();
-    closeOpenClawAgentDatabaseByPath(target.storePath);
+    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     await updateResolvedSessionEntry(
       scope,
       (entry) => {
@@ -331,7 +334,7 @@ describe("qualified session accessor projection", () => {
     });
     const scope = { cfg, agentId: "main", sessionKey: "global" };
     const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-    closeOpenClawAgentDatabaseByPath(target.storePath);
+    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     const previousPath = `${target.storePath}.original`;
     fs.renameSync(target.storePath, previousPath);
     fs.copyFileSync(previousPath, target.storePath);

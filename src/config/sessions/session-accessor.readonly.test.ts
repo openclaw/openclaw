@@ -13,6 +13,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.j
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
@@ -21,6 +22,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -44,7 +46,17 @@ import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcrip
 import * as sqliteTargets from "./session-sqlite-target.js";
 
 const tempDirs: string[] = [];
-const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const autoTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.useRealTimers();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanupTempDirs(tempDirs);
+    cleanup();
+  }),
+);
 
 function countRegisteredAgentDatabases(env: NodeJS.ProcessEnv): number {
   const row = openOpenClawStateDatabase({ env })
@@ -56,13 +68,6 @@ function countRegisteredAgentDatabases(env: NodeJS.ProcessEnv): number {
 function clearRegisteredAgentDatabases(env: NodeJS.ProcessEnv): void {
   openOpenClawStateDatabase({ env }).db.prepare("DELETE FROM agent_databases").run();
 }
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
-  vi.useRealTimers();
-});
 
 describe("session accessor readonly listing", () => {
   it.each([false, true])(
@@ -236,6 +241,7 @@ describe("session accessor readonly listing", () => {
     expect(database.db).toBe(handle);
     expect(handle.isOpen).toBe(true);
     expect(handle.isTransaction).toBe(false);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearRegisteredAgentDatabases(env);
 
@@ -573,6 +579,7 @@ describe("session accessor readonly listing", () => {
       { agentId, env, sessionKey: "agent:worker-1:main" },
       { sessionId: "session-1", status: "running", updatedAt: 10 },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearRegisteredAgentDatabases(env);
 
@@ -590,6 +597,7 @@ describe("session accessor readonly listing", () => {
         { ...scope, sessionKey: "agent:worker-1:main" },
         { sessionId: "session-1", status, updatedAt: 10 },
       );
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       clearRegisteredAgentDatabases(env);
 
@@ -630,6 +638,7 @@ describe("session accessor readonly listing", () => {
       { agentId, env, sessionKey },
       { sessionId: "session-1", updatedAt: 1 },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearRegisteredAgentDatabases(env);
 
@@ -652,8 +661,12 @@ describe("session accessor readonly listing", () => {
       { agentId, env, sessionKey: invalidSessionKey },
       { sessionId: "invalid-session", updatedAt: 1 },
     );
-    openOpenClawAgentDatabase({ agentId, env })
-      .db.prepare("UPDATE session_nodes SET entry_valid = 0 WHERE session_key = ?")
+    const database = openOpenClawAgentDatabase({ agentId, env });
+    expect(
+      readSessionIdentityEvidenceBatch([{ agentId, env, sessionId, sessionKey, storePath }]),
+    ).toEqual([{ status: "current", sessionKey }]);
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 0 WHERE session_key = ?")
       .run(invalidSessionKey);
     const migrationInvalidAgentId = "migration-invalid";
     const migrationInvalidSessionKey = "agent:migration-invalid:main";
@@ -761,6 +774,10 @@ describe("session accessor readonly listing", () => {
         { sessionId: readableSessionId, updatedAt: 1 },
       );
       const database = openOpenClawAgentDatabase({ agentId, env });
+      const probe = { agentId, env, sessionId, sessionKey, storePath: database.path };
+      expect(readSessionIdentityEvidenceBatch([probe])).toEqual([
+        { status: "current", sessionKey },
+      ]);
       if (corruption === "participant" || corruption === "participant-integer") {
         recordSessionParticipant(
           { agentId, env, sessionKey },
@@ -791,11 +808,9 @@ describe("session accessor readonly listing", () => {
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
         .run(sessionKey);
 
-      expect(
-        readSessionIdentityEvidenceBatch([
-          { agentId, env, sessionId, sessionKey, storePath: database.path },
-        ]),
-      ).toEqual([{ status: "unknown", reason: "row-invalid" }]);
+      expect(readSessionIdentityEvidenceBatch([probe])).toEqual([
+        { status: "unknown", reason: "row-invalid" },
+      ]);
 
       expect(
         readSessionIdentityEvidenceBatch([

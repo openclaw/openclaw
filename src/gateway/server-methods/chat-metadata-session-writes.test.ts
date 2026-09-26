@@ -121,6 +121,7 @@ it.each(
       recordSelected("b", 20);
     }
     const database = openOpenClawAgentDatabase(selected);
+    const before = expectDefined(loadSessionEntry(selected), "selected session entry");
     if (write.startsWith("legacy sibling")) {
       database.db
         .prepare(
@@ -145,7 +146,6 @@ it.each(
         expect(loadSessionEntry(sibling)).not.toHaveProperty("owner");
       }
     }
-    const before = expectDefined(loadSessionEntry(selected), "selected session entry");
     if (cache === "full") {
       listSessionEntriesCore({ ...selected, projection: "list" });
     }
@@ -583,7 +583,6 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
         await invoke(fresh);
         // Fresh preparation agrees before asserting the held request, including on the old source.
         expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
         expect(changed.error).toBeUndefined();
         expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
       } finally {
@@ -591,6 +590,8 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
         await pending?.catch(() => {});
         await harness.runtime.stop();
       }
+      await cleanupSessionStateForTest({ stateDir: state.stateDir });
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     },
   );
 });

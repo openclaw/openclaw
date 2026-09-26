@@ -195,6 +195,7 @@ describe("SQLite reclamation admission races", () => {
         { sessionId, updatedAt: 1 },
       );
       // Close/checkpoint before copying so both files start with the same durable row and revision.
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       fs.copyFileSync(originalPath, replacementPath);
       fs.symlinkSync(originalPath, alias);

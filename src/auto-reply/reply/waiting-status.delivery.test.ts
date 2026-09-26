@@ -32,9 +32,6 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
   ...(await importOriginal<typeof SubagentRegistry>()),
   settleRequesterAfterSessionSpawns: settleRequester,
 }));
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
 
 const runId = "waiting-progress-run";
 const receipt: ProgressContinuationReceipt = {

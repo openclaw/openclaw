@@ -16,10 +16,11 @@ import {
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
-  disposeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -45,10 +46,6 @@ import { incrementCompactionCount } from "./session-updates.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
 let suiteRoot: string;
@@ -61,7 +58,7 @@ beforeAll(() => {
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabaseByPathAsync(storePath);
   expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
   fs.rmSync(suiteRoot, { recursive: true, force: true });
 });
@@ -270,33 +267,42 @@ async function createFixture() {
         source: "test",
         provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
       });
-      return withPluginRuntimeRegistryScope(registry, async () => {
-        const delivered: ReplyPayload[] = [];
-        const accounting = await accountQueued(context.execution);
-        const decision = await resolveFollowupDeliveryDecision({
-          turn,
-          execution: { runId: context.runId, outcome: context.execution },
-          accounting,
-          opts: { onBlockReply: async () => {} },
-        });
-        await deliverFollowupDecision({
-          decision,
-          turn,
-          defaults: {
-            defaultModel: diagnostic.model,
-            typing: createMockTypingController(),
-            typingMode: "never",
-            opts: {
-              onBlockReply: async (payload) => {
-                delivered.push(payload);
+      const metadataSnapshot = {
+        ...createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "synthetic", providers: [diagnostic.provider] }],
+        }),
+        workspaceDir: root,
+      };
+      return withPluginRuntimeGenerationScope(
+        { metadataSnapshot, pluginRegistry: registry },
+        async () => {
+          const delivered: ReplyPayload[] = [];
+          const accounting = await accountQueued(context.execution);
+          const decision = await resolveFollowupDeliveryDecision({
+            turn,
+            execution: { runId: context.runId, outcome: context.execution },
+            accounting,
+            opts: { onBlockReply: async () => {} },
+          });
+          await deliverFollowupDecision({
+            decision,
+            turn,
+            defaults: {
+              defaultModel: diagnostic.model,
+              typing: createMockTypingController(),
+              typingMode: "never",
+              opts: {
+                onBlockReply: async (payload) => {
+                  delivered.push(payload);
+                },
               },
             },
-          },
-          runId: context.runId,
-          runFollowup: async () => {},
-        });
-        return delivered;
-      });
+            runId: context.runId,
+            runFollowup: async () => {},
+          });
+          return delivered;
+        },
+      );
     },
     recordCompaction,
     accountAborted: (reason: "user" | "restart") => {
@@ -723,7 +729,13 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       });
       Object.assign(fixture.context.followupRun.run, outer);
       const entry = fixture.context.activeSessionEntry!;
-      Object.assign(entry, { modelProvider: outer.provider, model: outer.model });
+      Object.assign(entry, {
+        modelProvider: outer.provider,
+        model: outer.model,
+        providerOverride: selection.provider,
+        modelOverride: selection.model,
+        liveModelSwitchPending: true,
+      });
       await fixture.replace(entry);
 
       await fixture.account(lane, {
@@ -745,6 +757,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
       });
       if (runtimeOwned) {
         expect(persisted?.agentHarnessId).toBe("codex");
+        expect(persisted?.liveModelSwitchPending).toBeUndefined();
       }
     },
   );
@@ -810,6 +823,9 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     { mode: "inter-session completion", withUsage: false },
   ])("preserves diagnostics for $mode with usage=$withUsage", async ({ mode, withUsage }) => {
     const fixture = await createFixture();
+    const entry = { ...fixture.context.activeSessionEntry!, liveModelSwitchPending: true };
+    await fixture.replace(entry);
+    Object.assign(fixture.context.activeSessionEntry!, entry);
     fixture.context.isHeartbeat = mode === "heartbeat";
     if (mode === "heartbeat") {
       fixture.context.followupRun.run.terminalReplyExpectation = "optional";
@@ -824,6 +840,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
     const before = fixture.read()?.contextBudgetStatus;
     await fixture.account(lane, { usage: withUsage ? { input: 120 } : undefined });
     expect(fixture.read()?.contextBudgetStatus).toEqual(before);
+    expect(fixture.read()?.liveModelSwitchPending).toBe(true);
   });
 
   it.each([
@@ -986,6 +1003,7 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
         ...fixture.context.activeSessionEntry!,
         ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
         contextBudgetStatus: undefined,
+        liveModelSwitchPending: true,
       };
       await fixture.replace(next);
       const persisted = fixture.read();

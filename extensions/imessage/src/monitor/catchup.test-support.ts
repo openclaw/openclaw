@@ -44,8 +44,8 @@ async function saveIMessageCatchupCursor(
 }
 
 describe("resolveCatchupConfig", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
   });
 
   it("falls back to defaults when raw is undefined", () => {
@@ -87,7 +87,7 @@ describe("resolveCatchupConfig", () => {
 describe("advanceIMessageCatchupCursor", () => {
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
   });
 
   afterEach(async () => {
@@ -175,8 +175,8 @@ describe("advanceIMessageCatchupCursor", () => {
 });
 
 describe("capFailureRetriesMap", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
+  beforeEach(async () => {
+    await installIMessageStateRuntimeForTest();
   });
 
   it("is identity below the cap", () => {
@@ -206,7 +206,7 @@ describe("capFailureRetriesMap", () => {
 describe("performIMessageCatchup", () => {
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
   });
 
   afterEach(async () => {
@@ -567,7 +567,7 @@ describe("performIMessageCatchup", () => {
 describe("iMessage catchup cursor comparisons", () => {
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    installIMessageStateRuntimeForTest();
+    await installIMessageStateRuntimeForTest();
   });
 
   afterEach(async () => {

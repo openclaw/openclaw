@@ -30,6 +30,7 @@ import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-pref
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   prepareOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
@@ -45,12 +46,14 @@ import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcil
 import { runSessionStartupMigration } from "./startup-migration.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
 });
 
 it.each(["cold", "preexisting"] as const)(
@@ -66,6 +69,7 @@ it.each(["cold", "preexisting"] as const)(
     );
     setCanonicalSqliteSessionMainKey(initial, "previous");
     if (lifetime === "cold") {
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
     }
 
@@ -143,6 +147,7 @@ it.each([false, true])(
     }
     setCanonicalSqliteSessionMainKey(survivor, "previous");
     setCanonicalSqliteSessionMainKey(deleted, "previous");
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const deletion = beginAgentDeletionJournal(
       {
@@ -198,6 +203,7 @@ it("observes committed deletion before startup handoff after canonical database 
     { sessionId: "retained-session", updatedAt: 1 },
   );
   setCanonicalSqliteSessionMainKey(database, "previous");
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   expect(readAgentDatabaseAdmissionRefusal("alpha", { env })).toBeUndefined();
 
@@ -301,6 +307,7 @@ it.each(["missing", "receipt-held", "malformed-receipt", "malformed-journal"])(
           { sessionId: `${agentId}-session`, updatedAt: 1 },
         );
       }
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       runOpenClawStateWriteTransaction(
         (database) => {
@@ -411,6 +418,7 @@ it("re-registers durable lineage children before configured-only runtime reads",
       agentId: "codex",
       env,
     }).path;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     unregisterOpenClawAgentDatabase({ agentId: "codex", env, path: childDatabasePath });
 
@@ -475,7 +483,9 @@ it("keeps copied state directories self-contained for combined gateway reads", a
       { agentId: "main", env, sessionKey },
       { sessionId: "copied-session", updatedAt: 1 },
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     invalidateRegisteredAgentDatabasesMemo({ env });
   });
@@ -491,7 +501,9 @@ it("keeps copied state directories self-contained for combined gateway reads", a
 
     expect(combined.store[sessionKey]?.sessionId).toBe("copied-session");
     expect(Object.keys(combined.store).filter((key) => key === sessionKey)).toHaveLength(1);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     invalidateRegisteredAgentDatabasesMemo({ env });
   });
@@ -509,6 +521,7 @@ it.each(["registry", "main-key"] as const)(
     };
     const initial = openOpenClawAgentDatabase(options);
     setCanonicalSqliteSessionMainKey(initial, repair === "main-key" ? "previous" : "main");
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearOpenClawAgentIntegrityVerification(initial.path, env);
     if (repair === "registry") {
