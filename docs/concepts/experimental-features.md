@@ -60,9 +60,10 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This Labs entry permits automatic Decision assistance only when an agent has an
+effective Decision model and a supported consumer mode is explicitly enabled.
+Turning it on does not enable consumer modes, select a provider, provision
+credentials, or download models.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +83,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model
@@ -105,7 +106,7 @@ It performs no provider probes, secret resolution, file reads, network requests,
 model loading, or inference, and returns no provider-readiness diagnostics.
 This is an internal foundation boundary, not a new plugin SDK surface.
 
-For example, at a future automatic consumer boundary:
+For example, at an automatic consumer boundary:
 
 ```ts
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
@@ -117,15 +118,34 @@ if (!isDecisionAssistanceEligible(preparedConfig, owningAgentId)) {
 // before loading its optional implementation or preparing evaluation evidence.
 ```
 
-Use the existing config publication/refresh lifecycle, not file polling. Future
+Use the existing config publication/refresh lifecycle, not file polling. Automatic
 consumers must stop admitting automatic work after opt-out takes effect and
 revalidate current config, model selection, and live authority before applying
 awaited results. This helper is not an authority token or a cancellation owner.
 
-Any future consumer must document its evidence transfer, costs, latency, and
+Automatic consumers must document their evidence transfer, costs, latency, and
 failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges; this foundation sends no evidence and makes no
+provider and can incur charges; Labs alone sends no evidence and makes no
 performance or quality claims.
+
+### Compaction curation
+
+The built-in compaction safeguard supports the separate
+`agents.defaults.compaction.semanticCuration.mode` setting, which defaults to
+`"off"`. Observation (`"shadow"`) and applied selection (`"apply"`) additionally
+require Labs opt-in and an effective Decision model for the owning agent.
+Turning on Labs alone does not select either mode.
+
+Eligible compaction sends bounded conversation evidence to the selected Decision
+provider. Shadow mode observes without changing summarizer input. Apply mode can
+select a smaller temporary input, evaluate summary fidelity, and recover using
+the original input when needed. Selection, fidelity, and recovery add provider
+work and latency; hosted requests can incur charges. The source transcript is
+not rewritten. With Labs off or no effective Decision model, ordinary original-
+input summarization remains in use without automatic Decision calls. Cancellation
+and lost authority remain terminal rather than starting recovery. Representative
+retention quality, latency, and memory costs still require evaluation before
+broad rollout.
 
 ## Local model lean mode
 

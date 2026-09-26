@@ -23,7 +23,11 @@ import type {
   ProviderFailureReason,
   UnavailableReason,
 } from "./types.js";
-import { DecisionContractError, validateDecisionResult } from "./validation.js";
+import {
+  DecisionConsumerClosedError,
+  DecisionContractError,
+  validateDecisionResult,
+} from "./validation.js";
 
 type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
 const FAILURE_REASONS = new Set<ProviderFailureReason>([
@@ -37,12 +41,6 @@ const FAILURE_REASONS = new Set<ProviderFailureReason>([
 const MAX_CONCURRENT = 4;
 const COOLDOWN_MS = 10_000;
 const MAX_RETRY_AFTER_MS = 60_000;
-
-class DecisionConsumerClosedError extends Error {
-  constructor() {
-    super("Decision consumer authority closed.");
-  }
-}
 
 type Health = {
   id: string;
@@ -213,6 +211,7 @@ export class DecisionProviderHost {
     config: OpenClawConfig,
     registry: PluginRegistry,
     consumerId?: string,
+    readConfig: () => OpenClawConfig = createRuntimeConfigReader(config),
   ): Promise<DecisionOutcome> {
     const started = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };
@@ -226,6 +225,7 @@ export class DecisionProviderHost {
         registry,
         facts,
         consumerId,
+        readConfig,
       );
       return outcome;
     } finally {
@@ -247,7 +247,8 @@ export class DecisionProviderHost {
     config: OpenClawConfig,
     registry: PluginRegistry,
     facts: DecisionEvaluationFacts,
-    consumerId?: string,
+    consumerId: string | undefined,
+    readConfig: () => OpenClawConfig,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
     const instance = getPluginInstance(this.record);
@@ -260,7 +261,6 @@ export class DecisionProviderHost {
       facts.jsonInputBytes = Buffer.byteLength(JSON.stringify(submitted));
     }
     const health = this.generation(config);
-    const readConfig = createRuntimeConfigReader(config);
     if (!instance.runInRegistry(registry, () => this.ready())) {
       return this.unavailable("credentials-unavailable");
     }
@@ -325,6 +325,15 @@ export class DecisionProviderHost {
       try {
         // Preserve the offered questions even when the provider mutates its input.
         questions = structuredClone(submitted.questions);
+        // Runtime authority preparation and provider readiness may publish a new
+        // consumer configuration. Check the live owner before sending its evidence.
+        if (options.isEligible?.() === false) {
+          return this.unavailable("disabled");
+        }
+        const stoppedBeforeDispatch = interrupted();
+        if (stoppedBeforeDispatch) {
+          return stoppedBeforeDispatch;
+        }
         outcome = await instance.runInRegistry(
           registry,
           () => {

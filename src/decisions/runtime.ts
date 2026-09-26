@@ -2,6 +2,7 @@ import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
 import { resolveDecisionModelSetting } from "../agents/decision-model-setting.js";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -18,7 +19,11 @@ import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
-import { DecisionContractError, validateDecisionBatch } from "./validation.js";
+import {
+  DecisionConsumerClosedError,
+  DecisionContractError,
+  validateDecisionBatch,
+} from "./validation.js";
 
 type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
 
@@ -55,7 +60,8 @@ export async function evaluateDecisionInRegistry(
     options.rubricVersion.length > 128 ||
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
-    !(options.signal instanceof AbortSignal)
+    !(options.signal instanceof AbortSignal) ||
+    (options.isEligible !== undefined && typeof options.isEligible !== "function")
   ) {
     throw new DecisionContractError();
   }
@@ -90,6 +96,8 @@ export async function evaluateDecisionInRegistry(
   } catch {
     throw new DecisionContractError();
   }
+  // Bind the config owner before operator preparation can publish a replacement.
+  const readConfig = createRuntimeConfigReader(config);
   const model = normalizeModelRef(selected.provider, selected.model, {
     allowPluginNormalization: false,
     manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
@@ -136,27 +144,39 @@ export async function evaluateDecisionInRegistry(
         config,
         registry,
         consumerId,
+        readConfig,
       );
       assertCurrent();
       return result;
     }
     if (!authority?.() || !lifetime) {
-      throw new Error("Decision consumer authority closed.");
+      throw new DecisionConsumerClosedError();
     }
     const signal = AbortSignal.any([modelSignal, lifetime]);
-    const result = await entry.host.evaluate(
-      submitted,
-      { ...options, signal },
-      selected.model,
-      config,
-      registry,
-      consumerId,
-    );
+    let result: DecisionOutcome;
+    try {
+      result = await entry.host.evaluate(
+        submitted,
+        { ...options, signal },
+        selected.model,
+        config,
+        registry,
+        consumerId,
+        readConfig,
+      );
+    } catch (error) {
+      // The host sees a combined signal. A scoped retirement is terminal even
+      // when the provider reports it as an ordinary abort.
+      if (lifetime.aborted || !authority()) {
+        throw new DecisionConsumerClosedError();
+      }
+      throw error;
+    }
+    if (lifetime.aborted || !authority()) {
+      throw new DecisionConsumerClosedError();
+    }
     signal.throwIfAborted();
     assertCurrent();
-    if (!authority()) {
-      throw new Error("Decision consumer authority closed.");
-    }
     return result;
   } finally {
     modelExecution?.release();

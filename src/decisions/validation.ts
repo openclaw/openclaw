@@ -11,6 +11,14 @@ export class DecisionContractError extends Error {
   }
 }
 
+/** The finite consumer view was released or replaced while a decision was in flight. */
+export class DecisionConsumerClosedError extends Error {
+  constructor() {
+    super("Decision consumer authority closed.");
+    this.name = "DecisionConsumerClosedError";
+  }
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return (
     Boolean(value) &&

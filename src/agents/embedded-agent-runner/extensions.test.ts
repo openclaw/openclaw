@@ -3,7 +3,10 @@ import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
+import {
+  getCompactionSafeguardRuntime,
+  getCurrentCompactionSemanticMode,
+} from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
@@ -53,6 +56,66 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it.each([true, false])(
+    "uses persisted owner eligibility instead of prepared agent (enabled=%s)",
+    (ownerEnabled) => {
+      const sessionManager = {
+        getSessionTarget: () => ({
+          agentId: "owner",
+          sessionId: "id",
+          sessionKey: "agent:owner:id",
+          storePath: "/synthetic",
+        }),
+      } as SessionManager;
+      buildEmbeddedExtensionFactories({
+        cfg: {
+          agents: {
+            defaults: {
+              experimental: { decisionAssistance: true },
+              compaction: { mode: "safeguard", semanticCuration: { mode: "shadow" } },
+            },
+            entries: {
+              owner: { decisionModel: ownerEnabled ? "fixture/owner" : "" },
+              prepared: { decisionModel: ownerEnabled ? "" : "fixture/prepared" },
+            },
+          },
+        },
+        sessionManager,
+        agentId: "prepared",
+        provider: "fixture",
+        modelId: "summary",
+        model: undefined,
+      });
+      expect(getCompactionSafeguardRuntime(sessionManager)?.agentId).toBe("owner");
+      expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationMode).toBe(
+        ownerEnabled ? "shadow" : "off",
+      );
+    },
+  );
+
+  it("dispatches under the resolved main owner when the session has no target", () => {
+    const sessionManager = {} as SessionManager;
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            experimental: { decisionAssistance: true },
+            decisionModel: "global-provider/global-model",
+            compaction: { mode: "safeguard", semanticCuration: { mode: "shadow" } },
+          },
+          entries: { main: { decisionModel: "owner-provider/owner-model" } },
+        },
+      },
+      sessionManager,
+      provider: "fixture",
+      modelId: "summary",
+      model: undefined,
+    });
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.semanticCurationMode).toBe("shadow");
+    expect(runtime?.agentId).toBe("main");
+  });
+
   it("uses the prepared context budget for safeguard sizing", () => {
     const sessionManager = {} as SessionManager;
     const factories = buildEmbeddedExtensionFactories({
@@ -127,6 +190,50 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("wires shadow semantic curation into safeguard runtime", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          experimental: { decisionAssistance: true },
+          decisionModel: "fixture/default",
+          compaction: {
+            mode: "safeguard",
+            semanticCuration: {
+              mode: "shadow",
+              timeoutMs: 650,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { sessionManager } = buildSafeguardFactories(cfg);
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationMode).toBe("shadow");
+    expect(getCompactionSafeguardRuntime(sessionManager)?.semanticCurationTimeoutMs).toBe(650);
+    cfg.agents!.defaults!.compaction!.semanticCuration!.mode = "off";
+    expect(getCurrentCompactionSemanticMode(sessionManager)).toBe("off");
+  });
+
+  it("keeps automatic semantic curation off without Decision assistance consent", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          decisionModel: "openai/gpt-5-mini",
+          experimental: { decisionAssistance: false },
+          compaction: { mode: "safeguard", semanticCuration: { mode: "apply" } },
+        },
+      },
+    } as OpenClawConfig;
+    const { sessionManager } = buildSafeguardFactories(cfg);
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.semanticCurationMode).toBe("off");
+    cfg.agents!.defaults!.experimental!.decisionAssistance = true;
+    expect(runtime?.semanticCurationEligible?.()).toBe(true);
+    expect(getCurrentCompactionSemanticMode(sessionManager)).toBe("off");
+    cfg.agents!.defaults!.experimental!.decisionAssistance = false;
+    expect(runtime?.semanticCurationEligible?.()).toBe(false);
   });
 
   it("wires the run workspace into safeguard runtime", () => {
