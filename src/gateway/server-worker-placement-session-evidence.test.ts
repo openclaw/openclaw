@@ -159,7 +159,7 @@ describe("worker placement session evidence", () => {
         sessionId: `session-${kind}`,
         sessionKey: `agent:main:${kind}`,
       }));
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...identities[3]!,
         owner: { kind: "local" },
         claimId: "live-claim",

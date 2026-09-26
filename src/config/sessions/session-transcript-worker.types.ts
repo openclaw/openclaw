@@ -292,6 +292,14 @@ type SessionEntryReadWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+export type SessionDiagnosticTextWorkerInput = {
+  kind: "session-diagnostic-text";
+  database: { agentId: string; path: string };
+  scope: SessionEntryReadScope & { agentId: string; databaseAgentId: string; sessionId: string };
+  continuation?: CanonicalSessionReaderContinuation;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
 type SessionEntryReadWorkerResult = {
   kind: "session-entry-read";
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
@@ -436,6 +444,7 @@ export type SessionHistoryWorkerInput =
   | SessionProgressCardWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
+  | SessionDiagnosticTextWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
   | SessionStoreTargetWorkerInput
@@ -486,6 +495,11 @@ export type SessionTranscriptWorkerValues = {
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-entry-read": SessionEntryReadWorkerResult;
+  "session-diagnostic-text": {
+    kind: "session-diagnostic-text";
+    text: string | undefined;
+    source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+  };
   "session-exact-entries": SessionExactEntriesWorkerResult;
   "session-row-facts": SessionRowFactsWorkerResult;
   "session-store-target":
@@ -587,6 +601,9 @@ export type SessionHistoryWorkerDatabase = {
       unknown
     >
   >;
+  readDiagnosticText: (
+    input: Omit<SessionDiagnosticTextWorkerInput, "kind" | "database">,
+  ) => Promise<string | undefined>;
   readMembers: (
     input: Omit<SessionMembersWorkerInput, "kind" | "database">,
   ) => Promise<SessionMember[]>;

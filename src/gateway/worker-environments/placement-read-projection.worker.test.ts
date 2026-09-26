@@ -63,7 +63,7 @@ describe("worker placement read projection", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const database = openOpenClawStateDatabase();
     const { store, placement, identity } = activePlacement(database, "pending");
-    const claim = store.claimTurn({
+    const claim = await store.claimTurn({
       ...identity,
       owner: {
         kind: "worker",

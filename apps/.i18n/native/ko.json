@@ -903,6 +903,7 @@
     "native.android.8363c18ba7fdf0fd": "요청 빈도 제한",
     "native.android.837744e8aa3c8155": "연결됨",
     "native.android.83e4fdeca6722756": "설치된 스킬의 상태를 확인하고 관리합니다.",
+    "native.android.83e7a975bb7a5ea0": "링크 미리보기 접기",
     "native.android.83e80579dc21643d": "에이전트에게 말하기",
     "native.android.841570a28a49db67": "Cron을 변경하려면 operator.admin 권한이 필요합니다. 설정 코드는 의도적으로 이 권한을 부여하지 않습니다. 관리자 권한을 요청하려면 Gateway의 공유 토큰이나 비밀번호로 다시 연결하세요. 이 기기에 여전히 권한이 없다면 기존 관리자 클라이언트에서 대기 중인 권한 범위 확장 요청을 승인하세요.",
     "native.android.84244f73da2b8e3b": "OpenClaw",

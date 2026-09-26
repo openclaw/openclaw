@@ -5,6 +5,7 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -31,6 +32,7 @@ import {
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { renderChatTasksPanel } from "./components/chat-tasks-panel.ts";
+import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -293,6 +295,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
+      conversationTab: {
+        label: chatProps.assistantName,
+        icon: renderAgentIdentityAvatar(resolveAssistantDisplayAvatar(chatProps)),
+      },
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
       availableSlots,

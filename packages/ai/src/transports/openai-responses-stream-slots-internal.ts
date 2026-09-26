@@ -174,9 +174,14 @@ export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
   delta: string,
   materialize: (slot: TSlot) => void,
 ): void {
+  const offset = slot.pendingText?.length ?? 0;
   slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
   const priorText = slot.collapseCandidate?.block.text ?? "";
-  if (priorText.startsWith(slot.pendingText) || slot.pendingText.startsWith(priorText)) {
+  // Earlier deltas already matched; only compare the new overlap with the prior item.
+  if (
+    offset >= priorText.length ||
+    priorText.startsWith(delta.slice(0, priorText.length - offset), offset)
+  ) {
     return;
   }
   // Divergence means this is a distinct message; materialize its withheld delta.

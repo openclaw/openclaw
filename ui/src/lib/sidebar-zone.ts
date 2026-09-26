@@ -38,37 +38,25 @@ export function reconcileSidebarZone(
     if (seen.has(canonicalKey)) {
       continue;
     }
-    if (entry.type === "route") {
-      if (!validRouteSet.has(entry.route)) {
-        continue;
-      }
-      seen.add(canonicalKey);
-      entries.push(entry);
-      canonical.push(canonicalKey);
+    if (entry.type === "route" && !validRouteSet.has(entry.route)) {
       continue;
     }
-    if (entry.type === "plugin") {
-      seen.add(canonicalKey);
-      canonical.push(canonicalKey);
-      // Registration can disappear on reload, disconnect, or permission loss;
-      // an unavailable plugin must not erase the operator's saved placement.
-      if (pluginNavigationKeys.has(entry.key)) {
-        entries.push(entry);
-      }
+    if (
+      entry.type === "session" &&
+      !pinnedKeys.has(entry.key) &&
+      knownUnpinnedKeys.has(entry.key)
+    ) {
       continue;
     }
-    if (pinnedKeys.has(entry.key)) {
-      seen.add(canonicalKey);
-      entries.push(entry);
-      canonical.push(canonicalKey);
-      continue;
-    }
-    if (knownUnpinnedKeys.has(entry.key)) {
-      continue;
-    }
-    // Unknown state: keep the position, render nothing.
+    // Unavailable plugins and unknown sessions retain their saved position without rendering.
     seen.add(canonicalKey);
     canonical.push(canonicalKey);
+    if (
+      entry.type === "route" ||
+      (entry.type === "plugin" ? pluginNavigationKeys.has(entry.key) : pinnedKeys.has(entry.key))
+    ) {
+      entries.push(entry);
+    }
   }
 
   for (const session of pinnedSessions) {

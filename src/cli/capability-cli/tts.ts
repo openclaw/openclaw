@@ -1,17 +1,8 @@
 import { Option, type Command } from "commander";
-import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
+import { normalizeSpeechProviderId } from "../../tts/provider-registry-core.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import { resolveModelRefOverride, resolveTransport } from "./shared.js";
-import {
-  runTtsConvert,
-  runTtsPersonas,
-  runTtsProviders,
-  runTtsStateMutation,
-  runTtsVoices,
-} from "./tts-runtime.js";
 
 function registerTransportTtsCommand<T>(
   command: Command,
@@ -25,6 +16,7 @@ function registerTransportTtsCommand<T>(
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { resolveTransport } = await import("./shared.js");
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -52,6 +44,8 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .option("--output <path>", "Output path"),
     "local",
     async (opts, transport) => {
+      const { resolveModelRefOverride } = await import("./shared.js");
+      const { runTtsConvert } = await import("./tts-runtime.js");
       const modelRef = resolveModelRefOverride(opts.model as string | undefined);
       if (opts.model && !modelRef.provider) {
         throw new Error("TTS model overrides must use the form <provider/model>.");
@@ -85,6 +79,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { runTtsVoices } = await import("./tts-runtime.js");
         const voices = await runTtsVoices(opts.provider as string | undefined);
         emitJsonOrText(defaultRuntime, Boolean(opts.json), voices, providerSummaryText);
       });
@@ -96,13 +91,19 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .description("List speech providers")
       .option("--agent <id>", "Agent whose provider state should be inspected"),
     "local",
-    (opts, transport) => runTtsProviders(transport, opts.agent as string | undefined),
+    async (opts, transport) => {
+      const { runTtsProviders } = await import("./tts-runtime.js");
+      return runTtsProviders(transport, opts.agent as string | undefined);
+    },
   );
 
   registerTransportTtsCommand(
     tts.command("personas").description("List TTS personas"),
     "local",
-    (_, transport) => runTtsPersonas(transport),
+    async (_, transport) => {
+      const { runTtsPersonas } = await import("./tts-runtime.js");
+      return runTtsPersonas(transport);
+    },
   );
 
   tts
@@ -112,11 +113,13 @@ export function registerTtsCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { resolveTransport } = await import("./shared.js");
         const transport = resolveTransport({
           gateway: Boolean(opts.gateway),
           supported: ["gateway"],
           defaultTransport: "gateway",
         });
+        const { callGateway } = await import("../../gateway/call.js");
         const result = await callGateway({
           method: "tts.status",
           timeoutMs: 30_000,
@@ -136,7 +139,10 @@ export function registerTtsCapabilityCommands(capability: Command): void {
         .command(commandName)
         .description(`${commandName === "enable" ? "Enable" : "Disable"} TTS`),
       "gateway",
-      (_, transport) => runTtsStateMutation({ capability: capabilityId, transport }),
+      async (_, transport) => {
+        const { runTtsStateMutation } = await import("./tts-runtime.js");
+        return runTtsStateMutation({ capability: capabilityId, transport });
+      },
     );
   }
 
@@ -146,12 +152,14 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .description("Set the active TTS provider")
       .requiredOption("--provider <id>", "Speech provider id"),
     "gateway",
-    (opts, transport) =>
-      runTtsStateMutation({
+    async (opts, transport) => {
+      const { runTtsStateMutation } = await import("./tts-runtime.js");
+      return runTtsStateMutation({
         capability: "tts.set-provider",
         provider: String(opts.provider),
         transport,
-      }),
+      });
+    },
   );
 
   registerTransportTtsCommand(
@@ -161,10 +169,11 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       .addOption(new Option("--persona <id>", "TTS persona id").conflicts("off"))
       .option("--off", "Disable the active TTS persona", false),
     "gateway",
-    (opts, transport) => {
+    async (opts, transport) => {
       if (!opts.off && !opts.persona) {
         throw new Error("--persona is required unless --off is set");
       }
+      const { runTtsStateMutation } = await import("./tts-runtime.js");
       return runTtsStateMutation({
         capability: "tts.set-persona",
         persona: opts.off ? null : String(opts.persona),

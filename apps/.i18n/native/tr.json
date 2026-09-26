@@ -903,6 +903,7 @@
     "native.android.8363c18ba7fdf0fd": "Hız sınırı",
     "native.android.837744e8aa3c8155": "Bağlandı",
     "native.android.83e4fdeca6722756": "Yüklü becerilerin durumunu inceleyin ve yönetin.",
+    "native.android.83e7a975bb7a5ea0": "Bağlantı önizlemesini daralt",
     "native.android.83e80579dc21643d": "Ajanınızla konuşun",
     "native.android.841570a28a49db67": "Cron değişiklikleri operator.admin erişimi gerektirir. Kurulum kodları bu erişimi kasıtlı olarak vermez. Yönetici erişimi istemek için Gateway'in paylaşılan belirteci veya parolasıyla yeniden bağlanın. Bu cihaz hâlâ bu erişime sahip değilse bekleyen kapsam yükseltmesini mevcut bir yönetici istemcisinden onaylayın.",
     "native.android.84244f73da2b8e3b": "OpenClaw",
