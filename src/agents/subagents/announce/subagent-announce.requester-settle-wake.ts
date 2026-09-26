@@ -239,13 +239,19 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
 
   const batchCreatedAt = Math.min(...settledBatch.map((entry) => entry.createdAt));
+  // Frozen cohorts own their members' descendants, not unrelated sibling cohorts.
+  const settleRoots = frozenBatchRunIds?.length
+    ? settledBatch.map((entry) => entry.childSessionKey)
+    : [requesterSessionKey];
   const requesterHasUnsettledDescendants = () =>
-    hasDescendantRunAwaitingSettle(
-      requesterSessionKey,
-      currentSettledEntry.runId,
-      requesterAgentId,
-      requesterStorePath,
-      batchCreatedAt,
+    settleRoots.some((root) =>
+      hasDescendantRunAwaitingSettle(
+        root,
+        currentSettledEntry.runId,
+        requesterAgentId,
+        requesterStorePath,
+        batchCreatedAt,
+      ),
     );
   const hasUnsettledDescendants = requesterHasUnsettledDescendants();
   if ((!frozenBatchRunIds || frozenBatchRunIds.length === 0) && hasUnsettledDescendants) {
@@ -317,11 +323,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   }
   function deferBatch(
     state: RequesterSettleWakeBatchState,
-    countTowardsLimit = countActiveDescendantRuns(
-      requesterSessionKey,
-      requesterAgentId,
-      requesterStorePath,
-    ) === 0,
+    countTowardsLimit = !settleRoots.some(
+      (root) => countActiveDescendantRuns(root, requesterAgentId, requesterStorePath) > 0,
+    ),
   ): void {
     const now = Date.now();
     if ((state.nextAttemptAt ?? 0) > now) {
@@ -471,8 +475,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       // Returning here keeps restart/suspend drains free during backoff.
       return false;
     }
-    // A requester may spawn more work while this durable batch is waiting
-    // or replaying. Keep the frozen batch pending until the new work drains.
+    // Recheck owned descendants after loading findings and before dispatch.
     if (requesterHasUnsettledDescendants()) {
       deferBatch(state);
       return false;
