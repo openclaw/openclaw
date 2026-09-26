@@ -555,6 +555,7 @@ function buildChannelInboundEventContextValue(
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     ConversationAvatar: params.conversation.avatar,
+    ConversationLink: params.conversation.link,
     ChannelContext: params.channelContext,
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,

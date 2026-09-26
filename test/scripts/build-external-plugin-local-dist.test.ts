@@ -48,6 +48,8 @@ function writeChannelStateFixtures(pluginRoot: string) {
 describe("external plugin local dist build", () => {
   it("keeps excluded plugin graphs isolated and their runtime metadata loadable", async () => {
     const repoRoot = fs.realpathSync(tempDirs.make("openclaw-isolated-plugin-graphs-"));
+    const browserEntry = `dist/control-ui/${"a".repeat(64)}/index.js`;
+    const browserSource = "export const browserUi = true;\n";
     const plugins = [
       { id: "external-cjs", runtimeFormat: "cjs", publishToNpm: true, bundledDist: true },
       { id: "external-esm", runtimeFormat: "esm", publishToNpm: true, bundledDist: true },
@@ -65,6 +67,7 @@ describe("external plugin local dist build", () => {
     );
     for (const { id, runtimeFormat, publishToNpm, bundledDist } of plugins) {
       const pluginRoot = path.join(repoRoot, "extensions", id);
+      const browserUi = id === "external-only";
       fs.mkdirSync(pluginRoot, { recursive: true });
       fs.writeFileSync(
         path.join(pluginRoot, "package.json"),
@@ -78,10 +81,22 @@ describe("external plugin local dist build", () => {
             channel: { id, label: id, ...channelStateFixtures },
             build: { runtimeFormat, bundledDist },
             release: { publishToNpm },
+            ...(browserUi ? { assetScripts: { build: "node build-browser.mjs" } } : {}),
           },
         }),
       );
-      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), JSON.stringify({ id }));
+      fs.writeFileSync(
+        path.join(pluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({ id, ...(browserUi ? { controlUi: { entry: browserEntry } } : {}) }),
+      );
+      if (browserUi) {
+        fs.writeFileSync(
+          path.join(pluginRoot, "build-browser.mjs"),
+          `import fs from "node:fs";
+           fs.mkdirSync(${JSON.stringify(path.posix.dirname(browserEntry))}, { recursive: true });
+           fs.writeFileSync(${JSON.stringify(browserEntry)}, ${JSON.stringify(browserSource)});`,
+        );
+      }
       writeChannelStateFixtures(pluginRoot);
       fs.writeFileSync(
         path.join(pluginRoot, "runtime-api.ts"),
@@ -107,7 +122,14 @@ describe("external plugin local dist build", () => {
       const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
       expect(metadata.openclaw.extensions).toEqual([`./index${extension}`]);
       expect(metadata.openclaw.setupEntry).toBe(`./setup-entry${extension}`);
-      expect(fs.existsSync(path.join(repoRoot, "extensions", id, "dist"))).toBe(false);
+      const sourceRoot = path.join(repoRoot, "extensions", id);
+      if (id === "external-only") {
+        expect(fs.readFileSync(path.join(sourceRoot, browserEntry), "utf8")).toBe(browserSource);
+        expect(fs.readdirSync(path.join(sourceRoot, "dist"))).toEqual(["control-ui"]);
+        expect(fs.existsSync(path.join(pluginRoot, "control-ui"))).toBe(false);
+      } else {
+        expect(fs.existsSync(path.join(sourceRoot, "dist"))).toBe(false);
+      }
       fs.writeFileSync(
         path.join(pluginRoot, runtimeFormat === "cjs" ? "index.js" : "index.cjs"),
         'throw new Error("stale format must not execute");\n',

@@ -173,12 +173,14 @@ describe("applyTemplate", () => {
     expect(applyTemplate("missing={{Missing}}", ctx)).toBe("missing=");
   });
 
-  it("never renders channel-owned conversation image references", () => {
+  it("never renders channel-owned conversation navigation or image references", () => {
     const ctx = {
       ConversationAvatar: "/private/media/inbound/avatar.png",
+      ConversationLink: { url: "https://chat.example.test/thread/123", label: "Source Thread" },
     } as unknown as TemplateContext;
 
     expect(applyTemplate("avatar={{ConversationAvatar}}", ctx)).toBe("avatar=");
+    expect(applyTemplate("link={{ConversationLink}}", ctx)).toBe("link=");
   });
 });
 

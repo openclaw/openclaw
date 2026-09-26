@@ -412,6 +412,20 @@ export async function prepareSessionMutationFacts(
       selectedPaths.add(path.resolve(selected.storePath));
       if (sharing) {
         selectedPaths.add(path.resolve(sharing.source.path));
+        // New and existing rows retain the captured aliases of the same physical store.
+        // Creation writers publish through the logical alias used during preparation.
+        const sourceCandidates = discoveryCandidates.filter((candidate) =>
+          matchesAgentDatabaseReadCandidatePath(
+            { ...candidate, path: candidate.physicalPath },
+            sharing.source.path,
+          ),
+        );
+        if (sourceCandidates.length === 0) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        for (const candidate of sourceCandidates) {
+          selectedPaths.add(path.resolve(candidate.path));
+        }
       }
       if (!match) {
         if (!params.allowMissing) {
@@ -451,20 +465,6 @@ export async function prepareSessionMutationFacts(
             sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
           ),
         };
-        selectedPaths.add(path.resolve(selected.storePath));
-        selectedPaths.add(path.resolve(sharing.source.path));
-        const sourceCandidates = discoveryCandidates.filter((candidate) =>
-          matchesAgentDatabaseReadCandidatePath(
-            { ...candidate, path: candidate.physicalPath },
-            sharing.source.path,
-          ),
-        );
-        if (sourceCandidates.length === 0) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        for (const candidate of sourceCandidates) {
-          selectedPaths.add(path.resolve(candidate.path));
-        }
         const retained = retainedReads.get(`${sharing.databaseIdentity}\0${target.storeKey}`);
         if (!retained) {
           throw new SessionMutationFactsUnavailableError();

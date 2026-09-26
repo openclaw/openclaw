@@ -176,7 +176,15 @@ describe("pending ACP spawn authority", () => {
         defaultSessionId: "parent-session",
       });
       const proveDelegatedCredit = stage === "runtime" && closure === "live";
+      const conversationLink = {
+        url: "https://chat.example.test/thread/123",
+        label: "Source Thread",
+      };
       if (proveDelegatedCredit) {
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey: parentSessionKey },
+          { conversationLink },
+        );
         await recordSessionParticipant(
           { agentId: "main", sessionKey: parentSessionKey },
           { identity: { type: "profile", id: "human-contributor" }, promptedAt: 1 },
@@ -314,6 +322,7 @@ describe("pending ACP spawn authority", () => {
           if (proveDelegatedCredit) {
             const entry = loadSessionEntry({ sessionKey: input.sessionKey, agentId: "fixture" });
             expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
+            expect(entry?.conversationLink).toEqual(conversationLink);
             expect(entry?.participants ?? []).toEqual([]);
           }
           ensuredSessions.push(input.sessionKey);

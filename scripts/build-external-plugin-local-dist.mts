@@ -24,7 +24,7 @@ export function listExternalPluginLocalDistPackageDirs(
     .map(({ id }) => `extensions/${id}`);
 }
 
-/** Builds isolated plugin graphs, then stages every output below its excluded root dist path. */
+/** Builds isolated plugin graphs and stages their Node runtime output. */
 export async function buildExternalPluginLocalDist(
   params: ExternalPluginLocalDistParams = {},
 ): Promise<{ durationMs: number; pluginDirs: string[] }> {
@@ -50,9 +50,20 @@ export async function buildExternalPluginLocalDist(
     const targetDir = path.join(repoRoot, "dist", "extensions", result.pluginDir);
     assertRealOutputRoot(targetDir);
     fs.rmSync(targetDir, { recursive: true, force: true });
-    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-    fs.cpSync(result.outDir, targetDir, { recursive: true });
-    fs.rmSync(result.outDir, { recursive: true, force: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+    for (const entry of fs.readdirSync(result.outDir)) {
+      // Source-discovered plugins serve these assets in place; plugins:assets:copy
+      // also stages them at their manifest-relative path, without flattening dist/.
+      if (entry === "control-ui") {
+        continue;
+      }
+      const source = path.join(result.outDir, entry);
+      fs.cpSync(source, path.join(targetDir, entry), { recursive: true });
+      fs.rmSync(source, { recursive: true, force: true });
+    }
+    if (fs.readdirSync(result.outDir).length === 0) {
+      fs.rmdirSync(result.outDir);
+    }
     pluginDirs.push(result.pluginDir);
   }
 

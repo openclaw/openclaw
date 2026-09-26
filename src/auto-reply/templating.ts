@@ -1,4 +1,5 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
+import type { SessionConversationLink } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -396,6 +397,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   NativeChannelId?: string;
   /** Channel-owned local conversation image reference; never rendered into prompt text. */
   ConversationAvatar?: string;
+  /** Display-only launch destination; not delivery routing or prompt content. */
+  ConversationLink?: SessionConversationLink;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -487,7 +490,7 @@ export type FinalizedRuntimeMsgContext = Omit<
     CommandTurn?: CommandTurnContext;
   };
 
-type NonTemplateContextKey = "ConversationAvatar";
+type NonTemplateContextKey = "ConversationAvatar" | "ConversationLink";
 
 export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
@@ -557,7 +560,7 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
-    if (key === "ConversationAvatar") {
+    if (key === "ConversationAvatar" || key === "ConversationLink") {
       return "";
     }
     const value = ctx[key as keyof TemplateContext];

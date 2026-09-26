@@ -1,3 +1,4 @@
+import type { SessionConversationLink } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type {
   GetReplyOptions,
@@ -83,6 +84,8 @@ export type ConversationFacts = {
   threadId?: string;
   nativeChannelId?: string;
   avatar?: string;
+  /** Canonical external destination, resolved by the channel after thread creation. */
+  link?: SessionConversationLink;
   routePeer?: {
     kind: "direct" | "group" | "channel";
     id: string;

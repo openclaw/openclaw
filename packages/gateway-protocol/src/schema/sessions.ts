@@ -56,12 +56,14 @@ export {
   type SessionsPatchParams,
 } from "./sessions-patch.js";
 export {
+  SessionConversationLinkSchema,
   SessionCreatedActorSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionConversationLink,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,

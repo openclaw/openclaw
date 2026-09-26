@@ -41,6 +41,7 @@ function buildGatewaySessionEventFields(params: {
     space: sessionRow.space,
     chatType: sessionRow.chatType,
     origin: sessionRow.origin,
+    conversationLink: sessionRow.conversationLink,
     archived: sessionRow.archived ?? false,
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,

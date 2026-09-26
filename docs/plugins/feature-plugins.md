@@ -187,6 +187,38 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
+Session-header accessories also receive `props.session`, the pane's current
+session snapshot. It can be absent while loading and does not depend on the
+filtered sidebar roster. Changes arrive through the accessory's `update`.
+
+For a standard direct link, register an accessory using the shared browser
+helper. The plugin decides when and where the link appears:
+
+```typescript
+import { createSessionHeaderLink, defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
+
+export default defineControlUiPlugin({
+  id: "example-chat",
+  activate(host) {
+    return host.ui.registerAccessory({
+      id: "conversation-origin",
+      placement: "session-header",
+      mount: createSessionHeaderLink(({ conversationLink }) =>
+        conversationLink && URL.parse(conversationLink.url)?.hostname === "chat.example.com"
+          ? conversationLink
+          : undefined,
+      ),
+    });
+  },
+});
+```
+
+The helper is bundled into the plugin's browser code. It creates an HTTP(S)
+anchor with the shared header style, opens directly in a new tab, and removes
+the link when the resolver returns `undefined` or the view is hidden/disposed.
+Without a registered accessory, saved conversation-link metadata creates no
+button. Custom accessory mounts can still render arbitrary HTML, CSS, and JavaScript.
+
 The host also exposes session and agent snapshots and operations, plugin page
 navigation, authenticated requests, and subscriptions. Session and agent
 `refresh()` operations fetch new snapshots and reject on failure, so a plugin

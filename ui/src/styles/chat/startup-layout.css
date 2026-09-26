@@ -590,6 +590,36 @@ openclaw-chat-sidebar-region,
   min-width: 0;
 }
 
+.chat-session-accessories {
+  display: flow-root;
+  /* An inset separator takes no space when plugins render nothing or hide their content. */
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.plugin-session-header-link {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  gap: 0.35rem;
+  margin: 0 12px 8px;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  color: var(--text);
+  background: var(--bg);
+  font: 500 12px/1.4 var(--font-body, system-ui);
+  text-decoration: none;
+  cursor: pointer;
+}
+.plugin-session-header-link:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.plugin-session-header-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .sidebar-region__primary {
   display: flex;
   flex: 1 1 0;

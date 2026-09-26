@@ -49,6 +49,39 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Return to the source conversation
+
+Channel plugins can supply `conversation.link` when building an inbound event
+with `buildChannelInboundEventContext`:
+
+```typescript
+conversation: {
+  ...conversation,
+  link: {
+    url: "https://chat.example.com/conversations/example-thread",
+    label: "Example Thread",
+  },
+}
+```
+
+The channel owns the destination URL and plain-text label. Resolve the actual
+thread after any automatic thread creation; use the platform's permalink API
+when required. Discord and Slack supply this metadata. If a lookup fails, report
+the failure through the channel's logger and omit the link without blocking the
+agent's reply.
+
+The host retains the first valid HTTP(S) link on the logical session, preserves
+it across resets, and carries it to explicitly spawned or forked child sessions.
+Later delivery-route changes do not replace it. This metadata does not render
+any UI by itself. A channel's browser plugin registers a `session-header`
+accessory to display its link. Discord and Slack use the shared
+`createSessionHeaderLink` helper from `openclaw/plugin-sdk/control-ui` for the
+standard appearance and direct navigation, with no preview or dropdown.
+The helper receives the current session snapshot through the accessory's props;
+it requires no extra Gateway request. See [Feature plugins](/plugins/feature-plugins#contribute-and-replace-views)
+for registration. Other plugin accessories, including their custom HTML, CSS,
+and JavaScript, keep their existing contract.
+
 ## Walkthrough
 
 <Steps>

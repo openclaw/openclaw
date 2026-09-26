@@ -163,6 +163,14 @@
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
+    },
+    "controlUi": "./browser/index.ts",
+    "assetScripts": {
+      "build": "pnpm exec tsx --tsconfig ../../tsconfig.json ../../scripts/build-plugin-control-ui.mts",
+      "copy": "pnpm exec tsx --tsconfig ../../tsconfig.json ../../scripts/build-plugin-control-ui.mts --copy",
+      "buildOutputs": [
+        "openclaw.plugin.json"
+      ]
     }
   }
 }

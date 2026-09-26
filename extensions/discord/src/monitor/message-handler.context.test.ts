@@ -121,20 +121,39 @@ describe("discord message context", () => {
     expect(result?.ctxPayload.GroupSpace).toBe("guild-id");
   });
 
-  it("records the source channel as the parent of an auto-threaded turn", async () => {
+  it("links back to the created thread while retaining the mention's parent channel", async () => {
     const ctx = await createBaseDiscordMessageContext({
       channelConfig: { allowed: true, autoThread: true },
+      data: { guild: { id: "123456789012345678", name: "Test Guild" } },
+      guildInfo: null,
       client: {
         rest: {
-          get: async () => ({ thread: { id: "auto-thread-1" } }),
+          get: async () => ({ thread: { id: "234567890123456789" } }),
         },
       },
     });
 
     const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
 
-    expect(result?.ctxPayload.MessageThreadId).toBe("auto-thread-1");
+    expect(result?.ctxPayload.MessageThreadId).toBe("234567890123456789");
     expect(result?.ctxPayload.ThreadParentId).toBe("c1");
+    expect(result?.ctxPayload.ConversationLink).toEqual({
+      url: "https://discord.com/channels/123456789012345678/234567890123456789",
+      label: "Discord Thread",
+    });
+  });
+
+  it("links a direct conversation using its native channel rather than the sender", async () => {
+    const ctx = await createBaseDiscordMessageContext({
+      isDirectMessage: true,
+      isGuildMessage: false,
+      messageChannelId: "345678901234567890",
+    });
+    const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
+    expect(result?.ctxPayload.ConversationLink).toEqual({
+      url: "https://discord.com/channels/@me/345678901234567890",
+      label: "Discord Conversation",
+    });
   });
 
   it("builds the payload through the host channel context builder when one is supplied", async () => {

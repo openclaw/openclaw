@@ -13,6 +13,7 @@ import {
 import {
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
+  loadSessionEntry,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
@@ -61,9 +62,13 @@ describe("SQLite reset boundary transcript header", () => {
     "keeps an empty reset transcript readable with next session %s",
     async (nextSessionId) => {
       const sessionKey = "agent:main:empty-window-reset";
+      const conversationLink = {
+        url: "https://chat.example.test/thread/123",
+        label: "Source Thread",
+      };
       await replaceSessionEntry(
         { sessionKey, storePath },
-        { sessionId: "empty-window", updatedAt: 10 },
+        { sessionId: "empty-window", updatedAt: 10, conversationLink },
       );
 
       await resetSessionEntryLifecycle({
@@ -72,6 +77,9 @@ describe("SQLite reset boundary transcript header", () => {
         resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/reset-session-workspace" },
         buildNextEntry: () => ({ sessionId: nextSessionId, updatedAt: 20 }),
       });
+      expect(loadSessionEntry({ sessionKey, storePath })?.conversationLink).toEqual(
+        conversationLink,
+      );
 
       expect(
         SessionManager.open({

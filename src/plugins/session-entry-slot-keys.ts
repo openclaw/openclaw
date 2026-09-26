@@ -55,6 +55,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "participants",
   "participantCount",
   "createdAt",
+  "conversationLink",
   "forkSource",
   "previousSessionId",
   "forkedFromParent",

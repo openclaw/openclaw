@@ -89,6 +89,10 @@ import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
+import {
+  resolveSlackConversationLink,
+  resolveSlackGroupSessionSubject,
+} from "./prepare-session-presentation.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
@@ -101,20 +105,6 @@ const SLACK_SUBTEAM_MENTION_RE = /<!subteam\^([^>|]+)(?:\|[^>]+)?>/g;
 const SLACK_SUBTEAM_MENTION_MARKER = "<!subteam^";
 const SLACK_CHANNEL_ACCESS_DOCS_URL =
   "https://docs.openclaw.ai/channels/slack#access-control-and-routing";
-
-function resolveSlackGroupSessionSubject(params: {
-  channelId: string;
-  channelName?: string;
-  workspaceId: string;
-  workspaceName?: string;
-}): string {
-  const channelName = normalizeOptionalString(params.channelName);
-  const workspaceName = normalizeOptionalString(params.workspaceName);
-  if (channelName && workspaceName) {
-    return `${workspaceName} #${channelName}`;
-  }
-  return `Slack Channel (Workspace ID: ${params.workspaceId}, Channel ID: ${params.channelId})`;
-}
 
 function mergeSlackAssistantThreadContext(
   primary: Omit<SlackAssistantThreadContext, "updatedAt"> | undefined,
@@ -1249,11 +1239,6 @@ export async function prepareSlackMessage(params: {
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const workspaceId = opts.eventScope?.teamId || ctx.teamId;
-  const workspaceName =
-    ctx.installationIdentity?.kind === "workspace" &&
-    ctx.installationIdentity.teamId === workspaceId
-      ? ctx.installationIdentity.teamName
-      : undefined;
   // Stable Slack ids already own routing. Session presentation uses both human names or an
   // explicit id-labelled fallback so shared metadata never has to infer Slack identifiers.
   const groupSessionSubject = isRoomish
@@ -1261,7 +1246,7 @@ export async function prepareSlackMessage(params: {
         channelId: message.channel,
         channelName,
         workspaceId,
-        workspaceName,
+        installationIdentity: ctx.installationIdentity,
       })
     : undefined;
   const senderName = await resolveSenderName();
@@ -1439,6 +1424,16 @@ export async function prepareSlackMessage(params: {
     });
   }
 
+  // Resolve optional navigation before revalidating the session and cancellation below.
+  const conversationLink = await resolveSlackConversationLink({
+    ctx,
+    eventScope: opts.eventScope,
+    channelId: message.channel,
+    messageTs: threadContext.messageTs,
+    threadId:
+      effectiveMessageThreadId ?? (replyToMode !== "off" ? threadContext.messageTs : undefined),
+    existingLink: sessionEntry?.conversationLink,
+  });
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
   let inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
@@ -1521,6 +1516,7 @@ export async function prepareSlackMessage(params: {
       threadId: boundMessageThreadId,
       nativeChannelId: message.channel,
       avatar: conversationAvatar,
+      link: conversationLink,
     },
     route: {
       ...route,

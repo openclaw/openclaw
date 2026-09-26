@@ -19,7 +19,11 @@ it("inherits accepted human credit when participant persistence is still queued"
     const childSessionKey = "agent:main:subagent:child";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId });
     const scope = { agentId, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionId: "parent-id", updatedAt: 1 });
+    const conversationLink = {
+      url: "https://chat.example.test/thread/123",
+      label: "Source Thread",
+    };
+    await upsertSessionEntryCore(scope, { sessionId: "parent-id", updatedAt: 1, conversationLink });
     const releaseWriter = createDeferredCore();
     const writerStarted = createDeferredCore();
     const heldWriter = runOpenClawAgentWriteAdmission({ agentId, path: storePath }, async () => {
@@ -64,6 +68,7 @@ it("inherits accepted human credit when participant persistence is still queued"
       ]);
       const child = loadSessionEntry({ ...scope, sessionKey: childSessionKey });
       expect(child?.inheritedGitContributorProfileIds).toEqual(["human-requester"]);
+      expect(child?.conversationLink).toEqual(conversationLink);
       expect(child?.participants ?? []).toEqual([]);
     } finally {
       releaseWriter.resolve();

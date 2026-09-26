@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -20,6 +21,45 @@ import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const unavailableMessage =
   "Session access facts are unavailable; retry after session storage is ready.";
+
+it("binds creation through a logical session store under a directory alias", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    fs.symlinkSync(state.stateDir, state.path("state-alias"), "junction");
+    const storePath = state.path("state-alias", "agents", "main", "sessions", "sessions.json");
+    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:alias-creation";
+    const sessionId = "alias-created";
+    const scope = { agentId: "main", storePath, sessionKey };
+    await using storagePreparation = prepareSessionEntryMutationDatabases(
+      [{ scope, assertCurrent: () => {} }],
+      Promise.resolve(),
+    );
+    const storage = await storagePreparation.preparations[0]!;
+    const prepared = await prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      allowMissing: true,
+    });
+    try {
+      expect(prepared.readCurrent(cfg).target).toBeNull();
+      await expect(
+        createSessionEntryWithTranscript(
+          scope,
+          () => ({ ok: true, entry: { sessionId, updatedAt: 1 } }),
+          { bindCreation: prepared.bindCreation, commitGuard: () => storage.assertCurrent() },
+        ),
+      ).resolves.toMatchObject({ ok: true, entry: { sessionId } });
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(sessionId);
+      expect(readTranscriptStorageRows(database, sessionId)).toHaveLength(1);
+    } finally {
+      prepared.release();
+    }
+  });
+});
 
 it.each([
   { native: "completed", broker: "unknown" },

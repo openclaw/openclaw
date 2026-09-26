@@ -1,6 +1,8 @@
 {
   "id": "slack",
-  "categories": ["channels"],
+  "categories": [
+    "channels"
+  ],
   "doctorContract": {
     "configRepair": true
   },
@@ -25,5 +27,8 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/6ef25ab1b506325b6fa59aca1f144acaefd2376062071e636daa3968c8efddc4/index.js"
   }
 }
