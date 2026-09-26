@@ -3216,6 +3216,17 @@ fn main() {
             .to_string_lossy()
             .into_owned();
         let profiles = Arc::new(gateway_profiles::GatewayProfiles::new(&namespace));
+        #[cfg(target_os = "linux")]
+        if let Ok(root) = gateway_windows::profile_browser_root(app.handle()) {
+            let profiles = Arc::clone(&profiles);
+            // WebKitGTK keeps a data directory in use until exit, so storage of
+            // Gateways removed in an earlier session is deleted at launch.
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = profiles.prune_browser_data(&root) {
+                    eprintln!("{error}");
+                }
+            });
+        }
         app.manage(gateway_windows::GatewayWindows::new(Arc::clone(&profiles)));
         app.manage(native_browser::NativeBrowserState::default());
         app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
