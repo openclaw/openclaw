@@ -316,9 +316,10 @@ export function renderConfigForm(props: ConfigFormProps) {
           });
         })()
       : filteredEntries.map(([key, node]) => {
+          const hint = localizedHintForPath([key], props.uiHints);
           const meta = SECTION_META[key] ?? {
-            label: key.charAt(0).toUpperCase() + key.slice(1),
-            description: node.description ?? "",
+            label: hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
+            description: hint?.help ?? node.description ?? "",
           };
 
           return renderSection({
