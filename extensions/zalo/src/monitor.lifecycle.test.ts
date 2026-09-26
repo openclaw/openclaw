@@ -14,7 +14,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
@@ -100,18 +103,22 @@ describe("monitorZaloProvider lifecycle", () => {
     getUpdatesMock.mockReset();
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
     setActivePluginRegistry(createEmptyPluginRegistry());
-    // Agent close releases leases through shared state; closing shared state first
-    // can reopen it during teardown and leave Windows handles under the state dir.
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    if (testStateDir) {
-      await fs.rm(testStateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
-      testStateDir = undefined;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    try {
+      // Agent close releases leases through shared state; closing shared state first
+      // can reopen it during teardown and leave Windows handles under the state dir.
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      if (testStateDir) {
+        await fs.rm(testStateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+        testStateDir = undefined;
+      }
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       previousStateDir = undefined;
     }
   });

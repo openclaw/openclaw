@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   executeSqliteQuerySync,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as TelegramProcessingOutcome from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -391,6 +392,7 @@ async function withTempSpool<T>(fn: (spoolDir: string) => Promise<T>): Promise<T
   try {
     return await fn(spoolDir);
   } finally {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(spoolDir, { recursive: true, force: true });
   }
@@ -510,9 +512,13 @@ describe("TelegramPollingSession", () => {
     );
   });
 
-  afterEach(() => {
-    clearTelegramRuntime();
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    try {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    } finally {
+      clearTelegramRuntime();
+    }
   });
 
   it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
@@ -1968,6 +1974,7 @@ describe("TelegramPollingSession", () => {
       };
     });
 
+    let runPromise: Promise<void> | undefined;
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
@@ -1977,7 +1984,7 @@ describe("TelegramPollingSession", () => {
           drainIntervalMs: 10,
         },
       });
-      const runPromise = session.runUntilAbort();
+      runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(1));
 
       await writeSpooledTestUpdates(tempDir, [
@@ -2012,6 +2019,8 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       stopSecondWorker?.();
       vi.useRealTimers();
+      await runPromise;
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -2037,6 +2046,7 @@ describe("TelegramPollingSession", () => {
       }),
     }));
 
+    let runPromise: Promise<void> | undefined;
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
@@ -2048,7 +2058,7 @@ describe("TelegramPollingSession", () => {
         },
       });
 
-      const runPromise = session.runUntilAbort();
+      runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(1));
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);
@@ -2057,7 +2067,10 @@ describe("TelegramPollingSession", () => {
       expect(createWorker).toHaveBeenCalledTimes(1);
       expectLogExcludes(log, "isolated polling ingress failed");
     } finally {
+      abort.abort();
       vi.useRealTimers();
+      await runPromise;
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -2124,6 +2137,7 @@ describe("TelegramPollingSession", () => {
     } finally {
       abort.abort();
       vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -2200,6 +2214,7 @@ describe("TelegramPollingSession", () => {
       ).toBe(true);
     } finally {
       abort.abort();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -2247,8 +2262,9 @@ describe("TelegramPollingSession", () => {
       },
     });
 
+    let runPromise: Promise<void> | undefined;
     try {
-      const runPromise = session.runUntilAbort();
+      runPromise = session.runUntilAbort();
       await waitForTelegramTestState(() => expect(events).toEqual(["bot:42"]));
 
       await vi.advanceTimersByTimeAsync(2_000);
@@ -2266,6 +2282,8 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       worker.stop();
       vi.useRealTimers();
+      await runPromise;
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

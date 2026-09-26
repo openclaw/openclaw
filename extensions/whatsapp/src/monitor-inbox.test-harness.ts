@@ -7,6 +7,7 @@ import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-i
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   loadConfigMock,
@@ -247,6 +248,7 @@ export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessa
 export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 let resetWebInboundDedupe: ResetWebInboundDedupe;
+const inboxListeners = new Set<Awaited<ReturnType<MonitorWebInbox>>>();
 
 // Yields two macrotask ticks so already-scheduled inbound continuations run.
 // This deliberately does NOT wait for pending inbound work to finish — tests
@@ -350,7 +352,13 @@ export async function startInboxMonitor(
       callerOnPendingWorkChanged?.(pendingWorkCount, at);
     },
   });
-  return { listener, sock: getSock() };
+  let closeTask: Promise<void> | undefined;
+  const ownedListener = {
+    ...listener,
+    close: () => (closeTask ??= listener.close()),
+  };
+  inboxListeners.add(ownedListener);
+  return { listener: ownedListener, sock: getSock() };
 }
 
 export function buildNotifyMessageUpsert(params: {
@@ -434,13 +442,34 @@ export function installWebMonitorInboxUnitTestHooks() {
     authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   });
 
-  afterEach(() => {
-    resetLogger();
-    setLoggerOverride(null);
-    vi.useRealTimers();
-    if (authDir) {
-      fsSync.rmSync(authDir, { recursive: true, force: true });
-      authDir = undefined;
+  afterEach(async () => {
+    const closed = await Promise.allSettled(
+      [...inboxListeners].map((listener) => listener.close()),
+    );
+    const failures = closed.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    try {
+      await closeOpenClawStateDatabaseAsync();
+      if (authDir) {
+        fsSync.rmSync(authDir, { recursive: true, force: true });
+        authDir = undefined;
+      }
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      inboxListeners.clear();
+      try {
+        resetLogger();
+        setLoggerOverride(null);
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "WhatsApp inbox cleanup failed");
     }
   });
 }

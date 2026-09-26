@@ -236,32 +236,37 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("delayed-read");
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: messageId,
-        remoteJid: "999@s.whatsapp.net",
-        text: "ping",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
-    await waitForMessageCalls(onMessage, 1);
-
-    expect(sock.readMessages).not.toHaveBeenCalled();
-    finishMessage?.();
-    await vi.waitFor(() => {
-      expect(sock.readMessages).toHaveBeenCalledWith([
-        {
-          remoteJid: "999@s.whatsapp.net",
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
           id: messageId,
-          participant: undefined,
-          fromMe: false,
-        },
-      ]);
-    });
+          remoteJid: "999@s.whatsapp.net",
+          text: "ping",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
 
-    await listener.close();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+      finishMessage?.();
+      await vi.waitFor(() => {
+        expect(sock.readMessages).toHaveBeenCalledWith([
+          {
+            remoteJid: "999@s.whatsapp.net",
+            id: messageId,
+            participant: undefined,
+            fromMe: false,
+          },
+        ]);
+      });
+
+      await listener.close();
+    } finally {
+      finishMessage?.();
+      await listener.close();
+    }
   });
 
   it("delivery coordinator keeps the first durable delivery when a duplicate arrives", async () => {
@@ -351,16 +356,21 @@ describe("web monitor inbox delivery and dedupe", () => {
       pushName: "Tester",
     });
 
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    try {
+      sock.ev.emit("messages.upsert", upsert);
+      await waitForMessageCalls(onMessage, 1);
 
-    resetWebInboundDedupeForTests();
-    sock.ev.emit("messages.upsert", upsert);
-    await settleInboundWork();
-    expect(onMessage).toHaveBeenCalledTimes(1);
+      resetWebInboundDedupeForTests();
+      sock.ev.emit("messages.upsert", upsert);
+      await settleInboundWork();
+      expect(onMessage).toHaveBeenCalledTimes(1);
 
-    finishMessage?.();
-    await listener.close();
+      finishMessage?.();
+      await listener.close();
+    } finally {
+      finishMessage?.();
+      await listener.close();
+    }
   });
 
   it("delivery coordinator does not redispatch a completed transport-key duplicate", async () => {
@@ -404,34 +414,39 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 20,
     });
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-steer-1"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
-    await waitForMessageCalls(onMessage, 1);
-    expect(inboundMessage(onMessage).payload.body).toBe("first");
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-steer-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+      expect(inboundMessage(onMessage).payload.body).toBe("first");
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-steer-2"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "steer",
-        timestamp: 1_700_000_001,
-        pushName: "Tester",
-      }),
-    );
-    await waitForMessageCalls(onMessage, 2);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-steer-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "steer",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 2);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
 
-    releaseFirst?.();
-    await listener.close();
+      releaseFirst?.();
+      await listener.close();
+    } finally {
+      releaseFirst?.();
+      await listener.close();
+    }
   });
 
   it("delivery coordinator drains admitted same-lane turns before close completes", async () => {
@@ -452,48 +467,53 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 20,
     });
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-1"),
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+
+      const second = buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-2"),
         remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
+        text: "second",
+        timestamp: 1_700_000_001,
         pushName: "Tester",
-      }),
-    );
-    await waitForMessageCalls(onMessage, 1);
+      });
+      const third = buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-3"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "third",
+        timestamp: 1_700_000_002,
+        pushName: "Tester",
+      });
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [...second.messages, ...third.messages],
+      });
 
-    const second = buildNotifyMessageUpsert({
-      id: nextMessageId("debounce-close-2"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "second",
-      timestamp: 1_700_000_001,
-      pushName: "Tester",
-    });
-    const third = buildNotifyMessageUpsert({
-      id: nextMessageId("debounce-close-3"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "third",
-      timestamp: 1_700_000_002,
-      pushName: "Tester",
-    });
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [...second.messages, ...third.messages],
-    });
+      let closed = false;
+      const closePromise = listener.close().then(() => {
+        closed = true;
+      });
+      await waitForMessageCalls(onMessage, 2);
+      expect(closed).toBe(false);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("second\nthird");
 
-    let closed = false;
-    const closePromise = listener.close().then(() => {
-      closed = true;
-    });
-    await waitForMessageCalls(onMessage, 2);
-    expect(closed).toBe(false);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("second\nthird");
-
-    releaseFirst?.();
-    await closePromise;
-    expect(closed).toBe(true);
+      releaseFirst?.();
+      await closePromise;
+      expect(closed).toBe(true);
+    } finally {
+      releaseFirst?.();
+      await listener.close();
+    }
   });
 
   it("delivery coordinator keeps a reused debounce key pending across turns", async () => {
@@ -520,40 +540,45 @@ describe("web monitor inbox delivery and dedupe", () => {
       debounceMs: 60_000,
       shouldDebounce: (message) => message.payload.body !== "first",
     });
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-reused-key-1"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
-    await waitForMessageCalls(onMessage, 1);
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-reused-key-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-reused-key-2"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "second",
-        timestamp: 1_700_000_001,
-        pushName: "Tester",
-      }),
-    );
-    await settleInboundWork();
-    expect(onMessage).toHaveBeenCalledTimes(1);
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-reused-key-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+      await settleInboundWork();
+      expect(onMessage).toHaveBeenCalledTimes(1);
 
-    releaseFirst();
-    await firstFinished;
-    await settleInboundWork();
+      releaseFirst();
+      await firstFinished;
+      await settleInboundWork();
 
-    const closeStarted = Date.now();
-    await listener.close();
-    expect(Date.now() - closeStarted).toBeLessThan(5_000);
-    expect(onMessage).toHaveBeenCalledTimes(2);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+      const closeStarted = Date.now();
+      await listener.close();
+      expect(Date.now() - closeStarted).toBeLessThan(5_000);
+      expect(onMessage).toHaveBeenCalledTimes(2);
+      expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+    } finally {
+      releaseFirst();
+      await listener.close();
+    }
   });
 
   it("delivery coordinator force-flushes long durable debounce during shutdown", async () => {
@@ -588,8 +613,8 @@ describe("web monitor inbox delivery and dedupe", () => {
 
   it("delivery coordinator drains serialized same-lane replies before socket close", async () => {
     vi.useFakeTimers();
+    let releaseFirst: (() => void) | undefined;
     try {
-      let releaseFirst: (() => void) | undefined;
       const firstTurn = new Promise<void>((resolve) => {
         releaseFirst = resolve;
       });
@@ -653,6 +678,7 @@ describe("web monitor inbox delivery and dedupe", () => {
         sock.end.mock.invocationCallOrder.at(0),
       );
     } finally {
+      releaseFirst?.();
       vi.useRealTimers();
     }
   });
@@ -673,37 +699,42 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("close-inflight"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("close-inflight"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
 
-    await handlerStarted;
-    const closePromise = listener.close();
-    await Promise.resolve();
+      await handlerStarted;
+      const closePromise = listener.close();
+      await Promise.resolve();
 
-    expect(sock.end).not.toHaveBeenCalled();
+      expect(sock.end).not.toHaveBeenCalled();
 
-    if (!releaseHandler) {
-      throw new Error("Expected handler release callback to be initialized");
+      if (!releaseHandler) {
+        throw new Error("Expected handler release callback to be initialized");
+      }
+      releaseHandler();
+      await closePromise;
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
+      );
+    } finally {
+      releaseHandler?.();
+      await listener.close();
     }
-    releaseHandler();
-    await closePromise;
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(sock.end).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
-      sock.end.mock.invocationCallOrder.at(0),
-    );
   });
 
   it("delivery coordinator deduplicates redelivered messages by id", async () => {

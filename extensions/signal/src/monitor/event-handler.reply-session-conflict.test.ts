@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startSignalIngressMonitor } from "../signal-ingress.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
@@ -326,11 +327,18 @@ describe("signal reply session init conflict retry", () => {
     const eventId = JSON.stringify(["number:+15550001111", timestamp]);
     dispatchInboundMessageMock.mockRejectedValue(CONFLICT_ERROR);
 
+    const monitors: Array<{
+      monitor: Awaited<ReturnType<typeof startSignalIngressMonitor>>;
+      tracked: ReturnType<typeof createTrackedTaskHarness>;
+      abort: AbortController;
+    }> = [];
     const createIntegratedMonitor = async () => {
+      const abort = new AbortController();
       const tracked = createTrackedTaskHarness();
       const handler = createSignalEventHandler(
         createBaseSignalEventHandlerDeps({
           cfg: { messages: { inbound: { debounceMs: 10 } } },
+          abortSignal: abort.signal,
           runTrackedTask: tracked.runTrackedTask,
         }),
       );
@@ -340,6 +348,7 @@ describe("signal reply session init conflict retry", () => {
         dispatch: async (incoming, lifecycle) => await handler(incoming, lifecycle),
         runtime: { error: vi.fn(), log: vi.fn() },
       });
+      monitors.push({ monitor, tracked, abort });
       return { monitor, tracked };
     };
     const finishOuterAttempt = async (tracked: ReturnType<typeof createTrackedTaskHarness>) => {
@@ -420,9 +429,26 @@ describe("signal reply session init conflict retry", () => {
       expect(blockedRestart.tracked.tasks).toHaveLength(0);
       await blockedRestart.monitor.stop();
     } finally {
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
-      vi.useRealTimers();
+      for (const { abort } of monitors) {
+        abort.abort();
+      }
+      const stopped = await Promise.allSettled(monitors.map(({ monitor }) => monitor.stop()));
+      const settled = await Promise.allSettled(monitors.flatMap(({ tracked }) => tracked.tasks));
+      const failures = [...stopped, ...settled].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      try {
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        await fs.rm(stateDir, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        vi.useRealTimers();
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Signal ingress cleanup failed");
+      }
     }
   });
 

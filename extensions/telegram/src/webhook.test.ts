@@ -26,6 +26,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 // Telegram tests cover webhook plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
@@ -272,14 +273,18 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  vi.unstubAllEnvs();
-  clearTelegramRuntime();
-  closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
-  webhookStateDir = undefined;
-  webhookSpoolDir = undefined;
-  if (stateDir) {
-    await fs.rm(stateDir, { recursive: true, force: true });
+  try {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    if (stateDir) {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  } finally {
+    vi.unstubAllEnvs();
+    clearTelegramRuntime();
+    webhookStateDir = undefined;
+    webhookSpoolDir = undefined;
   }
 });
 

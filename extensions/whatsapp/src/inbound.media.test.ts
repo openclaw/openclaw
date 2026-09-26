@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
   mockGetContentType,
@@ -260,6 +261,7 @@ let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
+const inboxListeners = new Set<Awaited<ReturnType<typeof monitorWebInbox>>>();
 
 const LOG_PATH = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}.log`);
 const DIRECT_SYNTHETIC_BEARER = "synthetic-direct-bearer-never-real";
@@ -356,19 +358,64 @@ describe("web inbound media saves with extension", () => {
     );
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
     setLoggerOverride({ level: "trace", consoleLevel: "info", file: LOG_PATH });
-    ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
+    const inbound = await import("./inbound.js");
+    resetWebInboundDedupe = inbound.resetWebInboundDedupe;
+    monitorWebInbox = async (...args) => {
+      const listener = await inbound.monitorWebInbox(...args);
+      let closeTask: Promise<void> | undefined;
+      const ownedListener = {
+        ...listener,
+        close: () => (closeTask ??= listener.close()),
+      };
+      inboxListeners.add(ownedListener);
+      return ownedListener;
+    };
     ({ createWaSocket } = await import("./session.js"));
   });
 
+  afterEach(async () => {
+    const closed = await Promise.allSettled(
+      [...inboxListeners].map((listener) => listener.close()),
+    );
+    const failures = closed.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    try {
+      await closeOpenClawStateDatabaseAsync();
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      inboxListeners.clear();
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "WhatsApp inbound media cleanup failed");
+    }
+  });
+
   afterAll(async () => {
-    resetLogger();
-    setLoggerOverride(null);
-    await fs.rm(LOG_PATH, { force: true });
-    await fs.rm(HOME, { recursive: true, force: true });
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
+    const failures: unknown[] = [];
+    try {
+      await closeOpenClawStateDatabaseAsync().finally(() => {
+        try {
+          resetLogger();
+          setLoggerOverride(null);
+        } catch (error) {
+          failures.push(error);
+        }
+      });
+      await fs.rm(LOG_PATH, { force: true });
+      await fs.rm(HOME, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      if (ORIGINAL_HOME === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = ORIGINAL_HOME;
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "WhatsApp inbound media state cleanup failed");
     }
   });
 

@@ -313,20 +313,25 @@ describe("Zalo durable webhook ingress", () => {
         deliver,
       });
       ingress.start();
-      await ingress.accept(rawEvent({ messageId: "active-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+      try {
+        await ingress.accept(rawEvent({ messageId: "active-stop" }));
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
 
-      let stopped = false;
-      const stopping = ingress.stop().then(() => {
-        stopped = true;
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(stopped).toBe(false);
-      releaseDelivery();
-      await stopping;
-      expect(stopped).toBe(true);
+        let stopped = false;
+        const stopping = ingress.stop().then(() => {
+          stopped = true;
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+        expect(stopped).toBe(false);
+        releaseDelivery();
+        await stopping;
+        expect(stopped).toBe(true);
+      } finally {
+        releaseDelivery();
+        await ingress.stop();
+      }
     });
   });
 
@@ -346,26 +351,39 @@ describe("Zalo durable webhook ingress", () => {
         deliver,
       });
       ingress.start();
-      await ingress.accept(rawEvent({ messageId: "deferred-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-      expect(await queue.listClaims()).toHaveLength(1);
+      let adoptionTask: Promise<void> | undefined;
+      try {
+        await ingress.accept(rawEvent({ messageId: "deferred-stop" }));
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
+        expect(await queue.listClaims()).toHaveLength(1);
 
-      let stopped = false;
-      const stopping = ingress.stop().then(() => {
-        stopped = true;
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(stopped).toBe(false);
-      if (!deferredLifecycle) {
-        throw new Error("Zalo delivery did not expose its deferred lifecycle");
+        let stopped = false;
+        const stopping = ingress.stop().then(() => {
+          stopped = true;
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+        expect(stopped).toBe(false);
+        if (!deferredLifecycle) {
+          throw new Error("Zalo delivery did not expose its deferred lifecycle");
+        }
+        adoptionTask = Promise.resolve().then(() => deferredLifecycle?.onAdopted());
+        await adoptionTask;
+        await stopping;
+        expect(stopped).toBe(true);
+        const verdict = await queue.enqueue("deferred-stop", { version: 1, rawEvent: "{}" });
+        expect(verdict.kind).toBe("completed");
+      } finally {
+        if (deferredLifecycle) {
+          adoptionTask ??= Promise.resolve().then(() => deferredLifecycle?.onAdopted());
+        }
+        try {
+          await adoptionTask;
+        } finally {
+          await ingress.stop();
+        }
       }
-      await deferredLifecycle.onAdopted();
-      await stopping;
-      expect(stopped).toBe(true);
-      const verdict = await queue.enqueue("deferred-stop", { version: 1, rawEvent: "{}" });
-      expect(verdict.kind).toBe("completed");
     });
   });
 });
