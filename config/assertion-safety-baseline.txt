@@ -2012,10 +2012,10 @@ src/claws/openclaw-profile.ts	1
 src/claws/package-update.ts	1
 src/claws/packages.ts	1
 src/claws/project-build.ts	4
-src/claws/project.ts	4
+src/claws/project.ts	2
 src/claws/provenance.ts	6
-src/claws/reader.ts	5
-src/claws/schema.ts	3
+src/claws/reader.ts	3
+src/claws/schema.ts	2
 src/claws/update-capability-changes.ts	7
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
@@ -3182,7 +3182,6 @@ src/system-agent/probes.ts	1
 src/system-agent/rescue-message.ts	2
 src/system-agent/system-agent.ts	2
 src/system-agent/verified-inference.ts	1
-src/talk/agent-consult-tool.ts	2
 src/talk/agent-run-control-shared.ts	2
 src/talk/client-voice-confirmation.ts	1
 src/talk/client-voice-mutation-digest-owner.ts	1
@@ -3192,7 +3191,6 @@ src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/provider-resolver.ts	1
-src/talk/talk-session-controller.ts	2
 src/talk/turn-context-tracker.ts	2
 src/tasks/agent-harness-task-runtime-scope.ts	1
 src/tasks/generated-media-task-activity.ts	1
@@ -3258,7 +3256,7 @@ src/wizard/setup.plugin-config.ts	4
 src/wizard/setup.post-install-migration.ts	1
 src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	1
-src/worker/inference-stream.runtime.ts	5
+src/worker/inference-stream.runtime.ts	4
 src/worker/launch-descriptor.ts	5
 src/worker/node-workspace-protocol.ts	1
 src/worker/worker-command.runtime.ts	1

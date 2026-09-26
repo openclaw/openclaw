@@ -1,8 +1,7 @@
-// Image operation helpers normalize image transforms and adapter calls.
 import {
   isRastermillUnavailableError,
   RastermillUnavailableError,
-  readImageProbeFromHeader as readRastermillImageProbeFromHeader,
+  readImageProbeFromHeader,
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
@@ -11,6 +10,7 @@ import { convertBmpToPngWithWorker, createImageProcessor } from "./image-process
 
 export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 export { createImageProcessor } from "./image-processor.js";
+export { readImageProbeFromHeader };
 
 export type { ImageMetadata, ImageProbe };
 
@@ -67,12 +67,7 @@ function resolveDisplayImageMetadata(probe: ImageProbe | null): ImageMetadata | 
 
 /** Reads display dimensions from image header bytes without invoking a full image decode. */
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return resolveDisplayImageMetadata(readRastermillImageProbeFromHeader(buffer));
-}
-
-/** Reads image probe data from header bytes without invoking a full image decode. */
-export function readImageProbeFromHeader(buffer: Buffer): ImageProbe | null {
-  return readRastermillImageProbeFromHeader(buffer);
+  return resolveDisplayImageMetadata(readImageProbeFromHeader(buffer));
 }
 
 /** Detects animated WebP before a single-frame image transform can discard its frames. */
@@ -142,7 +137,7 @@ export async function convertImageToPng(buffer: Buffer): Promise<Buffer> {
   try {
     return (await createImageProcessor().encode(buffer, { format: "png" })).data;
   } catch (error) {
-    const probe = readRastermillImageProbeFromHeader(buffer);
+    const probe = readImageProbeFromHeader(buffer);
     const withinPixelLimit =
       probe &&
       probe.format === "bmp" &&

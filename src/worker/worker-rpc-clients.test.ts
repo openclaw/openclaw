@@ -14,11 +14,9 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
 import { WorkerConnectionInterruptedError } from "./worker-connection.js";
-import {
-  WorkerInferenceProxyClient,
-  WorkerLiveEventClient,
-  WorkerTranscriptCommitClient,
-} from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const HELLO: WorkerHelloOk = {
   type: "worker-hello-ok",

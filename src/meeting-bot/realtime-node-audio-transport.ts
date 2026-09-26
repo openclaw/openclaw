@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+import { sleep } from "../utils/sleep.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
@@ -34,6 +35,13 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
+  const invoke = (action: string, payload: Record<string, unknown> = {}, timeoutMs = 5_000) =>
+    params.runtime.nodes.invoke({
+      nodeId: params.nodeId,
+      command: params.commandName,
+      params: { action, bridgeId: params.bridgeId, ...payload },
+      timeoutMs,
+    });
   const runOutputCommand = <T>(task: () => Promise<T>): Promise<T> => {
     if (outputGenerationSupported) {
       return task();
@@ -71,12 +79,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
           }
           try {
             // Long-poll cadence bounds both normal input latency and transient-error retries.
-            const raw = await params.runtime.nodes.invoke({
-              nodeId: params.nodeId,
-              command: params.commandName,
-              params: { action: "pullAudio", bridgeId: params.bridgeId, timeoutMs: 250 },
-              timeoutMs: 2_000,
-            });
+            const raw = await invoke("pullAudio", { timeoutMs: 250 }, 2_000);
             if (stopped) {
               break;
             }
@@ -111,9 +114,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
               signalFatal();
               break;
             }
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 250);
-            });
+            await sleep(250);
           }
         }
       })();
@@ -126,12 +127,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       stopped = true;
       outputLoopbackVerifier.cancelOutput();
       try {
-        await params.runtime.nodes.invoke({
-          nodeId: params.nodeId,
-          command: params.commandName,
-          params: { action: "stop", bridgeId: params.bridgeId },
-          timeoutMs: 5_000,
-        });
+        await invoke("stop");
       } catch (error) {
         params.logger.debug?.(
           `${params.logScope} node audio bridge stop ignored: ${formatErrorMessage(error)}`,
@@ -149,16 +145,9 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
           if (stopped) {
             return;
           }
-          await params.runtime.nodes.invoke({
-            nodeId: params.nodeId,
-            command: params.commandName,
-            params: {
-              action: "pushAudio",
-              bridgeId: params.bridgeId,
-              base64: audio.toString("base64"),
-              ...(outputGenerationSupported ? { outputGeneration: generation } : {}),
-            },
-            timeoutMs: 5_000,
+          await invoke("pushAudio", {
+            base64: audio.toString("base64"),
+            ...(outputGenerationSupported ? { outputGeneration: generation } : {}),
           });
         });
       } catch (error) {
@@ -178,15 +167,8 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
         if (stopped) {
           return;
         }
-        await params.runtime.nodes.invoke({
-          nodeId: params.nodeId,
-          command: params.commandName,
-          params: {
-            action: "clearAudio",
-            bridgeId: params.bridgeId,
-            ...(outputGenerationSupported ? { outputGeneration } : {}),
-          },
-          timeoutMs: 5_000,
+        await invoke("clearAudio", {
+          ...(outputGenerationSupported ? { outputGeneration } : {}),
         });
       });
     },

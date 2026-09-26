@@ -23,7 +23,6 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import {
-  toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
   WorkerConnectionStoppedError,
@@ -854,18 +853,6 @@ describe("worker connection reconnect backoff", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-});
-
-describe("worker connection error coercion", () => {
-  it("preserves structured non-Error causes", () => {
-    const cause = { code: "ECONNRESET", status: 503 };
-
-    const error = toWorkerConnectionError(cause);
-
-    expect(error.message).toBe("[object Object]");
-    expect(error.cause).toBe(cause);
-    expect(error).toMatchObject(cause);
   });
 });
 

@@ -18,11 +18,13 @@ import {
   formatMeetingAgentTtsResultLog,
   formatMeetingTranscriptSummaryLog,
   meetingOutputBytesPerMs,
+  normalizeMeetingTtsPromptText,
+  resolveMeetingRealtimeTranscriptionProvider,
+} from "./realtime-engine-support.js";
+import {
   MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
   MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
   MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-  normalizeMeetingTtsPromptText,
-  resolveMeetingRealtimeTranscriptionProvider,
   type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHandle,
   type MeetingRealtimeEngineConfig,

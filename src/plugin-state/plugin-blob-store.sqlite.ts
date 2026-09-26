@@ -193,18 +193,22 @@ function blobKeyExists(
   );
 }
 
+function blobInfoQuery(db: DatabaseSync, params: { pluginId: string; namespace: string }) {
+  return kysely(db)
+    .selectFrom("plugin_blob_entries")
+    .select(["entry_key", "metadata_json", "created_at", "expires_at"])
+    .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace);
+}
+
 function selectLiveInfo(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
 ): PluginBlobStoredInfo[] {
   return executeSqliteQuerySync(
     db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
+    blobInfoQuery(db, params)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
       .orderBy("created_at", "asc")
       .orderBy("entry_key", "asc"),
@@ -217,12 +221,7 @@ function selectExpiredKeyInfo(
 ): PluginBlobStoredInfo | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
+    blobInfoQuery(db, params)
       .where("entry_key", "=", params.key)
       .where("expires_at", "is not", null)
       .where("expires_at", "<=", params.now),
@@ -581,12 +580,7 @@ export function pluginBlobDeleteExpiredInDatabase<TMetadata>(
   const now = Date.now();
   const rows = executeSqliteQuerySync(
     db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
+    blobInfoQuery(db, params)
       .where("expires_at", "is not", null)
       .where("expires_at", "<=", now)
       .orderBy("created_at", "asc")

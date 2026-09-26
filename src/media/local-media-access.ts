@@ -1,4 +1,3 @@
-// Local media access helpers validate workspace-local media path access.
 import type { ReadOptions, ReadOptionsWithBuffer, ReadPosition } from "node:fs";
 import fs, { type FileReadResult } from "node:fs/promises";
 import path from "node:path";
@@ -43,10 +42,13 @@ export class HostReadMediaTypeError extends LocalMediaAccessError {
   }
 }
 
-/** Returns the default root allowlist for local media reads. */
-export function getDefaultLocalRootsCore(): readonly string[] {
-  return getDefaultMediaLocalRoots();
-}
+export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
+
+type LocalMediaBoundaryOptions = {
+  inboundRoots?: readonly string[];
+  resolvedRoots?: readonly string[];
+  resolveRoots?: () => Promise<readonly string[]>;
+};
 
 async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
   const resolved = path.resolve(root);
@@ -61,7 +63,7 @@ async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
 export async function resolveLocalMediaRoots(
   localRoots?: readonly string[],
 ): Promise<readonly string[]> {
-  const roots = localRoots ?? getDefaultLocalRootsCore();
+  const roots = localRoots ?? getDefaultMediaLocalRoots();
   return await Promise.all(
     roots.map(async (root) => {
       const resolvedRoot = await resolveCanonicalBoundaryPath(root);
@@ -101,11 +103,7 @@ async function resolveLocalMediaBoundary(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
   managedReferenceErrors: ManagedReferenceErrorPolicy,
-  options?: {
-    inboundRoots?: readonly string[];
-    resolvedRoots?: readonly string[];
-    resolveRoots?: () => Promise<readonly string[]>;
-  },
+  options?: LocalMediaBoundaryOptions,
 ): Promise<ResolvedLocalMediaBoundary> {
   if (localRoots === "any") {
     return { rejectHardlinks: false, roots: "any" };
@@ -154,7 +152,7 @@ async function resolveLocalMediaBoundary(
       roots: [resolvedRoot],
     };
   }
-  const roots = localRoots ?? getDefaultLocalRootsCore();
+  const roots = localRoots ?? getDefaultMediaLocalRoots();
   const resolved = await resolveLocalMediaPathForContainment(mediaPath);
   const resolvedRoots =
     options?.resolvedRoots ??
@@ -205,11 +203,7 @@ async function resolveLocalMediaBoundary(
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-  options?: {
-    inboundRoots?: readonly string[];
-    resolvedRoots?: readonly string[];
-    resolveRoots?: () => Promise<readonly string[]>;
-  },
+  options?: LocalMediaBoundaryOptions,
 ): Promise<void> {
   await resolveLocalMediaBoundary(mediaPath, localRoots, "ignore", options);
 }
@@ -218,11 +212,8 @@ export async function assertLocalMediaAllowed(
 export async function readLocalMediaFile(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-  options: {
-    inboundRoots?: readonly string[];
+  options: LocalMediaBoundaryOptions & {
     maxBytes: number;
-    resolvedRoots?: readonly string[];
-    resolveRoots?: () => Promise<readonly string[]>;
     /** Local copies of remotely owned roots must not be read through ancestor aliases. */
     excludedRoots?: readonly string[];
   },

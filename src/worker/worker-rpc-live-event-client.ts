@@ -1,3 +1,4 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
@@ -191,8 +192,7 @@ export class WorkerLiveEventClient {
       ) {
         return;
       }
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.handleFailure(entry, failure);
+      this.handleFailure(entry, toStringifiedError(error));
     } finally {
       this.inFlight.delete(entry);
       this.pump();

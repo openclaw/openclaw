@@ -96,13 +96,12 @@ export async function runHostedChannelSetup(
 ): Promise<HostedSetupCompletion> {
   const { createChannelSetupHooks, setupChannels } =
     await import("../commands/onboard-channels.js");
-  let channelSetup: ReturnType<typeof createChannelSetupHooks>;
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
     run: async ({ baseConfig, runtime: setupRuntime }) => {
-      channelSetup = createChannelSetupHooks({
+      const channelSetup = createChannelSetupHooks({
         runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
       });
@@ -118,11 +117,9 @@ export async function runHostedChannelSetup(
           skipConfirm: true,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
           ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
-          onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+          onPostWriteHook: channelSetup.onPostWriteHook,
         }),
-        afterWrite: async (configPath) => {
-          await channelSetup.runPostWriteHooks(configPath);
-        },
+        afterWrite: channelSetup.runPostWriteHooks,
       };
     },
   });
