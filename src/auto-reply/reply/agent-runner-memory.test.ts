@@ -55,6 +55,7 @@ import {
 } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
+  createTestSessionTranscript,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
@@ -236,8 +237,7 @@ async function writeTestSessionTranscript(params: {
     sessionKey,
     storePath: path.join(params.rootDir, "sessions.json"),
   };
-  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
-  await replaceTranscriptEvents(scope, params.events);
+  await createTestSessionTranscript(scope, params.events);
   await waitForSessionTranscriptProjection(scope);
 }
 

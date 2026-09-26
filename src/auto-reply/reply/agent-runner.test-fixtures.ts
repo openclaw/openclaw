@@ -6,8 +6,13 @@ import {
   hasInternalRuntimeContext,
   stripInternalRuntimeContext,
 } from "../../agents/internal-runtime-context.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   registerMemoryCapability,
@@ -140,4 +145,31 @@ export async function writeTestSessionStore(
     delete fileEntry.sessionFile;
   }
   await replaceSessionEntry({ storePath, sessionKey }, entry);
+}
+
+// Writes a transcript through SessionManager so model-context reads observe it;
+// flat replaceTranscriptEvents rows are only visible to display-history reads.
+export async function createTestSessionTranscript(
+  scope: SessionTranscriptRuntimeTarget,
+  events: readonly unknown[],
+): Promise<void> {
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+  const manager = SessionManager.open(scope);
+  for (const event of events) {
+    if (!event || typeof event !== "object") {
+      throw new Error("createTestSessionTranscript: events must be objects");
+    }
+    const record = event as {
+      type?: unknown;
+      message?: Parameters<SessionManager["appendMessage"]>[0];
+      payload?: unknown;
+    };
+    if (record.type === "message" && record.message) {
+      manager.appendMessage(record.message);
+    } else if (typeof record.type === "string") {
+      manager.appendCustomEntry(record.type, record.payload);
+    } else {
+      throw new Error("createTestSessionTranscript: unsupported event shape");
+    }
+  }
 }

@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -127,6 +130,91 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
 
     expect(entry).toBe(sessionEntry);
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not compact on superseded display history behind a compaction boundary", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: false,
+    };
+
+    // Persist a compacted transcript whose retained display history exceeds the
+    // threshold while the compacted model window stays small. Pressure gating must
+    // follow the model window or budget compaction re-fires on healthy sessions.
+    const scope = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 1 });
+    const source = SessionManager.open(scope);
+    for (let index = 0; index < 64; index += 1) {
+      source.appendMessage({
+        role: "user",
+        content: `superseded ${index} ${"x".repeat(8_000)}`,
+        timestamp: index,
+      });
+    }
+    const firstKept = source.appendMessage({
+      role: "user",
+      content: "kept tail prompt",
+      timestamp: 64,
+    });
+    source.appendCompaction("summary", firstKept, 200_000);
+    source.appendMessage({ role: "user", content: "after compaction", timestamp: 65 });
+    await waitForSessionTranscriptProjection(scope);
+    await writeTestSessionStore(storePath, "agent:main:main", sessionEntry);
+
+    const entry = await runWithEntry(sessionEntry, sessionFile);
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("compacts when the compacted model window itself exceeds the threshold", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: false,
+    };
+
+    const scope = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 1 });
+    const source = SessionManager.open(scope);
+    const firstKept = source.appendMessage({
+      role: "user",
+      content: "kept prompt",
+      timestamp: 0,
+    });
+    source.appendCompaction("summary", firstKept, 100);
+    for (let index = 0; index < 64; index += 1) {
+      source.appendMessage({
+        role: "user",
+        content: `current ${index} ${"x".repeat(8_000)}`,
+        timestamp: index + 1,
+      });
+    }
+    await waitForSessionTranscriptProjection(scope);
+    await writeTestSessionStore(storePath, "agent:main:main", sessionEntry);
+
+    await runWithEntry(sessionEntry, sessionFile);
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
   it("compacts when totalTokens is large and fresh", async () => {

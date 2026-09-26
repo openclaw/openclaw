@@ -28,6 +28,7 @@ import {
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   deriveContextPromptTokens,
@@ -54,7 +55,6 @@ import {
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -554,18 +554,19 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptByteSize: snapshot.byteSize,
       };
     }
-    const messages = (await readSessionMessagesAsync(
-      {
-        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-        sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      {
-        mode: "full",
-        reason: "preflight-compaction-estimate",
-      },
-    )) as AgentMessage[];
+    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const storePath = normalizeOptionalString(params.storePath);
+    if (!agentId || !sessionKey || !storePath) {
+      return undefined;
+    }
+    // Preflight pressure must reflect the compacted model window instead of the
+    // retained display history: counting superseded messages re-fires budget
+    // compaction on healthy sessions after a compaction pass.
+    const messages = SessionManager.readSessionContext(
+      { agentId, sessionId, sessionKey, storePath },
+      (contextMessages) => Array.from(contextMessages),
+    );
     const estimatedTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
@@ -576,7 +577,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     return {
       promptTokens: estimatedTokens,
       promptTokenSource: "prompt_projection",
-      // Full-message estimation already includes assistant content. Preserve
+      // Prompt projection already includes assistant content. Preserve
       // output only for projection against a separate persisted prompt fact.
       promptIncludesOutput: true,
       outputTokens: normalizedOutputTokens,
