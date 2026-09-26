@@ -10,8 +10,8 @@ import {
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getPluginRegistryForContext } from "../../plugins/runtime.js";
 import {
+  getPluginRegistryForContext,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";

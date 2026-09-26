@@ -8,7 +8,7 @@ import {
   validatePluginsControlUiStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
-import { getPluginRegistryForContext } from "../../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   listControlUiPluginCatalog,
   listControlUiPluginActivations,

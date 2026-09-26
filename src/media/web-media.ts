@@ -27,7 +27,7 @@ import {
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
