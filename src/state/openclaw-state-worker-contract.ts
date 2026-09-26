@@ -15,6 +15,7 @@ import type { WorktreeRegistryReadOperations } from "../agents/worktrees/registr
 import type { WorktreeRetirementOperations } from "../agents/worktrees/registry-retirement.worker.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { AuditWriterOperations } from "../audit/audit-event-writer.types.js";
+import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
@@ -127,6 +128,7 @@ export type OpenClawStateWorkerOperations = WorktreeRetirementOperations &
   UserPreferenceWorkerOperations &
   OnboardingRecommendationWriteOperations &
   UserProfileWorkerOperations &
+  ChannelIngressWorkerOperations &
   CronStateWorkerOperations &
   FleetRegistryWriteOperations &
   ProjectRegistryWorkerOperations &

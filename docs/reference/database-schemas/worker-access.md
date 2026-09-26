@@ -110,6 +110,23 @@ the same background reader pool, without hydrating message bodies. Both paths
 retain the transcript read fence and raw line ordinals. Full indexing still scans
 the transcript; stored data, exported content, hashes, and update behavior are unchanged.
 
+Channel ingress admission, claims, completion, recovery, pruning, and identity-reset purges use the
+shared-state writer. Queue listings and claim/recovery preparation use that same
+broker's FIFO admission order so they observe earlier committed mutations, even
+inside an ambient discovery snapshot. Ordinary listings retain canonical
+read-write admission and create a missing database; explicitly read-only
+inspection retains its existing-only, noncreating opener inside the broker.
+Only diagnostic failed health, pressure, and account discovery use the read-only
+worker. Channel callbacks retain payload and lane policy on the
+Gateway thread; the writer compares the prepared ordered rows before claiming
+and rejects stale recovery decisions. A conflicting claim snapshot is prepared
+again; an uncertain write is never replayed. Database admission and commit remain
+bound to the captured owner, and shutdown joins accepted work. The existing
+`channel_ingress_events` schema, payload encoding, dedupe windows, retention, and
+update behavior are unchanged. Drain inspection reads pending and claimed rows in
+one snapshot so a concurrent release cannot hide a lane head between reads.
+Shutdown joins deferred settlement even when it starts before dispatch returns.
+
 Before yielding, capture the physical store target, source/admission scope,
 request identity, and the owning projection revision. The lifecycle owner retains
 that source until reader cleanup or write settlement completes. Workers return
