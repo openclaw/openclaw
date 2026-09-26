@@ -54,9 +54,9 @@ export class AgentTerminalSessionDrainTracker {
         }
         released = true;
         this.active.delete(key);
-        const waiters = this.waiters.get(key);
-        waiters?.delete(drained.resolve);
-        if (waiters?.size === 0) {
+        const pendingWaiters = this.waiters.get(key);
+        pendingWaiters?.delete(drained.resolve);
+        if (pendingWaiters?.size === 0) {
           this.waiters.delete(key);
         }
       },
