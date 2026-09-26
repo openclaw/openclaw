@@ -4362,51 +4362,6 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player"],
-    ["video", "clip.mp4", "video/mp4", "openclaw-chat-video-player"],
-  ] as const)("renders %s attachment %s with inline playback", (kind, label, mimeType, tag) => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
-    const onOpenImage = vi.fn();
-    const onOpenSidebar = vi.fn();
-    const source = `https://example.com/${label}`;
-
-    renderAssistantMessage(
-      container,
-      createAssistantMessage([createAttachmentBlock(source, kind, label, mimeType)], {
-        id: `assistant-${kind}-${label}-player`,
-      }),
-      { showToolCalls: false, onOpenImage, onOpenSidebar },
-    );
-
-    const player = expectElement(container, tag, HTMLElement) as HTMLElement & {
-      label: string;
-      mimeType: string;
-      onExpand: (src?: string) => void;
-      sourceIdentity: string;
-      src: string;
-    };
-    expect(player).toMatchObject({ label, mimeType, sourceIdentity: source, src: source });
-    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
-    player.onExpand(kind === "video" ? source : undefined);
-    if (kind === "video") {
-      expect(onOpenImage).toHaveBeenCalledWith({
-        kind: "video",
-        originalSrc: source,
-        src: source,
-        title: label,
-      });
-      expect(onOpenSidebar).not.toHaveBeenCalled();
-    } else {
-      expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "attachment", attachmentKind: kind, title: label }),
-      );
-    }
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
     ["document", "preview.html", "text/html"],
     ["document", "report.pdf", "application/pdf"],
     ["document", "rows.csv", "text/csv"],

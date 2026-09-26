@@ -21,6 +21,7 @@ import {
 import { agentRunFrameActiveStatusParts } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { buildChatItems } from "../chat-thread-build.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -73,6 +74,7 @@ import type {
   ChatTranscriptSession,
   TranscriptHeader,
 } from "./chat-transcript-session.ts";
+import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
@@ -142,7 +144,7 @@ export function projectChatTranscript(
       ...(props.pendingInputs ?? []).map((input) => input.message),
     ]);
   }
-  const chatItems = buildCachedChatItems({
+  const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
     archiveNotice: buildChatArchiveNotice(activeSession),
@@ -183,7 +185,8 @@ export function projectChatTranscript(
             agentId: props.fullMessageAgentId,
           }
         : undefined,
-  });
+  } satisfies Parameters<typeof buildCachedChatItems>[0];
+  const chatItems = buildCachedChatItems(chatItemsInput);
   const workingIndicator = chatItems.find((item) => item.kind === "reading-indicator");
   const runOutputTokens = workingIndicator?.runId
     ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
@@ -307,6 +310,8 @@ export function projectChatTranscript(
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
+    getTurnVideoMessages: (key: string) =>
+      state.transcriptRenderContext.turnVideoMessages?.get(key),
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
@@ -696,6 +701,11 @@ export function projectChatTranscript(
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
+  state.transcriptRenderContext.turnVideoMessages = projectTurnVideoMessages(
+    searchFiltering
+      ? buildChatItems({ ...chatItemsInput, searchOpen: false, searchQuery: "" })
+      : chatItems,
+  );
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     const loaded = loadedReplySources.get(replyToId);

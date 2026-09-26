@@ -136,6 +136,10 @@ export const imageLightboxStyles = css`
     touch-action: none;
   }
 
+  .stage--video-gallery {
+    touch-action: pan-y;
+  }
+
   .slide {
     container-type: size;
     width: 100%;

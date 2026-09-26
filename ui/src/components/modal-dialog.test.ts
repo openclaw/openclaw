@@ -188,6 +188,48 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(container.querySelector("textarea"));
   });
 
+  it.each(
+    ["none", "pointer", "keyboard"].flatMap((interaction) =>
+      [false, true].map((reopened) => ({ interaction, reopened })),
+    ),
+  )(
+    "honors autofocus without overriding $interaction input (reopened=$reopened)",
+    async ({ interaction, reopened }) => {
+      // oxlint-disable-next-line typescript/unbound-method -- The saved method is explicitly rebound with call(this) below.
+      const showModal = HTMLDialogElement.prototype.showModal;
+      vi.spyOn(HTMLDialogElement.prototype, "showModal").mockImplementation(
+        function (this: HTMLDialogElement) {
+          showModal.call(this);
+          const video = container.querySelector<HTMLVideoElement>("video")!;
+          if (interaction === "pointer") {
+            video.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
+          } else if (interaction === "keyboard") {
+            video.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
+            );
+          }
+          video.focus();
+        },
+      );
+      render(
+        html`<openclaw-modal-dialog label="Media"
+          ><button autofocus>Close</button><video controls tabindex="0"></video
+        ></openclaw-modal-dialog>`,
+        container,
+      );
+      const { modal, dialog } = await getRenderedModalDialog(container);
+      if (reopened) {
+        modal.hide();
+        await vi.waitFor(() => expect(dialog.open).toBe(false));
+        modal.show();
+        await getRenderedModalDialog(container);
+      }
+      expect(document.activeElement).toBe(
+        container.querySelector(interaction !== "none" ? "video" : "button"),
+      );
+    },
+  );
+
   it("keeps focus on a field the user selected when the show animation settles", async () => {
     render(
       html`<openclaw-modal-dialog label="Edit">
