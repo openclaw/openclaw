@@ -819,9 +819,7 @@ img.chat-avatar {
 .chat-group.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot),
 .chat-message--reply > :is(.chat-avatar, .chat-avatar-slot) {
   align-self: start;
-  margin-top: calc(
-    var(--chat-reply-attribution-font-size) * 1.5 + var(--chat-reply-attribution-gap)
-  );
+  margin-top: calc(var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap));
   position: relative;
   z-index: 1;
   display: grid;
@@ -844,7 +842,7 @@ img.chat-avatar {
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
   margin-top: calc(
-    var(--chat-reply-attribution-font-size) * 1.5 + var(--chat-reply-attribution-gap) + 4px +
+    var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap) + 4px +
       (1lh - var(--chat-avatar-column)) / 2
   );
 }
@@ -895,12 +893,14 @@ img.chat-avatar {
   width: 100%;
   font-size: var(--chat-reply-attribution-font-size);
   font-weight: 400;
-  line-height: 1.5;
+  line-height: var(--chat-reply-attribution-line-height);
   white-space: nowrap;
 }
 
+/* A whole-pixel line box keeps the 16px avatar on integer offsets. */
 :root {
   --chat-reply-attribution-font-size: 13px;
+  --chat-reply-attribution-line-height: 20px;
   --chat-reply-attribution-gap: 6px;
 }
 
@@ -951,6 +951,12 @@ img.chat-avatar {
   height: 16px;
   border: 0;
   box-shadow: none;
+}
+
+/* The agent avatar's hidden text fallback must not size its grid past the
+   16px circle, or the image stretches and crops. */
+.chat-reply-attribution__person .identity-avatar--agent {
+  grid-template: 100% / 100%;
 }
 
 .chat-reply-attribution__name {

@@ -38,7 +38,7 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
     timestamp: 0,
     isStreaming: false,
     visibleContent: "text",
-    replyToSender: { id: "casey", name },
+    replyToSender: { id: "casey", name, identity: { type: "agent", id: "casey" } },
     replyToMessage: {
       key: "prompt",
       message: source
@@ -64,6 +64,7 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
         sourceMessageId: "prompt",
         senderLabel: name,
         sender: { id: "casey", name },
+        agentAvatar: { avatar: null, textAvatar: "🦀" },
         text: "Original question",
         isLoaded: true,
       }),
@@ -123,6 +124,11 @@ describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
       const { row } = await draw("Casey Morgan");
       const group = row.closest(".chat-group")!;
       const icon = row.querySelector<HTMLElement>(".chat-reply-attribution__mobile-icon")!;
+      // The hidden text fallback must not stretch the agent image past its 16px circle.
+      const face = row.querySelector(".chat-author-avatar .identity-avatar__fallback")!;
+      expect([face.getBoundingClientRect().width, face.getBoundingClientRect().height]).toEqual([
+        16, 16,
+      ]);
       if (width < 768) {
         const avatar = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot")!;
         expect(avatar.getBoundingClientRect().width).toBe(0);
@@ -131,7 +137,6 @@ describe.each([1440, 390, 360])("reply attribution (%d px)", (width) => {
         expect(icon.getBoundingClientRect().height).toBe(14);
         const transform = new DOMMatrixReadOnly(getComputedStyle(icon).transform);
         expect(transform.a).toBe(direction === "rtl" ? -1 : 1);
-        expect(row.querySelector(".chat-author-avatar")!.getBoundingClientRect().width).toBe(16);
         const bounds = group.getBoundingClientRect();
         const rowBounds = row.getBoundingClientRect();
         expect(Math.abs(rowBounds.left - bounds.left)).toBeLessThanOrEqual(1);
