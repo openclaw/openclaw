@@ -854,6 +854,55 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it.each([
+    { name: "unlinked PR commit", commits: [previousSha, sha], links: [], accepted: true },
+    { name: "unlinked non-PR commit", commits: [sha], links: [], accepted: false },
+    {
+      name: "PR commit explicitly linked to another PR",
+      commits: [previousSha, sha],
+      links: [{ number: pr + 1 }],
+      accepted: false,
+    },
+  ])("validates scheduled fallback membership for $name", ({ commits, links, accepted }) => {
+    const headBranch = "fix/token-listener";
+    const headRepository = "contributor/openclaw";
+    const collect = () =>
+      collectHostedGateEvidence({
+        sha,
+        pullRequestCommitShas: commits,
+        pullRequestHeadBranch: headBranch,
+        pullRequestHeadRepository: headRepository,
+        workflowRuns: [
+          successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+          successfulRun("Blacksmith ARM Testbox", 2, "2026-06-17T10:54:00Z", {
+            status: "queued",
+            conclusion: null,
+          }),
+          successfulRun("Blacksmith ARM Testbox", 3, "2026-06-17T10:53:00Z", {
+            head_sha: previousSha,
+            head_branch: headBranch,
+            head_repository: { full_name: headRepository },
+            pull_requests: links,
+          }),
+        ],
+      });
+
+    if (accepted) {
+      expect(collect()).toEqual({
+        headSha: sha,
+        evidenceHeadSha: previousSha,
+        workflows: [
+          expect.objectContaining({ name: "CI", id: 1, headSha: sha }),
+          expect.objectContaining({ name: "Blacksmith ARM Testbox", id: 3, headSha: previousSha }),
+        ],
+      });
+    } else {
+      expect(collect).toThrow(
+        `Missing successful recent Blacksmith ARM Testbox workflow for ${sha}`,
+      );
+    }
+  });
+
   it("loads the complete PR commit set with one local rev-list command", () => {
     const baseSha = "a".repeat(40);
     const shas = Array.from({ length: 301 }, (_, index) =>

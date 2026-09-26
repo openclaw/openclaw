@@ -438,7 +438,7 @@ describe("plugins cli list", () => {
 
       const output = pluginsCliRuntimeLogs.join("\n");
       expect(output).toContain("Diagnostics:");
-      expect(output).toContain(message);
+      expect(output).toContain(expected);
       expect(output).not.toContain(cleanDoctorMessage);
     },
   );
