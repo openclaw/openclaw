@@ -187,6 +187,10 @@ describe("resident Codex catalog notifications", () => {
         await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       }
       await vi.advanceTimersByTimeAsync(trigger === "activity" ? 30_000 : 15 * 60_000);
+      if (trigger === "safety") {
+        expect(readNative).toHaveBeenCalledOnce();
+        await index.list({});
+      }
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(2);
       expect(warnings).toHaveBeenCalledOnce();
@@ -201,7 +205,7 @@ describe("resident Codex catalog notifications", () => {
     },
   );
 
-  it("leaves an unchanged home idle until the 15-minute native safety walk", async () => {
+  it("leaves an unchanged home idle until catalog demand after the native safety interval", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const inventory = Array.from({ length: 192 }, (_, i) =>
       thread({ id: `idle-${i}`, recencyAt: 1_000 - i }),
@@ -216,7 +220,9 @@ describe("resident Codex catalog notifications", () => {
     inventory.pop();
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-    expect(readNative).toHaveBeenCalledTimes(6);
+    expect(readNative).toHaveBeenCalledTimes(3);
+    await index.list({ limit: 64 });
+    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(6));
     expect(index.get("idle-191")).toBeUndefined();
   });
 
@@ -262,6 +268,8 @@ describe("resident Codex catalog notifications", () => {
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBeNull();
     expect(index.get("stored-255")).toBeDefined();
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
+    expect(readNative).toHaveBeenCalledTimes(7);
+    await index.list({ limit: 64 });
     await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
     expect(readNative).toHaveBeenCalledTimes(12);
     expect(index.get("stored-220")?.page.sessions[0]?.name).toBe("Silent tail rename");

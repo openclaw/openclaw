@@ -41,6 +41,10 @@ describe("Codex catalog launch failures", () => {
           await expect(control.initialize()).rejects.toBe(failure);
         } else {
           await vi.advanceTimersByTimeAsync(15 * 60_000);
+          await control.listPage({ limit: 1 });
+          await vi.waitFor(() =>
+            expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2),
+          );
         }
         await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
         await expect(control.initialize()).rejects.toBe(failure);

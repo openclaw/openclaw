@@ -22,6 +22,7 @@ export class CodexCatalogCurrency {
   private hydration: NodeJS.Immediate | undefined;
   private terminalFailure: CodexAppServerSpawnError | undefined;
   private running: Promise<void> | undefined;
+  private safetyRefresh: Promise<void> | undefined;
   private closed = false;
   private nativeDirty = false;
   private nextNativeAt = 0;
@@ -30,7 +31,12 @@ export class CodexCatalogCurrency {
   constructor(private readonly options: CurrencyOptions) {}
 
   hasActiveWork(): boolean {
-    return this.hydration !== undefined || this.initial !== undefined || this.running !== undefined;
+    return (
+      this.hydration !== undefined ||
+      this.initial !== undefined ||
+      this.running !== undefined ||
+      this.safetyRefresh !== undefined
+    );
   }
 
   assertRunnable(): void {
@@ -74,6 +80,42 @@ export class CodexCatalogCurrency {
     this.nativeDirty = true;
   }
 
+  /** Full safety walks serve catalog demand; an idle resident index does not start one. */
+  refreshNativeIfDue(): Promise<void> {
+    if (this.closed || !this.timer || Date.now() < this.nextNativeAt) {
+      return Promise.resolve();
+    }
+    if (this.safetyRefresh) {
+      return this.safetyRefresh;
+    }
+
+    const refresh = async () => {
+      if (this.running) {
+        await this.running;
+      }
+      if (this.closed || Date.now() < this.nextNativeAt) {
+        return;
+      }
+      const run = () => this.options.reconcileNative(true);
+      await Promise.resolve()
+        .then(() => (this.options.runBackground ? this.options.runBackground(run) : run()))
+        .catch((error: unknown) => {
+          this.options.report(
+            new Error(
+              `Codex catalog reconciliation failed; waiting for the next safety interval and catalog demand: ${coerceErrorMessage(error)}`,
+              { cause: error },
+            ),
+          );
+        });
+      // A failed walk must not restart on every busy catalog read.
+      this.nextNativeAt = Date.now() + SAFETY_INTERVAL_MS;
+    };
+    this.safetyRefresh = refresh().finally(() => {
+      this.safetyRefresh = undefined;
+    });
+    return this.safetyRefresh;
+  }
+
   start(): void {
     if (this.closed || this.timer) {
       return;
@@ -85,17 +127,14 @@ export class CodexCatalogCurrency {
         return;
       }
       const startedAt = Date.now();
-      const full = startedAt >= this.nextNativeAt;
       const filesDue = this.options.local && startedAt >= this.nextFilesAt;
-      if (!full && !filesDue && !this.nativeDirty) {
+      const nativeDue = this.nativeDirty && !this.safetyRefresh;
+      if (!filesDue && !nativeDue) {
         return;
       }
-      const nativeDue = full || this.nativeDirty;
-      // Consume this trigger even if background admission or reconciliation fails.
-      // New activity during the attempt remains eligible for the next tick.
-      this.nativeDirty = false;
-      if (full) {
-        this.nextNativeAt = startedAt + SAFETY_INTERVAL_MS;
+      // Consume only work admitted to this cycle; activity stays queued during a full walk.
+      if (nativeDue) {
+        this.nativeDirty = false;
       }
       if (filesDue) {
         this.nextFilesAt = startedAt + SAFETY_INTERVAL_MS;
@@ -105,14 +144,14 @@ export class CodexCatalogCurrency {
           await this.options.reconcileFiles();
         }
         if (nativeDue) {
-          await this.options.reconcileNative(full);
+          await this.options.reconcileNative(false);
         }
       };
       this.running = (this.options.runBackground ? this.options.runBackground(run) : run())
         .catch((error: unknown) => {
           this.options.report(
             new Error(
-              `Codex catalog reconciliation failed; waiting for new activity or the next safety cycle: ${coerceErrorMessage(error)}`,
+              `Codex catalog reconciliation failed; waiting for new activity or the next file safety cycle: ${coerceErrorMessage(error)}`,
               { cause: error },
             ),
           );
@@ -139,6 +178,9 @@ export class CodexCatalogCurrency {
     this.timer = undefined;
     clearTimeout(this.initial);
     this.initial = undefined;
-    return this.running;
+    if (this.running && this.safetyRefresh) {
+      return Promise.allSettled([this.running, this.safetyRefresh]).then(() => {});
+    }
+    return this.running ?? this.safetyRefresh;
   }
 }
