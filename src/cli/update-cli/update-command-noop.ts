@@ -81,29 +81,34 @@ export async function finishAlreadyCurrentUpdate(
       runId: params.opts.run?.runId,
     });
     if (membership) {
+      const deferredMaintenance =
+        "Core is already current; plugin, runtime, and service maintenance was deferred. " +
+        (params.requestedChannel && params.requestedChannel !== params.storedChannel
+          ? `Requested channel change to ${params.requestedChannel} was not applied; retry with --channel ${params.requestedChannel}. `
+          : "") +
+        membership.message;
+      result.steps.push({
+        name: "current-core-maintenance",
+        command: "openclaw update",
+        cwd: params.root,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: deferredMaintenance },
+      });
       params.stop();
-      await finishUpdate(
-        {
-          ...params,
-          result,
-          coreAlreadyCurrent: true,
-          mutationStarted: false,
-          installKindChanged: false,
-          downgradeRisk: false,
-          preManagedServiceStop: service,
-          ownedManagedUpdateEnv: context.env,
-          configSnapshot: context.configSnapshot,
-          preUpdatePluginInstallRecords: {},
-        },
-        {
-          deferredMaintenance:
-            "Core is already current; plugin, runtime, and service maintenance was deferred. " +
-            (params.requestedChannel && params.requestedChannel !== params.storedChannel
-              ? `Requested channel change to ${params.requestedChannel} was not applied; retry with --channel ${params.requestedChannel}. `
-              : "") +
-            membership.message,
-        },
-      );
+      await finishUpdate({
+        ...params,
+        result,
+        coreAlreadyCurrent: true,
+        deferredMaintenance,
+        mutationStarted: false,
+        installKindChanged: false,
+        downgradeRisk: false,
+        preManagedServiceStop: service,
+        ownedManagedUpdateEnv: context.env,
+        configSnapshot: context.configSnapshot,
+        preUpdatePluginInstallRecords: {},
+      });
       return;
     }
     const canRefreshRuntime =
