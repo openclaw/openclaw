@@ -4056,6 +4056,7 @@
     "native.apple.ffd4cac3f472c70f": "%@ 후 세션 만료",
     "native.apple.ffd5f2e059651aa1": "Gateway 설정 열기",
     "native.apple.ffefad3c8b30c36d": "코드 복사",
-    "native.apple.fff730f4390fd98f": "음성 재생을 위한 오디오를 할당할 수 없습니다."
+    "native.apple.fff730f4390fd98f": "음성 재생을 위한 오디오를 할당할 수 없습니다.",
+    "native.android.26e4d8de0a532892": "포커스 모드"
   }
 }

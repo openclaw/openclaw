@@ -55,6 +55,7 @@
     <string name="native_040435e3caaf64b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"セットアップコードはIPv6ゾーンIDを使用しています。 スコープなしのIPv6アドレスまたはLANホスト名を使用してください。"</string>
     <string name="native_040d2b3689dd1d4c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"添付ファイル"</string>
     <string name="native_046cd59be9d4d081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ウェイクワード、会話、再生を設定します。"</string>
+    <string name="native_047cfdebdd839f7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"フォーカスモード"</string>
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聞き取り中 (PTT)"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提案を却下しました。"</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"サイドバーを表示"</string>

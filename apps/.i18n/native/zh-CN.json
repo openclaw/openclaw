@@ -4056,6 +4056,7 @@
     "native.apple.ffd4cac3f472c70f": "会话将在 %@ 后过期",
     "native.apple.ffd5f2e059651aa1": "打开 Gateway 设置",
     "native.apple.ffefad3c8b30c36d": "复制代码",
-    "native.apple.fff730f4390fd98f": "无法为语音播放分配音频资源。"
+    "native.apple.fff730f4390fd98f": "无法为语音播放分配音频资源。",
+    "native.android.26e4d8de0a532892": "专注模式"
   }
 }

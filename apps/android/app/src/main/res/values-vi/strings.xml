@@ -55,6 +55,7 @@
     <string name="native_040435e3caaf64b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mã thiết lập sử dụng ID vùng IPv6. Hãy sử dụng địa chỉ IPv6 không có ID vùng hoặc tên máy chủ LAN."</string>
     <string name="native_040d2b3689dd1d4c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tệp đính kèm"</string>
     <string name="native_046cd59be9d4d081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cấu hình từ đánh thức, trò chuyện bằng giọng nói và phát âm thanh."</string>
+    <string name="native_047cfdebdd839f7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chế độ tập trung"</string>
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang lắng nghe (PTT)"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã từ chối đề xuất."</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hiển thị thanh bên"</string>

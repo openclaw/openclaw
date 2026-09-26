@@ -55,6 +55,7 @@
     <string name="native_040435e3caaf64b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"设置码使用了 IPv6 区域 ID. 请使用不带作用域的 IPv6 地址或局域网主机名。"</string>
     <string name="native_040d2b3689dd1d4c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"附件"</string>
     <string name="native_046cd59be9d4d081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"配置唤醒词、语音对话和播放。"</string>
+    <string name="native_047cfdebdd839f7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"专注模式"</string>
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆听 (PTT)"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提案已拒绝。"</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"显示侧边栏"</string>

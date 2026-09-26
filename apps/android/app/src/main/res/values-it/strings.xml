@@ -55,6 +55,7 @@
     <string name="native_040435e3caaf64b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Il codice di configurazione utilizza un ID di zona IPv6. Usa un indirizzo IPv6 senza ambito o un nome host LAN."</string>
     <string name="native_040d2b3689dd1d4c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Allegato"</string>
     <string name="native_046cd59be9d4d081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Configura le parole di attivazione, la conversazione e la riproduzione."</string>
+    <string name="native_047cfdebdd839f7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Modalità messa a fuoco"</string>
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"In ascolto (PTT)"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Proposta rifiutata."</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mostra barra laterale"</string>

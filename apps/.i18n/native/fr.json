@@ -4056,6 +4056,7 @@
     "native.apple.ffd4cac3f472c70f": "la session expire dans %@",
     "native.apple.ffd5f2e059651aa1": "Ouvrir les réglages du Gateway",
     "native.apple.ffefad3c8b30c36d": "Copier le code",
-    "native.apple.fff730f4390fd98f": "La lecture vocale n’a pas pu allouer les ressources audio."
+    "native.apple.fff730f4390fd98f": "La lecture vocale n’a pas pu allouer les ressources audio.",
+    "native.android.26e4d8de0a532892": "Mode focus"
   }
 }

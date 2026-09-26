@@ -4056,6 +4056,7 @@
     "native.apple.ffd4cac3f472c70f": "sessionen löper ut om %@",
     "native.apple.ffd5f2e059651aa1": "Öppna inställningar för Gateway",
     "native.apple.ffefad3c8b30c36d": "Kopiera kod",
-    "native.apple.fff730f4390fd98f": "Röstuppspelningen kunde inte allokera ljudresurser."
+    "native.apple.fff730f4390fd98f": "Röstuppspelningen kunde inte allokera ljudresurser.",
+    "native.android.26e4d8de0a532892": "Fokusläge"
   }
 }

@@ -55,6 +55,7 @@
     <string name="native_040435e3caaf64b1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"El código de configuración utiliza un identificador de zona IPv6. Usa una dirección IPv6 sin ámbito o un nombre de host de la LAN."</string>
     <string name="native_040d2b3689dd1d4c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Archivo adjunto"</string>
     <string name="native_046cd59be9d4d081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Configura las palabras de activación, la conversación y la reproducción."</string>
+    <string name="native_047cfdebdd839f7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Modo de enfoque"</string>
     <string name="native_049579fa8efbaa1b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Escuchando (PTT)"</string>
     <string name="native_04a3a0e94565c95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Propuesta rechazada."</string>
     <string name="native_04efae3fc7825d3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mostrar barra lateral"</string>
