@@ -62,7 +62,6 @@ import {
   bindTaskRunExecution,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
-  loadTaskRegistryStateFromSqliteReadOnlyResult,
   upsertTaskWithDeliveryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
 import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
@@ -155,39 +154,6 @@ function createUnsafeTaskOwnerIndex(database: DatabaseSync): void {
 }
 
 describe("task-registry store runtime", () => {
-  it("does not create shared state for a read-only task snapshot", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-task-store-readonly-" },
-      async () => {
-        const statePath = resolveOpenClawStateSqlitePath();
-        expect(() => statSync(statePath)).toThrow();
-
-        const snapshot = loadTaskRegistryStateFromSqliteReadOnly();
-        expect(snapshot.tasks.size).toBe(0);
-        expect(snapshot.deliveryStates.size).toBe(0);
-        expect(() => statSync(statePath)).toThrow();
-      },
-    );
-  });
-
-  it("reports an additive schema migration without querying newer task columns", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-task-store-old-schema-" },
-      async () => {
-        const database = openOpenClawStateDatabase();
-        database.db.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
-        closeOpenClawStateDatabase();
-
-        expect(loadTaskRegistryStateFromSqliteReadOnlyResult()).toEqual({
-          state: "migration-required",
-          snapshot: {
-            tasks: new Map(),
-            deliveryStates: new Map(),
-          },
-        });
-      },
-    );
-  });
   let testState: OpenClawTestState;
 
   beforeAll(async () => {

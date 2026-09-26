@@ -9,6 +9,7 @@ import {
   CallToolRequestSchema,
   CallToolResultSchema,
   ListToolsRequestSchema,
+  type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Value } from "typebox/value";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
@@ -34,7 +35,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
   }
   const initialized = createDeferredCore<NodeClaudeSkillInit>();
   void initialized.promise.catch(() => {});
-  const pending = new Map<string, ReturnType<typeof createDeferredCore<unknown>>>();
+  const pending = new Map<string, ReturnType<typeof createDeferredCore<CallToolResult>>>();
   let receivedInit = false;
   let closed = false;
   let artifacts: Awaited<ReturnType<typeof materializeSkillResources>> | undefined;
@@ -160,7 +161,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
               throw new Error("Only this turn's Skill Workshop is available.");
             }
             const id = randomUUID();
-            const call = createDeferredCore<unknown>();
+            const call = createDeferredCore<CallToolResult>();
             void call.promise.catch(() => {});
             pending.set(id, call);
             try {
@@ -172,7 +173,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
               );
               const result = await call.promise;
               assertCurrent();
-              return CallToolResultSchema.parse(result);
+              return result;
             } finally {
               pending.delete(id);
             }

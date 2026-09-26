@@ -35,7 +35,7 @@ import {
 import { runTaskDeliveryWithDetachedAdmission } from "./task-registry-delivery-admission.js";
 import { getTaskDeliveryState } from "./task-registry-mutation.js";
 import { cloneTaskRecord, pickPreferredRunIdTask } from "./task-registry-records.js";
-import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
+import { deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import { taskRegistryLog, tasks, tasksWithPendingDelivery } from "./task-registry-state.js";
 import type { TaskDeliveryStatus, TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
@@ -241,8 +241,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
     let startedMutation: Promise<TaskRecord | null> | undefined;
     let deliverySettled = false;
     try {
-      const { sendMessage, prepareTaskControlUiSessionUrl } =
-        await loadTaskRegistryDeliveryRuntime();
+      const { sendMessage, prepareTaskControlUiSessionUrl } = await deliveryRuntimeLoader.load();
       const resolveTaskControlUiSessionUrl = target.childSessionKey
         ? await prepareTaskControlUiSessionUrl(assertCurrent)
         : undefined;
@@ -577,7 +576,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
     if (initial.queued) {
       return await initial.queued;
     }
-    const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
+    const { sendMessage } = await deliveryRuntimeLoader.load();
     const invocation: {
       send?: { facts: TaskStateChangeDelivery; pending: ReturnType<typeof sendMessage> };
       cleanupFailure?: { error: unknown };

@@ -11,7 +11,7 @@ import {
 import { createSubagentTaskBackingDetail } from "../../tasks/task-backing-records.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.test-support.js";
 import { publishTaskRecordAfterAtomicStore } from "../../tasks/task-registry-publication.js";
-import * as controlRuntime from "../../tasks/task-registry-runtime-loaders.js";
+import { controlRuntimeLoader } from "../../tasks/task-registry-runtime-loaders.js";
 import { getTaskById } from "../../tasks/task-registry.js";
 import {
   createTaskFixture,
@@ -105,9 +105,9 @@ describe("subagents cancellation authority", () => {
               return runtime.cancelDetachedTaskRunById(params);
             },
           });
-          const loadControl = controlRuntime.loadTaskRegistryControlRuntime;
+          const loadControl = controlRuntimeLoader.load;
           const controlLoad = vi
-            .spyOn(controlRuntime, "loadTaskRegistryControlRuntime")
+            .spyOn(controlRuntimeLoader, "load")
             .mockImplementation(async () => {
               const loaded = await loadControl();
               if (phase === "before stop") {

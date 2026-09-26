@@ -2825,10 +2825,9 @@ src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	4
 src/node-host/invoke-agent-cli-claude.ts	1
-src/node-host/invoke-file-commands.ts	1
-src/node-host/invoke-payload.ts	5
-src/node-host/invoke.ts	3
-src/node-host/mcp.ts	3
+src/node-host/invoke-payload.ts	3
+src/node-host/invoke.ts	1
+src/node-host/mcp.ts	2
 src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
@@ -3172,12 +3171,9 @@ src/talk/provider-internal.ts	2
 src/talk/provider-resolver.ts	1
 src/talk/talk-session-controller.ts	2
 src/talk/turn-context-tracker.ts	2
-src/tasks/agent-harness-task-runtime-scope.ts	1
 src/tasks/generated-media-task-activity.ts	1
 src/tasks/task-flow-registry.store.ts	1
 src/tasks/task-flow-registry.ts	1
-src/tasks/task-flow-registry.types.ts	2
-src/tasks/task-registry.process-state.ts	1
 src/tasks/task-registry.sqlite.shared.ts	1
 src/tasks/task-registry.ts	1
 src/tasks/task-registry.types.ts	2
@@ -3198,7 +3194,7 @@ src/tts/tts-request.ts	1
 src/tts/tts-settings.ts	3
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	4
-src/tui/components/chat-log.ts	2
+src/tui/components/chat-log.ts	1
 src/tui/embedded-backend.ts	2
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
@@ -3210,7 +3206,7 @@ src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-task-suggestions.ts	6
-src/tui/tui.ts	4
+src/tui/tui.ts	2
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	2
 src/utils/reaction-level.ts	2

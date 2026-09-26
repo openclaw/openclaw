@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-coordinator.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -53,16 +56,7 @@ export async function runTaskFlowRestoreWorkerOperation<Key extends keyof Restor
       for (const settle of publications) {
         await settle();
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Task-flow restore reconciliation failed",
-          errors[0],
-        );
-      }
+      throwSqliteLifecycleErrors(errors, "Task-flow restore reconciliation failed");
     })());
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {

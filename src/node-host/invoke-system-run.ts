@@ -355,23 +355,19 @@ export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
 ): Promise<SystemRunParsePhase | null> {
+  const invalid = async (message: string) => {
+    await opts.sendInvokeResult({ ok: false, error: { code: "INVALID_REQUEST", message } });
+    return null;
+  };
   const command = resolveSystemRunCommandRequest({
     command: opts.params.command,
     rawCommand: opts.params.rawCommand,
   });
   if (!command.ok) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: command.message },
-    });
-    return null;
+    return invalid(command.message);
   }
   if (command.argv.length === 0) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "command required" },
-    });
-    return null;
+    return invalid("command required");
   }
 
   const shellPayload = command.shellPayload;
@@ -382,11 +378,7 @@ async function parseSystemRunPhase(
       ? null
       : normalizeSystemRunApprovalPlan(opts.params.systemRunPlan);
   if (opts.params.systemRunPlan !== undefined && !approvalPlan) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "systemRunPlan invalid" },
-    });
-    return null;
+    return invalid("systemRunPlan invalid");
   }
   const agentId = normalizeOptionalString(opts.params.agentId);
   const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
@@ -400,11 +392,7 @@ async function parseSystemRunPhase(
     approvalSource !== "ask-fallback" &&
     approvalSource !== "auto-review"
   ) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "approvalSource invalid" },
-    });
-    return null;
+    return invalid("approvalSource invalid");
   }
   const approvalDecision = resolveExecApprovalDecision(opts.params.approvalDecision);
   const approved = opts.params.approved === true;
@@ -412,14 +400,7 @@ async function parseSystemRunPhase(
     approvalSource != null &&
     (opts.params.approved !== undefined || opts.params.approvalDecision !== undefined)
   ) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "approvalSource cannot be combined with explicit approval",
-      },
-    });
-    return null;
+    return invalid("approvalSource cannot be combined with explicit approval");
   }
   const explicitApproval = approved || approvalDecision !== null;
   const forwardedDelayedApproval = approvalSource === "auto-review" || explicitApproval;
@@ -432,31 +413,18 @@ async function parseSystemRunPhase(
       normalizeOptionalString(approvalPlan.agentId) === agentId &&
       normalizeOptionalString(approvalPlan.sessionKey) === requestedSessionKey;
     if (!planMatchesRequest) {
-      await opts.sendInvokeResult({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message:
-            approvalSource != null
-              ? "approvalSource requires matching systemRunPlan"
-              : "explicit approval requires matching systemRunPlan",
-        },
-      });
-      return null;
+      return invalid(
+        approvalSource != null
+          ? "approvalSource requires matching systemRunPlan"
+          : "explicit approval requires matching systemRunPlan",
+      );
     }
   }
   const delayedApprovalPolicySnapshot = forwardedDelayedApproval
     ? (approvalPlan?.policySnapshot ?? null)
     : null;
   if (forwardedDelayedApproval && !delayedApprovalPolicySnapshot) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "delayed approval requires a prepared policy snapshot",
-      },
-    });
-    return null;
+    return invalid("delayed approval requires a prepared policy snapshot");
   }
   const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
   const envAssignmentOverrides =
@@ -470,14 +438,9 @@ async function parseSystemRunPhase(
   // `extractEnvAssignmentKeysFromDispatchWrappers` only emits keys that satisfy
   // `isEnvAssignment` and therefore portable env-key syntax by construction.
   if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
-      },
-    });
-    return null;
+    return invalid(
+      `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
+    );
   }
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -487,14 +450,7 @@ async function parseSystemRunPhase(
     envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
     envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0
   ) {
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: buildEnvOverrideRejectionMessage(envOverrideDiagnostics),
-      },
-    });
-    return null;
+    return invalid(buildEnvOverrideRejectionMessage(envOverrideDiagnostics));
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -643,16 +599,11 @@ async function evaluateSystemRunPolicyPhase(
   }
   if (requiresSecurityAuditSuppressionApproval && !policy.approvedByAsk) {
     policy = {
+      ...policy,
       allowed: false,
       eventReason: "approval-required",
       errorMessage: "SYSTEM_RUN_DENIED: approval required",
-      analysisOk: policy.analysisOk,
-      allowlistSatisfied: policy.allowlistSatisfied,
-      shellWrapperBlocked: policy.shellWrapperBlocked,
-      windowsShellWrapperBlocked: policy.windowsShellWrapperBlocked,
       requiresAsk: true,
-      approvalDecision: policy.approvalDecision,
-      approvedByAsk: policy.approvedByAsk,
     };
   }
   let autoReviewDeferredMessage: string | undefined;

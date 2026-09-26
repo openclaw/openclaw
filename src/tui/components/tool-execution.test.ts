@@ -38,11 +38,7 @@ describe("ToolExecutionComponent", () => {
         toolName === "exec" ? { code: "return value;" } : { runId: "synthetic-run" },
       );
       const result = { content: [{ type: "text", text }], details };
-      if (partial) {
-        component.setPartialResult(result);
-      } else {
-        component.setResult(result, { isError: true });
-      }
+      component.setResult(result, { partial, isError: !partial });
       component.setExpanded(true);
 
       for (const phase of [undefined, "update", "end"] as const) {
@@ -141,7 +137,7 @@ describe("ToolExecutionComponent", () => {
 
   it("keeps tool arguments, output, and running status independent across updates", () => {
     const component = new ToolExecutionComponent("read", { path: "initial.txt" });
-    component.setPartialResult({ content: [{ type: "text", text: "partial output" }] });
+    component.setResult({ content: [{ type: "text", text: "partial output" }] }, { partial: true });
     component.setArgs({ path: "updated.txt" });
     component.setExpanded(true);
 
@@ -161,7 +157,7 @@ describe("ToolExecutionComponent", () => {
     expect(rendered).not.toContain("partial output");
     expect(rendered).not.toContain("(running)");
 
-    component.setPartialResult(undefined);
+    component.setResult(undefined, { partial: true });
     rendered = normalizeTestText(component.render(80).join("\n"));
     expect(rendered).toContain("complete.txt");
     expect(rendered).toContain("(running)");
@@ -175,11 +171,7 @@ describe("ToolExecutionComponent", () => {
   ])("preserves indented $literal in tool output", ({ source, literal, complete }) => {
     const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
     const result = { content: [{ type: "text", text: source }] };
-    if (complete) {
-      component.setResult(result);
-    } else {
-      component.setPartialResult(result);
-    }
+    component.setResult(result, { partial: !complete });
 
     const rendered = component.render(80).map(normalizeTestText).join("\n");
     expect(rendered).toContain("```");
@@ -199,11 +191,7 @@ describe("ToolExecutionComponent", () => {
     ({ text, placeholder, complete }) => {
       const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
       const result = { content: [{ type: "text", text }] };
-      if (complete) {
-        component.setResult(result);
-      } else {
-        component.setPartialResult(result);
-      }
+      component.setResult(result, { partial: !complete });
       const hasPlaceholder = () =>
         component.render(80).map(normalizeTestText).join("\n").includes("...");
       expect(hasPlaceholder()).toBe(placeholder && !complete);

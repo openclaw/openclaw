@@ -50,6 +50,19 @@ export type GatewayServiceDefinitionTransactionHooks = {
 };
 type GatewayServiceFileState = z.infer<typeof fileState>;
 
+/** Rename can change ctime; the staged inode and payload identify the publication. */
+export function matchesServiceFilePublication(
+  current: GatewayServiceFileState | null,
+  prepared: GatewayServiceFileState,
+): current is GatewayServiceFileState {
+  return (
+    current !== null &&
+    (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
+      (key) => current[key] === prepared[key],
+    )
+  );
+}
+
 /** Keep the live file runnable until a complete replacement is ready. */
 export async function publishServiceFile(params: {
   filePath: string;

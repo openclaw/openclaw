@@ -1,12 +1,6 @@
 /** Shared node-host request, result, event, and approval-bin provider contracts. */
 import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
-/**
- * Shared request/result/event types for node-host command execution.
- *
- * These contracts are consumed by Gateway invoke handling, approval planning,
- * and node-host event emission.
- */
 /** Gateway invoke frame delivered to node-host command handlers. */
 export type NodeInvokeRequestPayload = {
   id: string;

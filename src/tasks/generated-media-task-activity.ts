@@ -1,19 +1,16 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const GENERATED_MEDIA_TASK_ACTIVITY_KEY = Symbol.for("openclaw.generatedMediaTaskActivity");
 const GENERATED_MEDIA_TASK_ADMISSIONS_KEY = Symbol.for("openclaw.generatedMediaTaskAdmissions");
 const GENERATED_MEDIA_TASK_ADMISSIONS_MAX_ENTRIES = 2_048;
 
 function getActiveGeneratedMediaTasks(): Map<string, string> {
-  return resolveGlobalSingleton(GENERATED_MEDIA_TASK_ACTIVITY_KEY, () => new Map<string, string>());
+  return resolveGlobalMap(GENERATED_MEDIA_TASK_ACTIVITY_KEY);
 }
 
 function getLatestGeneratedMediaTaskAdmissions(): Map<string, string> {
-  return resolveGlobalSingleton(
-    GENERATED_MEDIA_TASK_ADMISSIONS_KEY,
-    () => new Map<string, string>(),
-  );
+  return resolveGlobalMap(GENERATED_MEDIA_TASK_ADMISSIONS_KEY);
 }
 
 /** Tracks in-process generated-media work even when a plugin owns task persistence. */

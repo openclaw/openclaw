@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
+import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { renderSystemLaunchDaemonOwnershipShellProbe } from "./launchd-system.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
@@ -32,17 +33,10 @@ const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
 const RELOAD_BOOTOUT_WAIT_COUNT = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 15;
 const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
 
-function resolveGuiDomain(): string {
-  if (typeof process.getuid !== "function") {
-    return "gui/501";
-  }
-  return `gui/${process.getuid()}`;
-}
-
 function resolveLaunchdRestartTarget(
   env: Record<string, string | undefined> = process.env,
 ): LaunchdRestartTarget {
-  const domain = resolveGuiDomain();
+  const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const home = normalizeOptionalString(env.HOME) || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);

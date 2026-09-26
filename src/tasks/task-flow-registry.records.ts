@@ -24,32 +24,8 @@ export type TaskFlowSyncInput = Pick<
   | "progressSummary"
 >;
 
-export type FlowRecordPatch = Omit<
-  Partial<
-    Pick<
-      TaskFlowRecord,
-      | "status"
-      | "notifyPolicy"
-      | "goal"
-      | "currentStep"
-      | "blockedTaskId"
-      | "blockedSummary"
-      | "controllerId"
-      | "stateJson"
-      | "waitJson"
-      | "cancelRequestedAt"
-      | "updatedAt"
-      | "endedAt"
-    >
-  >,
-  | "currentStep"
-  | "blockedTaskId"
-  | "blockedSummary"
-  | "controllerId"
-  | "stateJson"
-  | "waitJson"
-  | "cancelRequestedAt"
-  | "endedAt"
+export type FlowRecordPatch = Partial<
+  Pick<TaskFlowRecord, "status" | "notifyPolicy" | "goal" | "updatedAt">
 > & {
   currentStep?: string | null;
   blockedTaskId?: string | null;
@@ -248,22 +224,10 @@ function resolveFlowBlockedSummary(
 function deriveTaskFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
 ): TaskFlowStatus {
-  if (task.status === "queued") {
-    return "queued";
-  }
-  if (task.status === "running") {
-    return "running";
-  }
   if (task.status === "succeeded") {
     return task.terminalOutcome === "blocked" ? "blocked" : "succeeded";
   }
-  if (task.status === "cancelled") {
-    return "cancelled";
-  }
-  if (task.status === "lost") {
-    return "lost";
-  }
-  return "failed";
+  return task.status === "timed_out" ? "failed" : task.status;
 }
 
 function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {

@@ -4,6 +4,7 @@ import type { AgentActivityItem } from "../../packages/gateway-protocol/src/sche
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js";
@@ -165,10 +166,7 @@ const TASK_REGISTRY_PROCESS_STATE_KEY = Symbol.for("openclaw.taskRegistry.state"
 
 /** Returns the singleton in-process task registry state. */
 export function getTaskRegistryProcessState(): TaskRegistryProcessState {
-  const globalState = globalThis as typeof globalThis & {
-    [TASK_REGISTRY_PROCESS_STATE_KEY]?: TaskRegistryProcessState;
-  };
-  globalState[TASK_REGISTRY_PROCESS_STATE_KEY] ??= {
+  return resolveGlobalSingleton<TaskRegistryProcessState>(TASK_REGISTRY_PROCESS_STATE_KEY, () => ({
     tasks: new Map<string, TaskRecord>(),
     taskDeliveryStates: new Map<string, TaskDeliveryState>(),
     taskIdsByRunId: new Map<string, Set<string>>(),
@@ -189,8 +187,7 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
       pending: new Set(),
       dirtyScopes: new Set(),
     },
-  };
-  return globalState[TASK_REGISTRY_PROCESS_STATE_KEY];
+  }));
 }
 
 export function clearTaskProgressBatches(): void {
@@ -234,15 +231,9 @@ export function getTasksByRunScope(params: {
 
 export function addRunIdIndex(taskId: string, runId?: string) {
   const trimmed = runId?.trim();
-  if (!trimmed) {
-    return;
+  if (trimmed) {
+    addIndexedKey(indexState.taskIdsByRunId, trimmed, taskId);
   }
-  let ids = indexState.taskIdsByRunId.get(trimmed);
-  if (!ids) {
-    ids = new Set<string>();
-    indexState.taskIdsByRunId.set(trimmed, ids);
-  }
-  ids.add(taskId);
 }
 
 function deleteRunIdIndex(taskId: string, runId?: string): void {

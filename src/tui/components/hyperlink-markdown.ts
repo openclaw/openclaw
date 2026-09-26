@@ -1,4 +1,3 @@
-// Hyperlink markdown helpers render markdown links with TUI hyperlink styling.
 import type {
   Component,
   DefaultTextStyle,

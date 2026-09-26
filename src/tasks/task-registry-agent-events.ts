@@ -2,7 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-coordinator.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
@@ -350,16 +353,7 @@ export const taskAgentEventMutations = {
     const errors = settled.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw createSqliteLifecycleAggregateError(
-        errors,
-        "Accepted task events failed to settle",
-        errors[0],
-      );
-    }
+    throwSqliteLifecycleErrors(errors, "Accepted task events failed to settle");
   },
 };
 

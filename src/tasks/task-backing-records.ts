@@ -14,24 +14,19 @@ type ManagedTaskBacking = { taskId: string; instance: TaskBackingInstance };
 
 export function readTaskBackingInstance(value: unknown): TaskBackingInstance | undefined {
   const detail = asOptionalRecord(value);
-  if (detail?.kind !== TASK_BACKING_DETAIL_KIND) {
+  if (
+    detail?.kind !== TASK_BACKING_DETAIL_KIND ||
+    typeof detail.generation !== "number" ||
+    !Number.isSafeInteger(detail.generation) ||
+    detail.generation <= 0
+  ) {
     return undefined;
   }
   if (detail.runtime === "acp") {
     const instanceId = typeof detail.instanceId === "string" ? detail.instanceId.trim() : "";
-    return instanceId &&
-      typeof detail.generation === "number" &&
-      Number.isSafeInteger(detail.generation) &&
-      detail.generation > 0
-      ? { runtime: "acp", instanceId, generation: detail.generation }
-      : undefined;
+    return instanceId ? { runtime: "acp", instanceId, generation: detail.generation } : undefined;
   }
-  if (
-    detail.runtime === "subagent" &&
-    typeof detail.generation === "number" &&
-    Number.isSafeInteger(detail.generation) &&
-    detail.generation > 0
-  ) {
+  if (detail.runtime === "subagent") {
     return { runtime: "subagent", generation: detail.generation };
   }
   return undefined;
@@ -159,15 +154,7 @@ export function createManagedTaskBackingDetail(
   current: ReturnType<typeof selectCurrentCanonicalTaskBacking>,
 ): JsonValue | undefined {
   return current
-    ? current.instance.runtime === "acp"
-      ? {
-          ...createAcpTaskBackingDetail(current.instance.instanceId, current.instance.generation),
-          taskId: current.task.taskId,
-        }
-      : {
-          ...createSubagentTaskBackingDetail(current.instance.generation),
-          taskId: current.task.taskId,
-        }
+    ? { kind: TASK_BACKING_DETAIL_KIND, ...current.instance, taskId: current.task.taskId }
     : undefined;
 }
 

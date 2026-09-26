@@ -100,12 +100,7 @@ export class SearchableSelectList implements Component, Focusable {
     this.selectedIndex = 0;
   }
 
-  /**
-   * Smart filtering that prioritizes:
-   * 1. Exact substring match in label (highest priority)
-   * 2. Exact substring in description
-   * 3. Fuzzy match (lowest priority)
-   */
+  // Rank exact label matches before description matches, then fuzzy matches.
   private smartFilter(query: string): SearchableSelectItem[] {
     const q = normalizeLowercaseStringOrEmpty(query);
     type ScoredItem = { item: SearchableSelectItem; tier: number; score: number };

@@ -82,7 +82,7 @@ const TASK_NOTIFY_POLICIES = new Set<TaskNotifyPolicy>(["done_only", "state_chan
 const TASK_TERMINAL_OUTCOMES = new Set<TaskTerminalOutcome>(["succeeded", "blocked"]);
 const TASK_SCOPE_KINDS = new Set<TaskScopeKind>(["session", "system"]);
 
-function parsePersistedTaskValue<T extends string>(
+export function parsePersistedTaskValue<T extends string>(
   value: unknown,
   values: ReadonlySet<T>,
   label: string,

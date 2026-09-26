@@ -1,6 +1,7 @@
 // Defines managed task-flow registry records and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { JsonValue, TaskNotifyPolicy } from "./task-registry.types.js";
+import { parsePersistedTaskValue } from "./task-registry.types.js";
 
 export type { JsonValue } from "./task-registry.types.js";
 
@@ -22,26 +23,15 @@ export type TaskFlowStatus = (typeof TASK_FLOW_STATUSES)[number];
 const TASK_FLOW_SYNC_MODES = new Set<TaskFlowSyncMode>(["task_mirrored", "managed"]);
 const TASK_FLOW_STATUS_SET = new Set<TaskFlowStatus>(TASK_FLOW_STATUSES);
 
-function parsePersistedFlowValue<T extends string>(
-  value: unknown,
-  values: ReadonlySet<T>,
-  label: string,
-): T {
-  if (typeof value === "string" && values.has(value as T)) {
-    return value as T;
-  }
-  throw new Error(`Invalid persisted task flow ${label}: ${JSON.stringify(value)}`);
-}
-
 export function parseOptionalTaskFlowSyncMode(value: unknown): TaskFlowSyncMode | undefined {
   if (value == null || value === "") {
     return undefined;
   }
-  return parsePersistedFlowValue(value, TASK_FLOW_SYNC_MODES, "sync mode");
+  return parsePersistedTaskValue(value, TASK_FLOW_SYNC_MODES, "flow sync mode");
 }
 
 export function parseTaskFlowStatus(value: unknown): TaskFlowStatus {
-  return parsePersistedFlowValue(value, TASK_FLOW_STATUS_SET, "status");
+  return parsePersistedTaskValue(value, TASK_FLOW_STATUS_SET, "flow status");
 }
 
 export type TaskFlowRecord = {

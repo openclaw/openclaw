@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "../infra/errors.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -70,15 +71,10 @@ import type { TaskRecord } from "./task-registry.types.js";
 export const taskRegistryLog = createSubsystemLogger("tasks/registry");
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
-const TASK_REGISTRY_REVISION_KEY = Symbol.for("openclaw.taskRegistry.revision");
-type TaskRegistryRevisionGlobal = typeof globalThis & {
-  [TASK_REGISTRY_REVISION_KEY]?: { value: number };
-};
-// SAFETY: This symbol owns the process-global revision cell assigned below.
-const taskRegistryRevisionGlobal = globalThis as TaskRegistryRevisionGlobal;
-const taskRegistryRevisionState = (taskRegistryRevisionGlobal[TASK_REGISTRY_REVISION_KEY] ??= {
-  value: 0,
-});
+const taskRegistryRevisionState = resolveGlobalSingleton(
+  Symbol.for("openclaw.taskRegistry.revision"),
+  () => ({ value: 0 }),
+);
 
 export function readTaskRegistryRevision(): number {
   return taskRegistryRevisionState.value;

@@ -296,7 +296,10 @@ function resolveUserBinDirs(
   return dirs;
 }
 
-function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
+export function getMinimalServicePathPartsFromEnv(
+  options: MinimalServicePathOptions = {},
+): string[] {
+  const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
     // Windows scheduled tasks inherit PATH from the task host; generated cmd
@@ -311,26 +314,10 @@ function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): st
   const existsSync = options.existsSync ?? fs.existsSync;
   const userDirs =
     includeUserDirs && (platform === "linux" || platform === "darwin")
-      ? resolveUserBinDirs(options.home, platform, options.env, existsSync, options)
+      ? resolveUserBinDirs(options.home ?? env.HOME, platform, env, existsSync, options)
       : [];
 
   return [...new Set([...extraDirs, ...systemDirs, ...userDirs].filter(Boolean))];
-}
-
-export function getMinimalServicePathPartsFromEnv(
-  options: MinimalServicePathOptions = {},
-): string[] {
-  const env = options.env ?? process.env;
-  return getMinimalServicePathParts({
-    ...options,
-    home: options.home ?? env.HOME,
-    env,
-  });
-}
-
-function buildMinimalServicePath(options: MinimalServicePathOptions = {}): string {
-  const env = options.env ?? process.env;
-  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
 function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): string {
@@ -459,7 +446,9 @@ function buildCommonServiceEnvironment(
   const minimalPath =
     platform === "win32"
       ? undefined
-      : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs });
+      : getMinimalServicePathPartsFromEnv({ env, platform, extraDirs: extraPathDirs }).join(
+          path.posix.delimiter,
+        );
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,

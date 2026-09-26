@@ -72,9 +72,6 @@ export function selectExistingTaskForCreate(params: {
   if (!runId || params.runtime !== "acp") {
     return undefined;
   }
-  if (runScopeMatches.length === 0) {
-    return undefined;
-  }
   return runScopeMatches.toSorted(compareTasksForRunIdLookup)[0];
 }
 
@@ -99,23 +96,18 @@ export function buildTaskCreateMergePatch(
   params: TaskCreateMergeParams,
 ): Partial<TaskRecord> {
   const patch: Partial<TaskRecord> = {};
-  if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
-    patch.sourceId = params.sourceId.trim();
-  }
-  if (params.taskKind?.trim() && !existing.taskKind?.trim()) {
-    patch.taskKind = params.taskKind.trim();
-  }
-  if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
-    patch.parentFlowId = params.parentFlowId.trim();
-  }
-  if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
-    patch.parentTaskId = params.parentTaskId.trim();
-  }
-  if (params.agentId?.trim() && !existing.agentId?.trim()) {
-    patch.agentId = params.agentId.trim();
-  }
-  if (params.requesterAgentId?.trim() && !existing.requesterAgentId?.trim()) {
-    patch.requesterAgentId = params.requesterAgentId.trim();
+  for (const key of [
+    "sourceId",
+    "taskKind",
+    "parentFlowId",
+    "parentTaskId",
+    "agentId",
+    "requesterAgentId",
+  ] as const) {
+    const value = params[key]?.trim();
+    if (value && !existing[key]?.trim()) {
+      patch[key] = value;
+    }
   }
   const nextLabel = params.label?.trim();
   if (params.preferMetadata) {

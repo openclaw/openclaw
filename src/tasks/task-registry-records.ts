@@ -44,24 +44,23 @@ export function listTasksFromIndex(
   index: ReadonlyMap<string, ReadonlySet<string>>,
   key: string,
 ): TaskRecord[] {
-  const ids = index.get(key);
-  if (!ids || ids.size === 0) {
-    return [];
-  }
-  return [...ids]
-    .map((taskId, insertionIndex) => {
+  return sortTaskRecordsNewestFirst(
+    [...(index.get(key) ?? [])].flatMap((taskId) => {
       const task = tasks.get(taskId);
-      return task ? Object.assign({}, cloneTaskRecord(task), { insertionIndex }) : null;
-    })
-    .filter(
-      (
-        task,
-      ): task is TaskRecord & {
-        insertionIndex: number;
-      } => Boolean(task),
-    )
+      return task ? [task] : [];
+    }),
+  ).map(cloneTaskRecord);
+}
+
+/** Keep equal-time records in reverse insertion order without copying their payloads. */
+export function sortTaskRecordsNewestFirst(records: Iterable<TaskRecord>): TaskRecord[] {
+  return Array.from(records, (task, insertionIndex) => ({
+    task,
+    createdAt: task.createdAt,
+    insertionIndex,
+  }))
     .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _insertionIndex, ...task }) => task);
+    .map(({ task }) => task);
 }
 
 export function selectTaskRecordsForOwnerTree(

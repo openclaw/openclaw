@@ -81,9 +81,9 @@ it("records ownership on first task write and reopens safely for candidate and o
   const originalVersion = readOnly.prepare("PRAGMA user_version").get();
   try {
     const schemaCookie = readOnly.prepare("PRAGMA schema_version").get();
-    const result = readTaskRegistrySnapshotIfReady({ db: readOnly, path: databasePath });
-    expect(result.state).toBe("ready");
-    expect(result.snapshot.tasks.get(task.taskId)?.executionOwner).toBeUndefined();
+    const snapshot = readTaskRegistrySnapshotIfReady({ db: readOnly, path: databasePath });
+    expect([...snapshot.tasks.keys()]).toEqual([task.taskId]);
+    expect(snapshot.tasks.get(task.taskId)?.executionOwner).toBeUndefined();
     expect(readOnly.prepare("PRAGMA schema_version").get()).toEqual(schemaCookie);
   } finally {
     readOnly.close();

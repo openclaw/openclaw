@@ -1,4 +1,3 @@
-// Waiting-status helpers kept pure so animation text can be tested without a TUI.
 type MinimalTheme = {
   dim: (s: string) => string;
   bold: (s: string) => string;

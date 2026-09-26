@@ -20,7 +20,7 @@ import {
   cloneTaskRecord,
   listTasksFromIndex,
   normalizeTaskTimestamps,
-  compareTasksNewestFirst,
+  sortTaskRecordsNewestFirst,
   pickPreferredRunIdTask,
   selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
@@ -307,10 +307,7 @@ export async function listTaskRecordPage(params: {
 export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean): TaskRecord[] {
   ensureTaskRegistryReady();
   const records = [...tasks.values()];
-  return (filter ? records.filter(filter) : records)
-    .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
-    .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _insertionIndex, ...task }) => task);
+  return sortTaskRecordsNewestFirst(filter ? records.filter(filter) : records).map(cloneTaskRecord);
 }
 
 export function hasActiveTaskForChildSessionKey(params: {
@@ -418,10 +415,7 @@ export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskR
       for (const task of records) {
         merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
-      return [...merged.values()]
-        .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
-        .toSorted(compareTasksNewestFirst)
-        .map(({ insertionIndex: _insertionIndex, ...task }) => task);
+      return sortTaskRecordsNewestFirst(merged.values());
     } catch (error) {
       owner.assertCurrent();
       taskRegistryLog.warn("Failed to read fresh owner task registry records", {
@@ -484,13 +478,12 @@ function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | un
     return undefined;
   }
   // Raw records stay inside this synchronous lookup; only the selected record is cloned.
-  const selected = [...(taskIdsByRelatedSessionKey.get(key) ?? [])]
-    .flatMap((taskId, insertionIndex) => {
+  const selected = sortTaskRecordsNewestFirst(
+    [...(taskIdsByRelatedSessionKey.get(key) ?? [])].flatMap((taskId) => {
       const task = tasks.get(taskId);
-      return task ? [{ task, createdAt: task.createdAt, insertionIndex }] : [];
-    })
-    .toSorted(compareTasksNewestFirst)
-    .find(({ task }) => taskMatchesRelatedSession(task, key))?.task;
+      return task ? [task] : [];
+    }),
+  ).find((task) => taskMatchesRelatedSession(task, key));
   return selected ? cloneTaskRecord(selected) : undefined;
 }
 

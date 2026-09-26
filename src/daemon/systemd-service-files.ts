@@ -24,11 +24,6 @@ import type {
 } from "./service-types.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
 import { expandSystemdEnvironmentFilePattern } from "./systemd-environment-file-pattern.js";
-import type {
-  SystemdCommandSnapshotParams,
-  SystemdEnvironmentFilesParams,
-  SystemdEnvironmentFileSpec,
-} from "./systemd-service-files.types.js";
 import { assertSystemdServiceAccount } from "./systemd-service-identity.js";
 import {
   parseSystemdEnvAssignments,
@@ -39,6 +34,18 @@ import {
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
+
+type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
+type SystemdEnvironmentFilesParams = {
+  environmentFileSpecs: SystemdEnvironmentFileSpec[];
+  failOnUnavailable?: boolean;
+};
+type SystemdCommandSnapshotParams = SystemdEnvironmentFilesParams & {
+  programArguments: string[];
+  workingDirectory: string;
+  inlineEnvironment: Record<string, string>;
+  unsetEnvironment: string[];
+};
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));

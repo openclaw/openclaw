@@ -46,6 +46,16 @@ export function createNodeInvokeProgressWriter(params: {
     return queue;
   };
 
+  const sendChunk = async (chunk: string) => {
+    await params.client.request("node.invoke.progress", {
+      invokeId: params.frame.id,
+      nodeId: params.frame.nodeId,
+      seq,
+      chunk,
+    });
+    seq += 1;
+  };
+
   const sendText = async (text: string) => {
     let remaining = text;
     while (remaining) {
@@ -53,13 +63,7 @@ export function createNodeInvokeProgressWriter(params: {
       if (!chunk) {
         break;
       }
-      await params.client.request("node.invoke.progress", {
-        invokeId: params.frame.id,
-        nodeId: params.frame.nodeId,
-        seq,
-        chunk,
-      });
-      seq += 1;
+      await sendChunk(chunk);
       remaining = remaining.slice(chunk.length);
     }
   };
@@ -77,13 +81,7 @@ export function createNodeInvokeProgressWriter(params: {
     heartbeatTimer = setTimeout(() => {
       heartbeatTimer = undefined;
       void enqueue(async () => {
-        await params.client.request("node.invoke.progress", {
-          invokeId: params.frame.id,
-          nodeId: params.frame.nodeId,
-          seq,
-          chunk: "",
-        });
-        seq += 1;
+        await sendChunk("");
         lastProgressAt = Date.now();
       }).finally(() => {
         heartbeatQueued = false;

@@ -23,7 +23,6 @@ import {
   readTaskRegistrySnapshotIfReady,
   upsertTaskDeliveryStateInDatabase,
   upsertTaskWithDeliveryStateInDatabase,
-  type TaskRegistryReadOnlyLoadResult,
 } from "./task-registry.store.kernel.js";
 import type {
   TaskRegistryMutationScope,
@@ -64,15 +63,10 @@ export function loadTaskRegistryMutationStateFromSqlite(
 
 /** Loads task records without creating or migrating shared state. */
 export function loadTaskRegistryStateFromSqliteReadOnly(): TaskRegistryStoreSnapshot {
-  return loadTaskRegistryStateFromSqliteReadOnlyResult().snapshot;
-}
-
-/** Reads task state only when the existing database already has the canonical task shape. */
-export function loadTaskRegistryStateFromSqliteReadOnlyResult(): TaskRegistryReadOnlyLoadResult {
   return (
     withExistingOpenClawStateDatabaseReadOnly(readTaskRegistrySnapshotIfReady) ?? {
-      state: "ready",
-      snapshot: { tasks: new Map(), deliveryStates: new Map() },
+      tasks: new Map(),
+      deliveryStates: new Map(),
     }
   );
 }

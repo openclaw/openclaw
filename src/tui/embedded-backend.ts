@@ -64,8 +64,6 @@ import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
   capLiveAssistantText,
-  normalizeLiveAssistantBufferedText,
-  projectLiveAssistantBufferedText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
@@ -126,6 +124,7 @@ import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpe
 import {
   assistantChatMessage,
   payloadText,
+  projectLocalRunText,
   resolveDeltaPayload,
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
@@ -547,12 +546,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const inFlightRun = newestInFlightRun
       ? {
           runId: newestInFlightRun[0],
-          text: projectLiveAssistantBufferedText(
-            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer, {
-              managedMediaUrls: [...newestInFlightRun[1].managedMediaUrls],
-            }).trim(),
-            { suppressLeadFragments: true },
-          ).text.trim(),
+          text: projectLocalRunText(newestInFlightRun[1]).text.trim(),
         }
       : undefined;
 
@@ -1056,12 +1050,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatDelta(runId: string, run: LocalRunState) {
-    const normalizedText = normalizeLiveAssistantBufferedText(run.buffer, {
-      managedMediaUrls: [...run.managedMediaUrls],
-    }).trim();
-    const projected = projectLiveAssistantBufferedText(normalizedText, {
-      suppressLeadFragments: true,
-    });
+    const projected = projectLocalRunText(run);
     const text = projected.text.trim();
     if (run.buffer && (!text || projected.suppress)) {
       return;
@@ -1101,13 +1090,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.registered = true;
     run.lastBroadcastText = undefined;
-    const projected = projectLiveAssistantBufferedText(
-      normalizeLiveAssistantBufferedText(run.buffer, {
-        final: true,
-        managedMediaUrls: [...run.managedMediaUrls],
-      }).trim(),
-      { suppressLeadFragments: false },
-    );
+    const projected = projectLocalRunText(run, true);
     const text = state === "final" && !projected.suppress ? projected.text.trim() : "";
     this.emit("chat", {
       runId,

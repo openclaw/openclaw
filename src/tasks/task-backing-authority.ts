@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import {
   createAcpTaskBackingDetail,
   createManagedTaskBackingDetail,
@@ -47,16 +47,7 @@ export async function prepareTaskBackingRead(): Promise<TaskBackingRead | undefi
   const errors = [taskRead, flowRead].flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw createSqliteLifecycleAggregateError(
-      errors,
-      "Task backing read preparation failed",
-      errors[0],
-    );
-  }
+  throwSqliteLifecycleErrors(errors, "Task backing read preparation failed");
   if (
     taskRead.status !== "fulfilled" ||
     flowRead.status !== "fulfilled" ||

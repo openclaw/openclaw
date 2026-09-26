@@ -23,13 +23,6 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
-/**
- * Plugin node-host command registry bridge.
- *
- * Node hosts load the active plugin registry, expose registered capabilities
- * and commands, and dispatch incoming node-host commands by exact command id.
- */
-
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
   () => import("../plugins/loader.js"),
 );
@@ -228,10 +221,6 @@ export function hasRegisteredNodeHostCommandActiveWork(): boolean {
   });
 }
 
-function isProviderSafeToolName(value: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
-}
-
 function buildNodePluginToolDescriptor(
   entry: PluginNodeHostCommandRegistration,
 ): NodePluginToolDescriptor | null {
@@ -241,7 +230,7 @@ function buildNodePluginToolDescriptor(
   }
   const name = normalizeOptionalString(agentTool.name) ?? "";
   const description = normalizeOptionalString(agentTool.description) ?? "";
-  if (!isProviderSafeToolName(name) || !description) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) || !description) {
     return null;
   }
   const mcpServer = normalizeOptionalString(agentTool.mcp?.server) ?? "";

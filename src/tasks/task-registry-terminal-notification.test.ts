@@ -695,8 +695,8 @@ describe("terminal task notification persistence", () => {
         commitTaskDeliveryFixture({ taskId: task.taskId });
       } else {
         const runtime = await import("./task-registry-runtime-loaders.js");
-        const load = runtime.loadTaskRegistryDeliveryRuntime;
-        vi.spyOn(runtime, "loadTaskRegistryDeliveryRuntime").mockImplementationOnce(async () => {
+        const load = runtime.deliveryRuntimeLoader.load;
+        vi.spyOn(runtime.deliveryRuntimeLoader, "load").mockImplementationOnce(async () => {
           const loaded = await load();
           commitTaskDeliveryFixture({ taskId: task.taskId });
           return loaded;
