@@ -201,13 +201,18 @@ export async function gatherDispatchRequest(
     });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
-      replyHotPathTiming.logIfSlow({
-        channel,
-        messageId,
-        sessionKey,
-        outcome,
-        reason: opts?.reason,
-      });
+      replyHotPathTiming.logIfSlow(
+        {
+          channel,
+          messageId,
+          runId: params.replyOptions?.runId,
+          sessionId: lifecycleSessionId,
+          sessionKey,
+          outcome,
+          reason: opts?.reason,
+        },
+        { beforeReplyResolver: agentDispatchStartedAt === 0 },
+      );
     }
     messageLifecycle.markProcessed(outcome, opts);
   };
@@ -230,7 +235,13 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
-    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
+    replyHotPathTiming.logPreparationIfSlow({
+      channel,
+      messageId,
+      runId: params.replyOptions?.runId,
+      sessionId: lifecycleSessionId,
+      sessionKey,
+    });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,

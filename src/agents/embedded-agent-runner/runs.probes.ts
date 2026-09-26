@@ -9,7 +9,11 @@ const reportedCompactingProbeFailures = new WeakSet<CompactionProbe>();
 export function isEmbeddedRunHandleAbortable(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
+  mode: "all" | "compacting" = "all",
 ): boolean {
+  if (mode === "compacting" && isEmbeddedRunHandleCompacting(sessionId, handle) !== true) {
+    return false;
+  }
   try {
     return handle.isAbortable?.() !== false;
   } catch (err) {
@@ -52,4 +56,18 @@ export function isEmbeddedRunHandleSupersedable(
     diag.warn(`supersede failed: runId=${runId} reason=lifecycle_check_failed err=${String(err)}`);
     return false;
   }
+}
+
+export function canSteerEmbeddedRunDuringCompaction(
+  sessionId: string,
+  handle: CompactionProbe &
+    Pick<EmbeddedAgentQueueHandle, "messageInjection" | "messageInjectionV2">,
+): boolean {
+  const compacting = isEmbeddedRunHandleCompacting(sessionId, handle);
+  // Modern injection capabilities can admit automatic compaction; an unreadable
+  // probe or a legacy manual-compaction handle must leave the input queued.
+  return (
+    compacting !== undefined &&
+    (!compacting || handle.messageInjectionV2?.version === 2 || Boolean(handle.messageInjection))
+  );
 }

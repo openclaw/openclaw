@@ -1,5 +1,5 @@
 import { getEventListeners } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   abortQueuedChatTurnById,
@@ -223,26 +223,32 @@ describe("chat-queued-turns", () => {
     expect(plain.signal.aborted).toBe(false);
   });
 
-  it.each(["rpc", "restart"])("aborts by runId and preserves %s disposition", (stopReason) => {
-    const map = emptyMap();
-    const controller = new AbortController();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "run-b",
-      controller,
-      sessionId: "sess-b",
-      sessionKey: "main",
-    });
-    const res = abortQueuedChatTurnById(map, {
-      runId: "run-b",
-      sessionKey: "main",
-      stopReason,
-    });
-    expect(res.aborted).toBe(true);
-    expect(controller.signal.aborted).toBe(true);
-    expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(stopReason === "restart");
-    expect(map.has("run-b")).toBe(false);
-  });
+  it.each(["rpc", "stop", "timeout", "restart", "archive", "delete"])(
+    "aborts by runId and preserves %s disposition",
+    (stopReason) => {
+      const map = emptyMap();
+      const controller = new AbortController();
+      const onAborted = vi.fn();
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "run-b",
+        controller,
+        sessionId: "sess-b",
+        sessionKey: "main",
+        onAborted,
+      });
+      const res = abortQueuedChatTurnById(map, {
+        runId: "run-b",
+        sessionKey: "main",
+        stopReason,
+      });
+      expect(res.aborted).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+      expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(stopReason === "restart");
+      expect(map.has("run-b")).toBe(false);
+      expect(onAborted).toHaveBeenCalledExactlyOnceWith(stopReason);
+    },
+  );
 
   it("retains a retired collect source identity until aggregate completion", () => {
     const map = emptyMap();
