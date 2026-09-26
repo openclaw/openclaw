@@ -243,6 +243,15 @@ describe("rewriteUpdateFlagArgv", () => {
       ["node", "entry.js", "--no-color", "status", "--update"],
     );
   });
+
+  it("rewrites --update past a root value flag given an empty string value", () => {
+    // Regression: a bare empty-string value token (e.g. `--profile ""`) used to be
+    // under-consumed, leaving "" as its own token that hit the `!arg` guard and made
+    // this function bail out before reaching --update.
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "--profile", "", "--update"]),
+    ).toEqual(["node", "entry.js", "--profile", "", "update"]);
+  });
 });
 
 describe("shouldEnsureCliPath", () => {
