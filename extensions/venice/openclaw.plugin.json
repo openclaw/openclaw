@@ -1,13 +1,15 @@
 {
   "id": "venice",
-  "categories": ["models"],
+  "categories": ["models", "media"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["venice"],
   "contracts": {
-    "usageProviders": ["venice"]
+    "usageProviders": ["venice"],
+    "imageGenerationProviders": ["venice"],
+    "videoGenerationProviders": ["venice"]
   },
   "modelPricing": {
     "providers": {

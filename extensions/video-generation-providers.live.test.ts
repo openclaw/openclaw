@@ -57,6 +57,7 @@ import qwenPlugin from "./qwen/index.js";
 import runwayPlugin from "./runway/index.js";
 import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 import togetherPlugin from "./together/index.js";
+import venicePlugin from "./venice/index.js";
 import vydraPlugin from "./vydra/index.js";
 import xaiPlugin from "./xai/index.js";
 
@@ -144,6 +145,7 @@ const CASES: LiveProviderCase[] = [
     pluginName: "Together Provider",
     providerId: "together",
   },
+  { plugin: venicePlugin, pluginId: "venice", pluginName: "Venice Provider", providerId: "venice" },
   { plugin: vydraPlugin, pluginId: "vydra", pluginName: "Vydra Provider", providerId: "vydra" },
   { plugin: xaiPlugin, pluginId: "xai", pluginName: "xAI Plugin", providerId: "xai" },
 ]

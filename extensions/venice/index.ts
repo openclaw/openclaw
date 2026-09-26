@@ -5,12 +5,14 @@ import {
   type ModelCompatConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildVeniceImageGenerationProvider } from "./image-generation-provider.js";
 import { VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import { applyVeniceConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildStaticVeniceProvider } from "./provider-catalog.js";
 import { createVeniceStreamWrapper } from "./stream.js";
 import { fetchVeniceUsage } from "./usage.js";
+import { buildVeniceVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "venice";
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
@@ -71,5 +73,9 @@ export default defineSingleProviderPluginEntry({
         timeoutMs: ctx.timeoutMs,
         fetchFn: ctx.fetchFn,
       }),
+  },
+  register(api) {
+    api.registerImageGenerationProvider(buildVeniceImageGenerationProvider());
+    api.registerVideoGenerationProvider(buildVeniceVideoGenerationProvider());
   },
 });

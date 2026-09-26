@@ -1,9 +1,24 @@
 // Venice tests cover index plugin behavior.
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 describe("venice provider plugin", () => {
+  it("registers the image and video generation providers alongside the text provider", async () => {
+    const registered = await registerProviderPlugin({
+      plugin,
+      id: "venice",
+      name: "Venice Provider",
+    });
+
+    expect(registered.providers.map((entry) => entry.id)).toEqual(["venice"]);
+    expect(registered.imageProviders.map((entry) => entry.id)).toEqual(["venice"]);
+    expect(registered.videoProviders.map((entry) => entry.id)).toEqual(["venice"]);
+  });
+
   it("registers provider-owned usage hooks", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

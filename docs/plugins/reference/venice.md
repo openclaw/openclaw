@@ -20,7 +20,7 @@ Adds Venice model provider support to OpenClaw.
 ## Surface
 
 - Providers: `venice`
-- Contracts: `usageProviders`
+- Contracts: `imageGenerationProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

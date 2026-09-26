@@ -88,6 +88,72 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
 | Uncensored             | `venice-uncensored-1-2`                      | Current uncensored Venice model        |
 </Tip>
 
+## Image generation
+
+Venice image models are available through the `image_generate` tool — the same
+tool used for every other image provider. Once `VENICE_API_KEY` is set, OpenClaw
+registers Venice as an image-generation provider automatically; no extra
+configuration is needed.
+
+- **Default model**: `venice-sd35`. Override with any Venice image model, for
+  example `flux-2-pro`, `seedream-v5-lite`, `nano-banana-pro`, or the uncensored
+  `lustify-v8`.
+- **Geometry**: pass `size` (width/height up to 1280px), `aspectRatio`, or
+  `resolution` (`1K`/`2K`/`4K`). Pixel-addressed models such as `venice-sd35`
+  take `size` as width/height; ratio-addressed models such as `qwen-image-2`
+  get an aspect ratio derived from `size` when it matches the model's list.
+  On pixel models a `resolution` tier becomes the long edge (`1K` is 1024px;
+  `2K`/`4K` get Venice's 1280px cap) and dimensions snap to the model's
+  divisor. Venice applies each model's own defaults for anything you omit.
+- **Uncensored by default**: Venice's `safe_mode` is disabled for this provider
+  so uncensored image models behave as intended.
+- **Editing**: pass one reference image and OpenClaw calls Venice's
+  `/image/edit` endpoint. The default edit model is `firered-image-edit`;
+  override with any Venice `*-edit` model such as `qwen-edit-uncensored`,
+  `seedream-v5-lite-edit`, or `nano-banana-pro-edit`.
+
+List the registered image providers and models at runtime with the tool's
+`list` action:
+
+```text
+/tool image_generate action=list
+```
+
+See [Image generation](/tools/image-generation) for the full tool reference.
+
+## Video generation
+
+Venice video models are available through the `video_generate` tool. Once
+`VENICE_API_KEY` is set, OpenClaw registers Venice as a video-generation
+provider automatically.
+
+- **Default model**: `wan-3-0-text-to-video` for text prompts. When you attach
+  an image and leave `model` unset, OpenClaw switches to the
+  `wan-3-0-image-to-video` sibling. Venice encodes the input mode in the model
+  id (`*-text-to-video`, `*-image-to-video`, `*-reference-to-video`,
+  `*-video-to-video`), so pick the id that matches your inputs when overriding.
+- **Inputs**: a plain or `first_frame` image becomes the start frame, a
+  `last_frame` image becomes the end frame, and `reference_image` images are
+  sent as references (up to 30 on reference-to-video models). Video and audio
+  references map to Venice's `video_url`, `reference_video_urls`, `audio_url`,
+  and `reference_audio_urls`.
+- **Controls**: `durationSeconds` (sent as Venice's `Ns` string, default 5s),
+  `aspectRatio`, `resolution`, and `audio`. Per-model limits come from Venice's
+  live `/models?type=video` constraints, so unsupported values are normalized
+  or rejected before the job is queued. Venice requires an aspect ratio on most
+  models and prices an omitted resolution at its top tier, so when you leave
+  them out OpenClaw sends the model's first listed ratio and its cheapest tier.
+- **Flow**: OpenClaw asks `/video/quote` for a price, queues on `/video/queue`,
+  polls `/video/retrieve` until the mp4 is ready, and deletes the media from
+  Venice once the bytes are safely downloaded. The USD quote is returned in the
+  result metadata as `quoteUsd`; jobs with video inputs skip the quote because
+  Venice prices those from a reference duration OpenClaw cannot compute.
+- **Consent-gated models**: some Seedance models require Venice's one-time
+  consent flow; Venice answers `409` until you accept it in your Venice
+  account. Pick another model or complete the consent there.
+
+See [Video generation](/tools/video-generation) for the full tool reference.
+
 ## Built-in catalog (16 visible models)
 
 <AccordionGroup>
