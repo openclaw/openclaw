@@ -23,6 +23,34 @@ openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 
 Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) after installing.
 
+## How messages reach the agent
+
+```mermaid
+sequenceDiagram
+    participant User as Talk user
+    participant Talk as Nextcloud Talk
+    participant Hook as OpenClaw webhook
+    participant Agent as OpenClaw agent
+    User->>Talk: Send a message
+    Talk->>Hook: Signed webhook
+    Hook->>Hook: Verify signature and store the message durably
+    Hook-->>Talk: HTTP 200 with durable acceptance marker
+    Hook->>Hook: Check sender, room, and mention access
+    alt Message is allowed
+        Hook->>Agent: Route to the agent session
+        Agent-->>Talk: Reply through the Talk API
+        Talk-->>User: Show the reply
+    else Message is not allowed
+        Note over Hook: No agent turn
+    end
+```
+
+The webhook acknowledgement confirms durable receipt, not permission to run an
+agent or completion of its reply. Access checks still apply after acceptance. Unknown DM senders may receive a
+pairing code instead of an agent reply.
+The webhook URL must be reachable from Nextcloud; replies travel back through
+the Talk API rather than in the webhook response.
+
 ## Quick setup (beginner)
 
 1. Install the plugin (above).
