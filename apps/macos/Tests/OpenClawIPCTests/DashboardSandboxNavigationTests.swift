@@ -225,31 +225,37 @@ struct DashboardSandboxNavigationTests {
         "https://widgets.example/mcp-app-sandbox?csp=encoded",
         "http://127.0.0.1:18790/mcp-app-sandbox?csp=encoded",
     ])
-    func `sandbox navigation requires a trusted dashboard subframe`(_ address: String) throws {
+    func `sandbox navigation requires a subframe`(_ address: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
         let sandbox = try #require(URL(string: address))
         #expect(DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: sandbox, dashboardURL: dashboard, isMainFrame: false))
         #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: true, isTrustedDashboardSource: true))
-        #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
+            to: sandbox, dashboardURL: dashboard, isMainFrame: true))
     }
 
     @Test(arguments: [
-        "https://widgets.example/mcp-app",
-        "https://widgets.example/mcp-app-sandbox/",
-        "https://widgets.example//mcp-app-sandbox",
-        "https://widgets.example/%6dcp-app-sandbox",
-        "https://widgets.example/mcp-app-sandbox%2f",
+        "https://status.example/dashboard",
+        "http://127.0.0.1:18790/status",
+    ])
+    func `website navigation requires a subframe`(_ address: String) throws {
+        let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
+        let website = try #require(URL(string: address))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: website, dashboardURL: dashboard, isMainFrame: false))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: website, dashboardURL: dashboard, isMainFrame: true))
+    }
+
+    @Test(arguments: [
         "file:///mcp-app-sandbox",
         "custom://widgets.example/mcp-app-sandbox",
     ])
-    func `sandbox navigation rejects noncanonical or unsafe URLs`(_ address: String) throws {
+    func `dashboard subframes reject unsafe URLs`(_ address: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
-        let sandbox = try #require(URL(string: address))
+        let url = try #require(URL(string: address))
         #expect(!DashboardWindowController.shouldAllowNavigation(
-            to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: url, dashboardURL: dashboard, isMainFrame: false))
     }
 
     @Test func `sandbox navigation rejects user information`() throws {
@@ -257,11 +263,11 @@ struct DashboardSandboxNavigationTests {
         var sandbox = try #require(URLComponents(string: "https://widgets.example/mcp-app-sandbox"))
         sandbox.user = "fixture-user"
         #expect(try !DashboardWindowController.shouldAllowNavigation(
-            to: #require(sandbox.url), dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: #require(sandbox.url), dashboardURL: dashboard, isMainFrame: false))
         sandbox.user = nil
         sandbox.password = "fixture-password"
         #expect(try !DashboardWindowController.shouldAllowNavigation(
-            to: #require(sandbox.url), dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            to: #require(sandbox.url), dashboardURL: dashboard, isMainFrame: false))
     }
 
     @Test(arguments: ["/control/", "/team%20space/"])
@@ -273,6 +279,53 @@ struct DashboardSandboxNavigationTests {
         #expect(DashboardWindowController.isTrustedLinkSource(descendant, dashboardURL: dashboard))
         let encodedSeparator = try #require(URL(string: "https://openclaw.example\(mountPath.dropLast())%2Fchat"))
         #expect(!DashboardWindowController.isTrustedLinkSource(encodedSeparator, dashboardURL: dashboard))
+    }
+
+    @Test func `dashboard WebKit loads a website subframe`() async throws {
+        let website = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><body><script>
+            if (location.pathname === '/status') {
+              location.assign('/status/next');
+            } else {
+              parent.postMessage('website-ready', '*');
+            }
+            </script></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { website.stop() }
+        let websiteURL = website.url("/status")
+        let dashboard = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><body><script>
+            const frame = document.createElement('iframe');
+            addEventListener('message', event => {
+              if (event.source === frame.contentWindow && event.data === 'website-ready') {
+                document.body.dataset.websiteReady = 'true';
+              }
+            });
+            frame.src = '\(websiteURL.absoluteString)';
+            document.body.append(frame);
+            </script></body></html>
+            """,
+            contentSecurityPolicy:
+            "default-src 'none'; script-src 'unsafe-inline'; frame-src http://127.0.0.1:\(website.port)")
+        defer { dashboard.stop() }
+        let dashboardURL = dashboard.url("/control/")
+        let controller = DashboardWindowController(
+            url: dashboardURL,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture-only", password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+
+        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        try await self.waitForDocument(
+            controller,
+            url: dashboardURL,
+            ready: "document.body.dataset.websiteReady === 'true'")
+        #expect(controller.webView.url == dashboardURL)
     }
 
     @Test func `dashboard WebKit loads the isolated sandbox and its inner document`() async throws {

@@ -54,28 +54,20 @@ extension DashboardWindowController {
     static func shouldAllowNavigation(
         to url: URL,
         dashboardURL: URL,
-        isMainFrame: Bool,
-        isTrustedDashboardSource: Bool = false) -> Bool
+        isMainFrame: Bool) -> Bool
     {
         guard let scheme = url.scheme?.lowercased() else { return true }
         if scheme == "about" || scheme == "blob" || scheme == "data" {
             return true
         }
         guard scheme == "http" || scheme == "https", url.user == nil, url.password == nil else { return false }
-        let host = url.host?.lowercased()
         if self.sameOrigin(url, dashboardURL) {
             return true
         }
-        guard !isMainFrame,
-              isTrustedDashboardSource,
-              host?.isEmpty == false
-        else {
-            return false
-        }
-        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
-            components[0] == "embed" &&
-            (components[1] == "channel" || components[1] == "thread"))
+        // Website widgets are sandboxed by the Control UI and receive no native
+        // bridge. Let their documents, links, and nested frames behave like they
+        // do in a browser without allowing them to replace the dashboard.
+        return !isMainFrame && url.host?.isEmpty == false
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
