@@ -3994,6 +3994,13 @@ export function createSelectedNodeTestShardBundles(
   options: Pick<NodeTestPlanOptions, "runnerBackend"> &
     RuntimeTestSelection & { onFallback?: (reason: string) => void } = {},
 ): CompactNodeTestShard[] | null {
+  if (options.runnerBackend === "runson") {
+    const selected = createSelectedNodeTestShardBundles(targets, {
+      ...options,
+      runnerBackend: "hybrid",
+    });
+    return selected && routeRunsOnJobs(selected, COMPACT_NODE_TEST_JOB_CAP);
+  }
   const selected = new Set(
     targets.filter((file) => !isCiProofTestFile(file) && isRuntimeTestFileIncluded(file, options)),
   );
@@ -4049,11 +4056,12 @@ export function createSelectedNodeTestShardBundles(
     }
     owners.add(matches[0]!);
   }
-  // Expansion owns multi-config families and fixed stripes. Project its final
-  // jobs so narrowing cannot increase workers through serial-job resource scaling.
+  // The complete plan owns process boundaries and resource policies. Its prices
+  // are planning facts; a selected subset must not reserve every original row.
+  const groupSeconds = new Map<NodeTestShardGroup, number>();
   const full =
     selected.size > tooling.size
-      ? createCompactNodeTestShardBundles(shards, options, "pull-request")
+      ? createCompactNodeTestShardBundles(shards, { ...options, groupSeconds }, "pull-request")
       : [];
   const canonicalGroups = full.flatMap((shard) => shard.groups);
   const isWholeToolingPair = (group: NodeTestShardGroup) =>
@@ -4081,6 +4089,78 @@ export function createSelectedNodeTestShardBundles(
     const owner = matches[0]!;
     selectedGroups.set(owner, [...(selectedGroups.get(owner) ?? []), target]);
   }
+  const canonicalFamilies = new Map<NodeTestShardGroup, string | undefined>();
+  const projected = full.flatMap((shard) => {
+    let retainedSeconds = 0;
+    const groups = shard.groups.flatMap((group) => {
+      const seconds = groupSeconds.get(group)!;
+      const files = selectedGroups.get(group);
+      if (!files?.length) {
+        return [];
+      }
+      // Artifact descriptors and opaque paired configs retain their complete owner.
+      if (group.requiresDist || isWholeToolingPair(group)) {
+        retainedSeconds += seconds;
+        canonicalFamilies.set(group, compactStripeFamily(group));
+        return [group];
+      }
+      const includePatterns =
+        group.includePatterns?.filter((file) => files.includes(file)) ?? files;
+      const selectedConfigs = group.configs.filter((config) =>
+        files.some((file) => configs.get(file) === config),
+      );
+      const inventory =
+        group.includePatterns ??
+        listWholeConfigFiles(group.shard_name) ??
+        (group.configs.length === 1 ? listNodeTestConfigFiles(group.configs[0]!) : undefined);
+      // Preserve opaque prices. Known inventories use the existing relative file
+      // weights, retaining an indivisible-file floor and separate build admission.
+      const weight = (paths: readonly string[]) =>
+        paths.reduce((total, file) => total + stripeFileWeight(file), 0);
+      retainedSeconds += inventory?.length
+        ? Math.min(
+            seconds,
+            Math.max(
+              (seconds * weight(includePatterns)) / weight(inventory),
+              DEFAULT_WHOLE_GROUP_SECONDS *
+                (options.runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
+              ...includePatterns.map(stripeFileWeight),
+            ),
+          )
+        : seconds;
+      const { timingKeys } = createCompactSplitTimingGeneration({
+        configs: selectedConfigs,
+        env: group.env,
+        parentShardName: `changed-${group.shard_name}`,
+        stripes: [includePatterns],
+      });
+      const projectedGroup = {
+        ...group,
+        configs: selectedConfigs,
+        includePatterns,
+        timing_key: timingKeys[0]!,
+      };
+      canonicalFamilies.set(projectedGroup, compactStripeFamily(group));
+      return [projectedGroup];
+    });
+    return groups.length
+      ? [
+          {
+            ...shard,
+            checkName: `checks-node-changed-${shard.shardName}`,
+            shardName: `changed-${shard.shardName}`,
+            groups,
+            predictedSeconds: Math.ceil(
+              Math.min(
+                shard.predictedSeconds!,
+                retainedSeconds +
+                  compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+              ),
+            ),
+          },
+        ]
+      : [];
+  });
   return [
     ...(tooling.size
       ? createCompactNodeTestShardBundles(
@@ -4090,53 +4170,96 @@ export function createSelectedNodeTestShardBundles(
           tooling,
         )
       : []),
-    ...full.flatMap((shard) => {
-      const groups = shard.groups.flatMap((group) => {
-        const files = selectedGroups.get(group);
-        if (!files?.length) {
-          return [];
-        }
-        // Build-artifact descriptors and the paired tooling configs retain
-        // their complete execution owner instead of becoming Node file jobs.
-        if (group.requiresDist || isWholeToolingPair(group)) {
-          return [group];
-        }
-        const includePatterns =
-          group.includePatterns?.filter((file) => files.includes(file)) ?? files;
-        const selectedConfigs = group.configs.filter((config) =>
-          files.some((file) => configs.get(file) === config),
-        );
-        // Refit folds complete selector generations into their parent. Keep that
-        // parent separate: a complete subset is not a full-suite observation.
-        const { timingKeys } = createCompactSplitTimingGeneration({
-          configs: selectedConfigs,
-          env: group.env,
-          parentShardName: `changed-${group.shard_name}`,
-          stripes: [includePatterns],
-        });
-        return [
-          {
-            ...group,
-            configs: selectedConfigs,
-            includePatterns,
-            timing_key: timingKeys[0]!,
-          },
-        ];
-      });
-      // Retain the original admission floor and preparation until subset costs
-      // have independent measurements; fewer files alone do not price cold imports.
-      return groups.length
-        ? [
-            {
-              ...shard,
-              checkName: `checks-node-changed-${shard.shardName}`,
-              shardName: `changed-${shard.shardName}`,
-              groups,
-            },
-          ]
-        : [];
-    }),
+    ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies),
   ];
+}
+
+function compactPreparationSeconds(
+  mode: NodeTestPretestBuildMode | undefined,
+  runnerBackend: string | undefined,
+) {
+  return mode
+    ? Math.round(
+        VITEST_PRETEST_BUILD_SECONDS[mode] *
+          (runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
+      )
+    : 0;
+}
+
+function packSelectedNodeTestJobs(
+  jobs: CompactNodeTestShard[],
+  runnerBackend: string | undefined,
+  canonicalFamilies: ReadonlyMap<NodeTestShardGroup, string | undefined>,
+) {
+  const policy = (job: CompactNodeTestShard) =>
+    JSON.stringify([
+      job.runner,
+      job.requiresDist,
+      job.pretestBuildMode,
+      job.planConcurrency,
+      job.groups.some(isExclusiveCompactGroup),
+      Object.entries(job.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+      job.timeoutMinutes,
+    ]);
+  const seconds = (bin: readonly CompactNodeTestShard[]) =>
+    bin.reduce(
+      (total, job) =>
+        total +
+        job.predictedSeconds! -
+        compactPreparationSeconds(job.pretestBuildMode, runnerBackend),
+      0,
+    ) + compactPreparationSeconds(bin[0]!.pretestBuildMode, runnerBackend);
+  const cap = (bin: readonly CompactNodeTestShard[]) => {
+    const first = bin[0]!;
+    const groups = bin.flatMap((job) => job.groups);
+    const hostedBuild = runnerBackend === "github" && first.pretestBuildMode;
+    if (groups.some(isExclusiveCompactGroup) && !hostedBuild) {
+      return runnerBackend === "hybrid" &&
+        !first.pretestBuildMode &&
+        bin.every((job) => job.predictedSeconds! <= COMPACT_EXCLUSIVE_JOB_SECONDS) &&
+        groups.every((group) => /^agentic-cli(?:-process-hosted-\d+)?$/u.test(group.shard_name))
+        ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
+        : COMPACT_EXCLUSIVE_JOB_SECONDS;
+    }
+    if (first.pretestBuildMode === "runtime" && runnerBackend === "hybrid") {
+      return COMPACT_HYBRID_RUNTIME_JOB_SECONDS;
+    }
+    if (first.planConcurrency === 2) {
+      return COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS;
+    }
+    return usesExpandedRunnerProfile(runnerBackend)
+      ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
+      : resolveCiNodeTestRunnerClass(first.runner).secondsCap;
+  };
+  // Whole projected jobs are indivisible: regrouping cannot reduce a child's
+  // prior concurrency envelope and accidentally unlock more workers.
+  return packNodeTestGroups(
+    jobs.toSorted(
+      (a, b) => b.predictedSeconds! - a.predictedSeconds! || a.checkName.localeCompare(b.checkName),
+    ),
+    (bin, job) => {
+      if (job.requiresDist || policy(bin[0]) !== policy(job)) {
+        return false;
+      }
+      const combined = [...bin, job];
+      const groups = combined.flatMap((entry) => entry.groups);
+      const families = groups
+        .map((group) => canonicalFamilies.get(group))
+        .filter((family) => family !== undefined);
+      return (
+        groups.length <= COMPACT_NODE_TEST_JOB_GROUPS &&
+        (job.planConcurrency === 1 || new Set(families).size === families.length) &&
+        seconds(combined) <= cap(combined)
+      );
+    },
+  )
+    .map((bin) =>
+      Object.assign(bin[0], {
+        groups: bin.flatMap((job) => job.groups),
+        predictedSeconds: Math.ceil(seconds(bin)),
+      }),
+    )
+    .toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
 
 function routeRunsOnJobs(
@@ -4214,7 +4337,7 @@ function routeRunsOnJobs(
 
 function createCompactNodeTestShardBundles(
   sourceShards: readonly NodeTestShard[],
-  options: NodeTestPlanOptions,
+  options: NodeTestPlanOptions & { groupSeconds?: Map<NodeTestShardGroup, number> },
   compactMode: CompactNodeTestPlanMode,
   selectedToolingFiles?: ReadonlySet<string>,
   splitHostedToolingTails = false,
@@ -4425,13 +4548,9 @@ function createCompactNodeTestShardBundles(
   const estimateStripeSeconds = (group: NodeTestShardGroup) => prepareStripe(group).seconds;
   const estimateBinSeconds = (groups: NodeTestShardGroup[]) => {
     const mode = mergeVitestPretestBuildModes(groups.map((group) => group.pretestBuildMode));
-    const buildSeconds = mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0;
     return (
       groups.reduce((seconds, group) => seconds + estimateStripeSeconds(group), 0) +
-      Math.round(
-        buildSeconds *
-          (options.runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
-      )
+      compactPreparationSeconds(mode, options.runnerBackend)
     );
   };
   const isHostedToolingGroup = (group: NodeTestShardGroup) =>
@@ -4939,6 +5058,23 @@ function createCompactNodeTestShardBundles(
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
     );
+  }
+  if (options.groupSeconds) {
+    for (const job of measuredJobs) {
+      const seconds = job.groups.map(estimateStripeSeconds);
+      const total = seconds.reduce((sum, value) => sum + value, 0);
+      const testSeconds = Math.max(
+        0,
+        job.predictedSeconds! -
+          compactPreparationSeconds(job.pretestBuildMode, options.runnerBackend),
+      );
+      job.groups.forEach((group, index) =>
+        options.groupSeconds!.set(
+          group,
+          total > 0 ? (testSeconds * seconds[index]!) / total : testSeconds / job.groups.length,
+        ),
+      );
+    }
   }
   return measuredJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
