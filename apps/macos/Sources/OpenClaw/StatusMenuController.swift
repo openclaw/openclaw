@@ -48,9 +48,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         StatusMenuAppearance.pin(self.menu)
 
         let renderer = StatusMenuRenderer(menu: self.menu, state: self.state, approvalQueue: self.approvals)
-        renderer.onInstallUpdate = { [weak self] in
-            self?.updater.checkForUpdates(nil)
-        }
         self.renderer = renderer
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -217,6 +214,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             mainSessionKey: self.activityStore.mainSessionKey,
             approvals: self.approvals.requests,
             gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries))
+        if self.updater.isAvailable {
+            self.renderer?.onInstallUpdate = { [weak self] in
+                guard let self, self.updater.isAvailable else { return }
+                self.updater.checkForUpdates(nil)
+            }
+        } else {
+            self.renderer?.onInstallUpdate = nil
+        }
         self.renderer?.isSleeping = statusMenuGatewayIsSleeping(state: self.state)
         self.renderer?.reconcile(StatusMenuDescriptor.build(from: snapshot))
     }
