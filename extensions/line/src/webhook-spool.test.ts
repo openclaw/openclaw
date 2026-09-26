@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   observeChannelIngressQueueWrite,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -138,8 +139,19 @@ describe("LINE webhook spool", () => {
           activeDeliveries -= 1;
         }
       });
-      const listPending = vi.spyOn(queue, "listPending");
-      const spool = createSpool(queue, deliver);
+      const factory = vi.spyOn(channelOutbound, "createChannelIngressMonitor");
+      let spool: ReturnType<typeof createSpool>;
+      let monitor: ReturnType<typeof channelOutbound.createChannelIngressMonitor>;
+      try {
+        spool = createSpool(queue, deliver);
+        const result = factory.mock.results[0];
+        if (result?.type !== "return") {
+          throw new Error("LINE spool did not create its ingress monitor");
+        }
+        monitor = result.value;
+      } finally {
+        factory.mockRestore();
+      }
       const firstBatch = Array.from({ length: 8 }, (_, index) =>
         createEvent({
           webhookEventId: `event-concurrency-${index}`,
@@ -152,15 +164,9 @@ describe("LINE webhook spool", () => {
       try {
         await spool.accept({ destination: "destination-1", events: firstBatch });
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(8));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-
-        const drainScansBeforeNinth = listPending.mock.calls.length;
+        await monitor.waitForPumpIdle();
         await spool.accept(callback(ninth));
-        await vi.waitFor(() =>
-          expect(listPending.mock.calls.length).toBeGreaterThan(drainScansBeforeNinth),
-        );
+        await monitor.waitForPumpIdle();
 
         expect(deliver).toHaveBeenCalledTimes(8);
         expect(maxActiveDeliveries).toBe(8);

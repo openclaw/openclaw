@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cleanupStartupPluginSourceCaptures } from "../commands/startup-plugin-source-captures.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as census from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -111,6 +112,147 @@ async function abandonCapture(stateDir: string, source: string) {
   expect(fs.readFileSync(captured.capturedFile, "utf8")).toBe(capturedSource);
   return captured;
 }
+
+it("retains mapped addons once through disposal and exit, then reclaims them at startup", async () => {
+  const stateDir = temp.make("plugin-capture-loaded-");
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...runtimeArgs,
+      "--input-type=module",
+      "-e",
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import fsp from "node:fs/promises";
+      import { createRequire } from "node:module";
+      import path from "node:path";
+      const require = createRequire(import.meta.url);
+      const exports = {};
+      const failure = new Error("synthetic addon initialization failed");
+      const dlopen = process.dlopen;
+      process.dlopen = function(module, file, flags) {
+        if (!/synthetic-addon-[0-3]\\.node$/.test(file)) return dlopen.apply(this, arguments);
+        if (file.endsWith("2.node") || file.endsWith("3.node")) {
+          assert.equal(this, process);
+          assert.equal(flags, 17);
+        }
+        if (file.endsWith("3.node")) {
+          captures[3].dispose();
+          throw failure;
+        }
+        module.exports = exports;
+        return exports;
+      };
+      const { createPluginSourceCapture } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.metadataCapture).href)});
+      const { createPluginNativeCaptureRoot, retainPluginSourceCaptureInstance } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.captureDirectory).href)});
+      const { GatewayScheduler } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.scheduler).href)});
+      const captures = [createPluginSourceCapture(), createPluginSourceCapture(), createPluginNativeCaptureRoot(), createPluginNativeCaptureRoot()];
+      const files = captures.map((capture, index) => path.join(capture.directory, "synthetic-addon-" + index + ".node"));
+      for (const file of files) fs.writeFileSync(file, "synthetic mapped image");
+      const warnings = [];
+      process.emitWarning = warning => warnings.push(String(warning));
+      const remove = fs.rmSync;
+      const removeAsync = fsp.rm;
+      let attempts = 0;
+      const check = target => {
+        if (files.some(file => file.startsWith(String(target) + path.sep))) {
+          attempts++;
+          throw Object.assign(new Error("synthetic mapped-image unlink"), { code: "EPERM" });
+        }
+      };
+      fs.rmSync = (target, options) => { check(target); return remove(target, options); };
+      fsp.rm = async (target, options) => { check(target); return removeAsync(target, options); };
+      for (const file of files.slice(0, 2)) {
+        assert.equal(require(file), exports);
+        delete require.cache[file];
+      }
+      assert.equal(process.dlopen({}, path.toNamespacedPath(files[2]), 17), exports);
+      assert.throws(() => process.dlopen({}, files[3], 17), error => error === failure);
+      for (const [index, capture] of captures.entries()) {
+        if (index % 2) await capture.disposeAsync();
+        else capture.dispose();
+      }
+      const maintenance = retainPluginSourceCaptureInstance();
+      const scheduler = new GatewayScheduler();
+      try {
+        await maintenance.startMaintenance(scheduler);
+        assert.notEqual(scheduler.nextWakeAtMs, null);
+      } finally {
+        try {
+          await maintenance.releaseAsync();
+          assert.equal(scheduler.nextWakeAtMs, null);
+        } finally {
+          await scheduler.stop();
+        }
+      }
+      assert(files.every(file => fs.existsSync(file)));
+      // Registered after the capture owner, so this includes its terminal cleanup.
+      process.on("exit", () => process.stdout.write(JSON.stringify({
+        directories: captures.map(capture => capture.directory), warnings, attempts,
+      })));
+      `,
+    ],
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  const observed: { directories: string[]; warnings: string[]; attempts: number } = JSON.parse(
+    result.stdout,
+  );
+  expect(observed.attempts).toBe(0);
+  expect(observed.warnings).toHaveLength(1);
+  expect(observed.warnings[0]).toContain("retained-by-loaded-module");
+  expect(result.stderr).not.toContain("cleanup failed");
+  expect(observed.directories.every((directory) => fs.existsSync(directory))).toBe(true);
+  // A new process has no mapped image and acquires released custody; no one-hour wait.
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  await cleanupStartupPluginSourceCaptures({
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  });
+  expect(warning).not.toHaveBeenCalled();
+  expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
+});
+
+it("disposes captures while sibling workers remain active", () => {
+  const stateDir = temp.make("plugin-capture-active-workers-");
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...runtimeArgs,
+      "--input-type=module",
+      "-e",
+      `
+      import { once } from "node:events";
+      import { Worker } from "node:worker_threads";
+      import { createPluginSourceCapture } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.metadataCapture).href)};
+      const workers = Array.from({ length: 2 }, () => new Worker(
+        "const { parentPort } = require('node:worker_threads'); parentPort.on('message', () => parentPort.close()); parentPort.postMessage('ready');",
+        { eval: true, execArgv: [] },
+      ));
+      await Promise.all(workers.map(worker => once(worker, "message")));
+      try {
+        for (let reload = 0; reload < 12; reload++) {
+          createPluginSourceCapture().dispose();
+          await createPluginSourceCapture().disposeAsync();
+        }
+      } finally {
+        const exits = workers.map(worker => once(worker, "exit"));
+        for (const worker of workers) worker.postMessage("close");
+        await Promise.all(exits);
+      }
+      process.stdout.write("captures disposed with workers alive");
+      `,
+    ],
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, encoding: "utf8", timeout: 15_000 },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("captures disposed with workers alive");
+  expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
+});
 
 it.each(["natural", "failure", "explicit", "signal"])(
   "reclaims process-owned captures on %s exit",

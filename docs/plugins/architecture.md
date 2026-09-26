@@ -311,8 +311,23 @@ still relies on startup reclamation. Plugin cleanup owns this capture subtree;
 reclamation removes captured payload before retiring the token so a partial deletion
 remains retryable. The token closes before its directory is removed, including on Windows.
 
-Startup and hourly cleanup inspect this owned subtree. An instance becomes
-eligible after one hour. For token-bearing instances, cleanup must
+A native library mapped in the current process retains its capture and token
+through process exit, even after its JavaScript module cache entry is removed.
+Cleanup records `retained-by-loaded-module` once for that capture lifetime instead
+of trying to unlink a loaded Windows image. Unchanged native package identities
+continue to share the retained payload across reloads. Native-load attempts also
+retain their capture when initialization throws: the native image can remain
+mapped after the initialization error.
+
+Before runtime plugin loading, startup attempts receipt-aware cleanup under
+exclusive maintenance ownership. It can reclaim a retired, unlocked instance
+immediately, including unpublished native payloads retained until the previous
+process exited. Published native payloads still referenced by the installed index
+remain available. Busy maintenance or cleanup failures produce a warning and
+startup continues; observational reads leave captures untouched.
+
+Hourly cleanup also inspects this owned subtree. An instance becomes eligible
+after one hour. Age alone never authorizes removal: for token-bearing instances, cleanup must
 also acquire the existing token's exclusive native lease to prove released custody.
 This works after process termination or reboot without PID or boot-namespace records
 and preserves the same cleanup contract for shipped `owner.sqlite` markers.

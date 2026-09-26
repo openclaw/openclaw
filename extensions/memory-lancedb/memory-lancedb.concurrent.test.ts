@@ -28,7 +28,7 @@ function initializeInChild(dbPath: string): Promise<void> {
     import { MemoryDB } from ${JSON.stringify(moduleUrl)};
     const db = new MemoryDB(process.argv[1], 4);
     try {
-      await db.count("concurrent-test-agent");
+      await db.list("concurrent-test-agent");
     } finally {
       db.close();
     }
