@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { AssistantMessage, AssistantMessageEvent, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
@@ -371,7 +372,7 @@ describe("worker native inference output owner", () => {
     const result = createNativeInferenceStreamGuard(native())(() => source);
     const events: AssistantMessageEvent[] = [];
     const expectedText = "synthetic-ordinary text";
-    const earlyText = Promise.withResolvers<void>();
+    const earlyText = createDeferred();
     let streamedText = "";
     const drain = (async () => {
       for await (const event of result) {
