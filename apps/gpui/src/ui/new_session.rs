@@ -50,8 +50,6 @@ pub(super) struct NewSessionUi {
     pub branches: BranchesResult,
     pub branches_loading: bool,
     pub branch_suggestions: bool,
-    pub model_metadata: std::collections::HashMap<String, serde_json::Value>,
-    pub model_policy: Option<serde_json::Value>,
     pub catalog_loading: bool,
     pub directory_loading: bool,
     pub directory: Option<DirectoryResult>,
@@ -105,8 +103,13 @@ impl NewSessionUi {
                     this.new_session.branch_suggestions = false;
                 }
                 if matches!(event, InputEvent::Change) && !this.new_session.locked() {
-                    this.new_session.draft.base_ref =
-                        this.new_session.base_ref_input.read(cx).value().to_string();
+                    let value = this.new_session.base_ref_input.read(cx).value().to_string();
+                    if value != this.new_session.draft.base_ref
+                        && this.new_session.picker == Some(DraftPicker::Checkout)
+                    {
+                        this.new_session.branch_suggestions = true;
+                    }
+                    this.new_session.draft.base_ref = value;
                 }
                 cx.notify();
             }),
@@ -152,8 +155,6 @@ impl NewSessionUi {
             branches: BranchesResult::default(),
             branches_loading: false,
             branch_suggestions: false,
-            model_metadata: Default::default(),
-            model_policy: None,
             catalog_loading: false,
             directory_loading: false,
             directory: None,
@@ -205,8 +206,6 @@ impl NewSessionUi {
         self.environments = Default::default();
         self.projects.clear();
         self.groups.clear();
-        self.model_metadata.clear();
-        self.model_policy = None;
         self.directory = None;
         self.sync_toolbar(None);
     }

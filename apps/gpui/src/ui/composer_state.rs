@@ -1,6 +1,6 @@
 use super::AppView;
 use crate::{
-    gateway::composer_rpc::{ChatSend, ModelChoice},
+    gateway::composer_rpc::{ChatSend, ModelChoice, ModelSelectionPolicy, ModelsResult},
     model::{
         attachments::Attachment,
         chat::{Message, RequestScope},
@@ -25,7 +25,7 @@ pub(super) struct PendingSend {
 #[derive(Default)]
 pub(super) struct CatalogEntry {
     pub commands: Option<Vec<Command>>,
-    pub models: Option<Vec<ModelChoice>>,
+    pub models: Option<ModelsResult>,
 }
 
 pub(super) struct ComposerUi {
@@ -36,6 +36,7 @@ pub(super) struct ComposerUi {
     pub recall: Recall,
     pub commands: Vec<Command>,
     pub models: Vec<ModelChoice>,
+    pub model_selection_policy: Option<ModelSelectionPolicy>,
     pub model_search: Entity<InputState>,
     pub model_open: bool,
     pub effort_open: bool,
@@ -65,6 +66,7 @@ impl ComposerUi {
             recall: Recall::default(),
             commands: Vec::new(),
             models: Vec::new(),
+            model_selection_policy: None,
             model_search,
             model_open: false,
             effort_open: false,

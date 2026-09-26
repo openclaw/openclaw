@@ -57,7 +57,7 @@ impl AppView {
             let cancel = form.clone();
             dialog
                 .title("Add MCP server")
-                .w(px(480.))
+                .w(px(tokens::CONNECTOR_DIALOG_WIDTH))
                 .close_button(!busy)
                 .overlay_closable(!busy)
                 .child(form.clone())
@@ -170,7 +170,7 @@ fn finish_connector(
 impl Render for ConnectorForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::get(cx);
-        let mut availability = div().h_flex().gap_2();
+        let mut availability = div().h_flex().gap(px(tokens::FORM_ACTION_GAP));
         for (session_only, label) in [(true, "This session"), (false, "Everywhere")] {
             availability = availability.child(
                 Button::new(if session_only {
@@ -189,7 +189,7 @@ impl Render for ConnectorForm {
                 })),
             );
         }
-        let mut transports = div().h_flex().gap_1();
+        let mut transports = div().h_flex().gap(px(tokens::FORM_SEGMENT_GAP));
         for (transport, label) in [
             ("streamable-http", "HTTP"),
             ("sse", "SSE"),
@@ -210,14 +210,14 @@ impl Render for ConnectorForm {
         }
         div()
             .v_flex()
-            .gap_3()
-            .text_size(px(13.))
+            .gap(px(tokens::FORM_GAP))
+            .text_size(px(tokens::FORM_TEXT_SIZE))
             .child("Configure the server and choose where it is enabled.")
             .child("Availability")
             .child(availability)
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(tokens::DETAIL_TEXT_SIZE))
                     .text_color(p.muted)
                     .child(if self.session_only {
                         "The server is saved globally disabled and enabled only for this session."
@@ -248,7 +248,7 @@ impl Render for ConnectorForm {
                 div()
                     .h_flex()
                     .justify_end()
-                    .gap_2()
+                    .gap(px(tokens::FORM_ACTION_GAP))
                     .child(
                         Button::new("connector-add")
                             .primary()

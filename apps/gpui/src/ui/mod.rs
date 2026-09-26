@@ -3,6 +3,7 @@ mod app_view;
 mod attention;
 mod attention_state;
 mod browser_panel;
+pub(crate) mod components;
 mod composer;
 mod composer_actions;
 mod composer_capabilities;

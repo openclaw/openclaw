@@ -159,7 +159,7 @@ pub struct Agent {
     pub workspace_git: bool,
     pub model: Option<serde_json::Value>,
     #[serde(rename = "agentRuntime")]
-    pub agent_runtime: Option<serde_json::Value>,
+    pub agent_runtime: Option<super::composer_rpc::AgentRuntime>,
     #[serde(rename = "defaultPermissionMode")]
     pub default_permission_mode: Option<String>,
 }

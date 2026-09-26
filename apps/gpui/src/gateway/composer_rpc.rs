@@ -31,7 +31,10 @@ pub struct ModelChoice {
     pub name: String,
     pub provider: String,
     pub available: Option<bool>,
+    pub unavailable_reason: Option<String>,
     pub manual_selection_allowed: Option<bool>,
+    pub agent_runtime: Option<AgentRuntime>,
+    pub runtime_choices: Vec<ModelRuntimeChoice>,
     pub thinking_levels: Vec<ThinkingLevel>,
     pub thinking_default: Option<String>,
 }
@@ -53,10 +56,42 @@ pub struct ThinkingLevel {
     pub label: String,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentRuntime {
+    pub id: String,
+    pub device_placement: Option<DevicePlacement>,
+    pub cloud_placement_supported: Option<bool>,
+    pub cloud_placement_execution_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePlacement {
+    pub required_node_commands: Vec<String>,
+    pub consumes_worker_slot: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ModelRuntimeChoice {
+    pub available: Option<bool>,
+    pub unavailable_reason: Option<String>,
+    pub agent_runtime: Option<AgentRuntime>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ModelSelectionPolicy {
+    pub restricted: bool,
+    pub default_model: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ModelsResult {
     pub models: Vec<ModelChoice>,
+    pub model_selection_policy: Option<ModelSelectionPolicy>,
 }
 
 #[derive(Clone, Serialize)]

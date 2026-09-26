@@ -67,6 +67,7 @@ impl AppView {
         self.composer_state.set_attachments(Vec::new());
         self.composer_state.commands.clear();
         self.composer_state.models.clear();
+        self.composer_state.model_selection_policy = None;
         self.composer_state.catalog_cache.clear();
         self.composer_state.close_popups();
         self.composer_state.recall.reset();
@@ -166,12 +167,14 @@ impl AppView {
             && let (Some(commands), Some(models)) = (&entry.commands, &entry.models)
         {
             self.composer_state.commands = commands.clone();
-            self.composer_state.models = models.clone();
+            self.composer_state.models = models.models.clone();
+            self.composer_state.model_selection_policy = models.model_selection_policy.clone();
             self.composer_state.catalogs_loading = false;
             return;
         }
         self.composer_state.commands.clear();
         self.composer_state.models.clear();
+        self.composer_state.model_selection_policy = None;
         self.composer_state.catalogs_loading = true;
         let params = CommandsList {
             context: CatalogScope {
@@ -239,11 +242,13 @@ impl AppView {
                                 .then_with(|| a.name.cmp(&b.name))
                         });
                         this.composer_state.models = result.models.clone();
+                        this.composer_state.model_selection_policy =
+                            result.model_selection_policy.clone();
                         this.composer_state
                             .catalog_cache
                             .entry(cache_key)
                             .or_default()
-                            .models = Some(result.models);
+                            .models = Some(result);
                     }
                     Err(error) => {
                         this.composer_state.error = Some(format!("Models unavailable: {error}"))

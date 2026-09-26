@@ -1,48 +1,10 @@
 use super::*;
+use crate::model::composer_library::{LibraryEntry, LibraryList, LibraryRead};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui_kit::component::{
     WindowExt,
     input::{Input, InputState, Textarea, TextareaState},
 };
-use serde::Deserialize;
-
-#[derive(Clone, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct LibraryEntry {
-    skill_id: String,
-    revision: String,
-    slug: String,
-    owner_label: String,
-    description: String,
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct LibrarySession {
-    selections: Vec<LibraryEntry>,
-    attachable: Vec<LibraryEntry>,
-}
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct LibraryList {
-    default_target: String,
-    default_selection_limit: u32,
-    default_selection_notice: Option<String>,
-    session: Option<LibrarySession>,
-}
-#[derive(Clone, Default, Deserialize)]
-#[serde(default)]
-struct LibraryFile {
-    path: String,
-    content: String,
-    encoding: Option<String>,
-}
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct LibraryRead {
-    entry: LibraryEntry,
-    content: String,
-    files: Vec<LibraryFile>,
-}
 
 #[derive(Default)]
 pub(super) struct LibraryUi {
@@ -156,7 +118,7 @@ impl AppView {
                             window.open_dialog(cx, move |dialog, _, _| {
                                 dialog
                                     .title(title.clone())
-                                    .w(px(960.))
+                                    .w(px(tokens::LIBRARY_DIALOG_WIDTH))
                                     .child(viewer.clone())
                             });
                         });
@@ -191,13 +153,13 @@ impl AppView {
         let can_write = self.composer_has_scope("operator.write");
         let mut rows = Vec::new();
         if id.is_none() {
-            rows.push(menu_note("Selected for this session", p).into_any_element());
+            rows.push(menu_note("Selected for this session", cx).into_any_element());
         }
         if busy {
-            rows.push(menu_note("Loading…", p).into_any_element());
+            rows.push(menu_note("Loading…", cx).into_any_element());
         }
         if let Some(error) = &library.error {
-            rows.push(menu_note(error, p).text_color(p.danger).into_any_element());
+            rows.push(menu_note(error, cx).text_color(p.danger).into_any_element());
             rows.push(
                 menu_row("library-reload", "Retry", None, None, None, false, cx)
                     .on_click(cx.listener(|this, _, _, cx| this.load_composer_library(cx)))
@@ -205,7 +167,7 @@ impl AppView {
             );
         }
         if let Some(notice) = &library.notice {
-            rows.push(menu_note(notice, p).into_any_element());
+            rows.push(menu_note(notice, cx).into_any_element());
         }
         if let Some(id) = id {
             if let Some(pin) = session.and_then(|s| s.selections.iter().find(|p| p.skill_id == id))
@@ -218,7 +180,7 @@ impl AppView {
                             pin.owner_label,
                             pin.revision.chars().take(8).collect::<String>()
                         ),
-                        p,
+                        cx,
                     )
                     .into_any_element(),
                 );
@@ -266,7 +228,7 @@ impl AppView {
         }
         if let Some(session) = session {
             if session.selections.is_empty() {
-                rows.push(menu_note("No managed skills selected.", p).into_any_element());
+                rows.push(menu_note("No managed skills selected.", cx).into_any_element());
             }
             for pin in &session.selections {
                 let id = pin.skill_id.clone();
@@ -283,7 +245,7 @@ impl AppView {
                         busy,
                         cx,
                     )
-                    .child(Icon::new(IconName::ChevronRight).size(px(14.)))
+                    .child(Icon::new(IconName::ChevronRight).size(px(tokens::ICON_SIZE)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.composer_capabilities.view = PlusView::Library(id.clone());
                         cx.notify();
@@ -292,8 +254,8 @@ impl AppView {
                 );
             }
             if !session.attachable.is_empty() {
-                rows.push(menu_divider(p).into_any_element());
-                rows.push(menu_note("Add from your libraries", p).into_any_element());
+                rows.push(menu_divider(cx).into_any_element());
+                rows.push(menu_note("Add from your libraries", cx).into_any_element());
             }
             for entry in &session.attachable {
                 let selected = entry.clone();
@@ -315,13 +277,13 @@ impl AppView {
             }
         }
         if let Some(result) = &library.result {
-            rows.push(menu_note(&format!("New sessions select up to {} default skills. Existing sessions keep their selected revisions.",result.default_selection_limit),p).into_any_element());
+            rows.push(menu_note(&format!("New sessions select up to {} default skills. Existing sessions keep their selected revisions.",result.default_selection_limit),cx).into_any_element());
             if let Some(notice) = &result.default_selection_notice {
-                rows.push(menu_note(notice, p).into_any_element());
+                rows.push(menu_note(notice, cx).into_any_element());
             }
         }
-        rows.push(menu_divider(p).into_any_element());
-        rows.push(menu_note("Agent skill inventory", p).into_any_element());
+        rows.push(menu_divider(cx).into_any_element());
+        rows.push(menu_note("Agent skill inventory", cx).into_any_element());
         rows
     }
 }
@@ -373,11 +335,11 @@ impl Render for LibraryReader {
         let names = std::iter::once("SKILL.md".to_owned())
             .chain(self.read.files.iter().map(|f| f.path.clone()))
             .collect::<Vec<_>>();
-        div().v_flex().gap_3().text_size(px(13.))
+        div().v_flex().gap(px(tokens::FORM_GAP)).text_size(px(tokens::FORM_TEXT_SIZE))
             .child(format!("{} · revision {}",self.read.entry.owner_label,self.read.entry.revision.chars().take(8).collect::<String>()))
             .child(div().text_color(p.muted).child("This is the exact revision selected for this session. Session access allows reading this pin, not editing its library or browsing other revisions."))
-            .child(div().id("library-files").h_flex().gap_1().overflow_x_scroll().children(names.into_iter().enumerate().map(|(index,name)|Button::new(("library-file",index)).ghost().small().label(name).when(self.selected==index,|b|b.bg(p.hover)).on_click(cx.listener(move|this,_,window,cx|this.select(index,window,cx))))))
+            .child(div().id("library-files").h_flex().gap(px(tokens::FORM_SEGMENT_GAP)).overflow_x_scroll().children(names.into_iter().enumerate().map(|(index,name)|Button::new(("library-file",index)).ghost().small().label(name).when(self.selected==index,|b|b.bg(p.hover)).on_click(cx.listener(move|this,_,window,cx|this.select(index,window,cx))))))
             .child(Input::new(&self.file).readonly(true).aria_label("Selected skill file"))
-            .child(Textarea::new(&self.text).readonly(true).h(px(360.)).aria_label("Selected skill revision"))
+            .child(Textarea::new(&self.text).readonly(true).h(px(tokens::LIBRARY_PREVIEW_HEIGHT)).aria_label("Selected skill revision"))
     }
 }

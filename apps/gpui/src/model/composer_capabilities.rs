@@ -1,6 +1,67 @@
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+pub fn has_operator_scope(hello: &Value, requested: &str) -> bool {
+    let Some(auth) = hello.get("auth") else {
+        return false;
+    };
+    if auth["role"].as_str().unwrap_or("operator") != "operator" {
+        return false;
+    }
+    auth.get("scopes")
+        .and_then(Value::as_array)
+        .is_some_and(|scopes| {
+            scopes.iter().any(|scope| {
+                scope.as_str() == Some(requested)
+                    || scope.as_str() == Some("operator.admin")
+                    || (requested == "operator.sessions.write"
+                        && scope.as_str() == Some("operator.write"))
+            })
+        })
+}
+
+pub fn method_available(hello: &Value, method: &str) -> bool {
+    hello
+        .pointer("/features/methods")
+        .and_then(Value::as_array)
+        .is_some_and(|methods| methods.iter().any(|value| value.as_str() == Some(method)))
+}
+
+pub fn draft_visibility_available(hello: &Value) -> bool {
+    hello
+        .pointer("/policy/hasMultipleSessionSharingIdentities")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && hello
+            .pointer("/policy/allowedSessionVisibilities")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("draft")))
+}
+
+pub fn permission_label(mode: Option<&str>, default: Option<&str>) -> String {
+    match mode {
+        Some("read-only") => "Read Only".into(),
+        Some("guarded") => "Guarded".into(),
+        Some("workspace") => "Workspace".into(),
+        Some("full") => "Full Access".into(),
+        _ => default
+            .map(|mode| format!("Default ({})", permission_label(Some(mode), None)))
+            .unwrap_or_else(|| "Default".into()),
+    }
+}
+
+pub fn permission_description(mode: Option<&str>) -> &'static str {
+    match mode {
+        Some("read-only") => {
+            "Agent tools can read within the session root, but cannot write or run commands."
+        }
+        Some("guarded") => "A human reviews requests beyond the session root.",
+        Some("workspace") => "An AI reviewer checks requests beyond the session root.",
+        Some("full") => "No reviewer; files and commands are unrestricted.",
+        _ => "Follow the agent's configured execution permissions.",
+    }
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Skill {

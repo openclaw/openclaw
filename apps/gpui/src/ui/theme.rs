@@ -180,3 +180,5 @@ pub fn apply(window: &mut Window, cx: &mut App) {
     Theme::sync_base(cx);
     window.refresh();
 }
+pub(crate) mod draft_tokens;
+pub(crate) mod menu_tokens;

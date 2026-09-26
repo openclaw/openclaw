@@ -12,7 +12,9 @@ pub mod web_urls;
 
 pub mod avatars;
 pub mod composer_capabilities;
+pub mod composer_library;
 pub mod new_session;
+pub mod new_session_admission;
 pub mod people;
 pub mod session_links;
 pub mod sidebar;

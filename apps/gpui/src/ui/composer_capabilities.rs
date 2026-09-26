@@ -1,17 +1,26 @@
+#[path = "composer_capability_actions.rs"]
+mod actions;
 #[path = "composer_connectors.rs"]
 mod connectors_ui;
 #[path = "composer_library.rs"]
 mod library_ui;
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    components::menu::{
+        MenuStyle, capability_note as menu_note, capability_row as menu_row,
+        divider as menu_divider, panel, popover,
+    },
+    theme::{Palette, menu_tokens as tokens},
+};
 use crate::model::composer_capabilities::{
-    self as capabilities, EffectiveTools, Skill, SkillCatalog,
+    self as capabilities, EffectiveTools, Skill, SkillCatalog, permission_description,
+    permission_label,
 };
 use gpui_kit::{
     assets::IconName,
     component::{
         Disableable, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        popover::Popover,
     },
     prelude::FluentBuilder as _,
     *,
@@ -68,325 +77,44 @@ impl ComposerCapabilities {
 }
 
 impl AppView {
-    fn capability_scope(&self) -> Scope {
-        Scope {
-            epoch: self.epoch,
-            agent: if self.new_session.active {
-                self.new_session.draft.agent_id.clone()
-            } else {
-                self.selected_row()
-                    .and_then(|row| row.agent().map(str::to_owned))
-                    .or_else(|| self.sidebar_state.selected_agent.clone())
-                    .unwrap_or_else(|| "main".to_owned())
-            },
-            session: (!self.new_session.active)
-                .then(|| self.chat.selected_session.clone())
-                .flatten(),
-            incarnation: (!self.new_session.active)
-                .then(|| self.selected_row().and_then(|row| row.session_id.clone()))
-                .flatten(),
-        }
-    }
-
-    fn capability_is_current(&self, scope: &Scope, generation: u64) -> bool {
-        self.session.is_some()
-            && self.capability_scope() == *scope
-            && self.composer_capabilities.generation == generation
-            && self.composer_capabilities.scope.as_ref() == Some(scope)
-    }
-
-    fn composer_has_scope(&self, name: &str) -> bool {
-        self.session
-            .as_ref()
-            .and_then(|session| session.hello().pointer("/auth/scopes"))
-            .and_then(Value::as_array)
-            .is_some_and(|scopes| {
-                scopes.iter().any(|scope| {
-                    scope.as_str() == Some(name) || scope.as_str() == Some("operator.admin")
-                })
-            })
-    }
-
-    fn composer_method_available(&self, method: &str) -> bool {
-        self.session
-            .as_ref()
-            .and_then(|session| session.hello().pointer("/features/methods"))
-            .and_then(Value::as_array)
-            .is_some_and(|methods| methods.iter().any(|v| v.as_str() == Some(method)))
-    }
-
-    pub(super) fn composer_draft_available(&self) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            session
-                .hello()
-                .pointer("/policy/hasMultipleSessionSharingIdentities")
-                .and_then(Value::as_bool)
-                == Some(true)
-                && session
-                    .hello()
-                    .pointer("/policy/allowedSessionVisibilities")
-                    .and_then(Value::as_array)
-                    .is_some_and(|values| {
-                        values.iter().any(|value| value.as_str() == Some("draft"))
-                    })
-        })
-    }
-
-    fn current_tool_overrides(&self) -> Option<&Value> {
-        if self.new_session.active {
-            self.new_session.draft.tool_overrides.as_ref()
-        } else {
-            self.selected_row()
-                .and_then(|row| row.tool_overrides.as_ref())
-        }
-    }
-
-    fn permission_blocked(&self) -> Option<&'static str> {
-        if self.session.is_none() {
-            return Some("Reconnect to change execution permissions.");
-        }
-        if self.composer_capabilities.pending
-            || self.new_session.locked()
-            || self
-                .selected_row()
-                .is_some_and(|row| row.permission_mode_pending)
-        {
-            return Some("Saving execution permissions…");
-        }
-        if self.composer_has_scope("operator.write") {
-            return None;
-        }
-        if self.composer_has_scope("operator.sessions.write")
-            && (self.new_session.active
-                || self.selected_row().is_some_and(|row| {
-                    matches!(row.sharing_role.as_deref(), Some("owner" | "admin"))
-                }))
-        {
-            return None;
-        }
-        Some("Changing permissions requires write access to this session.")
-    }
-
-    fn capability_blocked(&self) -> Option<&'static str> {
-        if self.session.is_none() {
-            Some("Reconnect to change session capabilities.")
-        } else if self.composer_capabilities.pending || self.new_session.locked() {
-            Some("Saving session settings…")
-        } else if !self.composer_has_scope("operator.admin") {
-            Some("Session capability changes require operator.admin access.")
-        } else if self.composer_capabilities.config.is_none() {
-            Some("Waiting for the active Gateway configuration.")
-        } else {
-            None
-        }
-    }
-
-    fn load_composer_capabilities(&mut self, cx: &mut Context<Self>) {
-        if self.session.is_none()
-            || self.composer_capabilities.pending
-            || self.composer_capabilities.library.busy
-        {
-            return;
-        }
-        let scope = self.capability_scope();
-        self.composer_capabilities.generation =
-            self.composer_capabilities.generation.wrapping_add(1);
-        let generation = self.composer_capabilities.generation;
-        self.composer_capabilities.scope = Some(scope.clone());
-        self.composer_capabilities.config = None;
-        self.composer_capabilities.config_loading = true;
-        self.composer_capabilities.config_error = None;
-        self.composer_capabilities.skills.clear();
-        self.composer_capabilities.skills_loading = true;
-        self.composer_capabilities.skills_error = None;
-        self.composer_capabilities.tools = None;
-        self.composer_capabilities.error = None;
-        let config_scope = scope.clone();
-        self.request("config.get", json!({}), cx, move |this, result, _| {
-            if !this.capability_is_current(&config_scope, generation) {
-                return;
-            }
-            this.composer_capabilities.config_loading = false;
-            match result {
-                Ok(snapshot) => match snapshot
-                    .get("runtimeConfig")
-                    .filter(|value| value.is_object())
-                {
-                    Some(config) => this.composer_capabilities.config = Some(config.clone()),
-                    None => {
-                        this.composer_capabilities.config_error =
-                            Some("The active Gateway configuration is unavailable.".into())
-                    }
-                },
-                Err(error) => this.composer_capabilities.config_error = Some(error),
-            }
-        });
-        self.request(
-            "skills.status",
-            json!({"agentId":scope.agent}),
-            cx,
-            move |this, result, _| {
-                if !this.capability_is_current(&scope, generation) {
-                    return;
-                }
-                this.composer_capabilities.skills_loading = false;
-                match result.and_then(|value| {
-                    serde_json::from_value::<SkillCatalog>(value).map_err(|e| e.to_string())
-                }) {
-                    Ok(mut catalog) => {
-                        catalog.skills.sort_by_key(|a| a.name.to_lowercase());
-                        this.composer_capabilities.skills = catalog.skills;
-                    }
-                    Err(error) => this.composer_capabilities.skills_error = Some(error),
-                }
-            },
-        );
-        self.load_composer_library(cx);
-    }
-
-    fn pick_composer_photos(&mut self, multiple: bool, cx: &mut Context<Self>) {
-        let scope = self.capability_scope();
-        let generation = self.composer_capabilities.generation;
-        let prompt = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple,
-            prompt: Some("Choose a photo".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let result = prompt.await;
-            let _ = this.update(cx, |this, cx| {
-                if !this.capability_is_current(&scope, generation) {
-                    return;
-                }
-                match result {
-                    Ok(Ok(Some(paths))) => this.attach_paths(paths, cx),
-                    Ok(Err(error)) => this.composer_state.error = Some(error.to_string()),
-                    _ => {}
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn load_composer_tools(&mut self, cx: &mut Context<Self>) {
-        let scope = self.capability_scope();
-        let Some(session) = &scope.session else {
-            return;
-        };
-        let generation = self.composer_capabilities.generation;
-        let model = self.selected_row().and_then(|row| row.model.clone());
-        self.composer_capabilities.tools = None;
-        self.composer_capabilities.tools_loading = true;
-        self.composer_capabilities.tools_error = None;
-        self.request(
-            "tools.effective",
-            json!({"agentId":scope.agent,"sessionKey":session}),
-            cx,
-            move |this, result, _| {
-                if !this.capability_is_current(&scope, generation)
-                    || this.selected_row().and_then(|row| row.model.clone()) != model
-                {
-                    return;
-                }
-                this.composer_capabilities.tools_loading = false;
-                match result
-                    .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))
-                {
-                    Ok(tools) => this.composer_capabilities.tools = Some(tools),
-                    Err(error) => this.composer_capabilities.tools_error = Some(error),
-                }
-            },
-        );
-    }
-
-    fn patch_composer_capability(&mut self, fields: Value, cx: &mut Context<Self>) {
-        let permission = fields.get("permissionMode").is_some();
-        let blocked = if permission {
-            self.permission_blocked()
-        } else {
-            self.capability_blocked()
-        };
-        if let Some(reason) = blocked {
-            self.composer_capabilities.error = Some(reason.into());
-            cx.notify();
-            return;
-        }
-        if fields.get("permissionMode").and_then(Value::as_str) == Some("full")
-            && !self.composer_has_scope("operator.admin")
-        {
-            return;
-        }
-        let scope = self.capability_scope();
-        self.composer_capabilities.scope = Some(scope.clone());
-        let generation = self.composer_capabilities.generation;
-        self.composer_capabilities.pending = true;
-        self.composer_capabilities.error = None;
-        self.patch_composer_settings(fields, cx, move |this, result, _| {
-            if !this.capability_is_current(&scope, generation) {
-                return;
-            }
-            this.composer_capabilities.pending = false;
-            if let Err(error) = result {
-                this.composer_capabilities.error = Some(error);
-            }
-        });
-    }
-
-    fn choose_permission(&mut self, mode: Option<&str>, cx: &mut Context<Self>) {
-        if self.permission_blocked().is_some()
-            || (mode == Some("full") && !self.composer_has_scope("operator.admin"))
-        {
-            return;
-        }
-        self.composer_capabilities.permission_open = false;
-        if mode
-            == self
-                .selected_row()
-                .and_then(|row| row.permission_mode.as_deref())
-        {
-            cx.notify();
-            return;
-        }
-        self.patch_composer_capability(json!({"permissionMode":mode}), cx);
-    }
-
     pub(super) fn composer_plus_control(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::get(cx);
         let state = &self.composer_capabilities;
         let has_overrides = capabilities::override_count(self.current_tool_overrides()) > 0;
         let target = cx.entity().downgrade();
-        Popover::new("composer-plus-menu")
-            .anchor(Anchor::BottomLeft)
-            .appearance(false)
-            .open(state.plus_open)
-            .on_open_change(move |open, _, cx| {
+        popover(
+            "composer-plus-menu",
+            Anchor::BottomLeft,
+            state.plus_open,
+            Button::new("attach-files")
+                .ghost()
+                .small()
+                .size(px(tokens::PLUS_BUTTON_SIZE))
+                .child(Icon::new(IconName::Plus).size(px(tokens::PLUS_ICON_SIZE)))
+                .accessibility_label("Add attachment")
+                .text_color(if has_overrides { p.accent } else { p.muted })
+                .when(!state.plus_open, |button| button.tooltip("Add attachment"))
+                .accessibility_label("Add attachment")
+                .disabled(
+                    self.session.is_none()
+                        || self.new_session.locked()
+                        || (!self.new_session.active && self.chat.loading),
+                ),
+            self.composer_plus_menu(cx),
+            move |open, _, cx| {
                 let _ = target.update(cx, |this, cx| {
-                    this.composer_capabilities.plus_open = *open;
+                    if this.composer_capabilities.plus_open == open {
+                        return;
+                    }
+                    this.composer_capabilities.plus_open = open;
                     this.composer_capabilities.view = PlusView::Root;
-                    if *open {
+                    if open {
                         this.load_composer_capabilities(cx);
                     }
                     cx.notify();
                 });
-            })
-            .trigger(
-                Button::new("attach-files")
-                    .ghost()
-                    .small()
-                    .size(px(28.))
-                    .child(Icon::new(IconName::Plus).size(px(20.)))
-                    .accessibility_label("Add attachment")
-                    .text_color(if has_overrides { p.accent } else { p.muted })
-                    .tooltip("Add attachment")
-                    .disabled(
-                        self.session.is_none()
-                            || self.new_session.locked()
-                            || (!self.new_session.active && self.chat.loading),
-                    ),
-            )
-            .child(self.composer_plus_menu(cx))
+            },
+        )
     }
 
     fn composer_plus_menu(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -394,22 +122,16 @@ impl AppView {
         let state = &self.composer_capabilities;
         let overrides = self.current_tool_overrides();
         let blocked = self.capability_blocked();
-        let mut menu = div()
-            .id("composer-capability-menu")
-            .v_flex()
-            .w(px(if state.view == PlusView::Root {
-                208.
+        let mut menu = panel(
+            "composer-capability-menu",
+            if state.view == PlusView::Root {
+                tokens::CAPABILITY_ROOT_WIDTH
             } else {
-                272.
-            }))
-            .max_h(px(420.))
-            .overflow_y_scroll()
-            .p(px(4.))
-            .rounded(px(12.))
-            .border_1()
-            .border_color(p.border_strong)
-            .bg(p.elevated)
-            .shadow_lg();
+                tokens::CAPABILITY_DETAIL_WIDTH
+            },
+            MenuStyle::Capability,
+            cx,
+        );
         if state.view != PlusView::Root {
             menu = menu
                 .child(
@@ -437,7 +159,7 @@ impl AppView {
                         cx.notify();
                     })),
                 )
-                .child(menu_divider(p));
+                .child(menu_divider(cx));
         }
         match &state.view {
             PlusView::Root => {
@@ -487,7 +209,7 @@ impl AppView {
                             this.pick_attachments(cx);
                         })),
                     )
-                    .child(menu_divider(p))
+                    .child(menu_divider(cx))
                     .when(
                         self.new_session.active && self.composer_draft_available(),
                         |menu| {
@@ -534,7 +256,7 @@ impl AppView {
                         )
                         .child(
                             Icon::new(IconName::ChevronRight)
-                                .size(px(14.))
+                                .size(px(tokens::ICON_SIZE))
                                 .text_color(p.muted),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -553,30 +275,33 @@ impl AppView {
                             cx,
                         )
                         .child(
-                            div().text_size(px(10.)).text_color(p.muted).child(
-                                state
-                                    .config
-                                    .as_ref()
-                                    .map(|config| {
-                                        capabilities::connectors(config)
-                                            .iter()
-                                            .filter(|server| {
-                                                capabilities::enabled(
-                                                    overrides,
-                                                    "mcpServers",
-                                                    &server.name,
-                                                    server.enabled,
-                                                )
-                                            })
-                                            .count()
-                                            .to_string()
-                                    })
-                                    .unwrap_or_else(|| "…".into()),
-                            ),
+                            div()
+                                .text_size(px(tokens::BADGE_TEXT_SIZE))
+                                .text_color(p.muted)
+                                .child(
+                                    state
+                                        .config
+                                        .as_ref()
+                                        .map(|config| {
+                                            capabilities::connectors(config)
+                                                .iter()
+                                                .filter(|server| {
+                                                    capabilities::enabled(
+                                                        overrides,
+                                                        "mcpServers",
+                                                        &server.name,
+                                                        server.enabled,
+                                                    )
+                                                })
+                                                .count()
+                                                .to_string()
+                                        })
+                                        .unwrap_or_else(|| "…".into()),
+                                ),
                         )
                         .child(
                             Icon::new(IconName::ChevronRight)
-                                .size(px(14.))
+                                .size(px(tokens::ICON_SIZE))
                                 .text_color(p.muted),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -622,7 +347,7 @@ impl AppView {
                             this.patch_composer_capability(json!({"toolOverrides":next}), cx);
                         })),
                     )
-                    .child(menu_divider(p))
+                    .child(menu_divider(cx))
                     .child(
                         menu_row(
                             "capability-plugins",
@@ -650,7 +375,7 @@ impl AppView {
                             blocked.is_some(),
                             cx,
                         )
-                        .child(Icon::new(IconName::X).size(px(14.)))
+                        .child(Icon::new(IconName::X).size(px(tokens::ICON_SIZE)))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.patch_composer_capability(json!({"toolOverrides":null}), cx)
                         })),
@@ -660,11 +385,11 @@ impl AppView {
             PlusView::Skills => {
                 menu = menu.children(self.composer_library_menu(None, cx));
                 if state.skills_loading {
-                    menu = menu.child(menu_note("Loading skills…", p));
+                    menu = menu.child(menu_note("Loading skills…", cx));
                 } else if let Some(error) = &state.skills_error {
-                    menu = menu.child(menu_note(&format!("Could not load skills: {error}"), p));
+                    menu = menu.child(menu_note(&format!("Could not load skills: {error}"), cx));
                 } else if state.skills.is_empty() {
-                    menu = menu.child(menu_note("No skills available", p));
+                    menu = menu.child(menu_note("No skills available", cx));
                 } else {
                     for skill in &state.skills {
                         let key = skill.skill_key.clone();
@@ -701,7 +426,7 @@ impl AppView {
                         );
                     }
                 }
-                menu = menu.child(menu_divider(p)).child(
+                menu = menu.child(menu_divider(cx)).child(
                     menu_row(
                         "manage-skills",
                         "Manage skills",
@@ -724,9 +449,9 @@ impl AppView {
                     .map(capabilities::connectors)
                     .unwrap_or_default();
                 if state.config_loading {
-                    menu = menu.child(menu_note("Loading connectors…", p));
+                    menu = menu.child(menu_note("Loading connectors…", cx));
                 } else if state.config_error.is_none() && connectors.is_empty() {
-                    menu = menu.child(menu_note("No connectors configured", p));
+                    menu = menu.child(menu_note("No connectors configured", cx));
                 }
                 for server in connectors {
                     let checked = capabilities::enabled(
@@ -783,7 +508,7 @@ impl AppView {
                                 false,
                                 cx,
                             )
-                            .pl(px(28.))
+                            .pl(px(tokens::CAPABILITY_SUBROW_INDENT))
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     this.composer_capabilities.view = PlusView::Tools(name.clone());
@@ -794,7 +519,7 @@ impl AppView {
                         );
                     }
                 }
-                menu = menu.child(menu_divider(p)).child(
+                menu = menu.child(menu_divider(cx)).child(
                     menu_row(
                         "add-mcp-server",
                         "Add MCP server…",
@@ -811,7 +536,7 @@ impl AppView {
                 );
             }
             PlusView::Tools(server) => {
-                menu = menu.child(menu_note(server, p));
+                menu = menu.child(menu_note(server, cx));
                 let tools: Vec<_> = state
                     .tools
                     .as_ref()
@@ -825,9 +550,9 @@ impl AppView {
                     })
                     .collect();
                 if state.tools_loading {
-                    menu = menu.child(menu_note("Loading tools…", p));
+                    menu = menu.child(menu_note("Loading tools…", cx));
                 } else if let Some(error) = &state.tools_error {
-                    menu = menu.child(menu_note(&format!("Could not load tools: {error}"), p));
+                    menu = menu.child(menu_note(&format!("Could not load tools: {error}"), cx));
                 } else if tools.is_empty() {
                     let notice = state.tools.as_ref().and_then(|result| {
                         result.notices.iter().find(|n| {
@@ -843,7 +568,7 @@ impl AppView {
                         notice
                             .map(|n| n.message.as_str())
                             .unwrap_or("No tools available"),
-                        p,
+                        cx,
                     ));
                 }
                 for tool in tools {
@@ -881,7 +606,7 @@ impl AppView {
             .into_iter()
             .flatten()
         {
-            menu = menu.child(menu_note(error, p).text_color(p.danger));
+            menu = menu.child(menu_note(error, cx).text_color(p.danger));
         }
         if state.config_error.is_some()
             || state.skills_error.is_some()
@@ -917,63 +642,59 @@ impl AppView {
         let blocked = self.permission_blocked();
         let admin = self.composer_has_scope("operator.admin");
         let target = cx.entity().downgrade();
-        let mut menu = div()
-            .id("composer-permission-menu")
-            .v_flex()
-            .w(px(340.))
-            .p(px(8.))
-            .rounded(px(12.))
-            .border_1()
-            .border_color(p.border_strong)
-            .bg(p.elevated)
-            .shadow_lg()
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if let Some(index) = event
-                    .keystroke
-                    .key
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|index| (1..=5).contains(index))
-                {
-                    this.choose_permission(
-                        [
-                            None,
-                            Some("read-only"),
-                            Some("guarded"),
-                            Some("workspace"),
-                            Some("full"),
-                        ][index - 1],
-                        cx,
-                    );
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                Button::new("permission-help")
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .justify_between()
-                    .px_0()
-                    .pb(px(9.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(p.muted)
-                            .child("EXECUTION PERMISSIONS"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(p.muted)
-                            .child("Learn more"),
-                    )
-                    .on_click(|_, _, cx| {
-                        cx.open_url("https://docs.openclaw.ai/gateway/permission-modes")
-                    }),
-            );
+        let mut menu = panel(
+            "composer-permission-menu",
+            tokens::PERMISSION_PANEL_WIDTH,
+            MenuStyle::Permission,
+            cx,
+        )
+        .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            if let Some(index) = event
+                .keystroke
+                .key
+                .parse::<usize>()
+                .ok()
+                .filter(|index| (1..=5).contains(index))
+            {
+                this.choose_permission(
+                    [
+                        None,
+                        Some("read-only"),
+                        Some("guarded"),
+                        Some("workspace"),
+                        Some("full"),
+                    ][index - 1],
+                    cx,
+                );
+                cx.stop_propagation();
+            }
+        }))
+        .child(
+            Button::new("permission-help")
+                .ghost()
+                .small()
+                .w_full()
+                .justify_between()
+                .px_0()
+                .pb(px(tokens::PERMISSION_HEADING_PADDING_BOTTOM))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(tokens::HEADER_TEXT_SIZE))
+                        .font_weight(tokens::PERMISSION_HEADING_WEIGHT)
+                        .text_color(p.muted)
+                        .child("EXECUTION PERMISSIONS"),
+                )
+                .child(
+                    div()
+                        .text_size(px(tokens::HEADER_TEXT_SIZE))
+                        .text_color(p.muted)
+                        .child("Learn more"),
+                )
+                .on_click(|_, _, cx| {
+                    cx.open_url("https://docs.openclaw.ai/gateway/permission-modes")
+                }),
+        );
         for (index, mode) in [
             None,
             Some("read-only"),
@@ -996,25 +717,28 @@ impl AppView {
                 cx,
             )
             .when(selected, |row| row.bg(p.hover))
-            .tooltip(if locked {
-                "Full access requires operator.admin access."
-            } else {
-                blocked.unwrap_or(permission_description(mode))
-            })
+            .when_some(
+                if locked {
+                    Some("Full access requires operator.admin access.")
+                } else {
+                    blocked
+                },
+                |row, reason| row.tooltip(reason),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.choose_permission(mode, cx)));
             row = if locked {
-                row.child(Icon::new(IconName::Lock).size(px(16.)))
+                row.child(Icon::new(IconName::Lock).size(px(tokens::CAPABILITY_ICON_SIZE)))
             } else if selected {
                 row.child(
                     Icon::new(IconName::Check)
-                        .size(px(16.))
+                        .size(px(tokens::CAPABILITY_ICON_SIZE))
                         .text_color(p.accent),
                 )
             } else {
                 row.child(
                     div()
-                        .w(px(16.))
-                        .text_size(px(9.))
+                        .w(px(tokens::CAPABILITY_ICON_SIZE))
+                        .text_size(px(tokens::PERMISSION_SHORTCUT_SIZE))
                         .text_color(p.muted)
                         .child((index + 1).to_string()),
                 )
@@ -1022,70 +746,52 @@ impl AppView {
             menu = menu.child(row);
         }
         if let Some(error) = &self.composer_capabilities.error {
-            menu = menu.child(menu_note(error, p).text_color(p.danger));
+            menu = menu.child(menu_note(error, cx).text_color(p.danger));
         }
-        Popover::new("permission-picker")
-            .anchor(Anchor::BottomLeft)
-            .appearance(false)
-            .open(self.composer_capabilities.permission_open)
-            .on_open_change(move |open, _, cx| {
+        popover(
+            "permission-picker",
+            Anchor::BottomLeft,
+            self.composer_capabilities.permission_open,
+            Button::new("permission-mode")
+                .ghost()
+                .small()
+                .h(px(tokens::PERMISSION_CHIP_HEIGHT))
+                .accessibility_label(format!("Execution permissions: {label}"))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap(px(tokens::PERMISSION_CHIP_GAP))
+                        .text_size(px(tokens::PERMISSION_CHIP_TEXT_SIZE))
+                        .line_height(px(tokens::PERMISSION_CHIP_LINE_HEIGHT))
+                        .child(
+                            Icon::new(permission_icon(current))
+                                .size(px(tokens::CAPABILITY_ICON_SIZE)),
+                        )
+                        .child(label),
+                )
+                .text_color(if current.or(default) == Some("full") {
+                    p.accent
+                } else {
+                    p.muted
+                })
+                .disabled(blocked.is_some())
+                .when(!self.composer_capabilities.permission_open, |button| {
+                    button.tooltip(
+                        blocked.unwrap_or("Choose what available tools may do in this session."),
+                    )
+                }),
+            menu.into_any_element(),
+            move |open, _, cx| {
                 let _ = target.update(cx, |this, cx| {
-                    this.composer_capabilities.permission_open = *open;
+                    this.composer_capabilities.permission_open = open;
                     cx.notify();
                 });
-            })
-            .trigger(
-                Button::new("permission-mode")
-                    .ghost()
-                    .small()
-                    .h(px(30.))
-                    .accessibility_label(format!("Execution permissions: {label}"))
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(14.))
-                            .line_height(px(18.9))
-                            .child(Icon::new(permission_icon(current)).size(px(16.)))
-                            .child(label),
-                    )
-                    .text_color(if current.or(default) == Some("full") {
-                        p.accent
-                    } else {
-                        p.muted
-                    })
-                    .disabled(blocked.is_some())
-                    .tooltip(
-                        blocked.unwrap_or("Choose what available tools may do in this session."),
-                    ),
-            )
-            .child(menu)
+            },
+        )
     }
 }
 
-fn permission_label(mode: Option<&str>, default: Option<&str>) -> String {
-    match mode {
-        Some("read-only") => "Read Only".into(),
-        Some("guarded") => "Guarded".into(),
-        Some("workspace") => "Workspace".into(),
-        Some("full") => "Full Access".into(),
-        _ => default
-            .map(|mode| format!("Default ({})", permission_label(Some(mode), None)))
-            .unwrap_or_else(|| "Default".into()),
-    }
-}
-fn permission_description(mode: Option<&str>) -> &'static str {
-    match mode {
-        Some("read-only") => {
-            "Agent tools can read within the session root, but cannot write or run commands."
-        }
-        Some("guarded") => "A human reviews requests beyond the session root.",
-        Some("workspace") => "An AI reviewer checks requests beyond the session root.",
-        Some("full") => "No reviewer; files and commands are unrestricted.",
-        _ => "Follow the agent's configured execution permissions.",
-    }
-}
 fn permission_icon(mode: Option<&str>) -> IconName {
     match mode {
         Some("read-only") => IconName::ShieldEllipsis,
@@ -1094,92 +800,4 @@ fn permission_icon(mode: Option<&str>) -> IconName {
         Some("full") => IconName::ShieldAlert,
         _ => IconName::ShieldCheck,
     }
-}
-fn menu_divider(p: Palette) -> Div {
-    div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(p.border)
-}
-fn menu_note(note: &str, p: Palette) -> Div {
-    div()
-        .px(px(12.))
-        .py(px(10.))
-        .text_size(px(12.))
-        .line_height(px(16.8))
-        .text_color(p.muted)
-        .child(note.to_owned())
-}
-fn menu_row(
-    id: impl Into<SharedString>,
-    label: &str,
-    icon: Option<IconName>,
-    note: Option<&str>,
-    checked: Option<bool>,
-    disabled: bool,
-    cx: &App,
-) -> Button {
-    let p = Palette::get(cx);
-    Button::new(id.into())
-        .ghost()
-        .small()
-        .accessibility_label(label.to_owned())
-        .w_full()
-        .h_auto()
-        .min_h(px(40.))
-        .px(px(9.))
-        .py(px(6.))
-        .rounded(px(10.))
-        .disabled(disabled)
-        .child(
-            div()
-                .h_flex()
-                .w_full()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap(px(8.))
-                .children(icon.map(|icon| {
-                    Icon::new(icon).size(px(16.)).flex_shrink_0().text_color(
-                        if icon == IconName::ShieldAlert {
-                            p.accent
-                        } else {
-                            p.muted
-                        },
-                    )
-                }))
-                .child(
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(px(3.))
-                        .items_start()
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .line_height(px(15.6))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(p.strong)
-                                .child(label.to_owned()),
-                        )
-                        .children(note.map(|note| {
-                            div()
-                                .whitespace_normal()
-                                .text_size(px(11.))
-                                .line_height(px(13.75))
-                                .text_color(p.muted)
-                                .child(note.to_owned())
-                        })),
-                )
-                .children(checked.map(|checked| {
-                    div()
-                        .w(px(26.))
-                        .h(px(15.))
-                        .flex_shrink_0()
-                        .rounded_full()
-                        .bg(if checked { p.accent } else { p.border_strong })
-                        .p(px(2.))
-                        .h_flex()
-                        .when(checked, |el| el.justify_end())
-                        .child(div().size(px(11.)).rounded_full().bg(p.accent_fg))
-                })),
-        )
 }

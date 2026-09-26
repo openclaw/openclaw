@@ -1,5 +1,6 @@
 use super::{
     AppView,
+    components::dropdown::Dropdown,
     sidebar_navigation::{append_agent_navigation, append_identity_navigation},
     theme::{self, Appearance, Palette},
 };
@@ -363,7 +364,9 @@ impl AppView {
             .h_flex()
             .h(px(57.))
             .gap(px(4.))
-            .child(
+            .child(Dropdown::new(
+                "identity-menu-dropdown",
+                Anchor::TopLeft,
                 Button::new("identity-menu")
                     .ghost()
                     .flex_1()
@@ -411,52 +414,51 @@ impl AppView {
                             .size(px(13.))
                             .text_color(p.muted),
                     )
-                    .accessibility_label("Profile and settings")
-                    .dropdown_menu(move |menu, window, cx| {
-                        let mut menu =
-                            append_identity_navigation(menu.label(name.clone()), view.clone());
-                        menu = menu.separator().submenu(
-                            "Appearance",
-                            window,
-                            cx,
-                            move |mut menu, _, _| {
-                                for (label, mode) in [
-                                    ("System", Appearance::System),
-                                    ("Light", Appearance::Light),
-                                    ("Dark", Appearance::Dark),
-                                ] {
-                                    menu = menu.item(
-                                        PopupMenuItem::new(label)
-                                            .checked(mode == appearance)
-                                            .on_click(move |_, window, cx| {
-                                                theme::set_appearance(mode, window, cx)
-                                            }),
-                                    );
-                                }
-                                menu
-                            },
-                        );
-                        let retry = view.clone();
-                        menu = menu.item(PopupMenuItem::new("Reconnect").on_click(
-                            move |_, window, cx| {
-                                let _ = retry.update(cx, |this, cx| this.retry(window, cx));
-                            },
-                        ));
-                        let switch = view.clone();
-                        menu = menu.item(PopupMenuItem::new("Switch Gateway…").on_click(
-                            move |_, window, cx| {
-                                let _ =
-                                    switch.update(cx, |this, cx| this.switch_gateway(window, cx));
-                            },
-                        ));
-                        let signout = view.clone();
-                        menu.item(
-                            PopupMenuItem::new("Sign out").on_click(move |_, window, cx| {
-                                let _ = signout.update(cx, |this, cx| this.sign_out(window, cx));
-                            }),
-                        )
-                    }),
-            )
+                    .accessibility_label("Profile and settings"),
+                move |menu, window, cx| {
+                    let mut menu =
+                        append_identity_navigation(menu.label(name.clone()), view.clone());
+                    menu = menu.separator().submenu(
+                        "Appearance",
+                        window,
+                        cx,
+                        move |mut menu, _, _| {
+                            for (label, mode) in [
+                                ("System", Appearance::System),
+                                ("Light", Appearance::Light),
+                                ("Dark", Appearance::Dark),
+                            ] {
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .checked(mode == appearance)
+                                        .on_click(move |_, window, cx| {
+                                            theme::set_appearance(mode, window, cx)
+                                        }),
+                                );
+                            }
+                            menu
+                        },
+                    );
+                    let retry = view.clone();
+                    menu = menu.item(PopupMenuItem::new("Reconnect").on_click(
+                        move |_, window, cx| {
+                            let _ = retry.update(cx, |this, cx| this.retry(window, cx));
+                        },
+                    ));
+                    let switch = view.clone();
+                    menu = menu.item(PopupMenuItem::new("Switch Gateway…").on_click(
+                        move |_, window, cx| {
+                            let _ = switch.update(cx, |this, cx| this.switch_gateway(window, cx));
+                        },
+                    ));
+                    let signout = view.clone();
+                    menu.item(
+                        PopupMenuItem::new("Sign out").on_click(move |_, window, cx| {
+                            let _ = signout.update(cx, |this, cx| this.sign_out(window, cx));
+                        }),
+                    )
+                },
+            ))
             .child(self.gateway_menu(cx))
             .into_any_element()
     }

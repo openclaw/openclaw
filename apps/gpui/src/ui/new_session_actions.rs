@@ -4,7 +4,10 @@ use crate::{
         composer_rpc::{CommandsResult, ModelsResult},
         new_session_rpc::*,
     },
-    model::new_session::{Destination, DraftSession},
+    model::{
+        composer_capabilities::{has_operator_scope, method_available},
+        new_session::{Destination, DraftSession},
+    },
 };
 use gpui_kit::{component::input::InputState, *};
 use serde_json::{Value, json};
@@ -173,17 +176,13 @@ impl AppView {
     pub(super) fn draft_method(&self, method: &str) -> bool {
         self.session
             .as_ref()
-            .and_then(|s| s.hello().pointer("/features/methods"))
-            .and_then(Value::as_array)
-            .is_some_and(|ms| ms.iter().any(|m| m.as_str() == Some(method)))
+            .is_some_and(|session| method_available(session.hello(), method))
     }
 
     pub(super) fn draft_admin(&self) -> bool {
         self.session
             .as_ref()
-            .and_then(|s| s.hello().pointer("/auth/scopes"))
-            .and_then(Value::as_array)
-            .is_some_and(|scopes| scopes.iter().any(|s| s == "operator.admin"))
+            .is_some_and(|session| has_operator_scope(session.hello(), "operator.admin"))
     }
 
     pub(super) fn load_draft_catalogs(&mut self, cx: &mut Context<Self>) {
@@ -191,8 +190,8 @@ impl AppView {
         let generation = self.new_session.discovery_generation;
         let agent = self.new_session.draft.agent_id.clone();
         self.new_session.environment_scope = None;
-        self.new_session.model_metadata.clear();
-        self.new_session.model_policy = None;
+        self.composer_state.models.clear();
+        self.composer_state.model_selection_policy = None;
         self.load_draft_destinations(cx);
         if self.draft_method("system.info") {
             self.request("system.info", json!({}), cx, move |this, result, _| {
@@ -253,9 +252,6 @@ impl AppView {
                 "Group defaults are unavailable. Use New chat to start without this group.".into(),
             );
         }
-        self.composer_state.models.clear();
-        self.new_session.model_metadata.clear();
-        self.new_session.model_policy = None;
         self.composer_state.commands.clear();
         self.composer_state.catalogs_loading = true;
         self.request(
@@ -267,26 +263,11 @@ impl AppView {
                     return;
                 }
                 this.composer_state.catalogs_loading = false;
-                let result = result.map(|value| {
-                    this.new_session.model_policy = value.get("modelSelectionPolicy").cloned();
-                    for model in value["models"].as_array().into_iter().flatten() {
-                        if let (Some(id), Some(provider)) =
-                            (model["id"].as_str(), model["provider"].as_str())
-                        {
-                            let key = if id.starts_with(&format!("{provider}/")) {
-                                id.to_owned()
-                            } else {
-                                format!("{provider}/{id}")
-                            };
-                            this.new_session
-                                .model_metadata
-                                .insert(key.to_lowercase(), model.clone());
-                        }
-                    }
-                    value
-                });
                 match result.and_then(decode::<ModelsResult>) {
-                    Ok(result) => this.composer_state.models = result.models,
+                    Ok(result) => {
+                        this.composer_state.models = result.models;
+                        this.composer_state.model_selection_policy = result.model_selection_policy;
+                    }
                     Err(error) => {
                         this.new_session.error = Some(format!("Models unavailable: {error}"))
                     }
@@ -316,8 +297,7 @@ impl AppView {
     fn load_draft_destinations(&mut self, cx: &mut Context<Self>) {
         let runtime = self
             .draft_runtime()
-            .and_then(|runtime| runtime["id"].as_str())
-            .map(str::to_owned);
+            .map(|runtime| runtime.id.trim().to_owned());
         let scope = (
             self.epoch,
             self.new_session.draft.agent_id.clone(),

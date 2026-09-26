@@ -1,4 +1,16 @@
-use super::{AppView, new_session::DraftPicker, new_session_actions::clone_url, theme::Palette};
+use super::{
+    AppView,
+    components::{
+        controls, icons,
+        menu::{
+            self, MenuStyle, inline_detail_row as checkout_option, input_field as checkout_field,
+            note, section_header as title, selection_row as row,
+        },
+    },
+    new_session::DraftPicker,
+    new_session_actions::clone_url,
+    theme::{Palette, draft_tokens as t, menu_tokens as m},
+};
 use crate::model::new_session::{
     Destination, Visibility, is_worktree_name_valid, worktree_branch_name,
 };
@@ -8,7 +20,6 @@ use gpui_kit::{
         Disableable, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         input::{Input, Textarea},
-        popover::Popover,
     },
     prelude::FluentBuilder,
     *,
@@ -39,26 +50,26 @@ impl AppView {
             .id("new-session-composer")
             .v_flex()
             .w_full()
-            .gap(px(8.))
-            .px(px(14.))
-            .py(px(12.))
-            .min_h(px(112.))
+            .gap(px(t::STACK_GAP))
+            .px(px(t::COMPOSER_INSET))
+            .py(px(t::COMPOSER_PADDING_Y))
+            .min_h(px(t::COMPOSER_HEIGHT))
             .justify_between()
             .bg(p.card)
             .border_1()
             .border_color(p.border_strong)
-            .rounded(px(20.))
+            .rounded(px(t::COMPOSER_RADIUS))
             .capture_key_down(cx.listener(Self::composer_key_down))
             .children(self.attachment_rail(cx))
             .child(
                 Textarea::new(&self.composer)
-                    .mx(px(-10.))
+                    .mx(px(t::EDITOR_MARGIN_X))
                     .aria_label("What should this session work on?")
                     .accessibility_id("new-session-message")
                     .appearance(false)
                     .bordered(false)
                     .disabled(state.locked())
-                    .text_size(px(15.))
+                    .text_size(px(t::EDITOR_TEXT_SIZE))
                     .on_paste(move |item, _, cx| {
                         paste_target
                             .update(cx, |this, cx| this.composer_paste(item, cx))
@@ -67,7 +78,7 @@ impl AppView {
             )
             .children(self.composer_state.error.as_ref().map(|error| {
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(t::CAPTION_TEXT_SIZE))
                     .text_color(p.danger)
                     .child(error.clone())
             }))
@@ -75,7 +86,7 @@ impl AppView {
                 el.child(
                     div()
                         .text_color(p.muted)
-                        .text_size(px(12.))
+                        .text_size(px(t::CAPTION_TEXT_SIZE))
                         .child("Reading attachment…"),
                 )
             })
@@ -83,9 +94,9 @@ impl AppView {
                 div()
                     .h_flex()
                     .group("new-session-footer")
-                    .mx(px(-6.))
+                    .mx(px(t::FOOTER_MARGIN_X))
                     .items_center()
-                    .gap(px(6.))
+                    .gap(px(t::CONTROL_GAP))
                     .child(self.composer_plus_control(cx))
                     .child(self.permission_control(cx))
                     .when(self.composer_draft_available(), |el| {
@@ -93,8 +104,8 @@ impl AppView {
                             Button::new("draft-visibility")
                                 .ghost()
                                 .small()
-                                .h(px(30.))
-                                .icon(Icon::new(IconName::Pencil).size(px(14.)))
+                                .h(px(t::FOOTER_CONTROL_SIZE))
+                                .icon(Icon::new(IconName::Pencil).size(px(m::ICON_SIZE)))
                                 .label("Draft")
                                 .text_color(if draft.visibility == Visibility::Draft {
                                     p.accent
@@ -104,8 +115,10 @@ impl AppView {
                                 .tooltip("Keep this session to yourself until you publish it")
                                 .disabled(state.locked())
                                 .when(draft.visibility != Visibility::Draft, |el| {
-                                    el.opacity(0.)
-                                        .group_hover("new-session-footer", |el| el.opacity(1.))
+                                    el.opacity(t::HIDDEN_CONTROL_OPACITY)
+                                        .group_hover("new-session-footer", |el| {
+                                            el.opacity(t::VISIBLE_CONTROL_OPACITY)
+                                        })
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.new_session.draft.visibility =
@@ -125,7 +138,7 @@ impl AppView {
                         Button::new("start-session")
                             .primary()
                             .small()
-                            .size(px(30.))
+                            .size(px(t::FOOTER_CONTROL_SIZE))
                             .rounded_full()
                             .child(
                                 Icon::new(if state.submitting {
@@ -133,7 +146,7 @@ impl AppView {
                                 } else {
                                     IconName::ArrowUp
                                 })
-                                .size(px(16.)),
+                                .size(px(t::FOOTER_ICON_SIZE)),
                             )
                             .accessibility_label(if state.submitting {
                                 "Starting session"
@@ -154,7 +167,7 @@ impl AppView {
             .h_flex()
             .flex_wrap()
             .items_center()
-            .gap(px(2.))
+            .gap(px(t::CHIP_GAP))
             .when(self.sidebar_state.agents.len() > 1, |el| {
                 el.child(self.draft_picker(
                     DraftPicker::Agent,
@@ -240,18 +253,18 @@ impl AppView {
         });
         div().id("new-session-page").relative().flex_1().min_w_0().h_full()
             .child(div().id("new-session-scroll").v_flex().items_center().size_full().overflow_y_scroll()
-                .pt(px(32.)).px(px(36.)).pb(px(24.))
+                .pt(px(t::SCROLL_TOP)).px(px(t::SCROLL_PADDING_X)).pb(px(t::SCROLL_BOTTOM))
                 .on_drop(cx.listener(|this,paths:&ExternalPaths,_,cx| this.attach_paths(paths.paths().to_vec(),cx)))
-                .child(div().v_flex().items_center().gap(px(12.))
-                    .children(agent.map(|agent| div().size(px(96.)).h_flex().items_center().justify_center().text_size(px(14.)).child(agent.avatar())))
-                    .child(div().v_flex().items_center().gap(px(6.))
-                        .child(div().text_size(px(24.)).line_height(px(37.2)).font_weight(FontWeight::SEMIBOLD)
+                .child(div().v_flex().items_center().gap(px(t::HERO_GAP))
+                    .children(agent.map(|agent| div().size(px(t::HERO_AVATAR_SIZE)).h_flex().items_center().justify_center().text_size(px(t::ICON_SIZE)).child(agent.avatar())))
+                    .child(div().v_flex().items_center().gap(px(t::CONTROL_GAP))
+                        .child(div().text_size(px(t::TITLE_TEXT_SIZE)).line_height(px(t::TITLE_LINE_HEIGHT)).font_weight(t::TITLE_WEIGHT)
                             .child(agent.map(|a|a.name()).unwrap_or("Assistant").to_owned()))
-                        .child(div().text_size(px(13.)).line_height(px(20.15)).text_color(p.muted).child("Pick where this session works, then say what to do."))))
-                .child(div().v_flex().w_full().max_w(px(768.)).mt(px(44.)).gap(px(8.))
+                        .child(div().text_size(px(t::BODY_TEXT_SIZE)).line_height(px(t::HINT_LINE_HEIGHT)).text_color(p.muted).child("Pick where this session works, then say what to do."))))
+                .child(div().v_flex().w_full().max_w(px(t::COMPOSER_WIDTH)).mt(px(t::FORM_TOP)).gap(px(t::STACK_GAP))
                     .child(target_row)
-                    .when(invalid_name,|el| el.child(div().text_size(px(12.)).text_color(p.danger).px(px(18.)).child("Use lowercase letters, digits, and dashes (up to 64).")))
-                    .children(state.error.as_ref().map(|error| div().text_size(px(12.)).text_color(p.danger).child(error.clone())))
+                    .when(invalid_name,|el| el.child(div().text_size(px(t::CAPTION_TEXT_SIZE)).text_color(p.danger).px(px(t::NOTICE_INSET)).child("Use lowercase letters, digits, and dashes (up to 64).")))
+                    .children(state.error.as_ref().map(|error| div().text_size(px(t::CAPTION_TEXT_SIZE)).text_color(p.danger).child(error.clone())))
                     .when(state.group_failed,|el|el.child(Button::new("retry-group-defaults").ghost().small().label("Retry group defaults")
                         .on_click(cx.listener(|this,_,_,cx|{this.new_session.group_failed=false;this.new_session.group_pending=true;this.load_draft_catalogs(cx);}))))
                     .when(state.error.is_some() && state.completed_key.is_some(), |el| {
@@ -260,18 +273,19 @@ impl AppView {
                             .on_click(cx.listener(move|this,_,window,cx|this.select_session(key.clone(),window,cx))))
                     })
                     .child(composer)
-                    .when(incognito, |el| el.child(div().text_size(px(12.)).text_color(p.muted).px(px(14.)).child(
+                    .when(incognito, |el| el.child(div().text_size(px(t::CAPTION_TEXT_SIZE)).text_color(p.muted).px(px(t::COMPOSER_INSET)).child(
                         "Keep this session for 24 hours or until the Gateway restarts, whichever comes first"))))
                 .when(!incognito && self.composer.read(cx).value().trim().is_empty(), |el| el.child(
-                    div().v_flex().w_full().max_w(px(520.)).mt(px(36.)).gap(px(2.))
-                        .when(!recent.is_empty(), |el| el.child(div().px(px(12.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(p.muted).child("RECENT CHATS")))
+                    div().v_flex().w_full().max_w(px(t::RECENT_WIDTH)).mt(px(t::RECENT_TOP)).gap(px(t::CHIP_GAP))
+                        .when(!recent.is_empty(), |el| el.child(div().px(px(t::RECENT_ROW_PADDING_X)).text_size(px(t::CAPTION_TEXT_SIZE)).font_weight(t::TITLE_WEIGHT).text_color(p.muted).child("RECENT CHATS")))
                         .children(recent.into_iter().take(5).map(|row| {
                             let key = row.key.clone();
-                            Button::new(SharedString::from(format!("draft-recent-{key}"))).ghost().small().h(px(40.)).px(px(12.)).justify_start()
+                            Button::new(SharedString::from(format!("draft-recent-{key}"))).ghost().small().h(px(t::RECENT_ROW_HEIGHT)).px(px(t::RECENT_ROW_PADDING_X)).justify_start()
                                 .accessibility_label(row.title()).child(div().flex_1().text_left().child(row.title())).on_click(cx.listener(move |this,_,window,cx|this.select_session(key.clone(),window,cx)))
                         })))))
-            .child(Button::new("new-session-incognito").ghost().small().absolute().top(px(10.)).right(px(10.)).size(px(40.))
-                .border_1().border_color(p.border).rounded(px(12.)).child(incognito_icon(p.muted))
+            .child(Button::new("new-session-incognito").ghost().small().absolute().top(px(t::INCOGNITO_INSET)).right(px(t::INCOGNITO_INSET)).size(px(t::INCOGNITO_BUTTON_SIZE))
+                .border_1().border_color(p.border).rounded(px(t::INCOGNITO_RADIUS)).child(icons::incognito(if incognito {p.accent} else {p.muted}))
+                .when(incognito,|el|el.border_color(p.accent.opacity(t::ACTIVE_BORDER_OPACITY)).bg(p.accent.opacity(t::ACTIVE_BACKGROUND_OPACITY)))
                 .text_color(if incognito {p.accent} else {p.muted}).accessibility_label("Incognito")
                 .tooltip(if self.draft_admin(){"Keep this session for 24 hours or until the Gateway restarts, whichever comes first"}else{"Incognito requires administrator access"}).disabled(state.locked() || !self.draft_admin())
                 .on_click(cx.listener(|this,_,_,cx| {
@@ -290,15 +304,50 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let view = cx.entity().downgrade();
-        let p = Palette::get(cx);
-        Popover::new(id)
-            .anchor(Anchor::TopLeft)
-            .open(self.new_session.picker == Some(kind))
-            .appearance(false)
-            .on_open_change(move |open, window, cx| {
+        let accessible_label = format!(
+            "{}: {label}",
+            match kind {
+                DraftPicker::Agent => "Agent",
+                DraftPicker::Destination => "Environment",
+                DraftPicker::Project => "Project",
+                DraftPicker::Checkout => "Checkout",
+            }
+        );
+        let trigger = controls::chip(
+            SharedString::from(format!("{id}-trigger")),
+            label,
+            if kind == DraftPicker::Agent {
+                div()
+                    .text_size(px(t::ICON_SIZE))
+                    .child(
+                        self.sidebar_state
+                            .agents
+                            .iter()
+                            .find(|a| a.id == self.new_session.draft.agent_id)
+                            .map(|a| a.avatar())
+                            .unwrap_or_default(),
+                    )
+                    .into_any_element()
+            } else {
+                Icon::new(icon).size(px(m::ICON_SIZE)).into_any_element()
+            },
+            cx,
+        )
+        .accessibility_label(accessible_label)
+        .disabled(self.new_session.locked());
+        menu::popover(
+            id,
+            Anchor::TopLeft,
+            self.new_session.picker == Some(kind),
+            trigger,
+            content,
+            move |open, window, cx| {
                 let _ = view.update(cx, |this, cx| {
-                    this.new_session.picker = (*open).then_some(kind);
-                    if *open {
+                    if (this.new_session.picker == Some(kind)) == open {
+                        return;
+                    }
+                    this.new_session.picker = open.then_some(kind);
+                    if open {
                         this.new_session.search.update(cx, |input, cx| {
                             input.set_placeholder(
                                 match kind {
@@ -317,97 +366,44 @@ impl AppView {
                     }
                     cx.notify();
                 });
-            })
-            .trigger(
-                Button::new(SharedString::from(format!("{id}-trigger")))
-                    .ghost()
-                    .small()
-                    .h(px(26.))
-                    .px(px(10.))
-                    .rounded_full()
-                    .text_size(px(12.))
-                    .text_color(p.muted)
-                    .accessibility_label(label.clone())
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(if kind == DraftPicker::Agent {
-                                div()
-                                    .text_size(px(14.))
-                                    .child(
-                                        self.sidebar_state
-                                            .agents
-                                            .iter()
-                                            .find(|a| a.id == self.new_session.draft.agent_id)
-                                            .map(|a| a.avatar())
-                                            .unwrap_or_default(),
-                                    )
-                                    .into_any_element()
-                            } else {
-                                Icon::new(icon).size(px(14.)).into_any_element()
-                            })
-                            .child(label),
-                    )
-                    .dropdown_caret(true)
-                    .disabled(self.new_session.locked()),
-            )
-            .child(content)
-            .into_any_element()
+            },
+        )
+        .into_any_element()
     }
 
     fn draft_agent_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::get(cx);
-        panel("draft-agents-menu", 320., cx)
-            .gap_0()
-            .child(
-                div()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .text_size(px(11.))
-                    .line_height(px(16.))
-                    .text_color(p.muted)
-                    .child("AGENTS"),
+        menu::panel(
+            "draft-agents-menu",
+            t::AGENT_MENU_WIDTH,
+            MenuStyle::Selection,
+            cx,
+        )
+        .gap_0()
+        .child(
+            div()
+                .px(px(m::ROW_PADDING_X))
+                .py(px(t::HEADER_PADDING_Y))
+                .text_size(px(t::HEADING_TEXT_SIZE))
+                .line_height(px(t::HEADER_LINE_HEIGHT))
+                .text_color(p.muted)
+                .child("AGENTS"),
+        )
+        .children(self.sidebar_state.agents.iter().map(|agent| {
+            let id = agent.id.clone();
+            let selected = self.new_session.draft.agent_id == id;
+            controls::identity_row(
+                SharedString::from(format!("draft-agent-{id}")),
+                agent.name().to_owned(),
+                self.render_agent_avatar(agent, t::IDENTITY_AVATAR_SIZE, cx),
+                selected,
+                cx,
             )
-            .children(self.sidebar_state.agents.iter().map(|agent| {
-                let id = agent.id.clone();
-                let selected = self.new_session.draft.agent_id == id;
-                Button::new(SharedString::from(format!("draft-agent-{id}")))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .h(px(36.))
-                    .px(px(8.))
-                    .accessibility_label(agent.name().to_owned())
-                    .when(selected, |el| el.bg(p.hover))
-                    .child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(self.render_agent_avatar(agent, 20., cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_left()
-                                    .text_size(px(13.))
-                                    .child(agent.name().to_owned()),
-                            )
-                            .child(div().w(px(16.)).when(selected, |el| {
-                                el.child(
-                                    Icon::new(IconName::Check)
-                                        .size(px(14.))
-                                        .text_color(p.accent),
-                                )
-                            })),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.choose_draft_agent(id.clone(), window, cx)
-                    }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.choose_draft_agent(id.clone(), window, cx)
             }))
-            .into_any_element()
+        }))
+        .into_any_element()
     }
 
     fn draft_destination_label(&self) -> String {
@@ -435,19 +431,24 @@ impl AppView {
     fn draft_destination_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = &self.new_session;
         let query = state.search.read(cx).value().to_lowercase();
-        let mut menu = panel("draft-destination-menu", 360., cx)
-            .child(
-                Input::new(&state.search)
-                    .small()
-                    .appearance(false)
-                    .h(px(28.))
-                    .px(px(8.))
-                    .rounded(px(6.))
-                    .bg(Palette::get(cx).hover)
-                    .prefix(Icon::new(IconName::Search).size(px(14.)))
-                    .aria_label("Search environments"),
-            )
-            .child(title("YOUR DEVICES", cx));
+        let mut menu = menu::panel(
+            "draft-destination-menu",
+            t::DESTINATION_MENU_WIDTH,
+            MenuStyle::Selection,
+            cx,
+        )
+        .child(
+            Input::new(&state.search)
+                .small()
+                .appearance(false)
+                .h(px(m::ROW_HEIGHT))
+                .px(px(m::ROW_PADDING_X))
+                .rounded(px(t::SEARCH_RADIUS))
+                .bg(Palette::get(cx).hover)
+                .prefix(Icon::new(IconName::Search).size(px(m::ICON_SIZE)))
+                .aria_label("Search environments"),
+        )
+        .child(title("YOUR DEVICES", cx));
         let devices = state
             .environments
             .environments
@@ -487,7 +488,7 @@ impl AppView {
                     state.draft.destination == Destination::Local,
                     cx,
                 )
-                .icon(Icon::new(IconName::House).size(px(14.)))
+                .icon(Icon::new(IconName::House).size(px(m::ICON_SIZE)))
                 .tooltip("Runs on this Gateway")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.choose_draft_destination(Destination::Local, cx)
@@ -502,7 +503,7 @@ impl AppView {
             }
             let reason = self.draft_device_reason(device);
             menu=menu.child(row(format!("draft-device-{id}"),label,matches!(&state.draft.destination,Destination::Device{device_id} if device_id==&id),cx)
-                .icon(Icon::new(IconName::Monitor).size(px(14.))).disabled(reason.is_some())
+                .icon(Icon::new(IconName::Monitor).size(px(m::ICON_SIZE))).disabled(reason.is_some())
                 .tooltip(format!("{}{}",device.platform.as_deref().unwrap_or("Device"),device.worker_slots.as_ref().map(|slots|format!(" · {}/{} slots available",slots.available,slots.total)).unwrap_or_default()))
                 .when_some(reason,|el,reason|el.tooltip(reason))
                 .on_click(cx.listener(move|this,_,_,cx|this.choose_draft_destination(Destination::Device{device_id:id.clone()},cx))));
@@ -525,7 +526,7 @@ impl AppView {
                         selected,
                         cx,
                     )
-                    .icon(Icon::new(IconName::Cloud).size(px(14.)))
+                    .icon(Icon::new(IconName::Cloud).size(px(m::ICON_SIZE)))
                     .disabled(self.draft_cloud_reason(profile).is_some())
                     .when_some(self.draft_cloud_reason(profile), |el, reason| {
                         el.tooltip(reason)
@@ -585,7 +586,12 @@ impl AppView {
     fn draft_project_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = &self.new_session;
         let draft = &state.draft;
-        let mut menu = panel("draft-project-menu", 420., cx);
+        let mut menu = menu::panel(
+            "draft-project-menu",
+            t::PROJECT_MENU_WIDTH,
+            MenuStyle::Selection,
+            cx,
+        );
         if state.browsing {
             menu =
                 menu.child(row("draft-browser-back", "‹ Projects", false, cx).on_click(
@@ -618,7 +624,7 @@ impl AppView {
                             cx,
                         )
                         .when(entry.hidden, |el| el.text_color(Palette::get(cx).muted))
-                        .icon(Icon::new(IconName::Folder).size(px(14.)))
+                        .icon(Icon::new(IconName::Folder).size(px(m::ICON_SIZE)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.browse_draft_folder(Some(path.clone()), cx)
                         })),
@@ -667,7 +673,7 @@ impl AppView {
                     draft.folder == folder && draft.project_id.is_empty(),
                     cx,
                 )
-                .icon(Icon::new(IconName::Folder).size(px(14.)))
+                .icon(Icon::new(IconName::Folder).size(px(m::ICON_SIZE)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.choose_draft_folder(folder.clone(), window, cx)
                 })),
@@ -677,11 +683,11 @@ impl AppView {
             Input::new(&state.search)
                 .small()
                 .appearance(false)
-                .h(px(28.))
-                .px(px(8.))
+                .h(px(m::ROW_HEIGHT))
+                .px(px(m::ROW_PADDING_X))
                 .border_1()
                 .border_color(Palette::get(cx).border)
-                .rounded(px(6.))
+                .rounded(px(t::SEARCH_RADIUS))
                 .bg(Palette::get(cx).bg)
                 .aria_label("Search projects or paste a clone URL"),
         );
@@ -706,7 +712,7 @@ impl AppView {
                     draft.project_id == project.id,
                     cx,
                 )
-                .icon(Icon::new(IconName::GitBranch).size(px(14.)))
+                .icon(Icon::new(IconName::GitBranch).size(px(m::ICON_SIZE)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.choose_draft_project(project.clone(), window, cx)
                 })),
@@ -738,7 +744,7 @@ impl AppView {
         }
         menu.child(
             row("draft-browse", "Browse folders", false, cx)
-                .icon(Icon::new(IconName::Folder).size(px(14.)))
+                .icon(Icon::new(IconName::Folder).size(px(m::ICON_SIZE)))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.browse_draft_folder(Some(this.new_session.draft.folder.clone()), cx)
                 })),
@@ -750,9 +756,14 @@ impl AppView {
         let state = &self.new_session;
         let draft = &state.draft;
         let repository = draft.destination.is_remote() && !draft.project_git_url.is_empty();
-        let mut menu = panel(
+        let mut menu = menu::panel(
             "draft-checkout-menu",
-            if draft.worktree { 310. } else { 282.5 },
+            if draft.worktree {
+                t::WORKTREE_MENU_WIDTH
+            } else {
+                t::CHECKOUT_MENU_WIDTH
+            },
+            MenuStyle::Selection,
             cx,
         )
         .child(title("CHECKOUT", cx));
@@ -786,7 +797,6 @@ impl AppView {
                         state.branches.repository_status.as_deref() != Some("git")
                             && draft.project_git_url.is_empty(),
                     )
-                    .tooltip("Isolated copy of the repo")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.new_session.draft.worktree = true;
                         this.new_session.draft.fresh_workspace = false;
@@ -861,141 +871,6 @@ impl AppView {
     }
 }
 
-fn panel(id: &'static str, width: f32, cx: &App) -> Stateful<Div> {
-    let p = Palette::get(cx);
-    div()
-        .id(id)
-        .v_flex()
-        .w(px(width))
-        .max_h(px(360.))
-        .overflow_y_scroll()
-        .p(px(5.))
-        .gap(px(2.))
-        .rounded(px(12.))
-        .bg(p.elevated)
-        .border_1()
-        .border_color(p.border_strong)
-        .shadow_lg()
-}
-fn row(
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    selected: bool,
-    cx: &App,
-) -> Button {
-    let p = Palette::get(cx);
-    let label = label.into();
-    Button::new(id.into())
-        .ghost()
-        .small()
-        .w_full()
-        .min_h(px(28.))
-        .justify_start()
-        .px(px(8.))
-        .text_size(px(12.))
-        .text_color(p.text)
-        .accessibility_label(label.clone())
-        .child(div().flex_1().text_left().child(label))
-        .child(div().w(px(20.)).when(selected, |el| {
-            el.child(
-                Icon::new(IconName::Check)
-                    .size(px(14.))
-                    .text_color(p.accent),
-            )
-        }))
-}
-fn title(label: impl Into<SharedString>, cx: &App) -> Div {
-    div()
-        .px(px(8.))
-        .py(px(6.))
-        .text_size(px(11.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(Palette::get(cx).muted)
-        .child(label.into())
-}
-
-fn checkout_option(
-    id: &'static str,
-    label: &'static str,
-    icon: IconName,
-    detail: &str,
-    selected: bool,
-    cx: &App,
-) -> Button {
-    let p = Palette::get(cx);
-    Button::new(id)
-        .ghost()
-        .small()
-        .w_full()
-        .h(px(28.))
-        .px(px(8.))
-        .accessibility_label(label)
-        .when(selected, |el| el.bg(p.hover))
-        .child(
-            div()
-                .h_flex()
-                .w_full()
-                .items_center()
-                .gap(px(8.))
-                .child(Icon::new(icon).size(px(14.)))
-                .child(div().text_size(px(12.)).child(label))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(11.))
-                        .text_color(p.muted)
-                        .truncate()
-                        .child(detail.to_owned()),
-                )
-                .child(div().w(px(16.)).when(selected, |el| {
-                    el.child(
-                        Icon::new(IconName::Check)
-                            .size(px(14.))
-                            .text_color(p.accent),
-                    )
-                })),
-        )
-}
-
-fn checkout_field(
-    label: &'static str,
-    accessible: &'static str,
-    input: &Entity<gpui_kit::component::input::InputState>,
-    cx: &App,
-) -> Div {
-    let p = Palette::get(cx);
-    div()
-        .h_flex()
-        .items_center()
-        .gap(px(8.))
-        .px(px(8.))
-        .py(px(3.))
-        .child(
-            div()
-                .w(px(32.))
-                .flex_shrink_0()
-                .whitespace_nowrap()
-                .text_size(px(12.))
-                .text_color(p.muted)
-                .child(label),
-        )
-        .child(
-            Input::new(input)
-                .small()
-                .h(px(28.))
-                .flex_1()
-                .text_size(px(12.))
-                .aria_label(accessible),
-        )
-}
-fn note(label: impl Into<SharedString>, cx: &App) -> Div {
-    div()
-        .px(px(8.))
-        .py(px(6.))
-        .text_size(px(12.))
-        .text_color(Palette::get(cx).muted)
-        .child(label.into())
-}
 fn folder_name(path: &str) -> String {
     path.trim_end_matches('/')
         .rsplit('/')
@@ -1003,20 +878,4 @@ fn folder_name(path: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("Select folder")
         .to_owned()
-}
-
-fn incognito_icon(color: Hsla) -> AnyElement {
-    let color = Rgba::from(color);
-    let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="rgb({},{},{})" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5"/><path d="M14 2v5a1 1 0 0 0 1 1h5M10 22v-5M14 19v-2M18 20v-3M2 13h20M6 20v-3"/></svg>"#,
-        (color.r * 255.) as u8,
-        (color.g * 255.) as u8,
-        (color.b * 255.) as u8
-    );
-    img(std::sync::Arc::new(Image::from_bytes(
-        ImageFormat::Svg,
-        svg.into_bytes(),
-    )))
-    .size(px(19.))
-    .into_any_element()
 }
