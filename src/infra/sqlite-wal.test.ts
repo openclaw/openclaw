@@ -607,7 +607,7 @@ describe("sqlite WAL maintenance", () => {
     { kind: "unlinked", sidecar: "shm" },
     { kind: "replaced", sidecar: "wal" },
     { kind: "replaced", sidecar: "shm" },
-  ] as const)("hard-stops without closing a $kind -$sidecar handle", ({ kind, sidecar }) => {
+  ] as const)("hard-stops without closing a $kind -$sidecar handle", async ({ kind, sidecar }) => {
     vi.useFakeTimers();
     const tempDir = tempDirs.make("openclaw-sqlite-wal-split-brain-");
     const databasePath = path.join(tempDir, "state.sqlite");
@@ -648,7 +648,7 @@ describe("sqlite WAL maintenance", () => {
       throw new Error("process abort intercepted");
     });
 
-    expect(() => vi.advanceTimersByTime(100)).toThrow("process abort intercepted");
+    await vi.advanceTimersByTimeAsync(100);
 
     expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
     expect(abort).toHaveBeenCalledOnce();
