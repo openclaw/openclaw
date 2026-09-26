@@ -606,9 +606,27 @@ if (role === "leaf") {
       const controller = String.raw`
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { pathToFileURL } from "node:url";
 const [root, mode, repo] = process.argv.slice(2);
+let ownedLeaderPid, completedPsFault;
+const originalSpawnSync = childProcess.spawnSync;
+if (mode === "unknown") {
+  childProcess.spawnSync = function (...args) {
+    const result = Reflect.apply(originalSpawnSync, this, args);
+    const [command, argv] = args;
+    if (command === "ps" && ownedLeaderPid !== undefined && Array.isArray(argv) &&
+        argv.length === 5 && argv[0] === "-s" && argv[1] === String(ownedLeaderPid) &&
+        argv[2] === "-L" && argv[3] === "-o" && argv[4] === "pgid=,state=" &&
+        result.status === 23 && result.signal === null && !result.error) {
+      completedPsFault ??= { groupPid: ownedLeaderPid, status: result.status,
+        signal: result.signal, errorPresent: !!result.error };
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+}
 const { testing } = await import(${JSON.stringify(metadataUrl.href)});
 const { inspectManagedProcessGroup, waitForManagedProcessGroupExit } =
   await import(pathToFileURL(path.join(repo, "scripts/lib/managed-child-process.mts")));
@@ -636,12 +654,14 @@ try {
     renderSourceNodesHelpText: (context, taskContext) => {
       if (!taskContext) throw new Error("missing actual supervisor task context");
       renderState = context.env.OPENCLAW_STATE_DIR;
+      // Unknown mode fails every snapshot while the reaper holds the stopped group.
       return testing.spawnText([file("actor.mjs"), root, "leader"], {
         cwd: root, env: process.env, failureMessage: "supervised nodes fixture failed",
-        timeoutMs: 120000, killGraceMs: 5000, maxOutputBytes: 16384,
+        timeoutMs: 120000, killGraceMs: mode === "unknown" ? 1000 : 5000, maxOutputBytes: 16384,
         onTerminalFailure: taskContext.reportFailure, signal: taskContext.signal,
         spawnProcess: (...args) => {
           const child = spawn(...args);
+          ownedLeaderPid = child.pid;
           child.once("exit", (code, signal) => events.push({ event: "exit", code, signal }));
           child.once("close", (code, signal) => {
             events.push({ event: "close", code, signal });
@@ -676,9 +696,14 @@ try {
   outcome = { ok: false, code: error.code ?? null,
     cleanupCode: error.processTreeCleanupFailure?.code ?? null,
     preserveRenderState: error.preserveRenderState === true };
+} finally {
+  if (mode === "unknown") {
+    childProcess.spawnSync = originalSpawnSync;
+    syncBuiltinESMExports();
+  }
 }
 await liveControl;
-publish("outcome.json", { ...outcome, events, elapsedMs: Date.now() - started,
+publish("outcome.json", { ...outcome, completedPsFault, events, elapsedMs: Date.now() - started,
   outputPresent: fs.existsSync(outputPath), statePresent: !!renderState && fs.existsSync(renderState) });
 `;
       // The reaper owns the controller and adopted leaf. It never scans or signals unrelated PIDs.
@@ -954,7 +979,7 @@ finally:
           groupPresent: boolean;
           reaped: { pid: number; status: number }[];
         };
-        adopted: { pid: number };
+        adopted: { pid: number; pgid: number };
         signalZeroPresent: boolean;
         controllerCode: number;
         leaderClose: { code: number; signal: string | null };
@@ -967,6 +992,12 @@ finally:
           outputPresent: boolean;
           statePresent: boolean;
           events: { event: string; code: number; signal: string | null }[];
+          completedPsFault?: {
+            groupPid: number;
+            status: number;
+            signal: string | null;
+            errorPresent: boolean;
+          };
         };
         liveControl?: { observation: string; stopped: boolean; elapsedMs: number };
       };
@@ -1068,6 +1099,12 @@ finally:
         preserveRenderState: true,
         statePresent: true,
         outputPresent: false,
+      });
+      expect(unknown.outcome.completedPsFault).toEqual({
+        groupPid: unknown.adopted.pgid,
+        status: 23,
+        signal: null,
+        errorPresent: false,
       });
       expect(stopped.outcome, JSON.stringify(stopped.outcome)).toMatchObject({
         ok: true,
