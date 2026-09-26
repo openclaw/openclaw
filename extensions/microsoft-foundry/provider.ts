@@ -22,6 +22,30 @@ import {
 } from "./shared.js";
 
 type FoundryProviderHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+type FoundryManagedModel = Pick<
+  ModelProviderConfig["models"][number],
+  "contextWindow" | "contextTokens" | "maxTokens" | "metadataSource" | "params"
+>;
+
+function resolveFoundryManagedModelLimitRepair(
+  model: FoundryManagedModel,
+  capabilities: ReturnType<typeof resolveFoundryModelCapabilities>,
+): { contextWindow: number; maxTokens: number } | undefined {
+  // Repair only provider-generated fallback limits; explicit user caps remain authoritative.
+  if (
+    model.params?.canonicalModelId !== capabilities.modelName ||
+    model.contextWindow !== 128_000 ||
+    model.maxTokens !== 16_384 ||
+    model.contextTokens !== undefined ||
+    model.metadataSource !== undefined ||
+    !capabilities.modelName.toLowerCase().startsWith("gpt-5") ||
+    capabilities.contextWindow === model.contextWindow ||
+    capabilities.maxTokens === model.maxTokens
+  ) {
+    return undefined;
+  }
+  return { contextWindow: capabilities.contextWindow, maxTokens: capabilities.maxTokens };
+}
 
 const openAIResponsesStreamHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
 const wrapOpenAIResponsesStreamFn = openAIResponsesStreamHooks.wrapStreamFn;
@@ -111,6 +135,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
           thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap ?? model.thinkingLevelMap,
           params: { ...model.params, canonicalModelId: selectedModelCapabilities.modelName },
           input: selectedModelCapabilities.input,
+          ...resolveFoundryManagedModelLimitRepair(model, selectedModelCapabilities),
         });
         if (selectedModelCapabilities.compat) {
           const explicitSupportsReasoningEffort =
@@ -215,6 +240,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
         params: { ...model.params, canonicalModelId: capabilities.modelName },
         input: capabilities.input,
+        ...resolveFoundryManagedModelLimitRepair(model, capabilities),
         baseUrl: buildFoundryProviderBaseUrl(
           endpoint,
           modelId,
