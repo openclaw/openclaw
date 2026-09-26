@@ -46,12 +46,26 @@ beforeEach(() => {
     });
 });
 
+function observeChanges() {
+  const changed = vi.fn();
+  const facts = vi.fn();
+  const stop = sessionChanges.subscribe(changed);
+  const stopFacts = sessionChanges.subscribeFacts(facts);
+  return {
+    changed,
+    facts,
+    unsubscribe: () => {
+      stop();
+      stopFacts();
+    },
+  };
+}
+
 describe("gateway session row change publications", () => {
   it.each(["start", "end", "error"] as const)(
     "publishes lifecycle %s only after an accepted commit",
     async (phase) => {
-      const changed = vi.fn();
-      const unsubscribe = sessionChanges.subscribe(changed);
+      const { changed, facts, unsubscribe } = observeChanges();
       const write = (sessionId = entry.sessionId) =>
         persistGatewaySessionLifecycleEvent({
           sessionKey: target.sessionKey,
@@ -65,6 +79,7 @@ describe("gateway session row change publications", () => {
         rejectCommit = false;
         await write();
         expect(changed).toHaveBeenCalledExactlyOnceWith(target);
+        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
         await write("replaced-generation");
         expect(changed).toHaveBeenCalledTimes(1);
       } finally {
@@ -74,8 +89,7 @@ describe("gateway session row change publications", () => {
   );
 
   it("publishes observer digests only after an accepted commit", async () => {
-    const changed = vi.fn();
-    const unsubscribe = sessionChanges.subscribe(changed);
+    const { changed, facts, unsubscribe } = observeChanges();
     const write = () =>
       defaultPersistDigest({
         ...target,
@@ -96,6 +110,7 @@ describe("gateway session row change publications", () => {
       rejectCommit = false;
       expect(await write()).toBe(true);
       expect(changed).toHaveBeenCalledExactlyOnceWith(target);
+      expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
       expect(await write()).toBe(false);
       expect(changed).toHaveBeenCalledTimes(1);
     } finally {

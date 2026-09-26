@@ -463,6 +463,7 @@ export function buildPluginManifestRecord(params: {
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
+    uiCapabilities: params.manifest.uiCapabilities,
     themes: params.manifest.themes,
     themeDefinitions: loadManifestThemeDefinitions({
       pluginId,

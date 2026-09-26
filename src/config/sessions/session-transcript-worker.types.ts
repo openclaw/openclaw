@@ -320,7 +320,7 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing" | "sharing" | "replacement" | "creation";
+  projection?: "full" | "backing" | "sharing" | "replacement" | "creation" | "list";
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
@@ -346,6 +346,7 @@ export type SessionExactEntriesWorkerResult = {
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
+    databasePath: string;
   };
   sharing?: {
     source: { agentId: string; path: string };

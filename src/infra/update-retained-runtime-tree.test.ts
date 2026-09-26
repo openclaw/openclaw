@@ -270,7 +270,12 @@ it("copies overlay files without copy-up changing their admitted identity", asyn
       await fs.mkdir(path.dirname(destination), { recursive: true });
       await fs.writeFile(destination, `// ${file}\n`, { mode: 0o444 });
     }
+    await fs.chmod(path.dirname(path.join(source, nestedFiles[0]!)), 0o751);
   });
+  // Discovery can encounter a file before its parent directory's inventory entry.
+  f.plan.entries.sort(
+    (left, right) => Number(left.kind === "directory") - Number(right.kind === "directory"),
+  );
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   const disk = await fs.statfs(f.source);
   disk.type = 0x794c7630;
@@ -283,7 +288,9 @@ it("copies overlay files without copy-up changing their admitted identity", asyn
   });
   expect(link).not.toHaveBeenCalled();
   // Nested leaves must not repeat an ancestor-creation walk for every copied file.
-  expect(mkdir.mock.calls.length).toBeLessThanOrEqual(f.plan.entries.length * 2 + 1);
+  expect(mkdir.mock.calls.length).toBeLessThanOrEqual(
+    f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
+  );
   const retainedWorker = path.join(f.destination, "dist", "state", "worker.js");
   expect((await fs.stat(retainedWorker)).ino).not.toBe((await fs.stat(f.worker)).ino);
   expect(await fs.readFile(retainedWorker, "utf8")).toBe("export const generation = 'retained';\n");
@@ -293,6 +300,9 @@ it("copies overlay files without copy-up changing their admitted identity", asyn
     expect(await fs.readFile(retained, "utf8")).toBe(`// ${file}\n`);
     expect((await fs.stat(retained)).mode & 0o777).toBe(0o444);
   }
+  expect(
+    (await fs.stat(path.dirname(path.join(f.destination, nestedFiles[0]!)))).mode & 0o777,
+  ).toBe(0o751);
 });
 
 it.each([0, 1])("copies shared inode occurrence %i when hard links are refused", async (index) => {

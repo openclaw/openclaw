@@ -978,7 +978,6 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     run.bufferIsCurrent = opts?.isCurrent;
-    run.bufferUpdatedAt = now;
     if (!mergedRawText) {
       broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, "", opts);
       return;
@@ -1143,6 +1142,30 @@ export function createAgentEventHandler({
       shouldSuppressSilent,
     });
     const spawnedBy = resolveSpawnedBy(sessionKey);
+    const terminalPayload = {
+      runId: clientRunId,
+      sessionKey,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(spawnedBy && { spawnedBy }),
+      seq,
+    };
+    const createTerminalMessage = (canvasBlocks: NonNullable<ChatRunRecord["canvasBlocks"]>) =>
+      appendChatCanvasBlocksToMessage(
+        {
+          role: "assistant",
+          content: text ? [{ type: "text", text }] : [],
+          timestamp: Date.now(),
+          ...(opts?.assistantTranscriptIdempotencyKey
+            ? {
+                __openclaw: {
+                  runId: clientRunId,
+                  idempotencyKey: opts.assistantTranscriptIdempotencyKey,
+                },
+              }
+            : {}),
+        },
+        canvasBlocks,
+      );
     if (jobState !== "error") {
       const run = chatRunState.runs.get(clientRunId);
       const canvasBlocks = run?.canvasBlocks ?? [];
@@ -1153,11 +1176,7 @@ export function createAgentEventHandler({
         canvasBlocks.length > 0 &&
         !(run?.rawBuffer ?? run?.buffer ?? "").trim();
       const payload = {
-        runId: clientRunId,
-        sessionKey,
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-        ...(spawnedBy && { spawnedBy }),
-        seq,
+        ...terminalPayload,
         state: jobState === "done" ? ("final" as const) : ("aborted" as const),
         ...(jobState === "aborted" && opts?.abortErrorMessage
           ? { errorMessage: opts.abortErrorMessage }
@@ -1166,22 +1185,7 @@ export function createAgentEventHandler({
         ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
           (text && !shouldSuppressSilent) || canvasOnly
-            ? appendChatCanvasBlocksToMessage(
-                {
-                  role: "assistant",
-                  content: text ? [{ type: "text", text }] : [],
-                  timestamp: Date.now(),
-                  ...(opts?.assistantTranscriptIdempotencyKey
-                    ? {
-                        __openclaw: {
-                          runId: clientRunId,
-                          idempotencyKey: opts.assistantTranscriptIdempotencyKey,
-                        },
-                      }
-                    : {}),
-                },
-                canvasBlocks,
-              )
+            ? createTerminalMessage(canvasBlocks)
             : undefined,
       };
       if (payload.message) {
@@ -1193,26 +1197,11 @@ export function createAgentEventHandler({
     }
     const errorDetail = projectChatErrorDetail(opts?.errorObservation);
     const payload = {
-      runId: clientRunId,
-      sessionKey,
-      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-      ...(spawnedBy && { spawnedBy }),
-      seq,
+      ...terminalPayload,
       state: "error" as const,
       ...(opts?.assistantTranscriptIdempotencyKey && text && !shouldSuppressSilent
         ? {
-            message: appendChatCanvasBlocksToMessage(
-              {
-                role: "assistant",
-                content: [{ type: "text", text }],
-                timestamp: Date.now(),
-                __openclaw: {
-                  runId: clientRunId,
-                  idempotencyKey: opts.assistantTranscriptIdempotencyKey,
-                },
-              },
-              chatRunState.runs.get(clientRunId)?.canvasBlocks ?? [],
-            ),
+            message: createTerminalMessage(chatRunState.runs.get(clientRunId)?.canvasBlocks ?? []),
           }
         : {}),
       errorMessage: error ? formatForLog(error) : undefined,

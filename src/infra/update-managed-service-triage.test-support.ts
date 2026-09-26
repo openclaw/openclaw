@@ -7,11 +7,13 @@ import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
 import type { FixtureAcquisitionRollback } from "../../test/helpers/fixture-lifetime.js";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdUnitPath } from "../daemon/systemd-service-files.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { cleanupTriageBoundary } from "./triage-boundary-cleanup.test-support.js";
@@ -73,6 +75,9 @@ async function acquireTriageBoundary(
   await fs.mkdir(installRoot, { recursive: true });
   await fs.mkdir(candidateRoot, { recursive: true });
   const events = path.join(root, "events.jsonl");
+  const branchReadyPath = path.join(root, "branch-ready");
+  const fixtureStopping = new AbortController();
+  let branchReady: Promise<void> | undefined;
   const scopeFile = path.join(root, "scope.json");
   const primaryFile = path.join(root, "primary.json");
   const bin = path.join(root, "bin");
@@ -250,6 +255,7 @@ if (${Boolean(maintenance)}) {
   event('maintenance-exit',exit);
 }
 const branch=spawn(process.execPath,['-e',${JSON.stringify(common + "event('descendant', {stateDir:process.env.OPENCLAW_STATE_DIR, workspace:process.env.OPENCLAW_WORKSPACE_DIR, shell:process.env.OPENCLAW_SHELL, compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}); const {spawn}=require('node:child_process'); spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'});
+branch.once('spawn',()=>fs.writeFileSync(${JSON.stringify(branchReadyPath)},'ready'));
 event('branch',{child:branch.pid});
 admission.signal.addEventListener('abort',()=>{event('cancelled');void admission.finish("uncertain");process.exitCode=1;});
 await new Promise(resolve=>admission.signal.addEventListener('abort',resolve,{once:true}));
@@ -430,6 +436,16 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     helper,
     parent,
     exit,
+    waitForBranch: () => {
+      fixtureStopping.signal.throwIfAborted();
+      branchReady ??= waitForFixtureFile(
+        branchReadyPath,
+        racePromiseWithAbortSignal(exit, fixtureStopping.signal),
+      ).then(() => {
+        fixtureStopping.signal.throwIfAborted();
+      });
+      return branchReady;
+    },
     readEvents,
     output: () => output,
     stderr: () => stderr,
@@ -510,8 +526,10 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
           alive: isPidAlive(Number(pid)),
         })),
       ),
-    cleanup: () =>
-      cleanupTriageBoundary({
+    cleanup: async () => {
+      fixtureStopping.abort();
+      await branchReady?.catch(() => {});
+      await cleanupTriageBoundary({
         root,
         groups,
         helper,
@@ -521,7 +539,8 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         lines,
         readEvents,
         databasePath,
-      }),
+      });
+    },
   };
 }
 

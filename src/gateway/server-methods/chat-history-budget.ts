@@ -134,7 +134,7 @@ function isChatHistoryActivity(message: unknown): boolean {
     return false;
   }
   const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+  if (isToolResultContentType(role) || role === "tool" || role === "function") {
     return isPlainHistoryToolResult(entry);
   }
   if (
@@ -308,12 +308,16 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
+  const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
+    if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
+      return false;
+    }
+    bounded = candidate;
+    return true;
+  };
 
   if (params.snapshot.startedAt !== undefined) {
-    const candidate = { ...bounded, startedAt: params.snapshot.startedAt };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
+    retainIfWithinBudget({ ...bounded, startedAt: params.snapshot.startedAt });
   }
 
   if (params.snapshot.events) {
@@ -323,9 +327,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
     // Try all progress first, then search suffixes instead of serializing each eviction.
     let middle = 0;
     while (start < end) {
-      const candidate = { ...bounded, events: events.slice(middle) };
-      if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-        bounded = candidate;
+      if (retainIfWithinBudget({ ...bounded, events: events.slice(middle) })) {
         end = middle;
       } else {
         start = middle + 1;
@@ -335,17 +337,11 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.plan) {
-    const candidate = { ...bounded, plan: params.snapshot.plan };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
+    retainIfWithinBudget({ ...bounded, plan: params.snapshot.plan });
   }
 
   if (params.snapshot.text) {
-    const candidate = { ...bounded, text: params.snapshot.text };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
+    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
   }
   return bounded;
 }

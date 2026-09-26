@@ -236,6 +236,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         state.chatMessage ||
         state.chatAttachments.length ||
         state.chatGoalDraftMode ||
+        state.chatReplyTarget ||
         state.chatMentions?.length ||
         this.attachmentReads.pendingReads,
       )
@@ -251,6 +252,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
           fallback.message ||
           fallback.attachments.length ||
           fallback.goalMode ||
+          fallback.replyTarget ||
           fallback.mentions?.length,
         )
       );
@@ -271,6 +273,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const chatMessage = fallback?.[1].message ?? state.chatMessage;
     const chatMentions = fallback ? fallback[1].mentions : state.chatMentions;
     const chatGoalDraftMode = fallback ? fallback[1].goalMode : state.chatGoalDraftMode;
+    const chatReplyTarget = fallback ? fallback[1].replyTarget : state.chatReplyTarget;
     const attachments = [...(fallback?.[1].attachments ?? state.chatAttachments)];
     const reads = this.attachmentReads;
     const pendingReads = fallback ? 0 : reads.pendingReads;
@@ -288,6 +291,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
           : state.chatMessage === chatMessage &&
             state.chatMentions === chatMentions &&
             state.chatGoalDraftMode === chatGoalDraftMode &&
+            state.chatReplyTarget === chatReplyTarget &&
             this.attachmentReads === reads &&
             reads.pendingReads === pendingReads &&
             state.chatAttachments.length === attachments.length &&
@@ -319,6 +323,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         reads.abortReads();
         state.chatAttachments = [];
         state.chatGoalDraftMode = null;
+        state.chatReplyTarget = null;
         state.handleChatDraftChange("", []);
       }
       const retained = state.captureComposerRecoveryOwner?.()?.retainedAttachmentIds(attachments);

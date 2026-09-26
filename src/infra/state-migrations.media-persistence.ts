@@ -58,7 +58,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -144,58 +144,79 @@ async function migrateAgentDatabase(params: {
       pathname: params.pathname,
     });
     assertSupportedAgentSchemaVersion(database, params.pathname);
-    const indexChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
-      label: `agent ${params.agentId}`,
-      assertCurrent: () => {
-        assertAgentDatabaseMaintenanceAuthority();
-        assertOpenClawAgentDatabaseOwner(database, params);
-      },
-    });
-    params.changes.push(...indexChanges);
+    let userVersion = readSqliteUserVersion(database);
+    const initialVersion = userVersion;
+    const prepareSchema = () => {
+      userVersion = readSqliteUserVersion(database);
+      if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
+        migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(database, {
+          agentId: params.agentId,
+          path: params.pathname,
+        });
+        metadata = assertOpenClawAgentDatabaseOwner(database, {
+          agentId: params.agentId,
+          pathname: params.pathname,
+        });
+        userVersion = readSqliteUserVersion(database);
+      }
+      if (metadata.schemaVersion !== userVersion) {
+        throw new Error(
+          `${params.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}`,
+        );
+      }
+      if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
+        // The canonical owner admits supported versions and converges additive schema;
+        // media must not enumerate later schema revisions independently.
+        ensureOpenClawAgentDatabaseSchema(database, {
+          agentId: params.agentId,
+          path: params.pathname,
+        });
+        userVersion = readSqliteUserVersion(database);
+      }
+    };
+    let indexChanges: string[] = [];
+    try {
+      prepareSchema();
+    } catch (error) {
+      if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
+        throw error;
+      }
+      // Admission already checks the whole file. Only a proven integrity failure
+      // needs Doctor's preserving repair scan under an immediate transaction.
+      indexChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
+        label: `agent ${params.agentId}`,
+        assertCurrent: () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          assertOpenClawAgentDatabaseOwner(database, params);
+        },
+      });
+      params.changes.push(...indexChanges);
+      prepareSchema();
+    }
     if (
       indexChanges.length > 0 ||
       agentDatabaseLifecycle.terminal.peek(params.pathname) ||
       readOpenClawDatabaseQuarantineFailure("agent", params.pathname, { env: params.env })
     ) {
-      runSqliteImmediateTransactionSync(database, () => {
-        if (indexChanges.length === 0) {
-          assertSqliteIntegrity(database, params.pathname);
-        }
-        assertAgentDatabaseMaintenanceAuthority();
-        assertOpenClawAgentDatabaseOwner(database, params);
-        if (!clearOpenClawAgentDatabaseOpenFailure(params.pathname, { env: params.env })) {
-          throw new Error(
-            `Repaired ${params.pathname}, but its quarantine record could not be cleared.`,
-          );
-        }
-      });
-    }
-    let userVersion = readSqliteUserVersion(database);
-    const initialVersion = userVersion;
-    if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
-      migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(database, {
-        agentId: params.agentId,
-        path: params.pathname,
-      });
-      metadata = assertOpenClawAgentDatabaseOwner(database, {
-        agentId: params.agentId,
-        pathname: params.pathname,
-      });
-      userVersion = readSqliteUserVersion(database);
-    }
-    if (metadata.schemaVersion !== userVersion) {
-      throw new Error(
-        `${params.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}`,
+      runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          if (indexChanges.length === 0) {
+            assertSqliteIntegrity(database, params.pathname);
+          }
+          assertAgentDatabaseMaintenanceAuthority();
+          assertOpenClawAgentDatabaseOwner(database, params);
+          if (!clearOpenClawAgentDatabaseOpenFailure(params.pathname, { env: params.env })) {
+            throw new Error(
+              `Repaired ${params.pathname}, but its quarantine record could not be cleared.`,
+            );
+          }
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "media-persistence.quarantine-clear",
+        },
       );
-    }
-    if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
-      // The canonical owner admits supported versions and converges additive schema;
-      // media must not enumerate later schema revisions independently.
-      ensureOpenClawAgentDatabaseSchema(database, {
-        agentId: params.agentId,
-        path: params.pathname,
-      });
-      userVersion = readSqliteUserVersion(database);
     }
     const mediaSchemaUpgrade = userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION;
     const assertMediaSchemaMigration = () => {

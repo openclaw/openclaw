@@ -125,7 +125,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
         selected?.id,
       );
     }
-    for (const key of ["Home", "End"]) {
+    for (const key of ["ArrowUp", "ArrowDown", "Home", "End"]) {
       for (const modifier of ["shiftKey", "altKey", "ctrlKey", "metaKey"]) {
         expect(view.key(key, { [modifier]: true }).defaultPrevented).toBe(false);
         expect(view.container.querySelector('[role="option"][aria-selected="true"]')).toBe(

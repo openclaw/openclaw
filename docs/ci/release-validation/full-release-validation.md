@@ -91,7 +91,7 @@ secrets. Failed preparation, denied approval and cancellation cannot publish.
 
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
-and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
+and attempt. Create the tooling tag with the [release publish commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#qualify-publication-bytes);
 real core npm, plugin npm, or ClawHub publication from `main` is rejected before
 child dispatch. Docker-only recovery may still use `main`.
 
