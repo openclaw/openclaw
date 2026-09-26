@@ -55,6 +55,15 @@ export function startGatewayTaskSubscriptions(params: {
           (!event.previous || !isTerminalTaskStatus(event.previous.status))
             ? event.task.taskId
             : undefined;
+        // Web Push only notifies on a genuine transition into failure. Restore
+        // replays and retention no-ops re-project an already-failed record, so
+        // the push path must ignore those re-projections.
+        const becameFailed =
+          event.kind === "upserted" &&
+          (event.task.status === "failed" ||
+            event.task.status === "timed_out" ||
+            event.task.status === "lost") &&
+          (!event.previous || !isTerminalTaskStatus(event.previous.status));
         const runOwner = taskId ? state.runOwners.get(taskId) : undefined;
         const backing = taskId
           ? JSON.stringify(readTaskBackingInstance(state.tasks.get(taskId)?.detail))
@@ -122,7 +131,12 @@ export function startGatewayTaskSubscriptions(params: {
                 }
               }
             };
-            payload = { action: "upserted", task };
+            payload = {
+              action: "upserted",
+              task,
+              ...(becameFailed ? { becameFailed: true as const } : {}),
+              notifyPolicy: event.task.notifyPolicy,
+            };
             break;
           }
           case "deleted":

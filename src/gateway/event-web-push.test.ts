@@ -202,6 +202,7 @@ describe("event Web Push classification", () => {
       payload: {
         action: "upserted",
         task: { id: "task-1", runtime: "subagent", status: "failed" },
+        becameFailed: true,
       },
       path: "chat/research/thread%2E1",
     },
@@ -350,6 +351,7 @@ describe("event Web Push classification", () => {
     delivery.handleEvent("task", {
       action: "upserted",
       task: { id: "task-1", title: "Build\u202E", status: "failed" },
+      becameFailed: true,
     });
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
@@ -372,6 +374,45 @@ describe("event Web Push classification", () => {
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({
         payload: expect.objectContaining({ body: "Nightly\\u{2028}run needs attention." }),
+      }),
+    );
+  });
+
+  it("does not resend a push for a re-projected failed task", async () => {
+    // Restore replays and retention no-ops re-project an already-failed record
+    // without a transition, so the broadcast carries no becameFailed flag.
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    delivery.handleEvent("task", {
+      action: "upserted",
+      task: { id: "task-1", title: "Nightly sync", status: "failed" },
+    });
+    await Promise.resolve();
+    expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not notify for a silent-policy task failure", async () => {
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    delivery.handleEvent("task", {
+      action: "upserted",
+      task: { id: "task-1", title: "Quiet cleanup", status: "failed" },
+      becameFailed: true,
+      notifyPolicy: ["silent"],
+    });
+    await Promise.resolve();
+    expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+  });
+
+  it("notifies when a task transitions into failure", async () => {
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    delivery.handleEvent("task", {
+      action: "upserted",
+      task: { id: "task-1", title: "Nightly sync", status: "failed" },
+      becameFailed: true,
+    });
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ body: "Nightly sync needs attention." }),
       }),
     );
   });

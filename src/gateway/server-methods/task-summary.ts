@@ -4,7 +4,7 @@ import type { TaskSummary } from "../../../packages/gateway-protocol/src/index.j
 import { getTaskExecutionObservation } from "../../tasks/task-execution-observation.js";
 import { hasTaskTranscript } from "../../tasks/task-history.js";
 import { getTaskActivitySnapshot } from "../../tasks/task-registry-activity.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import type { TaskNotifyPolicy, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
   formatTaskStatusTitle,
@@ -28,7 +28,17 @@ const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
 };
 
 export type TaskEventPayload =
-  | { action: "upserted"; task: TaskSummary }
+  | {
+      action: "upserted";
+      task: TaskSummary;
+      // Set when the upsert transitioned the task into failed/timed_out.
+      // Restore replays and retention no-ops re-project an already-failed
+      // record, so notification paths must only trust this flag.
+      becameFailed?: boolean;
+      // Notification policy at publish time. Kept out of TaskSummary on
+      // purpose; notification paths read it from here instead.
+      notifyPolicy?: TaskNotifyPolicy;
+    }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
 

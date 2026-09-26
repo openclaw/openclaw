@@ -94,6 +94,15 @@ function resolveEventWebPushNotification(
     if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
       return null;
     }
+    // Only a transition into failure notifies. Gateway restore replays and
+    // retention no-ops re-project already-failed records, and those must not
+    // send a push for every restart.
+    if (value.becameFailed !== true) {
+      return null;
+    }
+    if (Array.isArray(value.notifyPolicy) && value.notifyPolicy.includes("silent")) {
+      return null;
+    }
     const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
     const taskTitle = normalizeWebPushDisplayLabel(task.title);
     return {
