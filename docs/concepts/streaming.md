@@ -200,15 +200,31 @@ instead of being overwritten in one editable draft.
 ### Channel mapping
 
 Discord defaults to `off` when `streaming` is unset, Telegram and Slack default
-to `progress`, and Mattermost and MS Teams default to `partial`.
+to `progress`, and Mattermost and MS Teams default to `partial`. Feishu (the
+bundled `extensions/feishu` channel) defaults to `partial` in direct chats.
 
-| Channel    | `off`         | `partial` | `block` | `progress`                        |
-| ---------- | ------------- | --------- | ------- | --------------------------------- |
-| Telegram   | Yes           | Yes       | Yes     | editable progress draft (default) |
-| Discord    | Yes (default) | Yes       | Yes     | editable progress draft (opt-in)  |
-| Slack      | Yes           | Yes       | Yes     | Block Kit session card (default)  |
-| Mattermost | Yes           | Yes       | Yes     | Yes                               |
-| MS Teams   | Yes           | Yes       | Yes     | native progress stream            |
+| Channel    | `off`         | `partial`                                                                                                                                                                                                              | `block` | `progress`                        |
+| ---------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------- |
+| Telegram   | Yes           | Yes                                                                                                                                                                                                                    | Yes     | editable progress draft (default) |
+| Discord    | Yes (default) | Yes                                                                                                                                                                                                                    | Yes     | editable progress draft (opt-in)  |
+| Slack      | Yes           | Yes                                                                                                                                                                                                                    | Yes     | Block Kit session card (default)  |
+| Mattermost | Yes           | Yes                                                                                                                                                                                                                    | Yes     | Yes                               |
+| MS Teams   | Yes           | Yes                                                                                                                                                                                                                    | Yes     | native progress stream            |
+| Feishu     | Yes           | Yes — card edits carrying the rolling progress draft and narration commentary lines (unavailable for replies that must carry outbound bot mentions, for `renderMode: "raw"`, and while modifying hooks are registered) | No      | No                                |
+
+The Feishu schema accepts only `off` and `partial` for `streaming.mode`; its
+progress rendering is the card-edit draft under `partial`, not the `progress`
+mode. Block-text delivery is configured separately through
+`channels.feishu.streaming.block.enabled` and is unaffected by the missing
+`block` mode value.
+
+Block streaming resolves per channel: an explicit
+`channels.<channel>.streaming.block.enabled` always wins; when it is unset, a
+preview-capable reply with an explicit `streaming.mode` (other than `off`)
+suppresses blocks, and otherwise `agents.defaults.blockStreamingDefault`
+decides. Blocks are the only mid-turn output path when no preview card can
+render, so channels that cannot stream a reply still deliver block text when
+the agent default is `on`.
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -365,7 +381,7 @@ result is still delivered normally to the model.
 
 Supported surfaces:
 
-- **Discord**, **Slack**, **Telegram**, and **Matrix** stream tool-progress and
+- **Discord**, **Slack**, **Telegram**, **Matrix**, and **Feishu** stream tool-progress and
   Codex preamble updates into the live preview edit by default when preview
   streaming is active. Microsoft Teams uses its native progress stream in
   personal chats.

@@ -29,7 +29,9 @@ including tool failures, with rows such as `🛠️ Bash: run tests`.
 <Note>
   Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
   to opt in. Telegram defaults to `progress` without additional config. Set
-  `mode: "partial"` on either to stream answer text instead. See
+  `mode: "partial"` on either to stream answer text instead. Feishu renders the
+  progress draft on its streaming card (tool lines also appear under
+  `mode: "partial"`). See
   [Streaming and chunking](/concepts/streaming#channel-mapping) for the full
   per-channel default table.
 </Note>

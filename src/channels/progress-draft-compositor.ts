@@ -78,6 +78,12 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const quietProgress = params.presentation === "summary" || !previewToolProgressEnabled;
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry, false, params.mode);
+  // The commentary lane is an opt-in presentation in progress mode. Partial
+  // preview mode (editable card drafts) adopts it unconditionally for narration
+  // preambles, mirroring how tool lines already flow there through
+  // previewToolProgressEnabled instead of the progress-only opt-in.
+  const commentaryLaneEnabled =
+    params.mode === "progress" ? commentaryProgressEnabled : previewToolProgressEnabled;
   // Reasoning is authored text, not tool telemetry: a quiet draft keeps it.
   const thinkingProgressEnabled = params.active && (params.reasoningGate ?? true);
   const suppressDefaultToolProgressMessages =
@@ -674,7 +680,10 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return false;
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string; complete?: boolean }) {
-      if (!isTurnActive() || params.mode !== "progress" || !commentaryProgressEnabled) {
+      // Progress mode keeps the opt-in commentary config; partial preview adopts
+      // the lane with its tool lines (commentaryLaneEnabled) for narration
+      // preambles, publishing through the channel update callback.
+      if (!isTurnActive() || !commentaryLaneEnabled) {
         return false;
       }
       const itemId = options?.itemId?.trim();
@@ -715,7 +724,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         lastIdLessCommentaryId = lineId;
         lastIdLessCommentaryBare = bareNormalized;
       }
-      return await startAndRender();
+      // Progress mode keeps the delayed-start gate; partial preview publishes
+      // through the channel's update callback, as tool lines already do.
+      return params.mode === "progress" ? await startAndRender() : await publish({ flush: true });
     },
   };
   return compositor;

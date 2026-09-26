@@ -1,0 +1,10 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"im.messageReaction.create","data":{"payload":{"emoji_type":"Typing"},"result":{"reaction_id":"reaction-1"},"target":"om-inbound"}}
+{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"Part one of the install guide: prerequisites and download."}}
+{"seq":4,"at":300,"dir":"in","kind":"block-final","data":{"text":"Part one of the install guide: prerequisites and download."}}
+{"seq":5,"at":600,"dir":"in","kind":"partial","data":{"text":"Part two of the install guide: run the installer and verify."}}
+{"seq":6,"at":900,"dir":"in","kind":"block-final","data":{"text":"Part two of the install guide: run the installer and verify."}}
+{"seq":7,"at":1200,"dir":"in","kind":"final","data":{"text":"Part one of the install guide: prerequisites and download.\n\nPart two of the install guide: run the installer and verify."}}
+{"seq":8,"at":1200,"dir":"out","kind":"im.message.reply","data":{"payload":{"content":{"zh_cn":{"content":[[{"tag":"md","text":"Part one of the install guide: prerequisites and download.\n\nPart two of the install guide: run the installer and verify."}]]}},"msg_type":"post"},"result":{"message_id":"om-1"},"target":"om-inbound"}}
+{"seq":9,"at":1200,"dir":"in","kind":"idle"}
+{"seq":10,"at":1200,"dir":"out","kind":"im.messageReaction.delete","data":{"payload":{"reaction_id":"reaction-1"},"result":{"code":0},"target":"om-inbound"}}

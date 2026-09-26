@@ -137,6 +137,11 @@ const FeishuStreamingSchema = z
   .object({
     mode: z.enum(["off", "partial"]).optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    // Progress-draft disposition when the final answer closes the streaming
+    // card: "overwrite" (default) keeps only the committed answer, matching the
+    // other draft channels; "append" retains the rolling progress lines above
+    // the final answer behind a separator.
+    finalize: z.enum(["overwrite", "append"]).optional(),
     block: z
       .object({
         enabled: z.boolean().optional(),
