@@ -576,6 +576,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/plugin-registry-inspection.test.ts",
   "src/plugins/status.registry-snapshot.test.ts",
   "src/plugins/status.runtime-inspection.test.ts",
+  "src/plugins/status.runtime-inspection.blocked-hooks.test.ts",
   "src/plugins/runtime/runtime-tasks.test.ts",
 
   "src/plugins/plugin-metadata-state-worker.test.ts",
