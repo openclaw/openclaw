@@ -13,6 +13,7 @@ import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
 } from "./markdown-assistant-transcript.ts";
+import { installMarkdownAudioTranscript } from "./markdown-audio-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { installMarkdownDetails } from "./markdown-details.ts";
 import {
@@ -155,6 +156,7 @@ export function createMarkdownParser(): MarkdownItParser {
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
   markdownParser.enable("strikethrough");
+  installMarkdownAudioTranscript(markdownParser);
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
