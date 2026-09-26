@@ -101,11 +101,12 @@ export function registerOperatorSpawnRollbackCases(options: {
             createQueuedTaskRun: createTaskRun,
             createRunningTaskRun: createTaskRun,
           });
+          const actual = await vi.importActual<
+            typeof import("../registry/subagent-registry-state.js")
+          >("../registry/subagent-registry-state.js");
           const persist = vi.mocked(persistSubagentRunsToDiskAsyncOrThrow);
           persist
-            .mockImplementationOnce(
-              expectDefined(persist.getMockImplementation(), "registry persistence implementation"),
-            )
+            .mockImplementationOnce(actual.persistSubagentRunsToDiskAsyncOrThrow)
             .mockImplementationOnce(async (runs, runIds) => {
               const record = expectDefined(
                 [...subagentRuns.values()].find(

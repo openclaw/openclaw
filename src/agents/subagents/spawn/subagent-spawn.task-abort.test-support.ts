@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { GatewayRequestOptions } from "../../../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -55,11 +54,12 @@ export function registerRequiredTaskAbortTests(
       });
       let rollbackRefused = false;
       if (rollback === "not-committed") {
+        const actual = await vi.importActual<
+          typeof import("../registry/subagent-registry-state.js")
+        >("../registry/subagent-registry-state.js");
         const persist = vi.mocked(persistSubagentRunsToDiskAsyncOrThrow);
         persist
-          .mockImplementationOnce(
-            expectDefined(persist.getMockImplementation(), "registry persistence implementation"),
-          )
+          .mockImplementationOnce(actual.persistSubagentRunsToDiskAsyncOrThrow)
           .mockImplementationOnce(async (runs, runIds) => {
             expect(runIds).toContain("gateway-accepted-run");
             expect(runs.has("gateway-accepted-run")).toBe(false);

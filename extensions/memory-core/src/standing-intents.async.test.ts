@@ -20,7 +20,9 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -47,17 +49,26 @@ const releases: Array<() => void> = [];
 const writerDrains: Array<() => Promise<unknown>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const release of releases.splice(0)) {
-      release();
+    try {
+      try {
+        for (const release of releases.splice(0)) {
+          release();
+        }
+        await Promise.allSettled(pending.splice(0));
+        await Promise.allSettled(writerDrains.splice(0).map((drain) => drain()));
+      } finally {
+        resetGlobalHookRunner();
+        resetPluginRuntimeStateForTest();
+      }
+      // Worker lease retirement still needs its original shared-state file.
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    } finally {
+      vi.unstubAllEnvs();
     }
-    await Promise.allSettled(pending.splice(0));
-    await Promise.allSettled(writerDrains.splice(0).map((drain) => drain()));
-    resetGlobalHookRunner();
-    resetPluginRuntimeStateForTest();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
-    cleanup();
   }),
 );
 
