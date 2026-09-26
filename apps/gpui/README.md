@@ -58,8 +58,9 @@ automatically.
 Files are checked against the Gateway's advertised attachment limits. Clipboard
 text longer than 1,000 UTF-16 units becomes a text-file attachment. Draft text and
 attachments remain in memory, isolated by window and conversation. Remote
-Markdown images are shown as links rather than fetched automatically; HTTP(S) links open
-in conversation reading tabs.
+Markdown images use explicit external-image cards rather than fetching remote URLs automatically; admitted inline raster data displays in place. HTTP(S) links open in conversation reading tabs. Assistant code blocks provide wrapping, long-code disclosure, and JSON Tree/Raw views; user code stays plain. Tables support expansion and copying. Long user messages can be expanded with Show more. Mermaid fences retain their source until a native diagram renderer is available.
+
+Managed image references resolve through the current Gateway connection and use bounded macOS thumbnails. Session changes and reconnects cancel pending loads. Managed files and inline file attachments offer Download through a native save dialog; each managed download requests fresh authority. Source downloads are limited to 12 MiB. Saves run off the UI thread and may finish at the chosen path once admitted, even if the conversation changes. Managed image decoding on other platforms and arbitrary plugin canvas widgets remain unverified or unsupported native surfaces.
 
 Deleting a conversation first archives it, then requests deletion with its
 session identity and `archivedOnly:true`, as required for `operator.write`.
@@ -78,9 +79,9 @@ fallback. Static weights preserve native font matching; see the
 
 Tool history and live events share invocation identity, including Gateway
 `tool_call` dispatch wrappers and their concrete children. Completed results
-remain settled across history refreshes. When a run finishes, errors, or stops,
+remain settled across history refreshes. Rich results preserve text and media; terminal cards show the command and outcome, and file mutations provide Diff/Raw views. Group summaries include failed and interrupted counts. When a run finishes, errors, or stops,
 any unresolved tools become muted **Interrupted** cards. Collapsed summaries
-show the tool action and its primary argument; expanded cards retain full JSON.
+show the tool action and its primary argument; expanded cards retain raw arguments and result details. Successful observed turns retain a time/token recap, while run errors appear in a dismissible card above the transcript. Compaction and injected system context have dedicated notices. Message footers support keyboard focus, copy feedback, reply previews and per-group usage metadata; sender avatars reuse the shared identity cache. Replies remain with the conversation draft and use the Gateway reply target when one exists.
 
 ## Keyboard shortcuts
 
