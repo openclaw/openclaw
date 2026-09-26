@@ -23,7 +23,7 @@ const collectMSTeamsMutableAllowlistWarnings =
     collectLists: (scope) => collectStandardAllowlistLists(scope),
   });
 
-export function runMSTeamsWebhookDoctorSequence({
+function runMSTeamsWebhookDoctorSequence({
   cfg,
   env,
 }: {
@@ -52,11 +52,11 @@ export function runMSTeamsWebhookDoctorSequence({
   };
 }
 
-export const msteamsDoctor: ChannelDoctorAdapter = {
+export const msteamsDoctor = {
   dmAllowFromMode: "topOnly",
   groupModel: "hybrid",
   groupAllowFromFallbackToAllowFrom: true,
   warnOnEmptyGroupSenderAllowlist: true,
   collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
   runConfigSequence: runMSTeamsWebhookDoctorSequence,
-};
+} satisfies ChannelDoctorAdapter;

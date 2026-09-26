@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 import { MSTeamsConfigSchema } from "./src/config-schema.js";
-import { runMSTeamsWebhookDoctorSequence } from "./src/doctor.js";
+import { msteamsDoctor } from "./src/doctor.js";
 import { resolveMSTeamsLegacyWebhook } from "./src/webhook-route.js";
 
 describe("Microsoft Teams Gateway webhook migration", () => {
@@ -22,7 +22,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     expect(channel.legacyWebhook).toEqual({ port: 3978 });
     expect(channel.streaming?.mode).toBe("block");
     expect(
-      runMSTeamsWebhookDoctorSequence({ cfg: migrated.config, env: {} }).infoNotes?.join(" "),
+      msteamsDoctor.runConfigSequence({ cfg: migrated.config, env: {} }).infoNotes?.join(" "),
     ).toContain("18789/teams/events");
   });
 
@@ -43,7 +43,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     expect(migrated.changes).toEqual([]);
     const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
     expect(resolveMSTeamsLegacyWebhook(channel)).toEqual(endpoint);
-    const notes = runMSTeamsWebhookDoctorSequence({
+    const notes = msteamsDoctor.runConfigSequence({
       cfg,
       env: { OPENCLAW_GATEWAY_PORT: "19002" },
     });
@@ -96,7 +96,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
       const cfg: OpenClawConfig = {
         channels: { msteams: { webhook: { path: `${path}?tenant=one` }, legacyWebhook } },
       };
-      const notes = runMSTeamsWebhookDoctorSequence({ cfg, env: {} });
+      const notes = msteamsDoctor.runConfigSequence({ cfg, env: {} });
       expect(notes.infoNotes ?? []).toEqual([]);
       const warning = notes.warningNotes.join(" ");
       expect(warning).toContain(`${path}?tenant=one ${reason}`);
@@ -113,9 +113,9 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     const cfg: OpenClawConfig = {
       channels: { msteams: { webhook: { path: "/health/messages" } } },
     };
-    expect(runMSTeamsWebhookDoctorSequence({ cfg, env: {} }).warningNotes).toEqual([]);
+    expect(msteamsDoctor.runConfigSequence({ cfg, env: {} }).warningNotes).toEqual([]);
     expect(
-      runMSTeamsWebhookDoctorSequence({ cfg: { channels: { msteams: { enabled: false } } } }),
+      msteamsDoctor.runConfigSequence({ cfg: { channels: { msteams: { enabled: false } } } }),
     ).toEqual({ changeNotes: [], warningNotes: [], infoNotes: [] });
   });
 });
