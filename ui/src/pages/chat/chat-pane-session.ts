@@ -305,7 +305,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {
-      this.unreadPatchGuard.shouldPatch(state.sessionKey, false, row.markedUnreadAt);
+      this.unreadPatchGuard.beginPatch(state.sessionKey, false, row.markedUnreadAt);
       return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
@@ -324,32 +324,33 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         listLoading: state.sessionsLoading,
         sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
         session: row,
-      }) ||
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
+      })
     ) {
       return;
     }
     const guardKey = state.sessionKey;
+    const settle = this.unreadPatchGuard.beginPatch(guardKey, true, row.markedUnreadAt);
+    if (!settle) {
+      return;
+    }
     void this.context.sessions
       .patch(
         row.key,
         { unread: false },
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
-      .then(
-        (result) => {
-          // A null result means no request was sent (connection scope lost);
-          // unlatch like a failure or the badge stays lit until navigation.
-          if (result === null) {
-            this.unreadPatchGuard.patchFailed(guardKey);
-          }
-        },
-        (error: unknown) => {
-          // The capability publishes the error once; only transient failures
-          // may send another acknowledgement on the next snapshot.
-          this.unreadPatchGuard.patchFailed(guardKey, error);
-        },
-      );
+      .then((result) => {
+        if (
+          settle() &&
+          result !== null &&
+          this.state === state &&
+          state.sessionKey === guardKey &&
+          this.secondarySessionReadsReady()
+        ) {
+          // Settlement can expose activity that arrived behind the optimistic read.
+          this.markSessionRead(selectedChatSessionRow(state));
+        }
+      }, settle);
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {

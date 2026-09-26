@@ -1,13 +1,98 @@
 /* @vitest-environment jsdom */
 
 import { ErrorCodes, GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+
+async function createUnreadAcknowledgementHarness(
+  options: {
+    agentStatus?: GatewaySessionRow["agentStatus"];
+    failRefresh?: boolean;
+  } = {},
+) {
+  const key = "agent:main:current";
+  const sessionId = "unread-session";
+  const firstResponse = createDeferred<unknown>();
+  const laterResponse = createDeferred<unknown>();
+  let row: GatewaySessionRow & { updatedAt: number } = {
+    key,
+    sessionId,
+    kind: "direct" as const,
+    updatedAt: 20,
+    unread: true,
+    agentStatus: options.agentStatus,
+    visibility: "shared" as const,
+    sharingRole: "member" as const,
+  };
+  let requestCount = 0;
+  const patchRequest = vi.fn(() => {
+    requestCount += 1;
+    return requestCount === 1 ? firstResponse.promise : laterResponse.promise;
+  });
+  let listRequests = 0;
+  const client = createTestGatewayClient((method) => {
+    if (method === "sessions.patch") {
+      return patchRequest();
+    }
+    if (method === "sessions.list") {
+      if (listRequests++ > 0 && options.failRefresh) {
+        throw new Error("Synthetic roster unavailable");
+      }
+      return sessionsResult([row], row.updatedAt);
+    }
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const { pane, sessions, state, emitGatewayEvent } = createTestChatPane({ client });
+  state.currentSessionId = sessionId;
+  setChatHistoryLoad(state, {
+    phase: "committed",
+    sessions,
+    client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: key,
+    requestAgentId: undefined,
+    sessionInfo: row,
+  });
+  const patch = vi.spyOn(sessions, "patch");
+  await sessions.refresh({ force: true });
+  const unsubscribe = sessions.subscribe(pane.applySessionsState.bind(pane));
+  return {
+    key,
+    sessionId,
+    firstResponse,
+    pane,
+    sessions,
+    patch,
+    patchRequest,
+    publishActivity(
+      updatedAt: number,
+      fields: Pick<GatewaySessionRow, "agentStatus" | "markedUnreadAt"> = {},
+    ) {
+      row = { ...row, updatedAt, unread: true, ...fields };
+      emitGatewayEvent("sessions.changed", { ...row, sessionKey: row.key, reason: "send" });
+    },
+    async close() {
+      unsubscribe();
+      sessions.dispose();
+      // A regression may dispatch during settlement; keep later requests bounded until disposal.
+      firstResponse.resolve(null);
+      laterResponse.resolve(null);
+      await Promise.allSettled(
+        patch.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
+      );
+    },
+  };
+}
 
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
@@ -182,41 +267,108 @@ describe("chat pane read markers", () => {
             requestSent: true,
           })
         : new GatewayRequestError({ code, message: "Read acknowledgement rejected" });
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        throw error;
+    const harness = await createUnreadAcknowledgementHarness();
+    const { pane, sessions, patch, patchRequest, firstResponse } = harness;
+    try {
+      pane.applySessionsState(sessions.state);
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
+      const firstPatch = patch.mock.results[0];
+      if (firstPatch?.type !== "return") {
+        throw new Error("Expected the automatic acknowledgement promise");
       }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
-    const { context } = pane;
-    const errors = vi.fn();
-    onTestFinished(
-      context.sessions.subscribe((state) => {
-        if (state.error) {
-          errors(state.error);
-        }
-      }),
-    );
-    const row: GatewaySessionRow = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 20,
-      unread: true,
-      agentStatus: { note: "Working", expiresAt: Date.now() + 60_000 },
-    };
+      firstResponse.reject(error);
+      await expect(firstPatch.value).rejects.toBe(error);
 
-    pane.markSessionRead(row);
-    await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(1));
-    pane.markSessionRead({ ...row, updatedAt: 21 });
-    if (retries) {
-      await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+      // Rollback publishes synchronously, before the acknowledgement settles.
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      expect(sessions.state.result?.sessions[0]?.unread).toBe(true);
+      expect(sessions.state.error).toBe(error.message);
+      harness.publishActivity(21);
+      expect(patchRequest).toHaveBeenCalledTimes(retries ? 2 : 1);
+    } finally {
+      await harness.close();
     }
-
-    expect(request).toHaveBeenCalledTimes(retries ? 2 : 1);
-    expect(errors).toHaveBeenCalledTimes(retries ? 2 : 1);
-    expect(context.sessions.state.error).toBe(error.message);
   });
+
+  it.each([
+    { name: "new activity", presented: true, markedUnreadAt: undefined, requests: 2 },
+    { name: "hidden pane", presented: false, markedUnreadAt: undefined, requests: 1 },
+    { name: "new manual reminder", presented: true, markedUnreadAt: 40, requests: 1 },
+  ])(
+    "settles successful reads with pending $name",
+    async ({ presented, markedUnreadAt, requests }) => {
+      const harness = await createUnreadAcknowledgementHarness();
+      const { key, sessionId, firstResponse, pane, sessions, patch, patchRequest } = harness;
+      try {
+        pane.applySessionsState(sessions.state);
+        expect(patchRequest).toHaveBeenCalledTimes(1);
+        const firstPatch = patch.mock.results[0];
+        if (firstPatch?.type !== "return") {
+          throw new Error("Expected the automatic acknowledgement promise");
+        }
+        harness.publishActivity(40, { markedUnreadAt });
+        pane.presented = presented;
+        expect(patchRequest).toHaveBeenCalledTimes(1);
+        firstResponse.resolve({
+          ok: true,
+          key,
+          path: "",
+          entry: { sessionId, updatedAt: 30, lastReadAt: 30, lastActivityAt: 20 },
+        });
+        await expect(firstPatch.value).resolves.toMatchObject({ ok: true });
+        expect(patchRequest).toHaveBeenCalledTimes(requests);
+        expect(sessions.state.result?.sessions[0]).toMatchObject({
+          updatedAt: 40,
+          unread: requests === 1,
+        });
+        expect(sessions.state.result?.sessions[0]?.markedUnreadAt).toBe(markedUnreadAt);
+      } finally {
+        await harness.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "reconciles acknowledged agent status when refresh fails (newer status: %s)",
+    async (hasNewerStatus) => {
+      const initialStatus = { note: "Waiting for input", expiresAt: Date.now() + 60_000 };
+      const newerStatus = hasNewerStatus
+        ? { note: "New attention request", expiresAt: initialStatus.expiresAt + 1 }
+        : undefined;
+      const harness = await createUnreadAcknowledgementHarness({
+        agentStatus: initialStatus,
+        failRefresh: true,
+      });
+      const { key, sessionId, pane, sessions, patch, patchRequest, firstResponse } = harness;
+      try {
+        pane.applySessionsState(sessions.state);
+        expect(patchRequest).toHaveBeenCalledTimes(1);
+        const firstPatch = patch.mock.results[0];
+        if (firstPatch?.type !== "return") {
+          throw new Error("Expected the automatic acknowledgement promise");
+        }
+        if (newerStatus) {
+          harness.publishActivity(40, { agentStatus: newerStatus });
+        }
+        firstResponse.resolve({
+          ok: true,
+          key,
+          path: "",
+          entry: { sessionId, updatedAt: 30, lastReadAt: 30, lastActivityAt: 20 },
+        });
+        await expect(firstPatch.value).resolves.toMatchObject({ ok: true });
+        expect(sessions.state.error).toContain("Synthetic roster unavailable");
+
+        // An unrelated publication must not revive status the Gateway cleared.
+        pane.applySessionsState(sessions.state);
+        expect(patchRequest).toHaveBeenCalledTimes(newerStatus ? 2 : 1);
+        expect(sessions.state.result?.sessions[0]?.agentStatus).toEqual(newerStatus);
+      } finally {
+        await harness.close();
+      }
+    },
+  );
 
   it("does not clear unread from a hidden retained pane", () => {
     const patch = vi.fn().mockResolvedValue(null);

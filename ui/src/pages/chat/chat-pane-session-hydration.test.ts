@@ -13,7 +13,7 @@ function createSecondaryHydrationPane() {
   const secondaryResponse = new Promise<never>(() => {});
   const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
   const listBranches = vi.fn(() => secondaryResponse);
-  const patch = vi.fn().mockResolvedValue({});
+  const patch = vi.fn(() => secondaryResponse);
   const sessions = {
     capturePullRequestEpoch: vi.fn(() => ({})),
     listBranches,

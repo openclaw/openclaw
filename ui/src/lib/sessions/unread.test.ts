@@ -4,97 +4,134 @@ import { describe, expect, it } from "vitest";
 import { SessionUnreadPatchGuard } from "./unread.ts";
 
 describe("SessionUnreadPatchGuard", () => {
-  it("patches an unread active session only once per unread episode", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-  });
-
-  it.each([undefined, new GatewayProtocolRequestError({ code: ErrorCodes.UNAVAILABLE })])(
-    "unlatches after a transient or unsent patch so later snapshots retry (%s)",
-    (error) => {
-      const guard = new SessionUnreadPatchGuard();
-      expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      guard.patchFailed("agent:main:a", error);
-      expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      // Failures for another session leave the current episode latched.
-      guard.patchFailed("agent:main:b");
-      expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
-    },
-  );
-
   it.each([ErrorCodes.INVALID_REQUEST, ErrorCodes.FORBIDDEN, ErrorCodes.APPROVAL_NOT_FOUND])(
     "latches a %s rejection until a new unread episode or activation",
     (code) => {
       const guard = new SessionUnreadPatchGuard();
-      expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
-      guard.patchFailed("agent:main:a", new GatewayProtocolRequestError({ code }));
-      expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-      expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
-      expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+      const settle = guard.beginPatch("agent:main:a", true, 100);
+      expect(settle).toBeTypeOf("function");
+      settle?.(new GatewayProtocolRequestError({ code }));
+      expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
+      expect(guard.beginPatch("agent:main:a", false, 100)).toBeNull();
+      expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
 
-      // A confirmed read ends this episode; new activity can be acknowledged.
-      expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-      expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      guard.patchFailed("agent:main:a", new GatewayProtocolRequestError({ code }));
+      expect(guard.beginPatch("agent:main:a", false)).toBeNull();
+      const settleNext = guard.beginPatch("agent:main:a", true);
+      expect(settleNext).toBeTypeOf("function");
+      settleNext?.(new GatewayProtocolRequestError({ code }));
       guard.beginActivation("agent:main:a");
-      expect(guard.shouldPatch("agent:main:a", true, 200)).toBe(true);
+      expect(guard.beginPatch("agent:main:a", true, 200)).toBeTypeOf("function");
     },
   );
 
-  it("re-acknowledges when new activity flags the open session unread again", () => {
+  it("admits one acknowledgement until its request settles", () => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    // Server confirms the read, then a background run completes.
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
+    const settle = guard.beginPatch("agent:main:a", true);
+    expect(settle).toBeTypeOf("function");
+    expect(guard.beginPatch("agent:main:a", true)).toBeNull();
+    settle?.();
+    expect(guard.beginPatch("agent:main:a", false)).toBeNull();
   });
 
-  it("keeps an acknowledgement latched across an optimistic local read", () => {
+  it.each([
+    { name: "activity", marker: undefined },
+    { name: "null-marker activity", marker: null },
+    { name: "manual", marker: 100 },
+  ])("keeps a $name acknowledgement pending through optimistic read and rollback", ({ marker }) => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
-    expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    guard.patchFailed("agent:main:a");
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
+    const settle = guard.beginPatch("agent:main:a", true, marker);
+    expect(settle).toBeTypeOf("function");
+    expect(guard.beginPatch("agent:main:a", false, marker)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, marker)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, marker)).toBeNull();
+
+    settle?.();
+    expect(guard.beginPatch("agent:main:a", true, marker)).toBeTypeOf("function");
   });
 
-  it("treats a null marker as no manual marker", () => {
+  it("re-arms after success when newer snapshots remain unread without a false confirmation", () => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, null)).toBe(true);
+    const settle = guard.beginPatch("agent:main:a", true);
+    expect(settle).toBeTypeOf("function");
+    // A newer activity snapshot can supersede the successful request's read state.
+    expect(guard.beginPatch("agent:main:a", true)).toBeNull();
+    settle?.();
+    expect(guard.beginPatch("agent:main:a", true)).toBeTypeOf("function");
+    expect(guard.beginPatch("agent:main:a", true)).toBeNull();
   });
 
-  it("does not patch read sessions and resets after changing sessions", () => {
+  it("does not let a repeated old settlement release its successor", () => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    expect(guard.shouldPatch("agent:main:b", true)).toBe(true);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
+    const settleFirst = guard.beginPatch("agent:main:a", true);
+    expect(settleFirst).toBeTypeOf("function");
+    settleFirst?.();
+    const settleSecond = guard.beginPatch("agent:main:a", true);
+    expect(settleSecond).toBeTypeOf("function");
+    settleFirst?.();
+    expect(guard.beginPatch("agent:main:a", true)).toBeNull();
+    settleSecond?.();
+    expect(guard.beginPatch("agent:main:a", true)).toBeTypeOf("function");
+  });
+
+  it("does not let an old A activation release a new A acknowledgement after visiting B", () => {
+    const guard = new SessionUnreadPatchGuard();
+    const settleOld = guard.beginPatch("agent:main:a", true);
+    expect(settleOld).toBeTypeOf("function");
+    expect(guard.beginPatch("agent:main:b", false)).toBeNull();
+    const settleCurrent = guard.beginPatch("agent:main:a", true);
+    expect(settleCurrent).toBeTypeOf("function");
+    settleOld?.();
+    expect(guard.beginPatch("agent:main:a", false)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true)).toBeNull();
+    settleCurrent?.();
+    expect(guard.beginPatch("agent:main:a", true)).toBeTypeOf("function");
+  });
+
+  it.each([undefined, 50])(
+    "preserves a newer manual marker through settlement of marker %s",
+    (marker) => {
+      const guard = new SessionUnreadPatchGuard();
+      const settle = guard.beginPatch("agent:main:a", true, marker);
+      expect(settle).toBeTypeOf("function");
+      expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
+      expect(guard.beginPatch("agent:main:a", false, 100)).toBeNull();
+      settle?.();
+      expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
+
+      guard.beginActivation("agent:main:a");
+      expect(guard.beginPatch("agent:main:a", true, 100)).toBeTypeOf("function");
+    },
+  );
+
+  it("does not acknowledge read or unknown state and treats a null marker as absent", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.beginPatch("agent:main:a", false)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", undefined)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, null)).toBeTypeOf("function");
   });
 
   it("preserves a manual unread marker created after the active session was observed", () => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+    expect(guard.beginPatch("agent:main:a", false)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
   });
 
   it("acknowledges a manual unread marker on a later activation", () => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    expect(guard.shouldPatch("agent:main:b", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
+    expect(guard.beginPatch("agent:main:a", false)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
+    expect(guard.beginPatch("agent:main:b", false)).toBeNull();
+    expect(guard.beginPatch("agent:main:a", true, 100)).toBeTypeOf("function");
   });
 
   it("restarts the unread episode when a retained pane is presented again", () => {
     const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+    const settleOld = guard.beginPatch("agent:main:a", true, 100);
+    expect(settleOld).toBeTypeOf("function");
     guard.beginActivation("agent:main:a");
-    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
+    expect(guard.beginPatch("agent:main:a", true, 100)).toBeTypeOf("function");
+    settleOld?.();
+    expect(guard.beginPatch("agent:main:a", true, 100)).toBeNull();
   });
 });

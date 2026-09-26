@@ -54,6 +54,7 @@ export function projectSessionPatchRowFields(
       unread: deriveSessionUnread(entry),
       lastReadAt: entry.lastReadAt,
       markedUnreadAt: entry.markedUnreadAt,
+      agentStatus: entry.agentStatus,
     };
     fields.push(
       patch.pinned === undefined ? read : patch.unread === false ? { ...pin, ...read } : pin,
