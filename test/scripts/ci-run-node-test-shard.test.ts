@@ -618,10 +618,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "keeps isolated Node-dependent coverage without losing other files under %s",
     (policy) => {
       const config = "test/vitest/vitest.unit-fast-isolated.config.ts";
-      const nodeFiles = [
-        "src/agents/code-mode.action-output.test.ts",
-        "src/proxy-capture/proxy-server.test.ts",
-      ];
+      const nodeFiles = ["src/agents/code-mode.action-output.test.ts"];
       const files = getUnitFastIsolatedTestFiles();
       const selection = { configs: [config] };
       const selected = resolveCiTestRuntimeSelections(selection, policy);
@@ -643,6 +640,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             policy,
           ),
         ).toEqual([{ runtime: "node" }]);
+      }
+      const captureFile = "src/proxy-capture/proxy-server.test.ts";
+      for (const selection of [
+        { targets: [captureFile] },
+        { configs: ["test/vitest/vitest.infra.config.ts"], includePatterns: [captureFile] },
+      ]) {
+        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([{ runtime: "node" }]);
       }
       expect(resolveCiTestRuntimeSelections({ targets: ["src/version.test.ts"] }, policy)).toEqual(
         policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
