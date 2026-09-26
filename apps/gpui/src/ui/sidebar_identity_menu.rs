@@ -1,6 +1,6 @@
 use super::AppView;
 use crate::ui::{
-    components::{icon::icon as ui_icon, icon_button::icon_button},
+    components::{icon_button::icon_button, icons::icon as ui_icon},
     theme::{
         self, Appearance, Palette,
         tokens::{TypographyExt, avatar, icon, icon_button as buttons, menu, space, text},

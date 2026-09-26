@@ -56,7 +56,13 @@ impl AppView {
     }
 
     pub(super) fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.web.picker_open {
+        if self.new_session.picker.is_some() {
+            self.new_session.picker = None;
+        } else if self.composer_capabilities.plus_open || self.composer_capabilities.permission_open
+        {
+            self.composer_capabilities.plus_open = false;
+            self.composer_capabilities.permission_open = false;
+        } else if self.web.picker_open {
             self.web.picker_open = false;
         } else if self.sidebar_state.palette_open {
             self.close_palette(window, cx);
@@ -101,11 +107,12 @@ impl AppView {
         {
             return;
         }
-        let keys: Vec<_> = if self.web.settings_open || self.show_connect_form {
-            Vec::new()
-        } else {
-            self.chat.selected_session.iter().cloned().collect()
-        };
+        let keys: Vec<_> =
+            if self.web.settings_open || self.show_connect_form || self.new_session.active {
+                Vec::new()
+            } else {
+                self.chat.selected_session.iter().cloned().collect()
+            };
         let mut params = json!({"sessionKeys": keys});
         if keys.iter().any(|key| !key.starts_with("agent:"))
             && let Some(agent) = &self.chat.selected_agent

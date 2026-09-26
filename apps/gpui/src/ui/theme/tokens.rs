@@ -152,6 +152,7 @@ pub mod avatar {
     pub const PERSON: AvatarMetrics = AvatarMetrics::new(20., 8., 1.);
     pub const IDENTITY: AvatarMetrics = AvatarMetrics::new(28., 10., 1.);
     pub const IDENTITY_MENU: AvatarMetrics = AvatarMetrics::new(26., 10.4, 1.);
+    pub const DRAFT_IDENTITY: AvatarMetrics = AvatarMetrics::new(20., 14.4, 0.);
     pub const AGENT_HEADER: AvatarMetrics = AvatarMetrics::new(28., 19., 0.);
     pub const AGENT_TILE: AvatarMetrics = AvatarMetrics::new(48., 25., 0.);
     pub const AGENT_ROSTER: AvatarMetrics = AvatarMetrics::new(36., 25.92, 0.);

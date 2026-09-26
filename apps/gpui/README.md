@@ -38,7 +38,8 @@ interactions have not been verified.
 | Conversations | Agent picker and All Agents roster, Home, New Chat, category/person/project/flat grouping, sort and ownership/archive filters, ten-row section paging, lazy child trees, unread/run/attention and pull-request indicators, title and Gateway transcript search. |
 | People and navigation | Online users with avatars, idle state, facepiles and activity cards; profile identity menu; authenticated agent/owner/channel images; native Home and embedded Control UI administration/plugin routes. |
 | Session actions | Inline rename, pin/unpin, read/unread, copy key, fork, archive with Undo, and confirmed transcript deletion. Shift-range/Cmd-toggle selection supports Gateway batch actions; row menus expose organization and ownership actions. |
-| Composer | One-to-six-line growth, per-conversation drafts, history recall, slash-command completion, file picker/drop, clipboard images, large-text paste attachments, attachment-only sends, searchable provider and model-account selection, supported effort levels, fast mode and context-window choices, token/context usage when real totals are available, and a read-only permission-mode chip. |
+| New chat | Cmd+N and sidebar + open an unsent draft with agent, destination, project/folder, current checkout or named worktree/base branch, group defaults, incognito, permissions, model/effort, and attachments. Local starts create and send together; remote starts create, dispatch, await placement, then send. |
+| Composer | One-to-six-line growth, per-conversation drafts, history recall, slash-command completion, file picker/drop, clipboard images, large-text paste attachments, attachment-only sends, searchable provider and model-account selection, supported effort levels, fast mode and context-window choices, token/context usage when real totals are available, editable permissions, and a + menu for photos/files, skills, connectors, and web search overrides. |
 | Transcript | Grouped messages, Markdown tables/task lists/links, highlighted code with a language/copy toolbar, attachment previews, thinking sections, humanized live/history tool cards, working phase and elapsed time, errors and stopped markers, older-history pagination, follow-tail and jump-to-latest. |
 | Questions and approvals | Session-scoped question forms with choices, multiple answers, Other, masked secret answers, navigation and Skip; approval cards with command/change previews, expiry and Gateway-provided decisions. |
 | Window | One window per saved Gateway, native Gateways menu and profile manager, custom title bar, collapsible 240–400px sidebar, system/light/dark appearance, connection status, reconnect countdown, and retry. |
@@ -100,8 +101,7 @@ remains archived. Archive Undo restores the previous pin preference.
 The layout follows Control UI density: single-line conversation rows, a compact
 breadcrumb title bar, right-aligned user bubbles, and a 112px composer with its
 model and effort controls in the bottom row. Question choices include their
-descriptions inside the selectable buttons. Permission mode is displayed from
-the selected session; changing it is not yet supported by this client.
+descriptions inside the selectable buttons. Permission changes use the Gateway’s session access rules; Full Access requires administrator scope. Skill, connector, tool, and web search overrides are sparse session settings. The + menu also exposes managed skill revisions and native MCP server setup.
 
 Instrument Sans is embedded under the SIL Open Font License, with system UI as
 fallback. Static weights preserve native font matching; see the
@@ -118,7 +118,7 @@ show the tool action and its primary argument; expanded cards retain full JSON.
 | Shortcut | Action |
 | --- | --- |
 | Cmd+1 through Cmd+9 | Open or focus the corresponding saved Gateway; primary is Cmd+1 |
-| Cmd+N / Cmd+Shift+O | Create a conversation for the selected agent |
+| Cmd+N / Cmd+Shift+O | Open a new-chat draft for the selected agent |
 | Cmd+K | Open conversation search |
 | Cmd+B | Collapse or expand the sidebar |
 | Cmd+R | Refresh conversations and selected history |
@@ -411,19 +411,27 @@ This controls app activation; it does not change macOS accessibility semantics.
 
 The `steipete/gpui-bgtest` branch patches `gpui-component` and `gpui-base` to
 the local `~/Projects/oss/gpui-kit` checkout for accessibility validation.
+The component patch exposes press actions for enabled popup-menu submenus,
+including Appearance, so background automation can navigate them with element
+clicks. Disabled submenu rows remain noninteractive.
 It also patches `accesskit_macos` to `~/Projects/oss/accesskit/platforms/macos`
 to expose each inactive window's internally focused element. The matching
 `accesskit` and `accesskit_consumer` paths keep the adapter's workspace dependencies
 on the same crate identities; their versions and source behavior are unchanged.
 The `gpui-pre-macos` patch at `~/Projects/oss/gpui-pre-macos` attaches the adapter
 to the rendering view that serves as AppKit's first responder.
-The Wry patch at `~/Projects/oss/wry` prevents hidden, unfocused macOS webviews
-from activating the app when the panel catalog is created. The upstream change
-is tracked in [tauri-apps/wry#1866](https://github.com/tauri-apps/wry/pull/1866).
+The Wry patch at `~/Projects/oss/wry` prevents hidden or unfocused child
+webviews from activating the application during construction.
 These absolute Cargo paths are local proof wiring and must be replaced with
 released dependencies before shipping the app.
 
-Sidebar proof uses a task-owned durable directory outside the repository, with launchers and
+Keep the target window partly visible during background proof. On macOS, GPUI
+stops drawing fully covered windows, which also leaves their accessibility tree
+stale. Moving only the target window into unused desktop space through AXPosition
+restores rendering without focusing or raising it.
+
+Sidebar proof uses the durable directory
+`/Users/steipete/Projects/openclaw-campaign-backup/gpui-proof`, with launchers and
 logs in `sidebar-rig/`, screenshots in `shots-sidebar/`, the source inventory in
 `sidebar-gap-table.md`, and outcomes in `sidebar-report.md`. The earlier task
 scratchpad was removed; its launchers and screenshots are not available.
@@ -492,9 +500,9 @@ Plugin theme hats and system-agent mascot branding are not reproduced natively.
 Child loading admits the first 100 children, displaying four before Show more.
 
 Sidebar filters, grouping, sort, section collapse, navigation choices, and All
-Agents mode persist per Gateway in the existing app state file. Drafts, appearance
+Agents mode persist per Gateway in the existing app state file. Drafts (including new-chat settings and unconfirmed submission recovery), appearance
 override, sidebar width, child expansion, and image caches remain in memory and
-reset when the app exits. Person initials preserve composed Unicode characters
+reset when the app exits. Drafts are isolated by Gateway; an uncertain create retains its request identity, and placement or first-message failure retains the created session key. A retry resumes that operation instead of creating another chat. Desktop photo actions use the native file picker; direct camera capture is not provided. Person initials preserve composed Unicode characters
 on macOS; other platforms currently use Unicode scalar initials. There is no local `/clear` interception.
 Question/approval options, attachment limits, model availability, and thinking
 levels depend on the connected Gateway. Inline history image previews require

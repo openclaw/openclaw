@@ -1,6 +1,6 @@
 use super::{
     AppView,
-    components::{icon::icon, list::list_row},
+    components::{icons::icon, list::list_row},
     theme::{
         Palette,
         tokens::{self, header, opacity, radius, row, space, text},

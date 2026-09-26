@@ -1,3 +1,5 @@
+mod attachments;
+
 use super::{AppView, composer_state::PendingSend};
 use crate::{
     gateway::composer_rpc::{CatalogScope, ChatSend, CommandsList, CommandsResult},
@@ -15,7 +17,31 @@ use gpui_kit::{
 use std::path::PathBuf;
 
 impl AppView {
+    fn composer_attachment_target(
+        &self,
+        scope: &Option<crate::model::chat::RequestScope>,
+        draft: Option<u64>,
+    ) -> bool {
+        match draft {
+            Some(generation) => {
+                self.new_session.active
+                    && self.new_session.generation == generation
+                    && !self.new_session.locked()
+            }
+            None => {
+                !self.new_session.active
+                    && scope
+                        .as_ref()
+                        .is_some_and(|scope| self.chat.is_current(scope))
+            }
+        }
+    }
     pub(super) fn composer_save_draft(&mut self, cx: &App) {
+        if self.new_session.active {
+            self.new_session.message = self.composer.read(cx).value().to_string();
+            self.new_session.attachments = self.composer_state.attachments.clone();
+            return;
+        }
         self.composer_state.drafts.save(Draft {
             text: self.composer.read(cx).value().to_string(),
             attachments: self.composer_state.attachments.clone(),
@@ -29,6 +55,12 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         self.composer_save_draft(cx);
+        self.new_session.bind_gateway(gateway);
+        self.new_session.active = false;
+        self.new_session.submitting = false;
+        self.new_session.generation += 1;
+        self.new_session.picker = None;
+        self.composer_capabilities.reset();
         self.composer_state.drafts.bind_gateway(gateway);
         self.composer_state.restore_pending = true;
         self.composer_state.attachment_generation += 1;
@@ -63,6 +95,9 @@ impl AppView {
     }
 
     pub(super) fn composer_restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer.update(cx, |input, cx| {
+            input.set_placeholder("Message OpenClaw", window, cx)
+        });
         let draft = self
             .chat
             .selected_session
@@ -145,11 +180,9 @@ impl AppView {
         let cache_key = (self.epoch, agent.clone(), scope.session_key.clone());
         if let Some(commands) = self.composer_state.catalog_cache.get(&cache_key) {
             self.composer_state.commands = commands.clone();
-            self.composer_state.catalogs_loading = false;
             return;
         }
         self.composer_state.commands.clear();
-        self.composer_state.catalogs_loading = true;
         let params = CommandsList {
             context: CatalogScope {
                 session_key: scope.session_key.clone(),
@@ -172,7 +205,6 @@ impl AppView {
                 {
                     return;
                 }
-                this.composer_state.catalogs_loading = false;
                 match result.and_then(|value| {
                     serde_json::from_value::<CommandsResult>(value)
                         .map_err(|error| error.to_string())
@@ -352,174 +384,13 @@ impl AppView {
         }
     }
 
-    pub(super) fn attachment_limits(&self) -> Result<AttachmentLimits, String> {
-        self.session
-            .as_ref()
-            .and_then(|session| session.hello().pointer("/policy/attachments"))
-            .cloned()
-            .ok_or_else(|| "Connect to a Gateway advertising attachment limits first".to_owned())
-            .and_then(|value| {
-                serde_json::from_value(value)
-                    .map_err(|error| format!("Invalid attachment policy: {error}"))
-            })
-    }
-
-    pub(super) fn pick_attachments(&mut self, cx: &mut Context<Self>) {
-        let Some(scope) = self.chat.scope() else {
-            return;
-        };
-        let epoch = self.epoch;
-        let prompt = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: true,
-            prompt: Some("Attach files".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let result = prompt.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.epoch != epoch || !this.chat.is_current(&scope) {
-                    return;
-                }
-                match result {
-                    Ok(Ok(Some(paths))) => this.attach_paths(paths, cx),
-                    Ok(Err(error)) => this.composer_state.error = Some(error.to_string()),
-                    _ => {}
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let limits = match self.attachment_limits() {
-            Ok(limits) => limits,
-            Err(error) => {
-                self.composer_state.error = Some(error);
-                cx.notify();
-                return;
-            }
-        };
-        let Some(scope) = self.chat.scope() else {
-            return;
-        };
-        let epoch = self.epoch;
-        let generation = self.composer_state.attachment_generation;
-        self.composer_state.reading += 1;
-        let task = self.runtime.spawn_blocking(move || {
-            paths
-                .into_iter()
-                .map(|path| Attachment::read(&path, limits))
-                .collect::<Vec<_>>()
-        });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.epoch != epoch
-                    || !this.chat.is_current(&scope)
-                    || this.composer_state.attachment_generation != generation
-                {
-                    return;
-                }
-                this.composer_state.reading = this.composer_state.reading.saturating_sub(1);
-                match result {
-                    Ok(results) => {
-                        let mut errors = Vec::new();
-                        for attachment in results {
-                            match attachment {
-                                Ok(attachment) => this.add_attachment(Ok(attachment), cx),
-                                Err(error) => errors.push(error),
-                            }
-                        }
-                        if !errors.is_empty() {
-                            this.composer_state.error = Some(errors.join("\n"));
-                        }
-                    }
-                    Err(error) => {
-                        this.composer_state.error =
-                            Some(format!("Could not read attachment: {error}"))
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    pub(super) fn composer_paste(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
-        let image = item.entries().iter().find_map(|entry| {
-            if let ClipboardEntry::Image(image) = entry {
-                Some(image)
-            } else {
-                None
-            }
-        });
-        let text = item
-            .entries()
-            .iter()
-            .filter_map(|entry| match entry {
-                ClipboardEntry::String(value) => Some(value.text.as_str()),
-                _ => None,
-            })
-            .collect::<String>();
-        let text = large_paste(&text).then_some(text);
-        if image.is_none() && text.is_none() {
-            return false;
-        }
-        let limits = match self.attachment_limits() {
-            Ok(limits) => limits,
-            Err(error) => {
-                self.composer_state.error = Some(error);
-                cx.notify();
-                return true;
-            }
-        };
-        let attachment = if let Some(image) = image {
-            Attachment::from_bytes(
-                format!("Pasted image.{}", image.format().extension()),
-                image.format().mime_type().into(),
-                AttachmentOrigin::Paste,
-                image.bytes().to_vec(),
-                limits,
-            )
-        } else {
-            Attachment::from_bytes(
-                "Pasted text.txt".into(),
-                "text/plain".into(),
-                AttachmentOrigin::Paste,
-                text.unwrap_or_default().into_bytes(),
-                limits,
-            )
-        };
-        self.add_attachment(attachment, cx);
-        true
-    }
-
-    fn add_attachment(&mut self, result: Result<Attachment, String>, cx: &mut Context<Self>) {
-        match result {
-            Ok(attachment) => {
-                let mut attachments = std::mem::take(&mut self.composer_state.attachments);
-                attachments.push(attachment);
-                self.composer_state.set_attachments(attachments);
-                self.composer_state.error = None;
-                self.composer_save_draft(cx);
-            }
-            Err(error) => self.composer_state.error = Some(error),
-        }
-        cx.notify();
-    }
-
-    pub(super) fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.composer_state
-            .attachments
-            .retain(|attachment| attachment.id != id);
-        self.composer_state.previews.remove(id);
-        self.composer_save_draft(cx);
-        cx.notify();
-    }
-
     pub(super) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.new_session.active {
+            if !self.composer_is_composing(window, cx) {
+                self.submit_new_session(cx);
+            }
+            return;
+        }
         if self.session.is_none()
             || self.chat.loading
             || self.model_controls.pending

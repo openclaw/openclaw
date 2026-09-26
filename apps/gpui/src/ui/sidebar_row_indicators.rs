@@ -1,5 +1,5 @@
 use super::{AppView, Palette, SessionRow, SidebarAttention};
-use crate::ui::components::icon::icon as ui_icon;
+use crate::ui::components::icons::icon as ui_icon;
 use crate::{
     model::{chat::now_ms, sidebar_pr::scoped_key},
     ui::theme::tokens::{avatar, colors, icon, space, text},

@@ -1,7 +1,7 @@
 use super::{
     AppView,
     components::{
-        icon::icon as ui_icon, icon_button::icon_button as ui_icon_button, list::list_row,
+        icon_button::icon_button as ui_icon_button, icons::icon as ui_icon, list::list_row,
     },
     session_actions::{SessionMenuShortcut, session_menu},
     theme::{

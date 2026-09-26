@@ -109,18 +109,7 @@ impl AppView {
                                             .h_flex()
                                             .items_center()
                                             .gap(px(6.))
-                                            .child(
-                                                Button::new("attach-files")
-                                                    .ghost()
-                                                    .small()
-                                                    .icon(Icon::new(IconName::Plus).size(px(16.)))
-                                                    .size(px(28.))
-                                                    .tooltip("Attach files · or drop files here")
-                                                    .disabled(disabled || self.session.is_none())
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.pick_attachments(cx)
-                                                    })),
-                                            )
+                                            .child(self.composer_plus_control(cx))
                                             .child(self.permission_control(cx)),
                                     )
                                     .child(
@@ -180,7 +169,7 @@ impl AppView {
             )
     }
 
-    fn attachment_rail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn attachment_rail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.composer_state.attachments.is_empty() {
             return None;
         }
@@ -377,28 +366,6 @@ impl AppView {
                 ))
                 .into_any_element(),
         )
-    }
-
-    fn permission_control(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = Palette::get(cx);
-        let label = match self
-            .selected_row()
-            .and_then(|row| row.permission_mode.as_deref())
-        {
-            Some("read-only") => "Read-only",
-            Some("guarded") => "Guarded",
-            Some("workspace") => "Workspace",
-            Some("full") => "Full access",
-            _ => "Default",
-        };
-        Button::new("permission-mode")
-            .ghost()
-            .small()
-            .h(px(30.))
-            .icon(Icon::new(IconName::ShieldCheck).size(px(16.)))
-            .label(label)
-            .text_color(p.muted)
-            .tooltip("Permission mode · read-only in this client")
     }
 
     fn usage_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

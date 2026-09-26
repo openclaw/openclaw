@@ -33,7 +33,6 @@ pub(super) struct ComposerUi {
     pub catalog_generation: u64,
     pub attachment_generation: u64,
     pub reading: usize,
-    pub catalogs_loading: bool,
     pub pending: HashMap<String, PendingSend>,
     pub suppress_enter: bool,
     pub catalog_cache: HashMap<(u64, Option<String>, String), Vec<Command>>,

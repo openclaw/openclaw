@@ -1,6 +1,6 @@
 use super::{
     AppView,
-    components::icon::icon as ui_icon,
+    components::icons::icon as ui_icon,
     theme::{
         Palette,
         tokens::{

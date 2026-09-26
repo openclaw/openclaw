@@ -1,10 +1,11 @@
+use super::menu::popover;
 use crate::ui::theme::{
     Palette,
     tokens::{MenuMetrics, colors, menu, radius, space},
 };
 use gpui_kit::{
     base::{Align, Placement, Positioner, StyledExt},
-    component::{Side, Theme, button::Button, menu::PopupMenu, popover::Popover},
+    component::{Side, Theme, button::Button, menu::PopupMenu},
     prelude::FluentBuilder,
     *,
 };
@@ -73,8 +74,8 @@ pub(crate) struct MenuSurface {
     build: MenuBuilder,
 }
 
-/// The native menu retains its item, selection, keyboard and dismissal owners.
-/// This adapter supplies only the measured sidebar surface and placement.
+/// PopupMenu owns selection, keyboard and submenu dismissal. This adapter
+/// supplies the measured sidebar presentation and placement.
 pub(crate) fn menu_surface(
     id: impl Into<SharedString>,
     trigger: Button,
@@ -101,7 +102,6 @@ impl RenderOnce for MenuSurface {
             holder.update(cx, |holder, _| holder.return_focus = focus);
         }
         let style = self.style;
-
         let button_style = self.trigger.style().clone();
         let trigger_style = StyleRefinement {
             position: button_style.position,
@@ -117,104 +117,97 @@ impl RenderOnce for MenuSurface {
             ..Default::default()
         };
         let open_holder = holder.downgrade();
-        let keyboard_holder = holder.downgrade();
         let content_holder = holder.clone();
         let build = self.build;
-        let popup = Popover::new(SharedString::from(format!("menu-surface:{}", self.id)))
-            .appearance(false)
-            .overlay_closable(false)
-            .open(holder.read(cx).open)
-            .trigger(self.trigger.on_click(move |event, window, cx| {
-                // Pointer activation belongs to Popover's mouse-down handler.
-                // Keyboard and accessibility presses reach the button directly.
-                if event.is_keyboard() {
-                    cx.stop_propagation();
-                    let _ = keyboard_holder.update(cx, |holder, cx| {
-                        holder.set_open(!holder.open, cx);
-                    });
-                    window.refresh();
-                }
-            }))
-            .top(space::NONE)
-            .on_open_change(move |open, _, cx| {
-                let _ = open_holder.update(cx, |holder, cx| holder.set_open(*open, cx));
-            })
-            .content(move |_, window, cx| {
-                let existing = content_holder.read(cx).menu.clone();
-                let menu = existing.unwrap_or_else(|| {
-                    let build = build.clone();
-                    let return_focus = content_holder.read(cx).return_focus.clone();
+        let parent_view = window.current_view();
+        let popup = popover(
+            SharedString::from(format!("menu-surface:{}", self.id)),
+            Anchor::TopLeft,
+            holder.read(cx).open,
+            self.trigger,
+            div().into_any_element(),
+            move |open, _, cx| {
+                let _ = open_holder.update(cx, |holder, cx| holder.set_open(open, cx));
+                cx.notify(parent_view);
+            },
+        )
+        // PopupMenu owns outside clicks across its entire submenu chain.
+        .overlay_closable(false)
+        .top(space::NONE)
+        .content(move |_, window, cx| {
+            let existing = content_holder.read(cx).menu.clone();
+            let menu = existing.unwrap_or_else(|| {
+                let build = build.clone();
+                let return_focus = content_holder.read(cx).return_focus.clone();
+                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
                     let extra_padding =
                         (style.metrics.padding - menu::NATIVE_PADDING).max(space::NONE);
-                    let menu_width =
-                        style.metrics.width - space::HAIRLINE * 2. - extra_padding * 2.;
-                    let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
-                        build(menu, window, cx)
-                            .min_w(menu_width)
-                            .max_w(menu_width)
-                            .max_h(style.metrics.max_height)
-                            .scrollable(true)
-                            .check_side(Side::Right)
-                            .when_some(return_focus, |menu, focus| menu.action_context(focus))
-                    });
-                    menu.focus_handle(cx).focus(window, cx);
-                    let popover = cx.entity().downgrade();
-                    let subscription =
-                        window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
-                            let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                            window.refresh();
-                        });
-                    content_holder.update(cx, |holder, _| {
-                        holder.menu = Some(menu.clone());
-                        holder.subscription = Some(subscription);
-                    });
-                    menu
+                    let width = style.metrics.width - space::HAIRLINE * 2. - extra_padding * 2.;
+                    build(menu, window, cx)
+                        .min_w(width)
+                        .max_w(width)
+                        .max_h(style.metrics.max_height)
+                        .scrollable(true)
+                        .check_side(Side::Right)
+                        .when_some(return_focus, |menu, focus| menu.action_context(focus))
                 });
-                let p = Palette::sidebar(cx);
-                let extra_padding = (style.metrics.padding - menu::NATIVE_PADDING).max(space::NONE);
-                let mut shadows = colors::menu_shadow(Theme::global(cx).is_dark());
-                if style.border_as_ring {
-                    shadows.insert(
-                        0,
-                        BoxShadow {
-                            color: colors::overlay_border(p),
-                            offset: point(space::NONE, space::NONE),
-                            blur_radius: space::NONE,
-                            spread_radius: space::HAIRLINE,
-                            inset: false,
-                        },
-                    );
-                }
-                let surface = div()
-                    .w(style.metrics.width)
-                    .border(space::HAIRLINE)
-                    .border_color(if style.border_as_ring {
-                        transparent_black()
-                    } else {
-                        colors::overlay_border(p)
-                    })
-                    .rounded(radius::ROW)
-                    .bg(p.elevated)
-                    .shadow(shadows)
-                    .p(extra_padding)
-                    .child(
-                        div()
-                            .rounded(
-                                (radius::ROW - space::HAIRLINE - extra_padding).max(space::NONE),
-                            )
-                            .overflow_hidden()
-                            .child(menu),
-                    );
-                let mut trigger_bounds = content_holder.read(cx).trigger_bounds;
-                trigger_bounds.origin.x += style.horizontal_offset;
-                Positioner::side(trigger_bounds)
-                    .placement(style.placement)
-                    .align(Align::Start)
-                    .offset(menu::ANCHOR_GAP)
-                    .margin(menu::VIEWPORT_MARGIN)
-                    .occlude()
-                    .child(surface)
+                let popover = cx.entity().downgrade();
+                let subscription =
+                    window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
+                        let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                        window.refresh();
+                    });
+                content_holder.update(cx, |holder, _| {
+                    holder.menu = Some(menu.clone());
+                    holder.subscription = Some(subscription);
+                });
+                menu.focus_handle(cx).focus(window, cx);
+                menu
             });
+            let p = Palette::sidebar(cx);
+            let extra_padding = (style.metrics.padding - menu::NATIVE_PADDING).max(space::NONE);
+            let mut shadows = colors::menu_shadow(Theme::global(cx).is_dark());
+            if style.border_as_ring {
+                shadows.insert(
+                    0,
+                    BoxShadow {
+                        color: colors::overlay_border(p),
+                        offset: point(space::NONE, space::NONE),
+                        blur_radius: space::NONE,
+                        spread_radius: space::HAIRLINE,
+                        inset: false,
+                    },
+                );
+            }
+            let surface = div()
+                .w(style.metrics.width)
+                .border(space::HAIRLINE)
+                .border_color(if style.border_as_ring {
+                    transparent_black()
+                } else {
+                    colors::overlay_border(p)
+                })
+                .rounded(radius::ROW)
+                .bg(p.elevated)
+                .shadow(shadows)
+                .p(extra_padding)
+                .child(
+                    div()
+                        .rounded((radius::ROW - space::HAIRLINE - extra_padding).max(space::NONE))
+                        .overflow_hidden()
+                        .child(menu),
+                );
+            let mut trigger_bounds = content_holder.read(cx).trigger_bounds;
+            trigger_bounds.origin.x += style.horizontal_offset;
+            Positioner::side(trigger_bounds)
+                .placement(style.placement)
+                .align(Align::Start)
+                .offset(menu::ANCHOR_GAP)
+                .margin(menu::VIEWPORT_MARGIN)
+                .occlude()
+                .child(surface)
+                .into_any_element()
+        });
         div()
             .id(SharedString::from(format!(
                 "menu-surface-trigger:{}",
@@ -233,5 +226,6 @@ impl RenderOnce for MenuSurface {
                 .size_full(),
             )
             .child(popup)
+            .into_any_element()
     }
 }

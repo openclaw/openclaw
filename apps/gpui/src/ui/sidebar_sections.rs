@@ -2,8 +2,8 @@ use super::{
     AppView,
     components::{
         hover_card::HoverCard,
-        icon::icon as ui_icon,
         icon_button::icon_button as ui_icon_button,
+        icons::icon as ui_icon,
         list::{empty_state, section_header, section_header_content},
     },
     theme::{
@@ -497,36 +497,61 @@ impl AppView {
             } else {
                 header.into_any_element()
             };
-            content = content.child(div().h_flex().child(header).when_some(
-                person,
-                |el, person| {
-                    let id = person.id.clone();
-                    let active = self.sidebar_state.preferences.owner_id.as_deref() == Some(&id);
-                    el.child(
-                        ui_icon_button(
-                            SharedString::from(format!("person-filter:{key}")),
-                            IconName::ListFilter,
-                            if active {
-                                "Show everyone".to_owned()
-                            } else {
-                                format!("Show only {}", person.label())
-                            },
-                            icon_button::SECTION,
-                            cx,
-                        )
-                        .text_color(if active { p.accent } else { p.muted })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.change_sidebar_preferences(
-                                |prefs| {
-                                    prefs.owner_id = if active { None } else { Some(id.clone()) };
-                                    prefs.involving_me = false;
-                                },
+            let new_group = section.id.strip_prefix("category:").map(str::to_owned);
+            let supports_new_group = new_group.is_some() || section.id == "ungrouped";
+            content = content.child(
+                div()
+                    .h_flex()
+                    .child(header)
+                    .when(supports_new_group, |el| {
+                        el.child(
+                            ui_icon_button(
+                                SharedString::from(format!("group-new:{key}")),
+                                IconName::Plus,
+                                format!("New chat in {}", section.label),
+                                icon_button::ROW,
                                 cx,
                             )
-                        })),
-                    )
-                },
-            ));
+                            .disabled(self.session.is_none())
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.new_chat_in_group(new_group.clone(), window, cx)
+                                },
+                            )),
+                        )
+                    })
+                    .when_some(person, |el, person| {
+                        let id = person.id.clone();
+                        let active =
+                            self.sidebar_state.preferences.owner_id.as_deref() == Some(&id);
+                        el.child(
+                            ui_icon_button(
+                                SharedString::from(format!("person-filter:{key}")),
+                                IconName::ListFilter,
+                                if active {
+                                    "Show everyone".to_owned()
+                                } else {
+                                    format!("Show only {}", person.label())
+                                },
+                                icon_button::SECTION,
+                                cx,
+                            )
+                            .text_color(if active { p.accent } else { p.muted })
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.change_sidebar_preferences(
+                                        |prefs| {
+                                            prefs.owner_id =
+                                                if active { None } else { Some(id.clone()) };
+                                            prefs.involving_me = false;
+                                        },
+                                        cx,
+                                    )
+                                },
+                            )),
+                        )
+                    }),
+            );
         }
         if !collapsed {
             let limit = self

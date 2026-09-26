@@ -77,6 +77,9 @@ impl AppView {
 
     pub(super) fn sync_web_overlays(&self, window: &mut Window, cx: &mut Context<Self>) {
         let popup = self.web.error.is_some()
+            || self.new_session.picker.is_some()
+            || self.composer_capabilities.plus_open
+            || self.composer_capabilities.permission_open
             || self.web.picker_open
             || self.sidebar_state.palette_open
             || self.model_controls.model_open

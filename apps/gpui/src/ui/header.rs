@@ -106,7 +106,7 @@ impl AppView {
                     .text_color(p.muted),
             )
             .child(div().flex_1().min_w_0().child(title))
-            .when(!self.web.settings_open, |el| {
+            .when(!self.new_session.active, |el| {
                 el.child(
                     Button::new("header-panels")
                         .ghost()
@@ -120,7 +120,7 @@ impl AppView {
             .when(self.chat.active_run.is_some(), |el| {
                 el.child(Spinner::new().small().color(p.muted))
             })
-            .when_some(selected, |el, row| {
+            .when_some(selected.filter(|_| !self.new_session.active), |el, row| {
                 el.child(
                     Button::new("chat-header-menu")
                         .ghost()

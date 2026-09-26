@@ -223,7 +223,7 @@ impl Palette {
         ControlColors {
             chip: self.popover.blend(self.strong.opacity(0.65)),
             menu: self.elevated.blend(self.card.opacity(0.04)),
-            menu_border: self.border_strong.opacity(0.64),
+            menu_border: tokens::colors::overlay_border(self),
             search: self.card.opacity(0.78),
             search_border: self.border.opacity(0.78),
             selected: self.text.opacity(0.08),
@@ -337,3 +337,5 @@ pub fn apply(window: &mut Window, cx: &mut App) {
     Theme::sync_base(cx);
     window.refresh();
 }
+pub(crate) mod draft_tokens;
+pub(crate) mod menu_tokens;

@@ -33,8 +33,8 @@ pub struct ModelChoice {
     pub alias: Option<String>,
     pub tags: Vec<String>,
     pub available: Option<bool>,
-    pub manual_selection_allowed: Option<bool>,
     pub unavailable_reason: Option<String>,
+    pub manual_selection_allowed: Option<bool>,
     pub context_window: Option<u64>,
     pub context_tokens: Option<u64>,
     pub context_windows: Vec<ContextWindowOption>,
@@ -70,6 +70,16 @@ impl ModelChoice {
 pub struct AgentRuntime {
     pub id: String,
     pub source: String,
+    pub device_placement: Option<DevicePlacement>,
+    pub cloud_placement_supported: Option<bool>,
+    pub cloud_placement_execution_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePlacement {
+    pub required_node_commands: Vec<String>,
+    pub consumes_worker_slot: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

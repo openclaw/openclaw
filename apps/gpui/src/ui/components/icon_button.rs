@@ -1,4 +1,4 @@
-use super::icon::icon;
+use super::icons::icon;
 use crate::ui::theme::{
     Palette,
     tokens::{IconButtonMetrics, radius, space},

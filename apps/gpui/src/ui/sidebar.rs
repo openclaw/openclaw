@@ -1,8 +1,8 @@
 use super::{
     AppView,
     components::{
-        icon::icon as ui_icon,
         icon_button::icon_button,
+        icons::icon as ui_icon,
         menu_surface::{MenuSurfaceSpec, menu_surface},
     },
     sidebar_navigation::append_identity_navigation,

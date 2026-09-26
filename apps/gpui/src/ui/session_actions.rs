@@ -67,8 +67,45 @@ impl AppView {
         cx: &mut Context<Self>,
         done: impl FnOnce(&mut Self, SessionRow, &mut Context<Self>) + 'static,
     ) {
+        self.patch_session_receipt(row, fields, cx, move |this, result, cx| {
+            if let Ok(row) = result {
+                done(this, row, cx);
+            }
+        });
+    }
+
+    pub(super) fn patch_composer_settings(
+        &mut self,
+        fields: Value,
+        cx: &mut Context<Self>,
+        done: impl FnOnce(&mut Self, Result<(), String>, &mut Context<Self>) + 'static,
+    ) {
+        if self.new_session.active {
+            self.patch_draft_settings(&fields, cx);
+            done(self, Ok(()), cx);
+        } else if let Some(row) = self.selected_row().cloned() {
+            self.patch_session_receipt(row, fields, cx, move |this, result, cx| {
+                done(this, result.map(|_| ()), cx);
+            });
+        } else {
+            done(self, Err("The session is still loading.".into()), cx);
+        }
+    }
+
+    fn patch_session_receipt(
+        &mut self,
+        row: SessionRow,
+        fields: Value,
+        cx: &mut Context<Self>,
+        done: impl FnOnce(&mut Self, Result<SessionRow, String>, &mut Context<Self>) + 'static,
+    ) {
         if self.session.is_none() {
             self.mutation_error("Reconnect before changing this session.".into());
+            done(
+                self,
+                Err("Reconnect before changing this session.".into()),
+                cx,
+            );
             return;
         }
         if fields.get("archived").is_some() && row.session_id.as_deref().is_none_or(str::is_empty) {
@@ -107,11 +144,16 @@ impl AppView {
                         .mutation_receipts
                         .current(&row.key, generation)
                 {
+                    done(
+                        this,
+                        Err("Session settings changed; refresh and retry.".into()),
+                        cx,
+                    );
                     return;
                 }
                 match result {
                     Ok(_) => {
-                        done(this, row, cx);
+                        done(this, Ok(row), cx);
                         if this.sidebar_state.selected_agent == agent {
                             this.refresh_sessions(cx);
                         }
@@ -131,6 +173,7 @@ impl AppView {
                             order_rows(&mut this.rows);
                         }
                         this.mutation_error(format!("Could not update session: {error}"));
+                        done(this, Err(error), cx);
                         this.refresh_sessions(cx);
                     }
                 }
@@ -163,14 +206,8 @@ impl AppView {
             this.sidebar_state.notifications.push(note);
         });
     }
-    pub(super) fn new_chat(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.create_session(
-            CreateParams {
-                agent_id: self.sidebar_state.selected_agent.clone(),
-                ..Default::default()
-            },
-            cx,
-        );
+    pub(super) fn new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_new_session(window, cx);
     }
     pub(super) fn fork_session(&mut self, row: SessionRow, cx: &mut Context<Self>) {
         self.create_session(

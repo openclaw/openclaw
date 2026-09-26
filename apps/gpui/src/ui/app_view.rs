@@ -77,6 +77,8 @@ pub struct AppView {
     pub(super) sidebar_state: SidebarState,
     pub(super) composer_state: ComposerUi,
     pub(super) model_controls: ModelControlsUi,
+    pub(super) new_session: super::new_session::NewSessionUi,
+    pub(super) composer_capabilities: super::composer_capabilities::ComposerCapabilities,
     pub(super) transcript_state: TranscriptUi,
     pub(super) router: Router,
     pub(super) attention_state: AttentionUi,
@@ -195,6 +197,8 @@ impl AppView {
             sidebar_state: SidebarState::new(window, cx),
             composer_state: ComposerUi::default(),
             model_controls: ModelControlsUi::new(window, cx),
+            new_session: super::new_session::NewSessionUi::new(window, cx),
+            composer_capabilities: Default::default(),
             transcript_state: TranscriptUi::default(),
             router: Router::default(),
             attention_state: AttentionUi::default(),
@@ -302,6 +306,10 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.composer_save_draft(cx);
+        self.new_session.active = false;
+        self.new_session.picker = None;
+        self.composer_capabilities.reset();
         self.web.settings_open = false;
         self.web.picker_open = false;
         self.web.address_dirty = true;
@@ -311,7 +319,6 @@ impl AppView {
         {
             return;
         }
-        self.composer_save_draft(cx);
         let destination_agent = self
             .rows
             .iter()
@@ -375,6 +382,9 @@ impl AppView {
     }
 
     pub(super) fn session_title(&self) -> String {
+        if self.new_session.active {
+            return "New chat".into();
+        }
         self.selected_row()
             .map(SessionRow::title)
             .or_else(|| {
@@ -403,6 +413,14 @@ impl Render for AppView {
             .filter(|expiry| *expiry > now)
             .min();
         self.apply_sidebar_pending(window, cx);
+        if let Some(key) = self.new_session.pending_open.take() {
+            self.composer
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.select_session(key, window, cx);
+        }
+        if self.new_session.inputs_dirty {
+            self.sync_draft_inputs(window, cx);
+        }
         self.composer_restore_if_pending(window, cx);
         self.sync_web_surfaces(window, cx);
         self.sync_viewer_presence(cx);
@@ -413,6 +431,8 @@ impl Render for AppView {
             self.connect_screen(cx).into_any_element()
         } else if self.web.settings_open {
             self.settings_body()
+        } else if self.new_session.active {
+            self.new_session_view(window, cx)
         } else {
             let attention = self.attention_dock(window, cx);
             div()
@@ -609,12 +629,16 @@ impl Render for AppView {
                             .current_dock()
                             .is_some_and(|dock| dock.layout.open && dock.layout.expanded)
                             || self.web.settings_open
+                            || self.new_session.active
                             || self.show_connect_form,
                         |el| el.child(body),
                     )
-                    .when(!self.web.settings_open && !self.show_connect_form, |el| {
-                        el.child(self.panel_dock(window, cx))
-                    }),
+                    .when(
+                        !self.web.settings_open
+                            && !self.show_connect_form
+                            && !self.new_session.active,
+                        |el| el.child(self.panel_dock(window, cx)),
+                    ),
             )
             .when(!self.show_connect_form, |el| {
                 el.children(

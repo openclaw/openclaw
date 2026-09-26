@@ -154,6 +154,14 @@ pub struct Agent {
     pub id: String,
     pub name: Option<String>,
     pub identity: AgentIdentity,
+    pub workspace: Option<String>,
+    #[serde(rename = "workspaceGit")]
+    pub workspace_git: bool,
+    pub model: Option<serde_json::Value>,
+    #[serde(rename = "agentRuntime")]
+    pub agent_runtime: Option<super::composer_rpc::AgentRuntime>,
+    #[serde(rename = "defaultPermissionMode")]
+    pub default_permission_mode: Option<String>,
 }
 impl Agent {
     pub fn name(&self) -> &str {
@@ -218,6 +226,17 @@ pub fn params(value: impl Serialize) -> Value {
 mod sidebar_tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn agent_roster_accepts_omitted_optional_capabilities() {
+        let roster: Agents = serde_json::from_value(json!({
+            "defaultId":"qa", "agents":[{"id":"qa","name":"QA"}]
+        }))
+        .unwrap();
+        assert_eq!(roster.agents[0].name(), "QA");
+        assert!(!roster.agents[0].workspace_git);
+        assert!(roster.agents[0].workspace.is_none());
+        assert!(roster.agents[0].default_permission_mode.is_none());
+    }
     #[test]
     fn sidebar_filters_use_gateway_membership_and_archive_wire_contracts() {
         let activity = params(ListParams::activity());
