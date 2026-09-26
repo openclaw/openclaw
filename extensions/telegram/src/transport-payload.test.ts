@@ -343,4 +343,44 @@ describe("Telegram topic transport payloads", () => {
       text: "Replacement",
     });
   });
+
+  it("clears media callback buttons when deleting before a text replacement fails", async () => {
+    const callbackMessage = directMessagesMessage({
+      text: undefined,
+      caption: "Choose an action",
+    }) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+    const editMessage = vi
+      .spyOn(bot.api, "editMessageText")
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: there is no text in the message to edit"),
+      );
+    const deleteMessage = vi
+      .spyOn(bot.api, "deleteMessage")
+      .mockRejectedValueOnce(new Error("400: Bad Request: message can't be deleted"));
+
+    try {
+      await actions.editCallbackMessageWithButtons("Replacement", []);
+    } finally {
+      editMessage.mockRestore();
+      deleteMessage.mockRestore();
+    }
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "editMessageReplyMarkup",
+      "sendMessage",
+    ]);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual({
+      chat_id: DIRECT_CHAT_ID,
+      message_id: 41,
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
+      text: "Replacement",
+    });
+  });
 });
