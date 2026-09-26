@@ -14,7 +14,7 @@ import {
   nextGeneration,
   normalizeIdentity,
   normalizeWorkerPlacementExecutionMode,
-  type WorkerSessionPlacementDispatchIdentity,
+  type WorkerPlacementDispatchStoreOperations,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import { ensureLocal, getRequired, query } from "./placement-row-codec.js";
@@ -22,13 +22,6 @@ import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservat
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { findWorkerEnvironment } from "./store-row-codec.js";
-
-export type WorkerPlacementDispatchStoreOperations = {
-  "workerPlacements.startDispatch": {
-    input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number };
-    output: WorkerSessionPlacementRecord;
-  };
-};
 
 export function startWorkerPlacementDispatchInWorker(
   input: WorkerPlacementDispatchStoreOperations["workerPlacements.startDispatch"]["input"],

@@ -107,6 +107,7 @@ describe("worker session placement moves", () => {
       moves: new Map(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     });
     expect(
       database.db

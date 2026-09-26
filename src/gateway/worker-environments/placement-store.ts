@@ -194,14 +194,21 @@ export function createWorkerSessionPlacementStore(
         }
         return requested;
       };
+      const byRequestedSet = (sessionIds: ReadonlySet<string>) =>
+        new Set(
+          [...requestedIds].flatMap(([original, normalized]) =>
+            sessionIds.has(normalized) ? [original] : [],
+          ),
+        );
       return {
         ...projection,
         placements: byRequestedId(placements),
         moves: byRequestedId(projection.moves),
-        workspaceResultReconcilingSessionIds: new Set(
-          [...requestedIds].flatMap(([original, normalized]) =>
-            projection.workspaceResultReconcilingSessionIds.has(normalized) ? [original] : [],
-          ),
+        workspaceResultReconcilingSessionIds: byRequestedSet(
+          projection.workspaceResultReconcilingSessionIds,
+        ),
+        workspaceRecoveryPendingSessionIds: byRequestedSet(
+          projection.workspaceRecoveryPendingSessionIds,
         ),
       };
     },

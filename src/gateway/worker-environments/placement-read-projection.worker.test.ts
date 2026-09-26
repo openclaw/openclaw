@@ -116,6 +116,9 @@ describe("worker placement read projection", () => {
       expect(snapshot.workspaceResultReconcilingSessionIds).toEqual(
         new Set(["pending", " pending "]),
       );
+      expect(snapshot.workspaceRecoveryPendingSessionIds).toEqual(
+        new Set(["pending", " pending "]),
+      );
       expect(snapshot.environments.get(placement.environmentId)).toEqual({
         environmentId: placement.environmentId,
         providerId: "fake",

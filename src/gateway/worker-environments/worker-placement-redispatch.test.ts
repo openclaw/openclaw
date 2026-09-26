@@ -24,6 +24,7 @@ function reader(
       environments: new Map(environment ? [[environment.environmentId, environment]] : []),
       moves: new Map(),
       workspaceResultReconcilingSessionIds: new Set<string>(),
+      workspaceRecoveryPendingSessionIds: new Set<string>(),
     }),
   };
 }

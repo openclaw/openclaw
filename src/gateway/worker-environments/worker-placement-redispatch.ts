@@ -1,33 +1,15 @@
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
-import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
+import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 
 type RedispatchableWorkerPlacement = Extract<
   WorkerSessionPlacementRecord,
   { state: "reclaimed" | "failed" }
 >;
-
-export function canRedispatchFailedWorkerPlacement(
-  placement: Extract<WorkerSessionPlacementRecord, { state: "failed" }>,
-  environment: WorkerEnvironmentPlacementFacts | undefined,
-): boolean {
-  return Boolean(
-    placement.activeOwnerEpoch !== null &&
-    !placement.turnClaim &&
-    environment &&
-    environment.environmentId === placement.environmentId &&
-    (environment.providerId !== DEVICE_WORKER_PROVIDER_ID || environment.nodeDeviceId) &&
-    isFailedWorkerPlacementEnvironmentGone({
-      placement,
-      environmentService: { get: () => environment },
-    }),
-  );
-}
 
 export function createWorkerPlacementRedispatch(params: {
   placements: Pick<WorkerSessionPlacementStore, "readProjection">;

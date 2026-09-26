@@ -87,6 +87,7 @@ async function heldPlacementReads(
           moves: new Map(),
           environments: new Map(),
           workspaceResultReconcilingSessionIds: new Set(),
+          workspaceRecoveryPendingSessionIds: new Set(),
         };
         entered.resolve();
         await release.promise;
@@ -393,6 +394,7 @@ it("serves an exact description while an unrelated bulk placement refresh is hel
         moves: new Map(),
         environments: new Map(),
         workspaceResultReconcilingSessionIds: new Set(),
+        workspaceRecoveryPendingSessionIds: new Set(),
       };
       if (holdBulk && ids.includes(bulkRow.sessionId)) {
         bulkEntered.resolve();

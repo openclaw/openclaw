@@ -70,6 +70,7 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
                 moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
                 workspaceResultReconcilingSessionIds:
                   placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+                workspaceRecoveryPendingSessionIds: new Set(),
                 environments,
               };
             },

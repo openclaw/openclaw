@@ -15,8 +15,10 @@ import {
   type WorkerPlacementRunnerAvailabilityReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
-import { canRedispatchFailedWorkerPlacement } from "../worker-environments/worker-placement-redispatch.js";
+import {
+  canRedispatchFailedWorkerPlacement,
+  isFailedWorkerPlacementEnvironmentGone,
+} from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
@@ -45,6 +47,7 @@ export function readSessionRowFacts(params: {
       move,
       environment,
       workspaceResultReconciling = false,
+      workspaceRecoveryPending = false,
     } = placementSource ?? {};
     const identity = placement
       ? readWorkerPlacementIdentity(
@@ -67,7 +70,7 @@ export function readSessionRowFacts(params: {
     const retryOnSend =
       placement?.state === "failed" &&
       !move &&
-      !workspaceResultReconciling &&
+      !workspaceRecoveryPending &&
       canRedispatchFailedWorkerPlacement(placement, environment);
     return {
       placement,
