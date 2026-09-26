@@ -287,7 +287,7 @@ function measureRichBlockChildren(
         measureRichBlockCaption(block.caption, size, depth + 1);
         break;
       case "map":
-        // Live-verified: maps do not consume the 50-attachment budget.
+        // Live-verified: maps do not consume the media-attachment budget.
         measureRichBlockCaption(block.caption, size, depth + 1);
         break;
       case "anchor":

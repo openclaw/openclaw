@@ -45,6 +45,29 @@ describe("Telegram physical send acceptance over HTTP", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([20, 21])("delivers every item and tail of a %i-media rich send", async (count) => {
+    const urls = Array.from(
+      { length: count },
+      (_, index) => `https://example.com/${index + 1}.jpg`,
+    );
+    const text = `${urls.map((url) => `<img src="${url}"/>`).join("\n\n")}\n\nTAIL`;
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+      api: bot.api,
+    });
+    expect(requests.map(({ method }) => method)).toEqual(
+      count === 20 ? ["sendRichMessage"] : ["sendRichMessage", "sendRichMessage"],
+    );
+    const pages = requests.map(({ fields }) => JSON.stringify(fields.rich_message));
+    const delivered = pages.map((page) => page.match(/https:\/\/example\.com\/\d+\.jpg/g) ?? []);
+    expect(delivered.map((media) => media.length)).toEqual(count === 20 ? [20] : [20, 1]);
+    expect(delivered.flat()).toEqual(urls);
+    expect(pages.at(-1)).toContain("TAIL");
+    expect(result.receipt?.platformMessageIds ?? [result.messageId]).toEqual(
+      count === 20 ? ["1"] : ["1", "2"],
+    );
+  });
+
   it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
     const source = "<https://example.com/a.pdf|Manual>";
     const text = sanitizeForPlainText(source, { style: "markdown" });

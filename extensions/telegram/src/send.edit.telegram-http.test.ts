@@ -1,7 +1,15 @@
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+
+const mediaMarkdown = (count: number) =>
+  Array.from(
+    { length: count },
+    (_, index) =>
+      `<figure><img src="https://example.com/${index + 1}.jpg"/><figcaption>photo-${index + 1}</figcaption></figure>`,
+  ).join("\n\n");
 
 describe("Telegram edit recovery over HTTP", () => {
   const fixture = useTelegramHttpFixture();
@@ -91,6 +99,99 @@ describe("Telegram edit recovery over HTTP", () => {
     },
   );
 
+  it.each([
+    { count: 20, native: false },
+    { count: 21, native: false },
+    { count: 20, native: true },
+    { count: 21, native: true },
+  ])(
+    "edits all $count media without truncation (native blocks: $native)",
+    async ({ count, native }) => {
+      const text = `${mediaMarkdown(count)}\n\nTAIL`;
+      await editMessageTelegram("123", 321, text, {
+        cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+        api: bot.api,
+        ...(native ? { richMessage: buildTelegramRichMarkdownPlan(text).richMessage } : {}),
+      });
+      expect(requests.map(({ method }) => method)).toEqual(["editMessageText"]);
+      const fields = requests[0]!.fields;
+      expect(fields.message_id).toBe(321);
+      if (count === 20) {
+        expect(fields.rich_message).toBeDefined();
+        expect(fields.text).toBeUndefined();
+      } else {
+        expect(fields.rich_message).toBeUndefined();
+        expect(fields.text).toBe(
+          Array.from(
+            { length: count },
+            (_, index) => `photo-${index + 1} https://example.com/${index + 1}.jpg`,
+          ).join("\n") + "\nTAIL",
+        );
+      }
+      expect(JSON.stringify(fields).match(/https:\/\/example\.com\/\d+\.jpg/g)).toEqual(
+        Array.from({ length: count }, (_, index) => `https://example.com/${index + 1}.jpg`),
+      );
+      expect(JSON.stringify(fields)).toContain("TAIL");
+    },
+  );
+
+  it.each([
+    { length: 4001, character: "x" },
+    { length: 4096, character: "x" },
+    { length: 4097, character: "x" },
+    { length: 4096, character: "😀" },
+    { length: 4097, character: "😀" },
+  ])(
+    "bounds the complete $length-character 21-media replacement with $character before HTTP",
+    async ({ length, character }) => {
+      const prefix =
+        Array.from(
+          { length: 21 },
+          (_, index) => `photo-${index + 1} https://example.com/${index + 1}.jpg`,
+        ).join("\n") + "\n";
+      const tail = `${character.repeat(length - prefix.length - 4)}TAIL`;
+      const buttons = [[{ text: "Keep", callback_data: "keep" }]];
+      const result = editMessageTelegram("123", 321, `${mediaMarkdown(21)}\n\n${tail}`, {
+        cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+        api: bot.api,
+        buttons,
+        linkPreview: false,
+      });
+      if (length > 4096) {
+        await expect(result).rejects.toThrow(
+          "complete plain fallback is 4097 characters, exceeding the 4096-character edit limit",
+        );
+        expect(requests).toEqual([]);
+      } else {
+        await expect(result).resolves.toMatchObject({ ok: true, messageId: "321", chatId: "123" });
+        expect(requests).toEqual([
+          {
+            method: "editMessageText",
+            fields: {
+              chat_id: "123",
+              message_id: 321,
+              text: prefix + tail,
+              link_preview_options: { is_disabled: true },
+              reply_markup: { inline_keyboard: buttons },
+            },
+          },
+        ]);
+      }
+    },
+  );
+
+  it.each([4001, 4096])("recovers a complete %i-character rich edit", async (length) => {
+    const text = `START${"x".repeat(length - 8)}END`;
+    rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
+    await editMessageTelegram("123", 321, text, {
+      cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+      api: bot.api,
+    });
+    expect(requests.map(({ method }) => method)).toEqual(["editMessageText", "editMessageText"]);
+    expect(requests[0]!.fields.rich_message).toBeDefined();
+    expect(requests[1]!.fields).toEqual({ chat_id: "123", message_id: 321, text });
+  });
+
   it.each([undefined, true, false])(
     "resolves named-account edit previews with explicit override %s",
     async (linkPreview) => {
@@ -130,16 +231,16 @@ describe("Telegram edit recovery over HTTP", () => {
       '"url":"https://example.com"',
     );
     expect(requests[1]!.fields.text).toBe("More\nDownload");
-    rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID", "Bad Request: message is too long");
+    rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
     const text = `START${"x".repeat(4100)}END`;
     await expect(
       editMessageTelegram("123", 321, text, { cfg: richCfg, api: bot.api }),
-    ).rejects.toThrow("message is too long");
-    expect(requests.slice(2).map(({ method }) => method)).toEqual([
-      "editMessageText",
-      "editMessageText",
-    ]);
-    expect(requests.at(-1)!.fields.text).toBe(text);
+    ).rejects.toThrow(
+      "complete plain fallback is 4108 characters, exceeding the 4096-character edit limit",
+    );
+    expect(requests.slice(2).map(({ method }) => method)).toEqual(["editMessageText"]);
+    expect(requests.at(-1)!.fields.rich_message).toBeDefined();
+    expect(requests.at(-1)!.fields.text).toBeUndefined();
   });
 
   it("retries idempotent edits after a real server rejection", async () => {
