@@ -264,9 +264,8 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     if (this.sessionSortMode === "people" && this.sessionPeopleSortCapability() === false) {
       this.setSessionSortMode("created");
     }
-    const activeRouteKey = isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "";
     if (isSessionRouteId(this.activeRouteId)) {
-      void this.sessionData.loadActiveSessionLineage(activeRouteKey);
+      void this.sessionData.loadActiveSessionLineage(this.getRouteSessionKey());
     }
     scheduleSidebarChildSessions(this.sessionData, () => this.childSessionParents());
   }
