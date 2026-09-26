@@ -11,6 +11,13 @@ vi.mock("./session-catalog-executable.js", () => ({
   resolveClaudeTerminalExecutable: vi.fn(),
 }));
 
+const subsystemLogMock = vi.hoisted(() => ({ warn: vi.fn(), verbose: vi.fn() }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  createSubsystemLogger: vi.fn(() => subsystemLogMock),
+}));
+
 type CommandRunner = OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
 type CommandResult = Awaited<ReturnType<CommandRunner>>;
 type WrapperHook = "wrapStreamFn" | "wrapSimpleCompletionStreamFn";
@@ -104,6 +111,46 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  subsystemLogMock.warn.mockClear();
+  subsystemLogMock.verbose.mockClear();
+});
+
+describe("Claude version probe failure diagnostics (#157541)", () => {
+  it.each([
+    {
+      mode: "missing executable",
+      setup: () => {
+        vi.mocked(resolveClaudeTerminalExecutable).mockReturnValue(undefined);
+        return vi.fn<CommandRunner>().mockResolvedValue(versionResult("2.1.281"));
+      },
+      expectWarn: "executable-missing",
+    },
+    {
+      mode: "command failure",
+      setup: () => vi.fn<CommandRunner>().mockRejectedValue(new Error("synthetic launch failure")),
+      expectWarn: "probe-error",
+    },
+    {
+      mode: "unparseable output",
+      setup: () => vi.fn<CommandRunner>().mockResolvedValue(versionResult("unrecognized output")),
+      expectWarn: "unparseable-output",
+    },
+  ])("warns with cause when probe fails: $mode", async ({ setup, expectWarn }) => {
+    const fixture = register(setup());
+    const request = capture(fixture.provider, "wrapStreamFn");
+    await request.run();
+    // The request still goes through without identity (transport floor intact),
+    // but the failure must be visible instead of silent.
+    expect(request.base.mock.calls[0]?.[2]?.headers).toEqual(oauthOptions.headers);
+    expect(subsystemLogMock.warn).toHaveBeenCalledOnce();
+    expect(subsystemLogMock.warn.mock.calls[0]?.[0]).toEqual(expect.stringContaining(expectWarn));
+    // Security: warnings carry only bounded failure categories, never raw
+    // subprocess output or error text that could hold private paths/values.
+    for (const call of subsystemLogMock.warn.mock.calls) {
+      expect(String(call[0])).not.toContain("synthetic launch failure");
+      expect(String(call[0])).not.toContain("unrecognized output");
+    }
+  });
 });
 
 describe.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
