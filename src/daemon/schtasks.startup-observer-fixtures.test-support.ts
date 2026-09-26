@@ -76,8 +76,19 @@ const nativeSpawn = cp.spawn;
 let detachedRecord;
 cp.spawn = (command, args, options) => {
   if (options?.detached !== true) return nativeSpawn(command, args, options);
+  let effectiveArgs = args;
+  if (spec.preOpenCodePage !== undefined) {
+    if (spec.mode !== "batch" || !/^[0-9]+$/.test(spec.preOpenCodePage) ||
+        !["exit-tag-argv-pre-open-diagnostic", "original-body-pre-open-diagnostic"].includes(spec.variant) ||
+        JSON.stringify(args) !== JSON.stringify(["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""']) ||
+        options.windowsVerbatimArguments !== true || options.windowsHide !== true || options.stdio !== "ignore") {
+      throw new Error("Pre-open diagnostic does not match the original CMD invocation policy");
+    }
+    effectiveArgs = [...args.slice(0, -1), '"chcp ' + spec.preOpenCodePage + ' >nul & "%OPENCLAW_TASK_SCRIPT%""'];
+  }
   const record = {
-    command, args, cwd: options.cwd ?? process.cwd(), detached: options.detached,
+    command, args, effectiveArgs, preOpenCodePage: spec.preOpenCodePage,
+    cwd: options.cwd ?? process.cwd(), detached: options.detached,
     windowsHide: options.windowsHide, windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
     originalStdio: options.stdio, variant: spec.variant,
     effectiveStdio: spec.variant === "file-backed-diagnostic" ? ["ignore", "file", "file"] : options.stdio,
@@ -89,7 +100,7 @@ cp.spawn = (command, args, options) => {
   const descriptors = spec.variant === "file-backed-diagnostic"
     ? [fs.openSync(spec.stdoutPath, "wx"), fs.openSync(spec.stderrPath, "wx")] : [];
   try {
-    const child = nativeSpawn(command, args, descriptors.length
+    const child = nativeSpawn(command, effectiveArgs, descriptors.length
       ? { ...options, stdio: ["ignore", ...descriptors] } : options);
     child.once("spawn", () => { record.pid = child.pid; record.spawnObserved = true; save(record); });
     child.once("error", (error) => { record.errorCode = error.code ?? null; save(record); });

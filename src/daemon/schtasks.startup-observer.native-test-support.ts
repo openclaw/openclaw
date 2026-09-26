@@ -59,7 +59,9 @@ export async function runObservedStartupLaunch(params: {
       | "exit-tag-pathological-diagnostic"
       | "exit-tag-ascii-path-diagnostic"
       | "exit-tag-code-page-header-diagnostic"
-      | "exit-tag-argv-capture-diagnostic",
+      | "exit-tag-argv-capture-diagnostic"
+      | "exit-tag-argv-pre-open-diagnostic"
+      | "original-body-pre-open-diagnostic",
     scriptPath = params.scriptPath,
     argvCapture?: {
       helperPath: string;
@@ -68,6 +70,7 @@ export async function runObservedStartupLaunch(params: {
       expectedArguments: string[];
       originalScriptSha256: string;
     },
+    preOpenCodePage?: string,
   ) {
     const expectedExitTag = variant.startsWith("exit-tag-") ? 42 : undefined;
     const bytes = await fs.readFile(scriptPath);
@@ -88,6 +91,7 @@ export async function runObservedStartupLaunch(params: {
         scriptPath,
         expectedExitTag,
         argvCapture,
+        preOpenCodePage,
         invocationPath: `${prefix}.invocation.json`,
         stdoutPath: `${prefix}.stdout.log`,
         stderrPath: `${prefix}.stderr.log`,
@@ -166,6 +170,13 @@ export async function runObservedStartupLaunch(params: {
           ? "encodeWindowsLauncherScript(cmd)"
           : "ASCII CRLF",
       ...(argvCapture ? { argvCapture } : {}),
+      ...(preOpenCodePage
+        ? {
+            preOpenCodePage,
+            invocationQualification: "diagnostic command arguments; original spawn options",
+            lifecycleQualification: false,
+          }
+        : {}),
       scriptBase64: bytes.toString("base64"),
       scriptSha256: createHash("sha256").update(bytes).digest("hex"),
       ...(expectedExitTag === undefined ? {} : { expectedExitTag, lifecycleQualification: false }),
@@ -289,13 +300,12 @@ export async function runObservedStartupLaunch(params: {
   }
   async function diagnoseArgvCapture(original: Buffer) {
     const variant = "exit-tag-argv-capture-diagnostic";
-    const file = path.join(params.proofRoot, `${params.mode}-${variant}.observation.json`);
-    const notRun = (reason: string) =>
+    const notRun = (reason: string, skippedVariant: string = variant) =>
       fs.writeFile(
-        file,
+        path.join(params.proofRoot, `${params.mode}-${skippedVariant}.observation.json`),
         JSON.stringify({
           mode: params.mode,
-          variant,
+          variant: skippedVariant,
           event: "not-run",
           lifecycleQualification: false,
           scriptPath: params.scriptPath,
@@ -315,9 +325,10 @@ export async function runObservedStartupLaunch(params: {
     }
     const helperPath = path.join(canonicalRoot, "argv-capture.cjs");
     const resultPath = path.join(canonicalRoot, "argv-result.json");
+    const preOpenResultPath = path.join(canonicalRoot, "argv-pre-open-result.json");
     const asciiPath = (value: string) =>
       /^[\x20-\x7e]+$/u.test(value) && !/[&|<>^%!"()]/u.test(value);
-    if (![path.resolve(root), helperPath, resultPath].every(asciiPath)) {
+    if (![path.resolve(root), helperPath, resultPath, preOpenResultPath].every(asciiPath)) {
       await notRun("The argv helper's complete isolated path is not ASCII and syntax-neutral");
       return;
     }
@@ -346,18 +357,69 @@ export async function runObservedStartupLaunch(params: {
     }
     await fs.writeFile(helperPath, startupArgvCaptureSource, { flag: "wx" });
     await fs.writeFile(params.scriptPath, captureScript);
-    await run(variant, params.scriptPath, {
+    const capture = {
       helperPath,
       helperSha256: createHash("sha256").update(startupArgvCaptureSource).digest("hex"),
       resultPath,
       expectedArguments,
       originalScriptSha256: createHash("sha256").update(original).digest("hex"),
-    });
+    };
+    await run(variant, params.scriptPath, capture);
     assert.deepEqual(
       await fs.readFile(helperPath),
       Buffer.from(startupArgvCaptureSource),
       "ASCII argv helper bytes changed during observation",
     );
+    const codePage = /^@chcp ([0-9]+) >nul\r\n/u.exec(preamble)?.[1];
+    assert.ok(codePage, "The original preamble did not contain a recorded code page");
+    const preOpen = await run(
+      "exit-tag-argv-pre-open-diagnostic",
+      params.scriptPath,
+      { ...capture, resultPath: preOpenResultPath },
+      codePage,
+    );
+    assert.deepEqual(
+      await fs.readFile(helperPath),
+      Buffer.from(startupArgvCaptureSource),
+      "ASCII argv helper bytes changed during pre-open observation",
+    );
+    const packet = z
+      .object({
+        error: z.null(),
+        result: z.object({
+          event: z.literal("argv-captured"),
+          pid: identity,
+          ppid: identity,
+          execPath: z.literal(process.execPath),
+          argv: z.array(z.string()),
+          error: z.null(),
+        }),
+      })
+      .safeParse(preOpen.argvCapture);
+    const expectedArgv = [process.execPath, helperPath, ...expectedArguments];
+    const invocation = preOpen.invocation;
+    const exactArgv =
+      packet.success &&
+      packet.data.result.argv.length === expectedArgv.length &&
+      packet.data.result.argv.every((value, index) => value === expectedArgv[index]);
+    if (
+      preOpen.event !== "diagnostic-exit" ||
+      preOpen.exitTagMatched !== true ||
+      invocation?.exitObserved !== true ||
+      invocation.exitCode !== 42 ||
+      invocation.exitSignal !== null ||
+      !packet.success ||
+      !exactArgv ||
+      packet.data.result.ppid !== invocation.pid
+    ) {
+      await notRun(
+        "Pre-open argv/identity/exit evidence was absent, malformed, or did not match exactly",
+        "original-body-pre-open-diagnostic",
+      );
+      return;
+    }
+    await fs.writeFile(params.scriptPath, original);
+    await run("original-body-pre-open-diagnostic", params.scriptPath, undefined, codePage);
   }
   async function diagnoseExitTag() {
     const original = await fs.readFile(params.scriptPath);
@@ -367,6 +429,8 @@ export async function runObservedStartupLaunch(params: {
       "exit-tag-ascii-path-diagnostic",
       "exit-tag-code-page-header-diagnostic",
       "exit-tag-argv-capture-diagnostic",
+      "exit-tag-argv-pre-open-diagnostic",
+      "original-body-pre-open-diagnostic",
     ] as const;
     try {
       await fs.writeFile(params.scriptPath, tagged);
