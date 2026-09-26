@@ -460,6 +460,24 @@ a saved policy is not proof that the running Gateway applied it.
   </Step>
 </Steps>
 
+## Handle malformed provider responses
+
+Import `ProviderJsonParseError` and the bounded JSON readers from
+`openclaw/plugin-sdk/provider-http`. `readProviderJsonResponse` and its
+object/array variants throw this `Error` subtype only when UTF-8 decoding or
+JSON parsing fails. It preserves the `Error` name and the message
+`<label>: malformed JSON response`.
+
+Catch it with `error instanceof ProviderJsonParseError` when your plugin needs
+a provider-specific malformed-response diagnostic. Rethrow other errors:
+transport failures, oversized responses, body-read failures such as stalls or
+interrupted streams, and rejected content types retain their existing errors. Valid JSON with an
+unexpected object or array shape is also a separate validation failure.
+
+Pass `{ requestHeaders: headers }` to the reader when the request contains
+credentials. This omits parser causes that could contain reflected header
+values; without that option, the parse error retains its cause.
+
 ## Publish to ClawHub
 
 Provider plugins publish the same way as any other external code plugin:

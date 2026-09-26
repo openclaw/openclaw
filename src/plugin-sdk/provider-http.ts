@@ -23,6 +23,7 @@ export {
   readProviderTextResponse,
   readResponseTextLimited,
   truncateErrorDetail,
+  ProviderJsonParseError,
 } from "../agents/provider-http-errors.js";
 export {
   readProviderResponseErrorText,
