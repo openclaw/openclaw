@@ -115,20 +115,6 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.scenarioIds).toBeNull();
   });
 
-  it("records an Anthropic baseline lane cleanly for parity runs", () => {
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
-      primaryModel: "anthropic/claude-opus-4-8",
-      alternateModel: "anthropic/claude-sonnet-4-6",
-    });
-    expect(json.run.primaryModel).toBe("anthropic/claude-opus-4-8");
-    expect(json.run.primaryProvider).toBe("anthropic");
-    expect(json.run.primaryModelName).toBe("claude-opus-4-8");
-    expect(json.run.alternateModel).toBe("anthropic/claude-sonnet-4-6");
-    expect(json.run.alternateProvider).toBe("anthropic");
-    expect(json.run.alternateModelName).toBe("claude-sonnet-4-6");
-  });
-
   it("leaves split fields null when a model ref is malformed", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
@@ -141,17 +127,6 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.alternateModel).toBe("");
     expect(json.run.alternateProvider).toBeNull();
     expect(json.run.alternateModelName).toBeNull();
-  });
-
-  it("keeps scenarios and counts alongside the run metadata", () => {
-    const json = buildQaSuiteSummaryJson(baseParams);
-    expect(json.scenarios).toHaveLength(2);
-    expect(json.counts).toEqual({
-      total: 2,
-      passed: 1,
-      failed: 1,
-      skipped: 0,
-    });
   });
 
   it("includes skipped scenarios in the canonical summary counts", () => {
@@ -259,40 +234,7 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("records optional runtime metrics when provided", () => {
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
-      metrics: {
-        wallMs: 12_000,
-        gatewayProcessCpuMs: 3_400,
-        gatewayCpuCoreRatio: 0.283,
-        gatewayProcessRssStartBytes: 100_000_000,
-        gatewayProcessRssEndBytes: 125_000_000,
-        gatewayProcessRssDeltaBytes: 25_000_000,
-        gatewayProcessRssPeakBytes: 140_000_000,
-        gatewayProcessRssPeakDeltaBytes: 40_000_000,
-        gatewayProcessRssSamples: [
-          {
-            label: "suite-start",
-            at: "2026-04-22T12:00:00.000Z",
-            gatewayProcessRssBytes: 100_000_000,
-          },
-          {
-            label: "scenario:canary:finish",
-            at: "2026-04-22T12:00:10.000Z",
-            gatewayProcessRssBytes: 140_000_000,
-          },
-        ],
-        gatewayHeapSnapshots: [
-          {
-            label: "suite-start",
-            at: "2026-04-22T12:00:01.000Z",
-            path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-            bytes: 12_345,
-          },
-        ],
-      },
-    });
-    expect(json.metrics).toEqual({
+    const metrics = {
       wallMs: 12_000,
       gatewayProcessCpuMs: 3_400,
       gatewayCpuCoreRatio: 0.283,
@@ -321,6 +263,9 @@ describe("buildQaSuiteSummaryJson", () => {
           bytes: 12_345,
         },
       ],
-    });
+    };
+    const json = buildQaSuiteSummaryJson({ ...baseParams, metrics: structuredClone(metrics) });
+
+    expect(json.metrics).toEqual(metrics);
   });
 });

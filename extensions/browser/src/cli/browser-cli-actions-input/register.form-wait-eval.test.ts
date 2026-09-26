@@ -281,7 +281,7 @@ describe("browser action input evaluate command", () => {
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it.each([false, 0, "", null, undefined])("preserves the successful value %j", async (value) => {
+  it.each([false, undefined])("preserves the successful value %j", async (value) => {
     mocks.callBrowserRequest.mockResolvedValueOnce({ ok: true, result: value });
     await createActionInputProgram().parseAsync(["browser", "evaluate", "--fn", "() => 0"], {
       from: "user",

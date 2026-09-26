@@ -40,6 +40,7 @@ describe("extractPdfContent", () => {
         maxPages: 2,
         maxPixels: 100,
         minTextChars: 10,
+        password: "synthetic-password",
       }),
     ).resolves.toEqual({ text: "extracted pdf", images: [], metadata });
     expect(extractDocumentContentMock).toHaveBeenCalledWith({
@@ -48,31 +49,7 @@ describe("extractPdfContent", () => {
       maxPages: 2,
       maxPixels: 100,
       minTextChars: 10,
-    });
-  });
-
-  it("passes PDF passwords through to document extractors", async () => {
-    extractDocumentContentMock.mockResolvedValue({
-      text: "encrypted pdf",
-      images: [],
-      extractor: "pdf",
-    });
-
-    await extractPdfContent({
-      buffer: Buffer.from("%PDF-1.4"),
-      maxPages: 2,
-      maxPixels: 100,
-      minTextChars: 10,
-      password: "secret",
-    });
-
-    expect(extractDocumentContentMock).toHaveBeenCalledWith({
-      buffer: Buffer.from("%PDF-1.4"),
-      mimeType: "application/pdf",
-      maxPages: 2,
-      maxPixels: 100,
-      minTextChars: 10,
-      password: "secret",
+      password: "synthetic-password",
     });
   });
 

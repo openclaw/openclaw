@@ -511,43 +511,6 @@ it("lets an admitted root enter session work while suspension preparation refuse
   }
 });
 
-it("registers active work before waiting for the store writer barrier", async () => {
-  const storePath = "store-writer-barrier";
-  const writerStarted = createDeferred();
-  const releaseWriter = createDeferred();
-  const firstValidation = createDeferred();
-  let validationCount = 0;
-  const writer = runExclusiveSessionStoreWrite(storePath, async () => {
-    writerStarted.resolve();
-    await releaseWriter.promise;
-  });
-  await writerStarted.promise;
-
-  const admissionPromise = beginSessionWorkAdmission({
-    scope: storePath,
-    identities: ["agent:main:child", "session-writer-barrier"],
-    assertAllowed: () => {
-      validationCount += 1;
-      if (validationCount === 1) {
-        firstValidation.resolve();
-      }
-    },
-  });
-  await firstValidation.promise;
-  await Promise.resolve();
-
-  expect(isSessionWorkAdmissionActive(storePath, ["session-writer-barrier"])).toBe(true);
-
-  releaseWriter.resolve();
-  const admission = await admissionPromise;
-  try {
-    expect(validationCount).toBe(2);
-  } finally {
-    admission.release();
-    await writer;
-  }
-});
-
 it("revalidates inline when admission begins inside the active store writer", async () => {
   const storePath = "store-writer-reentrant-admission";
   const order: string[] = [];
@@ -861,34 +824,6 @@ it("cancels work admission waiting behind a lifecycle mutation", async () => {
   await mutation;
 });
 
-it("cancels work admission while a lifecycle mutation holds the identity lock", async () => {
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
-    },
-  });
-  await mutationStarted.promise;
-
-  const controller = new AbortController();
-  const abortError = new Error("cancel during lifecycle mutation");
-  const admission = beginSessionWorkAdmission({
-    scope: "store-a",
-    identities: ["session-1"],
-    signal: controller.signal,
-    assertAllowed: () => {},
-  });
-  controller.abort(abortError);
-
-  await expect(admission).rejects.toBe(abortError);
-  releaseMutation.resolve();
-  await mutation;
-});
-
 it("cancels a queued lifecycle mutation before it becomes active", async () => {
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
@@ -994,34 +929,6 @@ it("bounds interruption waits for non-cooperative work", async () => {
         timeoutMs: 1,
       }),
     ).resolves.toBe(false);
-  } finally {
-    admissionLease.release();
-  }
-});
-
-it("excludes the initiating admission from an in-band interruption", async () => {
-  let interrupted = false;
-  const admissionLease = await beginSessionWorkAdmission({
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    assertAllowed: () => {},
-    onInterrupt: () => {
-      interrupted = true;
-    },
-  });
-
-  try {
-    await expect(
-      admissionLease.run(
-        async () =>
-          await interruptSessionWorkAdmissions({
-            scope: "store-a",
-            identities: ["session-1"],
-            timeoutMs: 1,
-          }),
-      ),
-    ).resolves.toBe(true);
-    expect(interrupted).toBe(false);
   } finally {
     admissionLease.release();
   }

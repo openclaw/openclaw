@@ -2620,6 +2620,11 @@ describe("runGatewayLoop", () => {
 
   it("keeps the process alive and retries after task runtime state restores fail", async () => {
     vi.clearAllMocks();
+    const firstFailure = createDeferredCore<string>();
+    const secondFailure = createDeferredCore<string>();
+    gatewayLog.error
+      .mockImplementationOnce(firstFailure.resolve)
+      .mockImplementationOnce(secondFailure.resolve);
     reloadTaskRuntimeStateFromStore.mockReset();
     reloadTaskRuntimeStateFromStore
       .mockImplementationOnce(async () => {
@@ -2663,14 +2668,8 @@ describe("runGatewayLoop", () => {
           stop = captureSignal("SIGTERM");
           const restartSignal = captureSignal("SIGUSR2");
           restartSignal();
-          await waitForLoopCondition(
-            () =>
-              gatewayLog.error.mock.calls.some(([message]) =>
-                String(message).includes(
-                  "gateway startup failed: task-flow registry restore failed.",
-                ),
-              ),
-            "expected failed task-flow registry restore to be logged",
+          await expect(firstFailure.promise).resolves.toContain(
+            "gateway startup failed: task-flow registry restore failed.",
           );
 
           expectRestartCloseCall(closeFirst, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
@@ -2679,12 +2678,8 @@ describe("runGatewayLoop", () => {
           expect(runtime.exit).not.toHaveBeenCalled();
 
           restartSignal();
-          await waitForLoopCondition(
-            () =>
-              gatewayLog.error.mock.calls.some(([message]) =>
-                String(message).includes("gateway startup failed: task registry restore failed."),
-              ),
-            "expected failed task-registry restore to be logged",
+          await expect(secondFailure.promise).resolves.toContain(
+            "gateway startup failed: task registry restore failed.",
           );
 
           expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
@@ -2708,6 +2703,7 @@ describe("runGatewayLoop", () => {
         });
       });
     } finally {
+      gatewayLog.error.mockReset();
       reloadTaskRuntimeStateFromStore.mockReset();
     }
   });

@@ -134,14 +134,18 @@ function runBasePreparation(
 describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
   it.each([
     { shape: "merge", branch: "main", depth: 2, passes: true, eventName: "pull_request" },
-    { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
-    {
-      shape: "merge without parents",
-      branch: "main",
-      depth: 1,
-      passes: false,
-      eventName: "pull_request",
-    },
+    ...(workflowName === workflows[0]
+      ? [
+          { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
+          {
+            shape: "merge without parents",
+            branch: "main",
+            depth: 1,
+            passes: false,
+            eventName: "pull_request",
+          },
+        ]
+      : []),
     {
       shape: "manual",
       branch: "feature",

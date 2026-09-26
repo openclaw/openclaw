@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { nestedToolHistoryFixture } from "../test/nested-tool-activity-fixture.js";
 import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
@@ -124,6 +125,80 @@ async function runPromptEvidence(
   });
 }
 
+async function runNestedToolHistoryEvidence(params: { leakContextMarker?: boolean } = {}) {
+  const scenario = readQaScenarioById(scenarioId);
+  const actions = scenario.execution.flow?.steps[0]?.actions;
+  if (!actions) {
+    throw new Error("instruction profile scenario has no actions");
+  }
+  const historyEvidenceAction = actions.find(
+    (action) =>
+      typeof action === "object" &&
+      action !== null &&
+      "call" in action &&
+      action.call === "waitForCondition" &&
+      "saveAs" in action &&
+      action.saveAs === "historyEvidence",
+  );
+  if (!historyEvidenceAction) {
+    throw new Error("instruction profile scenario has no history evidence wait");
+  }
+  const config = scenario.execution.config ?? {};
+  const { artifactFile, contextMarker, finalReply, inputFile, nonce } = config;
+  if (
+    typeof artifactFile !== "string" ||
+    typeof contextMarker !== "string" ||
+    typeof finalReply !== "string" ||
+    typeof inputFile !== "string" ||
+    typeof nonce !== "string"
+  ) {
+    throw new Error("instruction profile scenario has incomplete artifact evidence config");
+  }
+  const workspaceDir = "/qa-instruction-profile-workspace";
+  const messages = [
+    nestedToolHistoryFixture({
+      toolName: "read",
+      toolCallId: "read-instruction-profile-input",
+      input: { path: inputFile },
+      text: params.leakContextMarker ? `${nonce} ${contextMarker}` : nonce,
+    }),
+    nestedToolHistoryFixture({
+      toolName: "write",
+      toolCallId: "write-instruction-profile-artifact",
+      input: { path: artifactFile, content: nonce },
+      text: `Wrote ${artifactFile}`,
+    }),
+    { role: "assistant", content: [{ type: "text", text: finalReply }] },
+  ];
+  const flow: QaScenarioFlow = {
+    steps: [
+      {
+        name: "recognizes nested read and write history evidence",
+        actions: [{ set: "sessionKey", value: sessionKey }, historyEvidenceAction],
+        detailsExpr:
+          "JSON.stringify({ terminalReplies: historyEvidence.visibleAssistant.length, finalText: historyEvidence.final.text })",
+      },
+    ],
+  };
+  return await runLoadedScenarioFlow(scenarioId, {
+    flow,
+    api: {
+      path,
+      env: {
+        providerMode: "live-frontier",
+        gateway: {
+          workspaceDir,
+          call: async (method: string, input: Record<string, unknown>) => {
+            expect(method).toBe("chat.history");
+            expect(input).toEqual({ sessionKey, limit: 100, maxChars: 131072 });
+            return { messages };
+          },
+        },
+      },
+    },
+  });
+}
+
 describe("instruction profile prompt evidence", () => {
   it("acquires full injection evidence despite truncated metadata and stale provider mismatches", async () => {
     const result = await runPromptEvidence({
@@ -175,6 +250,24 @@ describe("instruction profile prompt evidence", () => {
   ])("rejects $name", async (params) => {
     await expect(runPromptEvidence(params)).rejects.toThrow(
       "current-run provider prompt evidence mismatch",
+    );
+  });
+});
+
+describe("instruction profile tool history evidence", () => {
+  it("recognizes canonical nested receipts without counting them as visible replies", async () => {
+    const result = await runNestedToolHistoryEvidence();
+
+    expect(result.status).toBe("pass");
+    expect(JSON.parse(result.steps[0]?.details ?? "{}")).toEqual({
+      terminalReplies: 1,
+      finalText: "WROTE instruction-profile-proof.txt",
+    });
+  });
+
+  it("rejects a protected marker leaked through a canonical nested receipt", async () => {
+    await expect(runNestedToolHistoryEvidence({ leakContextMarker: true })).rejects.toThrow(
+      "test condition was not met",
     );
   });
 });

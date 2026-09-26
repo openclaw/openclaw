@@ -290,20 +290,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "help",
-      "path": "ui/src/lib/chat/commands.ts",
-      "text": "book"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "help",
-      "path": "ui/src/lib/chat/commands.ts",
-      "text": "tools"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/about/view.ts",

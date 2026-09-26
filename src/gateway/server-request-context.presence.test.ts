@@ -28,7 +28,7 @@ vi.mock("./server/health-state.js", () => ({
 }));
 
 function makePresenceContextParams(overrides: Parameters<typeof makeContextParams>[0] = {}) {
-  vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const params = makeContextParams(overrides);
   const publisher = createPresencePublisher({
     broadcast: params.runtime.broadcast,
@@ -90,7 +90,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: true,
         updatedAt: 2,
       });
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(50);
     }
 
     expect(first.authenticatedUserProfile).toEqual({
@@ -188,7 +188,7 @@ describe("createGatewayRequestContext presence", () => {
         ...display,
         updatedAt: linked.updatedAt,
       });
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(50);
 
       expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
       expect(sourceClient.authenticatedUserProfile).toEqual({
@@ -251,7 +251,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: false,
       updatedAt: 2,
     });
-    vi.runOnlyPendingTimers();
+    vi.advanceTimersByTime(50);
 
     for (const client of ownerClients) {
       expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
@@ -288,10 +288,10 @@ describe("createGatewayRequestContext presence", () => {
     const params = makePresenceContextParams({ clients });
     const context = createGatewayRequestContext(params);
     context.recordClientActivity?.({ ...client });
-    vi.runOnlyPendingTimers();
+    vi.advanceTimersByTime(50);
     expect(params.runtime.broadcast).not.toHaveBeenCalled();
     context.recordClientActivity?.(client);
-    vi.runOnlyPendingTimers();
+    vi.advanceTimersByTime(50);
     expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
       "presence",
       {
@@ -308,11 +308,11 @@ describe("createGatewayRequestContext presence", () => {
     now.mockReturnValue(11_000);
     clients.delete(client);
     context.recordClientActivity?.(client);
-    vi.runOnlyPendingTimers();
+    vi.advanceTimersByTime(50);
     expect(params.runtime.broadcast).toHaveBeenCalledOnce();
   });
 
-  it("coalesces typing activity across a person's tabs and publishes explicit changes on the next turn", async () => {
+  it("coalesces typing activity across a person's tabs and publishes explicit changes after the coalescing window", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const started = 1_800_000_000_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(started);
@@ -389,7 +389,7 @@ describe("createGatewayRequestContext presence", () => {
           respond,
         });
         expect(respond).toHaveBeenCalledWith(true, { ok: true, broadcast: false });
-        vi.runOnlyPendingTimers();
+        vi.advanceTimersByTime(50);
       };
 
       for (let second = 0; second < 30; second++) {
@@ -415,12 +415,12 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: started + 31_000,
       });
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(50);
       expect(events()).toHaveLength(3);
       expect(rows().every((row) => row.user?.name === "Renamed Person")).toBe(true);
       health.mockReturnValue(12);
       context.publishPresence();
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(50);
       expect(events()).toHaveLength(4);
       await typeAt(32_000, tabs[1]!);
       expect(events()).toHaveLength(4);
@@ -433,7 +433,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: started + 179_000,
       });
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(50);
       expect(events()).toHaveLength(5);
       await typeAt(180_000, tabs[1]!);
       expect(events()).toHaveLength(6);
@@ -488,7 +488,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: 2,
       });
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(50);
       expect(client.authenticatedUserProfile?.displayName).toBe("Before");
       expect(params.runtime.broadcast).not.toHaveBeenCalled();
       expect(
@@ -523,7 +523,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: false,
       updatedAt: 2,
     });
-    vi.runOnlyPendingTimers();
+    vi.advanceTimersByTime(50);
 
     expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
     const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
@@ -567,7 +567,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: true,
       updatedAt: 2,
     });
-    vi.runOnlyPendingTimers();
+    vi.advanceTimersByTime(50);
 
     const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
       presence?: Array<{ user?: { id?: string; email?: string } }>;

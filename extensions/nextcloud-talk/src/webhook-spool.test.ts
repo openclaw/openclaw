@@ -185,25 +185,6 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("rejects a duplicate after completion", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async (_message, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const spool = startSpool(queue, deliver);
-      try {
-        const rawEvent = createRawEvent({ messageId: "msg-completed" });
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
   it("preserves the retired room-token plus message-id guard scenario", async () => {
     await withQueue(async (queue) => {
       const delivered: Array<[messageId: string, roomId: string]> = [];

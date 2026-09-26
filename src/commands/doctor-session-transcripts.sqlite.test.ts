@@ -622,13 +622,16 @@ describe("doctor session transcript repair", () => {
     expect(receipts).toEqual([]);
   });
 
-  it("skips session SQLite import when the Gateway owns the state lock", async () => {
+  it.each([
+    new GatewayLockError("gateway already running"),
+    new GatewayLockError(
+      "lock operation failed",
+      Object.assign(new Error("function not implemented"), { code: "ENOSYS" }),
+    ),
+  ])("reports the lock failure when session SQLite import is unavailable: %s", async (cause) => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(
-      new DoctorSqliteMaintenanceLockUnavailableError(
-        "session SQLite import",
-        new GatewayLockError("gateway already running"),
-      ),
+      new DoctorSqliteMaintenanceLockUnavailableError("session SQLite import", cause),
     );
 
     await expect(
@@ -640,12 +643,10 @@ describe("doctor session transcript repair", () => {
     ).resolves.toBeUndefined();
 
     expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Skipped: Gateway or another SQLite maintenance command owns the state directory",
-      ),
-      "Session SQLite",
-    );
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(cause.message), "Session SQLite");
+    if (cause.cause) {
+      expect(note).toHaveBeenCalledWith(expect.stringContaining("ENOSYS"), "Session SQLite");
+    }
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining('run "openclaw doctor --fix" for session-store maintenance'),
       "Session SQLite",

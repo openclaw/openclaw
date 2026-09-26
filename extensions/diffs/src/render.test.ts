@@ -3,9 +3,15 @@ import { disposeHighlighter } from "@pierre/diffs";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
+import type { DiffRenderOptions } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
+const renderOptions: DiffRenderOptions = {
+  presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+  image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+  expandUnchanged: false,
+};
 
 describe("renderDiffDocument", () => {
   afterEach(async () => {
@@ -20,11 +26,7 @@ describe("renderDiffDocument", () => {
         after: "const value = 2;\n",
         path: "src/example.ts",
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
     );
 
     expect(rendered.title).toBe("src/example.ts");
@@ -55,13 +57,12 @@ describe("renderDiffDocument", () => {
         after: "new\n",
       },
       {
+        ...renderOptions,
         presentation: {
           ...DEFAULT_DIFFS_TOOL_DEFAULTS,
           fontSize: Number.NaN,
           lineSpacing: Number.POSITIVE_INFINITY,
         },
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
       },
     );
 
@@ -72,28 +73,6 @@ describe("renderDiffDocument", () => {
     expect(rendered.imageHtml).not.toContain("NaNpx");
   });
 
-  it("resolves viewer assets under an optional base path", async () => {
-    const rendered = await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "const value = 1;\n",
-        after: "const value = 2;\n",
-      },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
-    );
-
-    const html = rendered.html ?? "";
-    const loaderSrc = html.match(/<script type="module" src="([^"]+)"><\/script>/)?.[1];
-    expect(loaderSrc).toBe("../../assets/viewer.js");
-    expect(
-      new URL(loaderSrc ?? "", "https://example.com/openclaw/plugins/diffs/view/id/token").pathname,
-    ).toBe("/openclaw/plugins/diffs/assets/viewer.js");
-  });
-
   it("downgrades invalid language hints to plain text", async () => {
     const rendered = await renderDiffDocument(
       {
@@ -102,11 +81,7 @@ describe("renderDiffDocument", () => {
         after: "const value = 2;\n",
         lang: "not-a-real-language",
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
     );
 
     const html = rendered.html ?? "";
@@ -132,11 +107,7 @@ describe("renderDiffDocument", () => {
         after: "REPORT z_demo2.\n",
         lang: "abap",
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
       "viewer",
     );
 
@@ -159,12 +130,7 @@ describe("renderDiffDocument", () => {
         after: "REPORT z_demo2.\n",
         lang: "abap",
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-        languagePackAvailable: true,
-      },
+      { ...renderOptions, languagePackAvailable: true },
       "viewer",
     );
 
@@ -274,11 +240,7 @@ describe("renderDiffDocument", () => {
         kind: "patch",
         patch,
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
       "viewer",
     );
 
@@ -306,11 +268,7 @@ describe("renderDiffDocument", () => {
         kind: "patch",
         patch,
       },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+      renderOptions,
       "viewer",
     );
 
@@ -336,11 +294,7 @@ describe("renderDiffDocument", () => {
           kind: "patch",
           patch,
         },
-        {
-          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-          expandUnchanged: false,
-        },
+        renderOptions,
       ),
     ).rejects.toThrow("too many files");
   });

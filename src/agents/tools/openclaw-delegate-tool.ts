@@ -1,6 +1,7 @@
 /** Regular-agent client for the OpenClaw system agent. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import {
   isDeliverableMessageChannel,
@@ -33,10 +34,7 @@ type OpenClawDelegateResult = {
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
   return sessionKey?.trim()
-    ? `delegate-${createHash("sha256")
-        .update(`${agentId}\0${sessionKey.trim()}`)
-        .digest("hex")
-        .slice(0, 32)}`
+    ? `delegate-${sha256Hex(`${agentId}\0${sessionKey.trim()}`).slice(0, 32)}`
     : `delegate-${randomUUID()}`;
 }
 

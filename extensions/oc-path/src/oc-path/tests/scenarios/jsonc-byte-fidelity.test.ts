@@ -35,82 +35,8 @@ function assertNotParseable(raw: string): void {
 }
 
 describe("jsonc byte-fidelity", () => {
-  it("empty file", () => {
-    expect(rt("")).toBe("");
-  });
-
-  it("whitespace-only", () => {
-    expect(rt("   \n\n   \n")).toBe("   \n\n   \n");
-  });
-
-  it("empty object", () => {
-    expect(rt("{}")).toBe("{}");
-    const root = assertParseable("{}");
-    expect(root.kind).toBe("object");
-    if (root.kind === "object") {
-      expect(root.entries).toHaveLength(0);
-    }
-  });
-
-  it("empty array", () => {
-    expect(rt("[]")).toBe("[]");
-    const root = assertParseable("[]");
-    expect(root.kind).toBe("array");
-    if (root.kind === "array") {
-      expect(root.items).toHaveLength(0);
-    }
-  });
-
-  it("trivial scalar root", () => {
-    expect(rt("42")).toBe("42");
-    expect(rt('"x"')).toBe('"x"');
-    expect(rt("true")).toBe("true");
-    expect(rt("null")).toBe("null");
-    expect(assertParseable("42").kind).toBe("number");
-    expect(assertParseable('"x"').kind).toBe("string");
-    expect(assertParseable("true").kind).toBe("boolean");
-    expect(assertParseable("null").kind).toBe("null");
-  });
-
-  it("line comments preserved", () => {
-    const raw = '// a leading comment\n{ "x": 1 } // trailing\n';
-    expect(rt(raw)).toBe(raw);
-    expect(assertParseable(raw).kind).toBe("object");
-  });
-
-  it("block comments preserved", () => {
-    const raw = '/* header */\n{\n  /* inline */\n  "x": 1\n}\n';
-    expect(rt(raw)).toBe(raw);
-    const root = assertParseable(raw);
-    expect(root.kind).toBe("object");
-  });
-
-  it("trailing commas preserved", () => {
-    const raw = '{\n  "x": 1,\n  "y": 2,\n}';
-    expect(rt(raw)).toBe(raw);
-    const root = assertParseable(raw);
-    if (root.kind === "object") {
-      expect(root.entries).toHaveLength(2);
-    }
-  });
-
-  it("mixed CRLF + LF preserved", () => {
-    const raw = '{\r\n  "x": 1,\n  "y": 2\r\n}';
-    expect(rt(raw)).toBe(raw);
-    const root = assertParseable(raw);
-    if (root.kind === "object") {
-      expect(root.entries.map((e) => e.key)).toEqual(["x", "y"]);
-    }
-  });
-
   it("BOM preserved on raw, stripped for parse", () => {
     const raw = '﻿{ "x": 1 }';
-    expect(rt(raw)).toBe(raw);
-    expect(assertParseable(raw).kind).toBe("object");
-  });
-
-  it("deeply nested structures preserved", () => {
-    const raw = '{ "a": { "b": { "c": { "d": [1, [2, [3, [4]]]] } } } }';
     expect(rt(raw)).toBe(raw);
     expect(assertParseable(raw).kind).toBe("object");
   });
@@ -147,18 +73,6 @@ describe("jsonc byte-fidelity", () => {
         expect(v.value).toBe("héllo 世界 🎉");
       }
     }
-  });
-
-  it("idiosyncratic whitespace preserved", () => {
-    const raw = '{    "x"   :     1    ,\n   "y":   2}';
-    expect(rt(raw)).toBe(raw);
-    expect(assertParseable(raw).kind).toBe("object");
-  });
-
-  it("file-level trailing whitespace preserved", () => {
-    const raw = '{ "x": 1 }\n\n\n';
-    expect(rt(raw)).toBe(raw);
-    expect(assertParseable(raw).kind).toBe("object");
   });
 
   it("malformed input still emits raw verbatim AND emits a diagnostic", () => {

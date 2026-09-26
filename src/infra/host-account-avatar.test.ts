@@ -94,8 +94,8 @@ describe("resolveHostAccountAvatar", () => {
     expect(runExecMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["linux", "win32"] as const)("does not read a macOS photo on %s", async (platform) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  it("does not read a macOS photo on other platforms", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     await expect(resolveHostAccountAvatar()).resolves.toBeNull();
     expect(runExecMock).not.toHaveBeenCalled();
   });

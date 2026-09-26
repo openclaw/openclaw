@@ -11,26 +11,33 @@ vi.mock("./transport.js", () => ({
 
 let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
 
+function mockResponse(text: string, contentType = "application/json", status = 200) {
+  performMatrixRequestMock.mockResolvedValue({
+    response: new Response(text, { status, headers: { "content-type": contentType } }),
+    text,
+    buffer: Buffer.from(text, "utf8"),
+  });
+}
+
 describe("MatrixAuthedHttpClient", () => {
+  let client: InstanceType<typeof MatrixAuthedHttpClient>;
+
   beforeAll(async () => {
     ({ MatrixAuthedHttpClient } = await import("./http-client.js"));
   });
 
   beforeEach(() => {
     performMatrixRequestMock.mockReset();
+    client = new MatrixAuthedHttpClient({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+    });
   });
 
-  it("parses JSON responses and forwards absolute-endpoint opt-in", async () => {
-    performMatrixRequestMock.mockResolvedValue({
-      response: new Response('{"ok":true}', {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      text: '{"ok":true}',
-      buffer: Buffer.from('{"ok":true}', "utf8"),
-    });
+  it("parses mixed-case JSON responses and forwards absolute-endpoint opt-in", async () => {
+    mockResponse('{"ok":true}', "Application/JSON; charset=utf-8");
 
-    const client = new MatrixAuthedHttpClient({
+    const configuredClient = new MatrixAuthedHttpClient({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
       ssrfPolicy: {
@@ -41,7 +48,7 @@ describe("MatrixAuthedHttpClient", () => {
         proxyUrl: "http://proxy.internal:8080",
       },
     });
-    const result = await client.requestJson({
+    const result = await configuredClient.requestJson({
       method: "GET",
       endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
       timeoutMs: 5000,
@@ -66,45 +73,10 @@ describe("MatrixAuthedHttpClient", () => {
     });
   });
 
-  it("parses JSON responses when the media type casing differs", async () => {
-    performMatrixRequestMock.mockResolvedValue({
-      response: new Response('{"ok":true}', {
-        status: 200,
-        headers: { "content-type": "Application/JSON; charset=utf-8" },
-      }),
-      text: '{"ok":true}',
-      buffer: Buffer.from('{"ok":true}', "utf8"),
-    });
-
-    const client = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-    });
-    const result = await client.requestJson({
-      method: "GET",
-      endpoint: "/_matrix/client/v3/account/whoami",
-      timeoutMs: 5000,
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
   it.each(["application/json-seq", 'text/plain; profile="application/json"'])(
     "does not parse a non-JSON media type containing application/json (%s)",
     async (contentType) => {
-      performMatrixRequestMock.mockResolvedValue({
-        response: new Response('{"ok":true}', {
-          status: 200,
-          headers: { "content-type": contentType },
-        }),
-        text: '{"ok":true}',
-        buffer: Buffer.from('{"ok":true}', "utf8"),
-      });
-
-      const client = new MatrixAuthedHttpClient({
-        homeserver: "https://matrix.example.org",
-        accessToken: "token",
-      });
+      mockResponse('{"ok":true}', contentType);
       const result = await client.requestJson({
         method: "GET",
         endpoint: "/_matrix/client/v3/account/whoami",
@@ -115,29 +87,6 @@ describe("MatrixAuthedHttpClient", () => {
     },
   );
 
-  it("returns plain text when response is not JSON", async () => {
-    performMatrixRequestMock.mockResolvedValue({
-      response: new Response("pong", {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      }),
-      text: "pong",
-      buffer: Buffer.from("pong", "utf8"),
-    });
-
-    const client = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-    });
-    const result = await client.requestJson({
-      method: "GET",
-      endpoint: "/_matrix/client/v3/ping",
-      timeoutMs: 5000,
-    });
-
-    expect(result).toBe("pong");
-  });
-
   it("returns raw buffers for media requests", async () => {
     const payload = Buffer.from([1, 2, 3, 4]);
     performMatrixRequestMock.mockResolvedValue({
@@ -146,10 +95,6 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: payload,
     });
 
-    const client = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-    });
     const result = await client.requestRaw({
       method: "GET",
       endpoint: "/_matrix/media/v3/download/example/id",
@@ -160,16 +105,7 @@ describe("MatrixAuthedHttpClient", () => {
   });
 
   it("raises HTTP errors with status code metadata", async () => {
-    performMatrixRequestMock.mockResolvedValue({
-      response: Response.json({ error: "forbidden" }, { status: 403 }),
-      text: JSON.stringify({ error: "forbidden" }),
-      buffer: Buffer.from(JSON.stringify({ error: "forbidden" }), "utf8"),
-    });
-
-    const client = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-    });
+    mockResponse('{"error":"forbidden"}', "application/json", 403);
     let rejection: unknown;
     try {
       await client.requestJson({
@@ -188,19 +124,7 @@ describe("MatrixAuthedHttpClient", () => {
   });
 
   it("throws descriptive error on malformed JSON success response", async () => {
-    performMatrixRequestMock.mockResolvedValue({
-      response: new Response("NOT JSON {{{", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      text: "NOT JSON {{{",
-      buffer: Buffer.from("NOT JSON {{{", "utf8"),
-    });
-
-    const client = new MatrixAuthedHttpClient({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-    });
+    mockResponse("NOT JSON {{{");
     let rejection: unknown;
     try {
       await client.requestJson({

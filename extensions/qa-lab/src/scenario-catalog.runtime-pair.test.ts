@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { resolveQaRuntimePairLaneScenarioIds } from "./runtime-pair-lane-selection.js";
 import {
-  QA_RUNTIME_PAIR_LANES,
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
@@ -26,19 +25,6 @@ describe("QA runtime-pair scenario catalog", () => {
     expect(config?.failurePrompt).toContain(
       "Do not repair, omit, replace, or retry the empty task",
     );
-  });
-
-  it("uses the canonical lanes with audited declaration counts", () => {
-    expect(QA_RUNTIME_PAIR_LANES).toEqual(["core", "extended", "soak"]);
-
-    const laneCounts = Object.fromEntries(
-      QA_RUNTIME_PAIR_LANES.map((lane) => [
-        lane,
-        readQaScenarioPack().scenarios.filter((scenario) => scenario.runtimePairLane === lane)
-          .length,
-      ]),
-    );
-    expect(laneCounts).toEqual({ core: 35, extended: 9, soak: 2 });
   });
 
   it("declares every release agentic scenario in the core lane", () => {

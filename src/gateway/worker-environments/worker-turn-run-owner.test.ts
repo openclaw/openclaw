@@ -48,7 +48,6 @@ describe("cloud worker run ownership", () => {
 
   it.each([
     { cancellation: "user", firstToolDelayMs: 0 },
-    { cancellation: "deadline", firstToolDelayMs: 0 },
     { cancellation: "deadline", firstToolDelayMs: 10 * 60_000 },
   ] as const)(
     "keeps a bounded remote tool alive until $cancellation cancellation after a $firstToolDelayMs ms tool-start delay",

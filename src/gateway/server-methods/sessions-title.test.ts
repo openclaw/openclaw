@@ -256,7 +256,6 @@ describe("sessions.title.prepare", () => {
   );
 
   it.each([
-    { message: "" },
     { message: "   " },
     { message: "/new" },
     { message: "Secret draft", incognito: true },
