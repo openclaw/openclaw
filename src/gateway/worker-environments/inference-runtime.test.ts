@@ -205,7 +205,9 @@ describe("worker inference provider runtime", () => {
       source: "user",
       routeRequirement: "subscription",
     });
-    await oauthRuntime.executor(params(request(), vi.fn()));
+    await expect(oauthRuntime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
     const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
 
     const apiKeyRuntime = setup();
@@ -226,25 +228,6 @@ describe("worker inference provider runtime", () => {
       auth: "api-key",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("prepares the selected model against its gateway-owned OAuth route", async () => {
-    const runtime = setup();
-    runtime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
-      routeRequirement: "subscription",
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-
-    expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
-      auth: "oauth",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 

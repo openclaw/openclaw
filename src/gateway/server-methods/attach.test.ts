@@ -36,6 +36,13 @@ const grantWithAgentOpts = (agentId: string, respond: ReturnType<typeof vi.fn>) 
     },
   }) as unknown as GatewayRequestHandlerOptions;
 
+const grant = expectDefined(attachHandlers["attach.grant"], "attach.grant handler");
+const revoke = expectDefined(attachHandlers["attach.revoke"], "attach.revoke handler");
+
+function responseCall(respond: ReturnType<typeof vi.fn>) {
+  return expectDefined(respond.mock.calls[0], "attach response");
+}
+
 describe("attach gateway methods", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
@@ -48,16 +55,10 @@ describe("attach gateway methods", () => {
 
   it("attach.grant mints a session-bound grant and returns loopback config + token env", async () => {
     const respond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantOpts("agent:main:attach-method", respond));
+    await grant(grantOpts("agent:main:attach-method", respond));
 
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    );
+    const [ok, payload] = responseCall(respond);
     expect(ok).toBe(true);
     const body = payload as {
       token: string;
@@ -75,10 +76,7 @@ describe("attach gateway methods", () => {
 
   it("uses an explicit agent for an omitted session key", async () => {
     const respond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantWithAgentOpts("research", respond));
+    await grant(grantWithAgentOpts("research", respond));
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     const result = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
@@ -86,15 +84,9 @@ describe("attach gateway methods", () => {
   });
   it("rejects attach grants for reserved harness sessions", async () => {
     const respond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantOpts("agent:main:harness:codex:supervision:native-thread", respond));
+    await grant(grantOpts("agent:main:harness:codex:supervision:native-thread", respond));
 
-    const [ok, , error] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    );
+    const [ok, , error] = responseCall(respond);
     expect(ok).toBe(false);
     expect(error).toMatchObject({ code: "INVALID_REQUEST" });
     expect((error as { message: string }).message).toContain("reserved");
@@ -107,10 +99,7 @@ describe("attach gateway methods", () => {
     const respond = vi.fn();
     const sessionKey = "agent:main:harness:legacy-notes";
 
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantOpts(sessionKey, respond));
+    await grant(grantOpts(sessionKey, respond));
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     const response = respond.mock.calls[0]?.[1] as { token: string } | undefined;
@@ -129,10 +118,7 @@ describe("attach gateway methods", () => {
     });
     const respond = vi.fn();
 
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantOpts("agent:main:harness:codex:supervision:native-thread", respond));
+    await grant(grantOpts("agent:main:harness:codex:supervision:native-thread", respond));
 
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
@@ -143,15 +129,9 @@ describe("attach gateway methods", () => {
 
   it("returns an attach MCP config whose env placeholders are all supplied", async () => {
     const respond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantOpts("agent:main:attach-method", respond));
+    await grant(grantOpts("agent:main:attach-method", respond));
 
-    const body = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    )[1] as {
+    const body = responseCall(respond)[1] as {
       mcpConfig: unknown;
       env: Record<string, string>;
     };
@@ -162,21 +142,15 @@ describe("attach gateway methods", () => {
 
   it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async () => {
     const grantRespond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )(grantOpts("agent:main:revoke-me", grantRespond));
+    await grant(grantOpts("agent:main:revoke-me", grantRespond));
     const token = (
-      expectDefined(grantRespond.mock.calls[0], "grantRespond.mock.calls[0] test invariant")[1] as {
+      responseCall(grantRespond)[1] as {
         token: string;
       }
     ).token;
 
     const revokeRespond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.revoke"],
-      'attachHandlers["attach.revoke"] test invariant',
-    )({
+    await revoke({
       params: { token },
       respond: revokeRespond,
     } as unknown as GatewayRequestHandlerOptions);
@@ -184,48 +158,36 @@ describe("attach gateway methods", () => {
     expect(resolveAttachGrant(token)).toBeUndefined();
 
     const errRespond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.revoke"],
-      'attachHandlers["attach.revoke"] test invariant',
-    )({
+    await revoke({
       params: {},
       respond: errRespond,
     } as unknown as GatewayRequestHandlerOptions);
-    const [errOk, , err] = expectDefined(
-      errRespond.mock.calls[0],
-      "errRespond.mock.calls[0] test invariant",
-    );
+    const [errOk, , err] = responseCall(errRespond);
     expect(errOk).toBe(false);
     expect((err as { code: string }).code).toBe("INVALID_REQUEST");
   });
 
   it("applies a positive ttlMs and falls back to the default for an invalid one", async () => {
     const r1 = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )({
+    await grant({
       params: { sessionKey: "agent:main:ttl", ttlMs: 30_000 },
       respond: r1,
       context: { getRuntimeConfig: () => ({}) },
     } as unknown as GatewayRequestHandlerOptions);
     const now1 = Date.now();
-    const b1 = expectDefined(r1.mock.calls[0], "r1.mock.calls[0] test invariant")[1] as {
+    const b1 = responseCall(r1)[1] as {
       expiresAtMs: number;
     };
     expect(b1.expiresAtMs).toBeGreaterThan(now1 + 20_000);
     expect(b1.expiresAtMs).toBeLessThan(now1 + 40_000); // honored 30s ttl, not the 1h default
 
     const r2 = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.grant"],
-      'attachHandlers["attach.grant"] test invariant',
-    )({
+    await grant({
       params: { sessionKey: "agent:main:ttl2", ttlMs: -5 },
       respond: r2,
       context: { getRuntimeConfig: () => ({}) },
     } as unknown as GatewayRequestHandlerOptions);
-    const b2 = expectDefined(r2.mock.calls[0], "r2.mock.calls[0] test invariant")[1] as {
+    const b2 = responseCall(r2)[1] as {
       expiresAtMs: number;
     };
     expect(b2.expiresAtMs).toBeGreaterThan(Date.now() + 50 * 60_000);
@@ -233,17 +195,11 @@ describe("attach gateway methods", () => {
 
   it("attach.revoke treats non-object params as a missing token (INVALID_REQUEST)", async () => {
     const respond = vi.fn();
-    await expectDefined(
-      attachHandlers["attach.revoke"],
-      'attachHandlers["attach.revoke"] test invariant',
-    )({
+    await revoke({
       params: null,
       respond,
     } as unknown as GatewayRequestHandlerOptions);
-    const [ok, , err] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    );
+    const [ok, , err] = responseCall(respond);
     expect(ok).toBe(false);
     expect((err as { code: string }).code).toBe("INVALID_REQUEST");
   });

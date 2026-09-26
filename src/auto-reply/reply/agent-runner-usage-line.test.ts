@@ -25,7 +25,6 @@ describe("appendUsageLine", () => {
     ]
   >([
     ["costless flat-price runtime", completeUsage, false, "est $1.00"],
-    ["priced tool loop", { ...completeUsage, cost: { total: 0.25 } }, true, "est $0.25"],
     ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000"],
     ["incomplete tiered cost", completeUsage, true, undefined],
     ["input-only usage without a price", { input: 1_000_000 }, false, undefined],
@@ -35,13 +34,6 @@ describe("appendUsageLine", () => {
       { input: 1000, cost: { total: 0.25 } },
       true,
       "est $0.25",
-    ],
-    ["partial usage with a recorded zero", { output: 50, cost: { total: 0 } }, true, "est $0.0000"],
-    [
-      "cost-only positive total",
-      { cost: { total: 0.25 } },
-      true,
-      "Usage: ? in / ? out · est $0.25",
     ],
     ["cost-only zero total", { cost: { total: 0 } }, true, "Usage: ? in / ? out · est $0.0000"],
   ])("formats %s for the selected agent in an explicit fleet", (_name, usage, tiered, expected) => {

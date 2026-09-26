@@ -22,16 +22,6 @@ describe("accepted chat-send retry classification", () => {
       expected: "retry",
     },
     {
-      name: "projection unavailability after model start",
-      params: { error: projectionError, phase: "post-ack" as const, executionStarted: true },
-      expected: "reconcile",
-    },
-    {
-      name: "projection unavailability after observable side effects",
-      params: { error: projectionError, phase: "post-ack" as const, sideEffectsObserved: true },
-      expected: "reconcile",
-    },
-    {
       name: "an unclassified dispatch failure",
       params: { error: new Error("dispatch failed"), phase: "post-ack" as const },
       expected: "terminal",

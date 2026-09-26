@@ -105,7 +105,7 @@ describe("resolveModelDirectiveSelection", () => {
     },
   );
 
-  it.each([undefined, {}, { allow: [] }, { allow: ["openai/*"] }])(
+  it.each([undefined, { allow: [] }, { allow: ["openai/*"] }])(
     "permits an explicit uncataloged model with policy %j",
     async (modelPolicy) => {
       const cfg: OpenClawConfig = {

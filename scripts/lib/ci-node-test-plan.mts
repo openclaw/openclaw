@@ -2969,7 +2969,6 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
       {
         configs: ["test/vitest/vitest.unit-fast.config.ts", "test/vitest/vitest.tooling.config.ts"],
         includePatterns: [
-          "src/commands/status.scan-result.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ci-workflow-planning.test.ts",
           "test/scripts/ci-workflow-evidence.test.ts",

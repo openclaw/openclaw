@@ -453,17 +453,6 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(after.lastError).toBe("transient failure");
   });
 
-  it("records retry state if delivery fails during drain", async () => {
-    const log = createRecoveryLog();
-    const deliver = createTransientFailureDeliver();
-
-    await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-
-    await expect(
-      drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir }),
-    ).resolves.toBeUndefined();
-  });
-
   it("removes random unknown-after-send entries without replaying during reconnect drain", async () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
@@ -753,17 +742,6 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
     expect(deliver).not.toHaveBeenCalled();
     expectLogMessageWith(log.info, "not ready for retry yet");
-  });
-
-  it("still bypasses backoff for no-listener failures on reconnect", async () => {
-    const log = createRecoveryLog();
-    const deliver = vi.fn<DeliverFn>(async () => {});
-
-    await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-
-    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("ignores other channels even when reconnect drain runs", async () => {

@@ -16,13 +16,15 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
-const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
+const persistAbortTargetEntryMock = vi.hoisted(() =>
+  vi.fn<typeof import("./commands-session-store.js").persistAbortTargetEntry>(async () => true),
+);
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
   vi.fn(() => ({ entry: undefined, key: undefined })),
 );
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() =>
-  vi.fn(async (params: { beforeKill?: () => Promise<boolean> }) => {
+  vi.fn<typeof import("./abort-operation.js").stopSubagentsForRequester>(async (params) => {
     await params.beforeKill?.();
     return { stopped: 0, failed: 0 };
   }),
@@ -179,31 +181,16 @@ describe("handleStopCommand target fallback", () => {
     });
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
     const [persistAbortTargetParams] = expectDefined(
-      (
-        persistAbortTargetEntryMock.mock.calls as unknown as Array<
-          [
-            {
-              key?: string;
-              entry?: unknown;
-              sessionStore?: unknown;
-              storePath?: string;
-            },
-          ]
-        >
-      )[0],
-      "(persistAbortTargetEntryMock.mock.calls as unknown as Array<\n        [\n          {\n            key?: string;\n            entry?: unknown;\n            sessionStore?: unknown;\n            storePath?: string;\n          },\n        ]\n      >)[0] test invariant",
+      persistAbortTargetEntryMock.mock.calls[0],
+      "persisted abort target",
     );
     expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
     expect(persistAbortTargetParams?.entry).toBeUndefined();
     expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
     expect(persistAbortTargetParams?.storePath).toBe("/tmp/sessions.json");
     const [stopSubagentsParams] = expectDefined(
-      (
-        stopSubagentsForRequesterMock.mock.calls as unknown as Array<
-          [{ cfg?: unknown; requesterSessionKey?: string }]
-        >
-      )[0],
-      "(stopSubagentsForRequesterMock.mock.calls as unknown as Array<\n        [{ cfg?: unknown; requesterSessionKey?: string }]\n      >)[0] test invariant",
+      stopSubagentsForRequesterMock.mock.calls[0],
+      "subagent stop target",
     );
     expect(stopSubagentsParams?.cfg).toBe(params.cfg);
     expect(stopSubagentsParams?.requesterSessionKey).toBe("agent:target:telegram:direct:123");

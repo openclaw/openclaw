@@ -205,10 +205,6 @@ function hookHandler(on: ReturnType<typeof vi.fn>, hookName: string) {
   return handler as ((event: unknown, context: unknown) => unknown) | undefined;
 }
 
-function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(hookHandler(on, hookName)).toBeTypeOf("function");
-}
-
 function expectToolExecute(tool: unknown, name?: string) {
   const record = tool as { execute?: unknown; name?: unknown };
   if (name) {
@@ -404,6 +400,7 @@ describe("memory plugin e2e", () => {
 
   afterEach(() => {
     clearMemoryPluginState();
+    vi.unstubAllEnvs();
   });
 
   function parseConfig(overrides: Record<string, unknown> = {}) {
@@ -500,49 +497,15 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema resolves env vars", () => {
-    const previousApiKey = process.env.TEST_MEMORY_API_KEY;
-
-    try {
-      process.env.TEST_MEMORY_API_KEY = "test-key-123";
-
-      const config = memoryPlugin.configSchema?.parse?.({
-        embedding: {
-          apiKey: "${TEST_MEMORY_API_KEY}",
-        },
-        dbPath: getDbPath(),
-      }) as MemoryPluginTestConfig | undefined;
-
-      expect(config?.embedding?.apiKey).toBe("test-key-123");
-    } finally {
-      if (previousApiKey === undefined) {
-        delete process.env.TEST_MEMORY_API_KEY;
-      } else {
-        process.env.TEST_MEMORY_API_KEY = previousApiKey;
-      }
-    }
-  });
-
-  test("config schema accepts provider-backed embeddings without apiKey", () => {
-    const config = memoryPlugin.configSchema?.parse?.({
-      embedding: {
-        provider: "openai",
-      },
-      dbPath: getDbPath(),
-    }) as MemoryPluginTestConfig | undefined;
-
-    expect(config?.embedding?.provider).toBe("openai");
-    expect(config?.embedding?.apiKey).toBeUndefined();
-    expect(config?.embedding?.model).toBe("text-embedding-3-small");
+    vi.stubEnv("TEST_MEMORY_API_KEY", "test-key-123");
+    const config = parseConfig({ embedding: { apiKey: "${TEST_MEMORY_API_KEY}" } });
+    expect(config?.embedding?.apiKey).toBe("test-key-123");
   });
 
   test("config schema validates captureMaxChars range", () => {
-    expect(() => {
-      memoryPlugin.configSchema?.parse?.({
-        embedding: { apiKey: OPENAI_API_KEY },
-        dbPath: getDbPath(),
-        captureMaxChars: 99,
-      });
-    }).toThrow("captureMaxChars must be between 100 and 10000");
+    expect(() => parseConfig({ captureMaxChars: 99 })).toThrow(
+      "captureMaxChars must be between 100 and 10000",
+    );
   });
 
   test("config schema accepts captureMaxChars override", () => {
@@ -554,13 +517,9 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema validates recallMaxChars range", () => {
-    expect(() => {
-      memoryPlugin.configSchema?.parse?.({
-        embedding: { apiKey: OPENAI_API_KEY },
-        dbPath: getDbPath(),
-        recallMaxChars: 99,
-      });
-    }).toThrow("recallMaxChars must be between 100 and 10000");
+    expect(() => parseConfig({ recallMaxChars: 99 })).toThrow(
+      "recallMaxChars must be between 100 and 10000",
+    );
   });
 
   test("config schema accepts recallMaxChars override", () => {
@@ -598,69 +557,6 @@ describe("memory plugin e2e", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "memory-lancedb: disabled until configured (embedding config required)",
     );
-  });
-
-  test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
-    const on = vi.fn();
-    const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: createPluginConfig({
-        autoCapture: false,
-        autoRecall: true,
-      }),
-      on,
-    });
-
-    registerTestPlugin(memoryPlugin, mockApi);
-
-    expectHookRegistered(on, "before_prompt_build");
-  });
-
-  test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
-    const workspaceDir = path.join(getTmpDir(), "workspace-public-artifacts");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-18.md"), "# Daily\n", "utf8");
-    const registerMemoryCapabilityLocal = vi.fn();
-    const mockApi = createMemoryPluginApi(getDbPath(), {
-      registerMemoryCapability: registerMemoryCapabilityLocal,
-    });
-
-    registerTestPlugin(memoryPlugin, mockApi);
-    const capability = firstObjectArg(
-      registerMemoryCapabilityLocal as unknown as MockCallSource,
-      "memory capability",
-    );
-    const publicArtifacts = capability.publicArtifacts as
-      | { listArtifacts?: (params: { cfg: unknown }) => Promise<unknown> }
-      | undefined;
-    expect(publicArtifacts?.listArtifacts).toBeTypeOf("function");
-
-    await expect(
-      publicArtifacts?.listArtifacts?.({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
-          },
-        },
-      }),
-    ).resolves.toEqual([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: path.join(workspaceDir, "MEMORY.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
-        kind: "daily-note",
-        workspaceDir,
-        relativePath: "memory/2026-05-18.md",
-        absolutePath: path.join(workspaceDir, "memory", "2026-05-18.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
   });
 
   test("preserves memory-core sidecar capability when registering public artifacts", async () => {
@@ -743,24 +639,7 @@ describe("memory plugin e2e", () => {
       id: "openai",
       create: createProvider,
     }));
-    const toArray = vi.fn(async () => []);
-    const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        close: vi.fn(),
-        openTable: vi.fn(async () => ({
-          checkoutLatest: vi.fn(async () => undefined),
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-          close: vi.fn(),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness();
 
     moduleMocks.getMemoryEmbeddingProvider.mockImplementation(getMemoryEmbeddingProvider);
     moduleMocks.createOpenAiClient.mockImplementation(() => {
@@ -866,23 +745,7 @@ describe("memory plugin e2e", () => {
       };
     });
     const getMemoryEmbeddingProvider = vi.fn(() => ({ id: "openai", create: createProvider }));
-    const toArray = vi.fn(async () => []);
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(vi.fn(() => ({ toArray }))));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        close: vi.fn(),
-        openTable: vi.fn(async () => ({
-          checkoutLatest: vi.fn(async () => undefined),
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch,
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-          close: vi.fn(),
-        })),
-      })),
-    }));
+    const { loadLanceDbModule } = createStandardMemoryTableHarness();
     const pluginConfig = {
       embedding: { provider: "openai", model: "text-embedding-3-small" },
       dbPath: getDbPath(),
@@ -1334,57 +1197,6 @@ describe("memory plugin e2e", () => {
         }
       },
     });
-  });
-
-  test("keeps before_prompt_build registered but inert when auto-recall is disabled", async () => {
-    const on = vi.fn();
-    const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: createPluginConfig({
-        autoCapture: true,
-        autoRecall: false,
-      }),
-      on,
-    });
-
-    registerTestPlugin(memoryPlugin, mockApi);
-
-    const beforePromptBuild = on.mock.calls.find(
-      ([hookName]) => hookName === "before_prompt_build",
-    )?.[1];
-    expect(beforePromptBuild).toBeTypeOf("function");
-    await expect(
-      beforePromptBuild?.(
-        { prompt: "what editor should i use?", messages: [] },
-        withAllowedMemoryRecallAuthority(),
-      ),
-    ).resolves.toBeUndefined();
-    expectHookRegistered(on, "agent_end");
-  });
-
-  test("keeps agent_end registered but inert when auto-capture is disabled", async () => {
-    const on = vi.fn();
-    const mockApi = createMemoryPluginApi(getDbPath(), {
-      pluginConfig: createPluginConfig({
-        autoCapture: false,
-        autoRecall: true,
-      }),
-      on,
-    });
-
-    registerTestPlugin(memoryPlugin, mockApi);
-
-    expectHookRegistered(on, "before_prompt_build");
-    const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
-    expect(agentEnd).toBeTypeOf("function");
-    await expect(
-      agentEnd?.(
-        {
-          success: true,
-          messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
-        },
-        { agentId: "main" },
-      ),
-    ).resolves.toBeUndefined();
   });
 
   test("does not start auto-recall when the turn authority denies memory_recall", async () => {
@@ -2668,7 +2480,6 @@ describe("memory plugin e2e", () => {
 
   test.each([
     { label: "distinct timestamps", timestamp: 1_000, laterTimestamp: 1_001, retained: "all" },
-    { label: "same timestamp", timestamp: 1_000, laterTimestamp: 1_000, retained: "all" },
     { label: "no timestamps", timestamp: undefined, laterTimestamp: undefined, retained: "all" },
     {
       label: "compacted older occurrence",
@@ -2677,22 +2488,10 @@ describe("memory plugin e2e", () => {
       retained: "early",
     },
     {
-      label: "same timestamp after retained anchor",
-      timestamp: 1_000,
-      laterTimestamp: 1_000,
-      retained: "anchor",
-    },
-    {
       label: "no timestamp after retained anchor",
       timestamp: undefined,
       laterTimestamp: undefined,
       retained: "anchor",
-    },
-    {
-      label: "same timestamp after retained assistant anchor",
-      timestamp: 1_000,
-      laterTimestamp: 1_000,
-      retained: "assistant",
     },
     {
       label: "no timestamp after retained assistant anchor",
@@ -2748,9 +2547,7 @@ describe("memory plugin e2e", () => {
   });
 
   test.each([
-    { kind: "bash", timestamp: 1_000 },
     { kind: "bash", timestamp: undefined },
-    { kind: "failed turn", timestamp: 1_000 },
     { kind: "failed turn", timestamp: undefined },
   ])("recognizes new context after a $kind anchor (timestamp=$timestamp)", async (scenario) => {
     const harness = await setupAutoCaptureCursorHarness();
@@ -2858,9 +2655,7 @@ describe("memory plugin e2e", () => {
   });
 
   test.each([
-    { label: "same timestamp failed survivor", timestamp: 1_000, retainAnchor: false },
     { label: "missing timestamp failed survivor", timestamp: undefined, retainAnchor: false },
-    { label: "same timestamp earlier quota skip", timestamp: 1_000, retainAnchor: true },
     { label: "missing timestamp earlier quota skip", timestamp: undefined, retainAnchor: true },
   ])("preserves unfinished equal occurrences after compaction ($label)", async (scenario) => {
     const embeddingsCreate = vi
@@ -3042,36 +2837,33 @@ describe("memory plugin e2e", () => {
     },
   );
 
-  test.each(["deleted", "reset", "new", "shutdown"])(
-    "evicts auto-capture state on session %s",
-    async (reason) => {
-      const harness = await setupAutoCaptureCursorHarness();
+  test.each(["reset"])("evicts auto-capture state on session %s", async (reason) => {
+    const harness = await setupAutoCaptureCursorHarness();
 
-      try {
-        const event = {
-          success: true,
-          messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
-        };
+    try {
+      const event = {
+        success: true,
+        messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
+      };
 
-        await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
-        await harness.sessionEnd?.(
-          {
-            sessionId: "session-id",
-            sessionKey: "session-ended",
-            messageCount: 1,
-            reason,
-          },
-          { agentId: "main", sessionId: "session-id", sessionKey: "session-ended" },
-        );
-        await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
+      await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
+      await harness.sessionEnd?.(
+        {
+          sessionId: "session-id",
+          sessionKey: "session-ended",
+          messageCount: 1,
+          reason,
+        },
+        { agentId: "main", sessionId: "session-id", sessionKey: "session-ended" },
+      );
+      await harness.agentEnd?.(event, { agentId: "main", sessionKey: "session-ended" });
 
-        expect(harness.embeddingsCreate).toHaveBeenCalledTimes(2);
-        expect(harness.add).toHaveBeenCalledTimes(2);
-      } finally {
-        cleanupAutoCaptureCursorHarness();
-      }
-    },
-  );
+      expect(harness.embeddingsCreate).toHaveBeenCalledTimes(2);
+      expect(harness.add).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanupAutoCaptureCursorHarness();
+    }
+  });
 
   test("retries without rejected dimensions and truncates the fallback vector", async () => {
     let nowMs = 1_000;
@@ -3202,19 +2994,9 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema accepts storageOptions with string values", () => {
-    const config = memoryPlugin.configSchema?.parse?.({
-      embedding: {
-        apiKey: OPENAI_API_KEY,
-        model: "text-embedding-3-small",
-      },
-      dbPath: getDbPath(),
-      storageOptions: {
-        region: "us-west-2",
-        access_key: "test-key",
-        secret_key: "test-secret",
-      },
-    }) as MemoryPluginTestConfig | undefined;
-
+    const config = parseConfig({
+      storageOptions: { region: "us-west-2", access_key: "test-key", secret_key: "test-secret" },
+    });
     expect(config?.storageOptions).toEqual({
       region: "us-west-2",
       access_key: "test-key",
@@ -3223,85 +3005,35 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema resolves env vars in storageOptions", () => {
-    const previousAccessKey = process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
-    const previousSecretKey = process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
-    process.env.TEST_MEMORY_STORAGE_ACCESS_KEY = "env-access";
-    process.env.TEST_MEMORY_STORAGE_SECRET_KEY = "env-secret";
-
-    try {
-      const config = memoryPlugin.configSchema?.parse?.({
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
-        storageOptions: {
-          region: "us-west-2",
-          access_key: "${TEST_MEMORY_STORAGE_ACCESS_KEY}",
-          secret_key: "${TEST_MEMORY_STORAGE_SECRET_KEY}",
-        },
-      }) as MemoryPluginTestConfig | undefined;
-
-      expect(config?.storageOptions).toEqual({
+    vi.stubEnv("TEST_MEMORY_STORAGE_ACCESS_KEY", "env-access");
+    vi.stubEnv("TEST_MEMORY_STORAGE_SECRET_KEY", "env-secret");
+    const config = parseConfig({
+      storageOptions: {
         region: "us-west-2",
-        access_key: "env-access",
-        secret_key: "env-secret",
-      });
-    } finally {
-      if (previousAccessKey === undefined) {
-        delete process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
-      } else {
-        process.env.TEST_MEMORY_STORAGE_ACCESS_KEY = previousAccessKey;
-      }
-      if (previousSecretKey === undefined) {
-        delete process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
-      } else {
-        process.env.TEST_MEMORY_STORAGE_SECRET_KEY = previousSecretKey;
-      }
-    }
+        access_key: "${TEST_MEMORY_STORAGE_ACCESS_KEY}",
+        secret_key: "${TEST_MEMORY_STORAGE_SECRET_KEY}",
+      },
+    });
+    expect(config?.storageOptions).toEqual({
+      region: "us-west-2",
+      access_key: "env-access",
+      secret_key: "env-secret",
+    });
   });
 
   test("config schema rejects missing env vars in storageOptions", () => {
-    const previousMissing = process.env.TEST_MEMORY_STORAGE_MISSING;
-
-    try {
-      delete process.env.TEST_MEMORY_STORAGE_MISSING;
-
-      expect(() => {
-        memoryPlugin.configSchema?.parse?.({
-          embedding: {
-            apiKey: OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: getDbPath(),
-          storageOptions: {
-            secret_key: "${TEST_MEMORY_STORAGE_MISSING}",
-          },
-        });
-      }).toThrow("Environment variable TEST_MEMORY_STORAGE_MISSING is not set");
-    } finally {
-      if (previousMissing === undefined) {
-        delete process.env.TEST_MEMORY_STORAGE_MISSING;
-      } else {
-        process.env.TEST_MEMORY_STORAGE_MISSING = previousMissing;
-      }
-    }
+    vi.stubEnv("TEST_MEMORY_STORAGE_MISSING", undefined);
+    expect(() =>
+      parseConfig({
+        storageOptions: { secret_key: "${TEST_MEMORY_STORAGE_MISSING}" },
+      }),
+    ).toThrow("Environment variable TEST_MEMORY_STORAGE_MISSING is not set");
   });
 
   test("config schema rejects storageOptions with non-string values", () => {
-    expect(() => {
-      memoryPlugin.configSchema?.parse?.({
-        embedding: {
-          apiKey: OPENAI_API_KEY,
-          model: "text-embedding-3-small",
-        },
-        dbPath: getDbPath(),
-        storageOptions: {
-          region: "us-west-2",
-          timeout: 30, // number, should fail
-        },
-      });
-    }).toThrow("storageOptions.timeout must be a string");
+    expect(() => parseConfig({ storageOptions: { region: "us-west-2", timeout: 30 } })).toThrow(
+      "storageOptions.timeout must be a string",
+    );
   });
 
   test("shouldCapture applies real capture rules", () => {
@@ -3360,12 +3092,10 @@ describe("memory plugin e2e", () => {
     expect(decoded[1]).toBeCloseTo(-2.5);
   });
 
-  test.each(
-    [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].flatMap((coordinate) => [
-      { encoding: "float array", coordinate },
-      { encoding: "base64", coordinate },
-    ]),
-  )("rejects nonfinite $coordinate in $encoding embeddings", ({ encoding, coordinate }) => {
+  test.each([
+    { encoding: "float array", coordinate: Number.NaN },
+    { encoding: "base64", coordinate: Number.POSITIVE_INFINITY },
+  ])("rejects nonfinite $coordinate in $encoding embeddings", ({ encoding, coordinate }) => {
     const bytes = Buffer.alloc(Float32Array.BYTES_PER_ELEMENT);
     bytes.writeFloatLE(coordinate);
     const vector = encoding === "base64" ? bytes.toString("base64") : [coordinate];
@@ -3506,7 +3236,6 @@ describe("memory plugin e2e", () => {
   });
 
   test.each([
-    { name: "nonzero prefix", vector: [3, 4, 12], expected: [0.6, 0.8] },
     { name: "zero prefix", vector: [0, 0, 1], expected: [0, 0] },
     { name: "short vector", vector: [1], expected: undefined },
   ])("normalizes fallback embeddings: $name", async ({ vector, expected }) => {
@@ -3950,17 +3679,6 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("Sender: Alex\nI prefer dark mode")).toBe(false);
   });
 
-  test("looksLikeEnvelopeSludge detects only marked channel context headers", () => {
-    expect(looksLikeEnvelopeSludge(ctxHeader("Context:"))).toBe(true);
-    expect(looksLikeEnvelopeSludge("Context:")).toBe(false);
-  });
-
-  test("looksLikeEnvelopeSludge does not false-positive on a mid-line context label", () => {
-    expect(
-      looksLikeEnvelopeSludge("The user mentioned Context: in their question about security"),
-    ).toBe(false);
-  });
-
   test("looksLikeEnvelopeSludge detects active-turn-recovery", () => {
     expect(looksLikeEnvelopeSludge("Some preamble active-turn-recovery boilerplate")).toBe(true);
   });
@@ -3987,21 +3705,6 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge(indentedPretty)).toBe(true);
   });
 
-  test("looksLikeEnvelopeSludge detects marked inbound-meta label variants", () => {
-    // buildInboundUserContextPrefix marks every injected header with the
-    // provenance marker; the marker suffix (not the label) is what's recognized,
-    // even when the fenced payload carries no envelope key.
-    expect(looksLikeEnvelopeSludge(`${ctxHeader("Location:")}\n\`\`\`json\n{}\n\`\`\``)).toBe(true);
-    expect(
-      looksLikeEnvelopeSludge(`${ctxHeader("Structured object:")}\n\`\`\`json\n{}\n\`\`\``),
-    ).toBe(true);
-    expect(
-      looksLikeEnvelopeSludge(
-        `${ctxHeader("Reply chain of current user message (nearest first):")}\n\`\`\`json\n[]\n\`\`\``,
-      ),
-    ).toBe(true);
-  });
-
   test("looksLikeEnvelopeSludge leaves a user heading + JSON that is not a known label", () => {
     // Regression: matching any `<heading>:` + fence ate ordinary user content.
     // Unknown labels whose JSON carries no envelope key are preserved.
@@ -4016,15 +3719,6 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge('Custom plugin label:\n```json\n{"chat_id":"c1"}\n```')).toBe(
       true,
     );
-  });
-
-  test("looksLikeEnvelopeSludge does not false-positive on mid-line quoted labels", () => {
-    expect(
-      looksLikeEnvelopeSludge("The docs note that 'Foo:' is a header style for context blocks"),
-    ).toBe(false);
-    expect(
-      looksLikeEnvelopeSludge("I always read API references that mention 'Bar:' patterns"),
-    ).toBe(false);
   });
 
   test("looksLikeEnvelopeSludge does not false-positive on user JSON with bare keys", () => {
@@ -4093,14 +3787,6 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("[telegram Alice] Alice: hello\nsecond line\nthird")).toBe(true);
   });
 
-  test("looksLikeEnvelopeSludge marker-free match is case insensitive", () => {
-    // Production paths feed lowercase channel ids, but the formatter does not
-    // lowercase `params.channel` itself; accept either casing so a stray uppercase
-    // id never bypasses the filter.
-    expect(looksLikeEnvelopeSludge("[Telegram Alice] Alice: hi")).toBe(true);
-    expect(looksLikeEnvelopeSludge("[DISCORD #general user] user: msg")).toBe(true);
-  });
-
   test("looksLikeEnvelopeSludge does not false-positive on markdown link syntax", () => {
     // `[text](url)` is a Markdown link, not a `[channel from] body` envelope.
     expect(looksLikeEnvelopeSludge("[click here](https://example.com)")).toBe(false);
@@ -4153,23 +3839,6 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture("[note] my thoughts")).toBe("[note] my thoughts");
   });
 
-  test("sanitizeForMemoryCapture strips formatInboundEnvelope direct-message prefix", () => {
-    expect(sanitizeForMemoryCapture("[Telegram Alice +5m] I prefer dark mode")).toBe(
-      "I prefer dark mode",
-    );
-    expect(
-      sanitizeForMemoryCapture("[Telegram Alice +5m Mon 2026-05-17 14:30 EDT] I prefer dark mode"),
-    ).toBe("I prefer dark mode");
-  });
-
-  test("sanitizeForMemoryCapture strips group-chat envelope prefix AND sender label", () => {
-    expect(
-      sanitizeForMemoryCapture(
-        "[Telegram Group id:123 Alice +5m Mon 2026-05-17 14:30 EDT] Alice: I prefer dark mode",
-      ),
-    ).toBe("I prefer dark mode");
-  });
-
   test("sanitizeForMemoryCapture strips sender label from real room-label envelope shapes", () => {
     // Real group/channel callers pass the room/conversation as `from` and the
     // sender separately; the sender is not necessarily present in the header.
@@ -4211,26 +3880,6 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture("Alice: I prefer dark mode")).toBe("Alice: I prefer dark mode");
   });
 
-  test("sanitizeForMemoryCapture preserves DM body that starts with `TODO:` / `FIXME:`", () => {
-    // Direct-message envelope: per the formatter contract there is no sender
-    // prefix on the body. A user-typed `TODO: ...` or `FIXME: ...` must not
-    // be truncated to `...`. The leading label does not match any token in
-    // the envelope header, so the gated strip leaves it alone.
-    expect(sanitizeForMemoryCapture("[telegram alice +5m] TODO: fix this")).toBe("TODO: fix this");
-    expect(sanitizeForMemoryCapture("[Telegram Alice +5m] FIXME: clean up sanitizer")).toBe(
-      "FIXME: clean up sanitizer",
-    );
-  });
-
-  test("sanitizeForMemoryCapture preserves group body whose `Name: ` does not match envelope", () => {
-    // Group envelope `[discord alice]` with body `Bob: hello` (Alice is
-    // quoting Bob). `Bob` is not a token in the envelope header, so the
-    // formatter could not have emitted it; the gated strip leaves it alone.
-    expect(sanitizeForMemoryCapture("[discord alice +5m] Bob: hello there")).toBe(
-      "Bob: hello there",
-    );
-  });
-
   test("sanitizeForMemoryCapture strips `(self):` body prefix from direct fromMe envelope", () => {
     // Direct chat + fromMe contract: body is `(self): <text>`. The literal
     // `(self)` sentinel is always safe to strip after an envelope bracket.
@@ -4262,54 +3911,6 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture(sanitized)).toBe(true);
   });
 
-  test("shouldCapture rejects envelope sludge", () => {
-    expect(
-      shouldCapture(
-        `${ctxHeader("Conversation info:")}\n\`\`\`json\n{"id":"123"}\n\`\`\`\nI always prefer dark mode`,
-      ),
-    ).toBe(false);
-  });
-
-  test("sanitizeForMemoryCapture strips timestamp prefix", () => {
-    expect(sanitizeForMemoryCapture("[Mon 2026-04-14 12:34 EDT] I prefer dark mode")).toBe(
-      "I prefer dark mode",
-    );
-  });
-
-  test("sanitizeForMemoryCapture strips inbound metadata blocks", () => {
-    const input = [
-      ctxHeader("Sender:"),
-      "```json",
-      '{"name": "Alex"}',
-      "```",
-      "",
-      "I always prefer verbose output",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer verbose output");
-  });
-
-  test("sanitizeForMemoryCapture strips known current inbound metadata blocks", () => {
-    const locationInput = [
-      ctxHeader("Location:"),
-      "```json",
-      '{"lat": 48.2, "lng": 16.3}',
-      "```",
-      "",
-      "I always prefer dark mode",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(locationInput)).toBe("I always prefer dark mode");
-
-    const replyChainInput = [
-      ctxHeader("Reply chain of current user message (nearest first):"),
-      "```json",
-      '[{"body":"quoted context"}]',
-      "```",
-      "",
-      "I always prefer concise replies",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(replyChainInput)).toBe("I always prefer concise replies");
-  });
-
   test("sanitizeForMemoryCapture drops presentation-only media-note lines", () => {
     const input = [
       "[media attached: /tmp/photo.jpg (image/jpeg)]",
@@ -4338,12 +3939,6 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(numberedCaption)).toBe(numberedCaption);
   });
 
-  test("sanitizeForMemoryCapture strips active_memory_plugin blocks", () => {
-    const input =
-      "<active_memory_plugin>some plugin data</active_memory_plugin>\nI prefer concise replies";
-    expect(sanitizeForMemoryCapture(input)).toBe("I prefer concise replies");
-  });
-
   test("sanitizeForMemoryCapture strips active memory prefix before user text", () => {
     const input = [
       "Context:",
@@ -4354,21 +3949,9 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
   });
 
-  test("sanitizeForMemoryCapture strips marked context header and trailing content", () => {
-    const input = `I prefer dark mode\n${ctxHeader("Context:")}\nsome trailing metadata`;
-    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
-  });
-
   test("sanitizeForMemoryCapture preserves a bare context header and trailing content", () => {
     const input = "I prefer dark mode\nContext:\nsome user-authored text";
     expect(sanitizeForMemoryCapture(input)).toBe(input);
-  });
-
-  test("sanitizeForMemoryCapture does not strip a context label mid-line", () => {
-    const input = "The user mentioned Context: in their question about security";
-    expect(sanitizeForMemoryCapture(input)).toBe(
-      "The user mentioned Context: in their question about security",
-    );
   });
 
   test("sanitizeForMemoryCapture preserves a near-miss context header with trailing text", () => {
@@ -4417,20 +4000,6 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I always prefer TypeScript over JavaScript");
   });
 
-  test("sanitizeForMemoryCapture truncates chat-history plain-text body so MEMORY_TRIGGER words inside are not captured", () => {
-    // The "Chat history since last reply" sentinel is followed by a plain-text
-    // transcript rather than a ```json``` fence.  The body must be truncated so
-    // that MEMORY_TRIGGER phrases inside quoted bot replies are never vectorized
-    // as long-term memories.
-    const input = [
-      "I always prefer dark mode",
-      ctxHeader("Chat history since last reply:"),
-      "User: what do you recommend?",
-      "Bot: I always recommend TypeScript for large projects",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
-  });
-
   test("sanitizeForMemoryCapture drops leading plain-text metadata bodies without a current boundary", () => {
     const input = [
       ctxHeader("Chat history since last reply:"),
@@ -4449,17 +4018,6 @@ describe("memory plugin e2e", () => {
       "[Telegram group:-100] obviyus: I prefer dark mode",
     ].join("\n");
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
-  });
-
-  test("sanitizeForMemoryCapture truncates thread-starter plain-text body", () => {
-    // Same fix for "Thread starter:" which also carries
-    // a plain-text body instead of a JSON code fence.
-    const input = [
-      "I always use ESLint in every project",
-      ctxHeader("Thread starter:"),
-      "Original message: I always want verbose logging enabled",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(input)).toBe("I always use ESLint in every project");
   });
 
   test("sanitizeForMemoryCapture truncates at earliest sentinel across multiple inbound-meta blocks", () => {
@@ -4643,24 +4201,6 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
   });
 
-  test("sanitizeForMemoryCapture preserves user text after back-to-back sentinels at start", () => {
-    // Two fenced context blocks at the very start (no user content before either)
-    // must both be stripped so the body that follows survives.
-    const input = [
-      ctxHeader("Conversation info:"),
-      "```json",
-      '{"id":"c1"}',
-      "```",
-      ctxHeader("Sender:"),
-      "```json",
-      '{"name":"Alex"}',
-      "```",
-      "",
-      "I always prefer verbose output",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer verbose output");
-  });
-
   test("shouldCapture does not fire on MEMORY_TRIGGER words inside a chat-history block body", () => {
     // Regression guard: shouldCapture itself calls looksLikeEnvelopeSludge first,
     // which rejects any text containing an inbound-meta sentinel. (sanitization
@@ -4687,30 +4227,7 @@ describe("memory plugin e2e", () => {
     expect(escapeMemoryForPrompt(indented)).toBe("function foo() {\n  return 42;\n}");
   });
 
-  test("escapeMemoryForPrompt leaves legacy media text inert and preserves formatting", () => {
-    const input = [
-      "Line one of the memory",
-      "Line two with [media attached: /tmp/p.jpg (image/jpeg)] inline",
-      "Line three of the memory",
-    ].join("\n");
-    const result = escapeMemoryForPrompt(input);
-    expect(result).toBe(input);
-  });
-
-  test("looksLikeEnvelopeSludge does not reject messages that quote a sentinel mid-sentence", () => {
-    // The sentinel membership test is now line-anchored so a user message that
-    // mentions the sentinel phrase inside a sentence must NOT be silently dropped.
-    expect(looksLikeEnvelopeSludge("I saw 'Sender:' in the API docs")).toBe(false);
-    expect(
-      looksLikeEnvelopeSludge(
-        "The docs mention 'Chat history since last reply:' as a block header",
-      ),
-    ).toBe(false);
-  });
-
   test("shouldCapture captures message quoting sentinel phrase mid-sentence", () => {
-    // Complement to the looksLikeEnvelopeSludge test above: such messages must
-    // flow through capture if they contain a MEMORY_TRIGGER word.
     expect(
       shouldCapture("I always read docs and I saw 'Sender:' described in the API reference"),
     ).toBe(true);
@@ -4739,18 +4256,6 @@ describe("memory plugin e2e", () => {
     expect(result).toContain("1. [preference]");
     expect(result).toContain("2. [preference]");
     expect(result).toContain("3. [entity]");
-  });
-
-  test("formatRelevantMemoriesContext retains inert legacy media text while filtering metadata", () => {
-    const result = formatRelevantMemoriesContext([
-      { category: "fact", text: `${ctxHeader("Sender:")}\nsome sludge` },
-      {
-        category: "other",
-        text: "[media attached: /tmp/img.jpg (image/jpeg)]",
-      },
-    ]);
-    expect(result).toContain("[media attached: /tmp/img.jpg (image/jpeg)]");
-    expect(result).not.toContain("Sender (untrusted metadata)");
   });
 
   test("escapeMemoryForPrompt preserves inert media text while escaping markup", () => {

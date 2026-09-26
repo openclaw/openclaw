@@ -14,6 +14,29 @@ import {
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
 
+function createAuthHarnesses(authStore: AuthProfileStore, key: string) {
+  const config: OpenClawConfig = {
+    auth: { order: { acme: ["acme:primary"] } },
+    agents: {
+      defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
+      list: [{ id: "main", default: true }],
+    },
+  };
+  const owner = createChatMetadataOwner(
+    config,
+    "model",
+    { acme: { type: "api_key", key } },
+    "acme",
+  );
+  const cached = createChatMetadataHarness(config, { useDefaultProjection: true });
+  const fresh = createChatMetadataHarness(config, { useDefaultProjection: true });
+  for (const harness of [cached, fresh]) {
+    harness.setOwner(owner);
+    harness.setAuthStore(authStore);
+  }
+  return { cached, fresh };
+}
+
 describe("gateway chat metadata auth deadlines", () => {
   test("retains metadata on bookkeeping and reads cleared and renewed cooldowns from a full catalog", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
@@ -101,19 +124,6 @@ describe("gateway chat metadata auth deadlines", () => {
     { at: 20_000, available: false },
   ])("reads a cached static token at $at without publication", async ({ at, available }) => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const config: OpenClawConfig = {
-      auth: { order: { acme: ["acme:primary"] } },
-      agents: {
-        defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
-        list: [{ id: "main", default: true }],
-      },
-    };
-    const owner = createChatMetadataOwner(
-      config,
-      "model",
-      { acme: { type: "api_key", key: "synthetic-token" } },
-      "acme",
-    );
     const authStore: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -125,12 +135,7 @@ describe("gateway chat metadata auth deadlines", () => {
         },
       },
     };
-    const cached = createChatMetadataHarness(config, { useDefaultProjection: true });
-    const fresh = createChatMetadataHarness(config, { useDefaultProjection: true });
-    for (const harness of [cached, fresh]) {
-      harness.setOwner(owner);
-      harness.setAuthStore(authStore);
-    }
+    const { cached, fresh } = createAuthHarnesses(authStore, "synthetic-token");
     try {
       await cached.runtime.refresh();
       await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({
@@ -157,30 +162,12 @@ describe("gateway chat metadata auth deadlines", () => {
     "keeps cached metadata current at $name without publication",
     async ({ cooldownUntil, at, before, after }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
-      const config: OpenClawConfig = {
-        auth: { order: { acme: ["acme:primary"] } },
-        agents: {
-          defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
-          list: [{ id: "main", default: true }],
-        },
-      };
-      const owner = createChatMetadataOwner(
-        config,
-        "model",
-        { acme: { type: "api_key", key: "synthetic-key" } },
-        "acme",
-      );
       const authStore: AuthProfileStore = {
         version: 1,
         profiles: { "acme:primary": { type: "api_key", provider: "acme", key: "synthetic-key" } },
         usageStats: { "acme:primary": { cooldownUntil } },
       };
-      const cached = createChatMetadataHarness(config, { useDefaultProjection: true });
-      const fresh = createChatMetadataHarness(config, { useDefaultProjection: true });
-      for (const harness of [cached, fresh]) {
-        harness.setOwner(owner);
-        harness.setAuthStore(authStore);
-      }
+      const { cached, fresh } = createAuthHarnesses(authStore, "synthetic-key");
       try {
         await cached.runtime.refresh();
         await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({

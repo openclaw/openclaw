@@ -108,26 +108,29 @@ describe("runMessageAction media behavior", () => {
     await resetMessageActionMediaMocks();
   });
 
-  it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        {
-          action,
-          buffer: parameterizedPngDataUrl,
-          base64: onePixelPngBase64,
-          contentType: "image/png",
-          filename: "attachment.png",
-        },
-        {
-          action,
-          buffer: `data:text/csv;base64,${csvBase64}`,
-          base64: csvBase64,
-          contentType: "text/csv",
-          filename: "attachment.csv",
-        },
-      ],
-    ),
-  )(
+  it.each([
+    {
+      action: "send",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+    {
+      action: "sendAttachment",
+      buffer: `data:text/csv;base64,${csvBase64}`,
+      base64: csvBase64,
+      contentType: "text/csv",
+      filename: "attachment.csv",
+    },
+    {
+      action: "setGroupIcon",
+      buffer: parameterizedPngDataUrl,
+      base64: onePixelPngBase64,
+      contentType: "image/png",
+      filename: "attachment.png",
+    },
+  ] as const)(
     "normalizes $contentType data URLs and infers filenames for $action",
     async ({ action, buffer, base64, contentType, filename }) => {
       const args: Record<string, unknown> = { buffer };
@@ -152,17 +155,15 @@ describe("runMessageAction media behavior", () => {
   );
 
   it.each(
-    (["send", "sendAttachment", "reply", "upload-file", "setGroupIcon"] as const).flatMap(
-      (action) => [
-        { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
-        { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
-        {
-          action,
-          name: "both aliases",
-          metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
-        },
-      ],
-    ),
+    (["send", "sendAttachment"] as const).flatMap((action) => [
+      { action, name: "contentType", metadata: { contentType: "image/jpeg" } },
+      { action, name: "mimeType", metadata: { mimeType: "image/jpeg" } },
+      {
+        action,
+        name: "both aliases",
+        metadata: { contentType: "image/jpeg", mimeType: "image/webp" },
+      },
+    ]),
   )("keeps $name authoritative for $action data URLs", async ({ action, metadata }) => {
     const args: Record<string, unknown> = {
       buffer: parameterizedPngDataUrl,

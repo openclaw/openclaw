@@ -2,7 +2,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { describe, expect, test } from "vitest";
 import {
   createMemoryLanceDbStateMigrations,
@@ -22,38 +25,47 @@ describe("memory-lancedb doctor migration", () => {
     prefix: "openclaw-memory-doctor-",
   });
 
-  test("assigns legacy shared rows to the configured default agent once", async () => {
-    const connection = await lancedb.connect(getDbPath());
-    const table = await connection.createTable("memories", [
-      {
-        id: "11111111-1111-4111-8111-111111111111",
-        text: "legacy shared memory",
-        vector: [1, 0],
-        importance: 0.7,
-        category: "fact",
-        createdAt: 1,
-      },
-    ]);
-    table.close();
-    connection.close();
+  type MigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 
-    const config = {
-      agents: { list: [{ id: "Owner Agent", default: true }, { id: "other" }] },
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: { dbPath: getDbPath() },
-          },
-        },
-      },
-    };
-    const params = {
-      config,
-      env: { ...process.env, HOME: getTmpDir() },
+  function migrationParams(
+    agents: MigrationParams["config"]["agents"] = { list: [{ id: "main", default: true }] },
+    dbPath = getDbPath(),
+    home = getTmpDir(),
+  ): MigrationParams {
+    return {
+      config: { agents, plugins: { entries: { "memory-lancedb": { config: { dbPath } } } } },
+      env: { ...process.env, HOME: home },
       stateDir: getTmpDir(),
       oauthDir: path.join(getTmpDir(), "oauth"),
       context: unusedDoctorContext,
     };
+  }
+
+  async function createLegacyTable(dbPath = getDbPath()) {
+    const connection = await lancedb.connect(dbPath);
+    try {
+      const table = await connection.createTable("memories", [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          text: "legacy shared memory",
+          vector: [1, 0],
+          importance: 0.7,
+          category: "fact",
+          createdAt: 1,
+        },
+      ]);
+      table.close();
+    } finally {
+      connection.close();
+    }
+  }
+
+  test("assigns legacy shared rows to the configured default agent once", async () => {
+    await createLegacyTable();
+
+    const params = migrationParams({
+      list: [{ id: "Owner Agent", default: true }, { id: "other" }],
+    });
     const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
 
     await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
@@ -74,36 +86,13 @@ describe("memory-lancedb doctor migration", () => {
   });
 
   test("assigns explicit-roster legacy rows to the configured system agent", async () => {
-    const connection = await lancedb.connect(getDbPath());
-    const table = await connection.createTable("memories", [
-      {
-        id: "12121212-1212-4121-8121-121212121212",
-        text: "legacy system memory",
-        vector: [1, 0],
-        importance: 0.7,
-        category: "fact",
-        createdAt: 1,
-      },
-    ]);
-    table.close();
-    connection.close();
+    await createLegacyTable();
 
-    const params = {
-      config: {
-        agents: {
-          ownership: "explicit" as const,
-          defaults: { systemAgent: { agentId: "Main Agent" } },
-          entries: { "Main Agent": {}, helper: {}, third: {} },
-        },
-        plugins: {
-          entries: { "memory-lancedb": { config: { dbPath: getDbPath() } } },
-        },
-      },
-      env: { ...process.env, HOME: getTmpDir() },
-      stateDir: getTmpDir(),
-      oauthDir: path.join(getTmpDir(), "oauth"),
-      context: unusedDoctorContext,
-    };
+    const params = migrationParams({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "Main Agent" } },
+      entries: { "Main Agent": {}, helper: {}, third: {} },
+    });
     const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
 
     await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
@@ -124,37 +113,9 @@ describe("memory-lancedb doctor migration", () => {
   test("keeps literal $ patterns in home when expanding a tilde dbPath", async () => {
     const home = path.join(getTmpDir(), "home$&d");
     const dollarDbPath = path.join(home, "lancedb-dollar");
-    const connection = await lancedb.connect(dollarDbPath);
-    const table = await connection.createTable("memories", [
-      {
-        id: "22222222-2222-4222-8222-222222222222",
-        text: "legacy shared memory",
-        vector: [1, 0],
-        importance: 0.7,
-        category: "fact",
-        createdAt: 1,
-      },
-    ]);
-    table.close();
-    connection.close();
+    await createLegacyTable(dollarDbPath);
 
-    const config = {
-      agents: { list: [{ id: "main", default: true }] },
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: { dbPath: "~/lancedb-dollar" },
-          },
-        },
-      },
-    };
-    const params = {
-      config,
-      env: { ...process.env, HOME: home },
-      stateDir: getTmpDir(),
-      oauthDir: path.join(getTmpDir(), "oauth"),
-      context: unusedDoctorContext,
-    };
+    const params = migrationParams(undefined, "~/lancedb-dollar", home);
     const migration = expectDefined(stateMigrations[0], "memory-lancedb state migration");
 
     await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
@@ -226,23 +187,7 @@ describe("memory-lancedb doctor migration", () => {
     table.close();
     connection.close();
 
-    const config = {
-      agents: { list: [{ id: "main", default: true }] },
-      plugins: {
-        entries: {
-          "memory-lancedb": {
-            config: { dbPath: getDbPath() },
-          },
-        },
-      },
-    };
-    const params = {
-      config,
-      env: { ...process.env, HOME: getTmpDir() },
-      stateDir: getTmpDir(),
-      oauthDir: path.join(getTmpDir(), "oauth"),
-      context: unusedDoctorContext,
-    };
+    const params = migrationParams();
     const migration = expectDefined(
       stateMigrations[1],
       "memory-lancedb legacy envelope state migration",
@@ -291,35 +236,9 @@ describe("memory-lancedb doctor migration", () => {
     expect(pluginRoot).toBe(packageRoot);
     const relativeDbPath = path.join("data", "lancedb");
     const absoluteDbPath = path.join(pluginRoot, relativeDbPath);
-    const connection = await lancedb.connect(absoluteDbPath);
-    const table = await connection.createTable("memories", [
-      {
-        id: "22222222-2222-4222-8222-222222222222",
-        text: "relative legacy memory",
-        vector: [1, 0],
-        importance: 0.7,
-        category: "fact",
-        createdAt: 2,
-      },
-    ]);
-    table.close();
-    connection.close();
+    await createLegacyTable(absoluteDbPath);
 
-    const config = {
-      agents: { list: [{ id: "main", default: true }] },
-      plugins: {
-        entries: {
-          "memory-lancedb": { config: { dbPath: relativeDbPath } },
-        },
-      },
-    };
-    const params = {
-      config,
-      env: { ...process.env, HOME: getTmpDir() },
-      stateDir: getTmpDir(),
-      oauthDir: path.join(getTmpDir(), "oauth"),
-      context: unusedDoctorContext,
-    };
+    const params = migrationParams(undefined, relativeDbPath);
     const migration = expectDefined(
       createMemoryLanceDbStateMigrations(pluginRoot)[0],
       "memory-lancedb state migration",

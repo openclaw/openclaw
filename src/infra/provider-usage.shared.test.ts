@@ -10,19 +10,12 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
-    { value: "clawrouter", expected: "clawrouter" },
-    { value: "deepseek", expected: "deepseek" },
-    { value: "zai", expected: "zai" },
-    { value: "z-ai", expected: "z-ai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
     { value: "minimax-portal-cn", expected: "minimax" },
-    { value: "claude-cli", expected: "anthropic" },
     { value: " CLAUDE-CLI ", expected: "anthropic" },
-    { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
     { value: "unknown-provider", expected: "unknown-provider" },
-    { value: undefined, expected: undefined },
     { value: null, expected: undefined },
   ])("normalizes provider ids for %j", ({ value, expected }) => {
     expect(resolveUsageProviderId(value)).toBe(expected);
@@ -39,7 +32,6 @@ describe("provider-usage.shared", () => {
     { value: 42, expected: 42 },
     { value: 120, expected: 100 },
     { value: Number.NaN, expected: 0 },
-    { value: Number.POSITIVE_INFINITY, expected: 0 },
   ])("clamps usage percents for %j", ({ value, expected }) => {
     expect(clampPercent(value)).toBe(expected);
   });

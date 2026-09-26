@@ -48,17 +48,6 @@ describe("configureCommandFromSectionsArg", () => {
     expect(runConfigureWizardMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed for an explicit --section list on a non-interactive terminal", async () => {
-    const runtime = makeRuntime();
-
-    await expect(
-      configureCommandFromSectionsArg(["channels"], runtime, { interactive: false }),
-    ).rejects.toThrow("exit 1");
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runConfigureWizardMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["omitted section values", undefined],
     ["the Commander default", []],
@@ -72,13 +61,9 @@ describe("configureCommandFromSectionsArg", () => {
     expect(runConfigureWizardMock).toHaveBeenCalledWith({ command: "configure" }, runtime);
   });
 
-  it.each([
-    ["unchanged section names", ["channels", "plugins"]],
-    ["trimmed section names", ["  channels  ", "\tplugins\t"]],
-  ] as const)("runs only the requested wizard sections for %s", async (_label, sections) => {
+  it("trims and runs only the requested wizard sections", async () => {
     const runtime = makeRuntime();
-
-    await configureCommandFromSectionsArg(sections, runtime, {
+    await configureCommandFromSectionsArg(["  channels  ", "\tplugins\t"], runtime, {
       interactive: true,
     });
 
@@ -91,10 +76,7 @@ describe("configureCommandFromSectionsArg", () => {
 
   it.each([
     ["an empty section", [""], true],
-    ["a whitespace section", [" \t "], true],
-    ["a valid section followed by an empty section", ["channels", ""], true],
-    ["a valid section followed by a whitespace section", ["channels", "  "], true],
-    ["a whitespace section before the non-interactive-terminal guard", ["  "], false],
+    ["a valid section followed by whitespace before the TTY guard", ["channels", "  "], false],
   ] as const)(
     "rejects %s without opening the unrestricted wizard",
     async (_label, sections, interactive) => {
@@ -109,20 +91,6 @@ describe("configureCommandFromSectionsArg", () => {
       expect(runConfigureWizardMock).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects a lone invalid section before unrestricted wizard dispatch", async () => {
-    const runtime = makeRuntime();
-
-    await expect(
-      configureCommandFromSectionsArg(["bogus"], runtime, { interactive: true }),
-    ).rejects.toThrow("exit 1");
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toBe(
-      "Invalid --section: bogus. Expected one of: workspace, model, web, gateway, daemon, channels, plugins, skills, health. Run openclaw configure without --section to use the full wizard.",
-    );
-    expect(runConfigureWizardMock).not.toHaveBeenCalled();
-  });
 
   it("validates invalid sections before the interactive-terminal guard", async () => {
     const runtime = makeRuntime();

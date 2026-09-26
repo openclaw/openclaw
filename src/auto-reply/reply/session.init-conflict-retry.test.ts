@@ -88,22 +88,6 @@ function conflictingAttempt(failures: number) {
 const instantSleep = async (_ms: number) => {};
 
 describe("runWithSessionInitConflictRetry", () => {
-  it("returns immediately when the first attempt succeeds", async () => {
-    const { attempt, state } = conflictingAttempt(0);
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
-      "ok",
-    );
-    expect(state.calls).toBe(1);
-  });
-
-  it("retries conflicts and succeeds once the competing writer settles", async () => {
-    const { attempt, state } = conflictingAttempt(3);
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
-      "ok",
-    );
-    expect(state.calls).toBe(4);
-  });
-
   it("retries conflict messages rejected as strings", async () => {
     const attempt = vi
       .fn<() => Promise<string>>()

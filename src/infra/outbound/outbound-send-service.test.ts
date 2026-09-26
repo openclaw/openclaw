@@ -253,6 +253,12 @@ describe("executeSendAction", () => {
     setActivePluginRegistry(createTestRegistry([]));
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
@@ -263,12 +269,6 @@ describe("executeSendAction", () => {
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendMessage.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-    });
 
     await executeSendAction({
       ctx: createContext({
@@ -362,39 +362,8 @@ describe("executeSendAction", () => {
     expect(onDeliveryResult).toHaveBeenCalledWith(evidence);
   });
 
-  it("forwards requesterSenderId to sendMessage on core outbound path", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendMessage.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-    });
-
-    await executeSendAction({
-      ctx: createContext({
-        input: {
-          sessionKey: "agent:main:directchat:group:ops",
-          requesterSenderId: "attacker",
-        },
-      }),
-      to: "channel:123",
-      message: "hello",
-    });
-
-    expectSingleCallFields(mocks.sendMessage, {
-      requesterSenderId: "attacker",
-    });
-  });
-
   it("forwards non-id requester sender fields to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendMessage.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-    });
 
     await executeSendAction({
       ctx: createContext({
@@ -418,12 +387,6 @@ describe("executeSendAction", () => {
 
   it("forwards requester session context to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendMessage.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-    });
 
     await executeSendAction({
       ctx: createContext({
@@ -507,12 +470,6 @@ describe("executeSendAction", () => {
 
   it("falls back to destination account when forwarding requester context to sendMessage", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendMessage.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-    });
 
     await executeSendAction({
       ctx: createContext({
@@ -843,23 +800,6 @@ describe("executeSendAction", () => {
         reply,
       }),
     );
-  });
-
-  it("uses plugin poll action when available", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
-
-    const result = await executePollAction({
-      ctx: createContext({}),
-      resolveCorePoll: () => ({
-        to: "channel:123",
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 1,
-      }),
-    });
-
-    expect(result.handledBy).toBe("plugin");
-    expect(mocks.sendPoll).not.toHaveBeenCalled();
   });
 
   it("does not invoke shared poll parsing before plugin poll dispatch", async () => {

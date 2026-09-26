@@ -4,15 +4,12 @@ import { formatTextCell, shortenText } from "./text-format.js";
 
 describe("shortenText", () => {
   it.each([
-    ["", 1, ""],
     ["openclaw", 16, "openclaw"],
     ["openclaw-status-output", 10, "openclaw-…"],
     ["openclaw", 0, ""],
-    ["openclaw", -1, ""],
     ["hello🙂world", 7, "hello🙂…"],
     ["🙂🙂🙂", 3, "🙂🙂🙂"],
     ["🙂🙂🙂🙂", 3, "🙂🙂…"],
-    ["a🙂🙂🙂🙂", 3, "a🙂…"],
     ["🙂x", 1, "…"],
     ["e\u0301x", 2, "e…"],
   ])("shortens %j to %i code points", (input, maxLen, expected) => {

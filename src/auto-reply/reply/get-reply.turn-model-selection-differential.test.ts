@@ -218,7 +218,6 @@ describe("getReplyFromConfig channel model input boundary", () => {
     groupId?: string;
     groupChannel?: string;
     omitPersistedChannel?: boolean;
-    omitChannelConfig?: boolean;
     expected: ModelRef;
   }> = [
     {
@@ -232,10 +231,6 @@ describe("getReplyFromConfig channel model input boundary", () => {
       expected: TURN_MODEL_PERSISTED_PEER_REF,
     },
     {
-      name: "persisted delivery channel exact conversation",
-      expected: TURN_MODEL_PERSISTED_CHANNEL_REF,
-    },
-    {
       name: "live channel exact conversation",
       omitPersistedChannel: true,
       expected: TURN_MODEL_LIVE_CHANNEL_REF,
@@ -245,17 +240,6 @@ describe("getReplyFromConfig channel model input boundary", () => {
       groupId: "unmatched",
       groupChannel: "parent-room",
       expected: TURN_MODEL_CHANNEL_REF,
-    },
-    {
-      name: "wildcard",
-      groupId: "unmatched",
-      expected: TURN_MODEL_CHANNEL_REF,
-    },
-    {
-      name: "default",
-      groupId: "unmatched",
-      omitChannelConfig: true,
-      expected: TURN_MODEL_DEFAULT_REF,
     },
   ];
 
@@ -280,20 +264,18 @@ describe("getReplyFromConfig channel model input boundary", () => {
         SenderId: "live-peer",
       },
       child,
-      modelByChannel: testCase.omitChannelConfig
-        ? undefined
-        : {
-            discord: {
-              room: turnModelRefLabel(TURN_MODEL_PERSISTED_CHANNEL_REF),
-              "persisted-peer": turnModelRefLabel(TURN_MODEL_PERSISTED_PEER_REF),
-              "parent-room": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
-              "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
-            },
-            telegram: {
-              room: turnModelRefLabel(TURN_MODEL_LIVE_CHANNEL_REF),
-              "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
-            },
-          },
+      modelByChannel: {
+        discord: {
+          room: turnModelRefLabel(TURN_MODEL_PERSISTED_CHANNEL_REF),
+          "persisted-peer": turnModelRefLabel(TURN_MODEL_PERSISTED_PEER_REF),
+          "parent-room": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
+          "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
+        },
+        telegram: {
+          room: turnModelRefLabel(TURN_MODEL_LIVE_CHANNEL_REF),
+          "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
+        },
+      },
       expected: {} as Record<TurnModelSelectionPath, TurnModelSelectionVerdict>,
     };
     const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);

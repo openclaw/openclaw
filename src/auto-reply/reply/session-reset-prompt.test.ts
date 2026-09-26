@@ -46,13 +46,21 @@ describe("resolveBareSessionResetPromptState", () => {
 
   it("uses limited bootstrap wording for constrained reset runs", async () => {
     const workspaceDir = await makeBootstrapPendingWorkspace();
-    const prompt = await resolveResetPrompt({ workspaceDir, hasBootstrapFileAccess: false });
+    const pending = await resolveBareSessionResetPromptState({
+      workspaceDir,
+      hasBootstrapFileAccess: false,
+    });
+    const { prompt } = pending;
 
+    expect(pending.bootstrapMode).toBe("limited");
+    expect(pending.shouldPrependStartupContext).toBe(false);
     expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
+    expect(prompt).toContain("while bootstrap is still pending for this workspace");
     expect(prompt).toContain("Never claim complete");
     expect(prompt).toContain("no generic first greeting");
     expect(prompt).toContain("switching to a primary interactive run with normal workspace access");
     expect(prompt).not.toContain("Please read BOOTSTRAP.md from the workspace now");
+    expect(prompt).not.toContain("Execute your Session Startup sequence now");
   });
 
   it("appends current time line so agents know the date", async () => {
@@ -64,18 +72,6 @@ describe("resolveBareSessionResetPromptState", () => {
     const prompt = await resolveResetPrompt({ cfg, nowMs });
     expect(prompt).toContain("Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York)");
     expect(prompt).toContain("Reference UTC: 2026-03-03 14:00 UTC");
-  });
-
-  it("does not append a duplicate current time line", async () => {
-    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const prompt = await resolveResetPrompt({ nowMs });
-    expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
-  });
-
-  it("falls back to UTC when no timezone configured", async () => {
-    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const prompt = await resolveResetPrompt({ nowMs });
-    expect(prompt).toContain("Current time:");
   });
 
   it("resolves shared bare reset prompt state from workspace bootstrap truth", async () => {
@@ -124,22 +120,6 @@ describe("resolveBareSessionResetPromptState", () => {
     expect(pending.shouldPrependStartupContext).toBe(true);
     expect(pending.prompt).toContain("Execute your Session Startup sequence now");
     expect(pending.prompt).not.toContain("while bootstrap is still pending for this workspace");
-  });
-
-  it("uses limited bootstrap mode when bare reset has no bootstrap file access", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-reset-no-file-access-");
-    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
-
-    const pending = await resolveBareSessionResetPromptState({
-      workspaceDir,
-      hasBootstrapFileAccess: false,
-    });
-
-    expect(pending.bootstrapMode).toBe("limited");
-    expect(pending.shouldPrependStartupContext).toBe(false);
-    expect(pending.prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
-    expect(pending.prompt).toContain("while bootstrap is still pending for this workspace");
-    expect(pending.prompt).not.toContain("Execute your Session Startup sequence now");
   });
 
   it("awaits async bootstrap file access before selecting reset mode", async () => {

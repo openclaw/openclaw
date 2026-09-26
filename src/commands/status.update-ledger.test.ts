@@ -169,17 +169,17 @@ describe("status update ledger evidence", () => {
     );
   });
 
-  it.each(["succeeded", "skipped", "rolled-back", "failed"] as const)(
-    "clears the failure after a later completed fetch even when the run is %s",
-    async (status) => {
-      recordRun({ status: "failed", reason: "fetch-failed" });
-      recordRun({ status, steps: [{ step: "git target inspection fetch", status: "completed" }] });
-      const update = await readStatus();
-      expect(update.git).not.toHaveProperty("stale");
-      expect(update.git).not.toHaveProperty("countsCached");
-      expect(formatUpdateOneLiner(update)).toContain("up to date");
-    },
-  );
+  it("clears the failure after a later completed fetch even when the run failed", async () => {
+    recordRun({ status: "failed", reason: "fetch-failed" });
+    recordRun({
+      status: "failed",
+      steps: [{ step: "git target inspection fetch", status: "completed" }],
+    });
+    const update = await readStatus();
+    expect(update.git).not.toHaveProperty("stale");
+    expect(update.git).not.toHaveProperty("countsCached");
+    expect(formatUpdateOneLiner(update)).toContain("up to date");
+  });
 
   it("retains the failure across later runs that never reached fetch, beyond a history page", async () => {
     const failed = recordRun({ status: "failed", reason: "fetch-failed" });

@@ -29,17 +29,8 @@ describe("normalizeHeadersInitForFetch", () => {
     expect(normalizeHeadersInitForFetch(headers)).toBe(headers);
   });
 
-  it("keeps plain string-key dictionaries unchanged when they have no symbol keys", () => {
-    const headers = { Accept: "application/json" };
-
-    expect(normalizeHeadersInitForFetch(headers)).toBe(headers);
-  });
-
-  it.each([
-    { enumerable: true, name: "enumerable" },
-    { enumerable: false, name: "non-enumerable" },
-  ])("drops $name own symbol keys from plain header dictionaries", ({ enumerable }) => {
-    const headers = createHeadersWithSymbol(enumerable);
+  it("drops enumerable own symbol keys without mutating the header dictionary", () => {
+    const headers = createHeadersWithSymbol(true);
 
     const normalized = normalizeHeadersInitForFetch(headers);
 

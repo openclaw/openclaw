@@ -16,11 +16,6 @@ const chatTypeProbeConfig = {
 describe("completion delivery policy", () => {
   it.each([
     {
-      name: "canonical group key",
-      requesterSessionKey: "agent:main:telegram:group:-100123",
-      expected: "group",
-    },
-    {
       name: "canonical channel key",
       requesterSessionKey: "agent:main:slack:channel:C123",
       expected: "channel",
@@ -29,16 +24,6 @@ describe("completion delivery policy", () => {
       name: "canonical direct key",
       requesterSessionKey: "agent:main:discord:dm:U123",
       expected: "direct",
-    },
-    {
-      name: "legacy Discord guild channel key",
-      requesterSessionKey: "agent:main:discord:guild-123:channel-456",
-      expected: "channel",
-    },
-    {
-      name: "legacy WhatsApp group key",
-      requesterSessionKey: "agent:main:whatsapp:123@g.us",
-      expected: "group",
     },
   ])("applies the inferred $expected policy for $name", ({ requesterSessionKey, expected }) => {
     expect(

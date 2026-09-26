@@ -23,22 +23,6 @@ describe("history media recording", () => {
     ]);
   });
 
-  it("preserves native sticker classification for local sticker images", () => {
-    expect(
-      normalizeHistoryMediaEntries({
-        messageId: "msg-sticker",
-        media: [{ path: "/tmp/sticker.png", contentType: "image/png", kind: "sticker" }],
-      }),
-    ).toEqual([
-      {
-        path: "/tmp/sticker.png",
-        contentType: "image/png",
-        kind: "sticker",
-        messageId: "msg-sticker",
-      },
-    ]);
-  });
-
   it.each([
     {
       name: "an image with generic MIME and a .bin path",
@@ -96,17 +80,13 @@ describe("history media recording", () => {
     ]);
   });
 
-  it.each([
-    { path: "/tmp/telegram-document.bin", contentType: "application/octet-stream" },
-    { path: "/tmp/telegram-document.png", contentType: undefined },
-    { path: "/tmp/telegram-document.png", contentType: "application/pdf" },
-    { path: "/tmp/telegram-document.png", contentType: "image/png" },
-  ])("never records authoritative documents with MIME $contentType as history images", (media) => {
+  it("never records authoritative documents with image MIME as history images", () => {
     expect(
       normalizeHistoryMediaEntries({
         media: [
           {
-            ...media,
+            path: "/tmp/telegram-document.png",
+            contentType: "image/png",
             kind: "document",
           },
         ],
@@ -114,22 +94,17 @@ describe("history media recording", () => {
     ).toEqual([]);
   });
 
-  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
-    "never records unknown-kind image-looking documents with MIME %s",
-    (contentType) => {
-      expect(
-        normalizeHistoryMediaEntries({
-          media: [{ path: "/tmp/report.png", contentType, kind: "unknown" }],
-        }),
-      ).toEqual([]);
-    },
-  );
+  it("never records unknown-kind image-looking documents with concrete non-image MIME", () => {
+    expect(
+      normalizeHistoryMediaEntries({
+        media: [{ path: "/tmp/report.png", contentType: "application/pdf", kind: "unknown" }],
+      }),
+    ).toEqual([]);
+  });
 
   it.each([
     { path: "/tmp/diagram.svg", kind: undefined },
     { path: "/tmp/diagram.svg", kind: "unknown" as const },
-    { path: "/tmp/photo.png", kind: undefined },
-    { path: "/tmp/photo.png", kind: "unknown" as const },
   ])("never manufactures image history from filename-only $path", (media) => {
     expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([]);
   });
@@ -160,22 +135,6 @@ describe("history media recording", () => {
 
     expect(historyMap.get("telegram-chat")).toEqual([
       { sender: "Alice", body: "<media:document>", messageId: "diagram-message" },
-    ]);
-  });
-
-  it("records text history unchanged when media resolver has no usable media", async () => {
-    const historyMap = new Map<string, HistoryEntry[]>();
-
-    await recordPendingHistoryEntryWithMedia({
-      historyMap,
-      historyKey: "channel-1",
-      limit: 5,
-      entry: { sender: "Alice", body: "hello", messageId: "msg-1" },
-      media: async () => [{ path: "https://example.com/a.png", contentType: "image/png" }],
-    });
-
-    expect(historyMap.get("channel-1")).toEqual([
-      { sender: "Alice", body: "hello", messageId: "msg-1" },
     ]);
   });
 

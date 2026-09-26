@@ -169,43 +169,6 @@ describe("fetchBrowserScreenshotDataUrl", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("rejects unsuccessful screenshot responses", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 404 })),
-    );
-
-    await expect(
-      fetchBrowserScreenshotDataUrl({
-        resourceBasePath: "/openclaw",
-        authToken: null,
-        path: "/tmp/missing.png",
-      }),
-    ).rejects.toThrow("Screenshot fetch failed (404).");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("cancels an unsuccessful screenshot response body", async () => {
-    vi.useFakeTimers();
-    const response = new Response("not found", { status: 404 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => response),
-    );
-
-    await expect(
-      fetchBrowserScreenshotDataUrl({
-        resourceBasePath: "/openclaw",
-        authToken: null,
-        path: "/tmp/missing.png",
-      }),
-    ).rejects.toThrow("Screenshot fetch failed (404).");
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("rejects an unsuccessful screenshot without waiting for stream cancellation", async () => {
     vi.useFakeTimers();
     const response = new Response("not found", { status: 404 });

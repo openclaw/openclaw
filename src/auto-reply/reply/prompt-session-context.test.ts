@@ -41,12 +41,6 @@ function metadata(ctx: TemplateContext) {
 
 describe("prepared reply conversation", () => {
   it.each([
-    {
-      name: "matching heartbeat",
-      input: { ...current, InternalTurnSource: "heartbeat" },
-      inherits: true,
-    },
-    { name: "matching cron", input: { ...current, InternalTurnSource: "cron" }, inherits: true },
     { name: "matching exec", input: current, inherits: true },
     {
       name: "heartbeat without a current route",

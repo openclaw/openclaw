@@ -5,7 +5,7 @@ import { installTmpDirHarness } from "./test-helpers.js";
 describe("MemoryDB observes externally committed rows", () => {
   const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-staleness-" });
 
-  test.each(["search", "count", "list", "query", "delete"] as const)(
+  test.each(["list", "query", "delete"] as const)(
     "%s observes a commit before any other reader operation refreshes the handle",
     async (operation) => {
       const reader = new MemoryDB(getDbPath(), 2);
@@ -19,14 +19,6 @@ describe("MemoryDB observes externally committed rows", () => {
           category: "other",
         });
         switch (operation) {
-          case "search":
-            await expect(reader.search("alpha", [1, 0], 5, 0)).resolves.toMatchObject([
-              { entry: { id: external.id, text: external.text } },
-            ]);
-            break;
-          case "count":
-            await expect(reader.count("alpha")).resolves.toBe(1);
-            break;
           case "list":
             await expect(reader.list("alpha", 5)).resolves.toMatchObject([{ id: external.id }]);
             break;

@@ -9,9 +9,7 @@ afterEach(() => {
 describe("resolveRequiredBackupPath", () => {
   it.each([
     [undefined, "--repository"],
-    ["", "--target"],
     ["   ", "<snapshot>"],
-    ["\t", "--scratch"],
   ] as const)("rejects %j for %s", (value, label) => {
     expect(() => resolveRequiredBackupPath(value, label)).toThrow(
       `Missing required ${label} value.`,

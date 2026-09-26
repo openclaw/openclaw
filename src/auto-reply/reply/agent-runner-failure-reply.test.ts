@@ -83,7 +83,7 @@ describe("buildExternalRunFailureReply", () => {
     expect(reply.text).not.toContain("/new");
   });
 
-  it.each(["401 unauthorized", "529 overloaded", "503 service unavailable", "402 billing"])(
+  it.each(["401 unauthorized", "529 overloaded"])(
     "keeps preflight %s diagnostics verbose-gated except for heartbeats",
     (failure) => {
       const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;

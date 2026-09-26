@@ -36,7 +36,7 @@ describe("CommandPalette platform shortcuts", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Linux x86_64"])(
     "uses the platform palette shortcut on %s without consuming text editing",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);

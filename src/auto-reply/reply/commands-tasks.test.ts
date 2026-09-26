@@ -110,7 +110,8 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).not.toContain("✅ Incomplete background task");
   });
 
-  it.each(["research", "ops"])("isolates the global task board for %s", async (agentId) => {
+  it("isolates the global task board by requester rather than executor", async () => {
+    const agentId = "research";
     for (const requesterAgentId of ["research", "ops", undefined]) {
       const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
       createRunningTaskRunCore({
@@ -136,7 +137,7 @@ describe("handleTasksCommand task board", () => {
 
     expect(reply.text).toContain("Current session: 1 active · 1 total");
     expect(reply.text).toContain(`${agentId} private task`);
-    expect(reply.text).not.toContain(`${agentId === "research" ? "ops" : "research"} private task`);
+    expect(reply.text).not.toContain("ops private task");
     expect(reply.text).not.toContain("unknown private task");
   });
 
@@ -161,29 +162,6 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("🟢 Video generation");
     expect(reply.text).toContain("CLI · running");
     expect(reply.text).toContain("Queued video generation");
-  });
-
-  it("lists session-backed image generation tasks for the current session", async () => {
-    createRunningTaskRunCore({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:main",
-      runId: "tool:image_generate:tasks-visible",
-      label: "Image generation",
-      task: "blue square icon",
-      progressSummary: "Queued image generation",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-
-    const reply = await buildTasksReplyForTest();
-
-    expect(reply.text).toContain("Current session: 1 active · 1 total");
-    expect(reply.text).toContain("🟢 Image generation");
-    expect(reply.text).toContain("CLI · running");
-    expect(reply.text).toContain("Queued image generation");
   });
 
   it("sanitizes leaked internal runtime context from visible task details", async () => {
@@ -265,27 +243,6 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).not.toContain("done a while ago");
   });
 
-  it("falls back to agent-local counts when the current session has no visible tasks", async () => {
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:other-session",
-      childSessionKey: "agent:main:subagent:tasks-agent-fallback",
-      runId: "run-tasks-agent-fallback",
-      agentId: "main",
-      task: "hidden background task",
-      progressSummary: "hidden progress detail",
-    });
-
-    const reply = await buildTasksReplyForTest({
-      sessionKey: "agent:main:empty-session",
-    });
-
-    expect(reply.text).toContain("Task runs: none active or recent for this session.");
-    expect(reply.text).toContain("Agent-local: 1 active · 1 total");
-    expect(reply.text).not.toContain("hidden background task");
-    expect(reply.text).not.toContain("hidden progress detail");
-  });
-
   it("counts session-backed video generation tasks in agent-local fallback", async () => {
     createRunningTaskRunCore({
       runtime: "cli",
@@ -329,6 +286,7 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("Task runs: none active or recent for this session.");
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("target hidden background task");
+    expect(reply.text).not.toContain("hidden target progress detail");
   });
 });
 

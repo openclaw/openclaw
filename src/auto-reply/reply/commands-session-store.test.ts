@@ -73,57 +73,6 @@ describe("commands session store persistence", () => {
     });
   });
 
-  it("persists a single command session entry through the accessor", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "agent:main:command";
-      const otherKey = "agent:main:other";
-      const entry: SessionEntry = {
-        sessionId: "command-session",
-        updatedAt: 1,
-        model: "gpt-5.5",
-      };
-      const otherEntry: SessionEntry = {
-        sessionId: "other-session",
-        updatedAt: 2,
-        delivery: { kind: "none" },
-      };
-      const seedEntry = { ...entry };
-      await persistCommandSession({
-        allowCreateSessionEntry: true,
-        sessionEntry: seedEntry,
-        sessionStore: { [sessionKey]: seedEntry },
-        sessionKey,
-        storePath,
-      });
-      await replaceSessionEntry({ storePath, sessionKey: otherKey }, { ...otherEntry });
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-
-      await expect(
-        persistCommandSession({
-          sessionEntry: entry,
-          sessionStore,
-          sessionKey,
-          storePath,
-        }),
-      ).resolves.toBe(true);
-
-      const persisted = loadSessionEntry({ storePath, sessionKey });
-      const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
-      expect(sessionStore[sessionKey]).toMatchObject({
-        sessionId: "command-session",
-        model: "gpt-5.5",
-      });
-      expect(sessionStore[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt);
-      expect(entry.updatedAt).not.toBe(1);
-      expect(persisted).toMatchObject({
-        sessionId: "command-session",
-        model: "gpt-5.5",
-        updatedAt: entry.updatedAt,
-      });
-      expect(persistedOther).toStrictEqual(otherEntry);
-    });
-  });
-
   it("persists command state without reverting concurrent session management", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:command";

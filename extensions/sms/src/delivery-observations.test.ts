@@ -13,27 +13,13 @@ import {
 } from "./delivery-observations.js";
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 function createAccount(
   accountId = "default",
   overrides: Partial<ResolvedSmsAccount> = {},
 ): ResolvedSmsAccount {
-  return {
-    accountId,
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId, ...overrides });
 }
 
 function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
@@ -192,20 +178,14 @@ describe("SMS delivery observations", () => {
     expect(JSON.stringify(current.record)).not.toContain("AC123");
   });
 
-  it.each(["receiving", "received"])(
-    "leaves legacy inbound SmsStatus=%s on the inbound path",
-    async (status) => {
-      const form = {
-        MessageSid: "SM123",
-        SmsStatus: status,
-      };
+  it("rejects legacy inbound status observations", async () => {
+    const form = { MessageSid: "SM123", SmsStatus: "receiving" };
 
-      expect(isTwilioDeliveryStatusForm(form)).toBe(false);
-      await expect(recordCallback(createStore(), form)).rejects.toThrow(
-        "Invalid Twilio delivery status callback.",
-      );
-    },
-  );
+    expect(isTwilioDeliveryStatusForm(form)).toBe(false);
+    await expect(recordCallback(createStore(), form)).rejects.toThrow(
+      "Invalid Twilio delivery status callback.",
+    );
+  });
 
   it.each(["accepted", "scheduled"])(
     "advances a message from its %s initial state through sent",

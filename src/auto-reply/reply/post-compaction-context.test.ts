@@ -26,10 +26,7 @@ describe("readPostCompactionContext", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  async function expectLegacySectionFallback(
-    postCompactionSections: string[],
-    expectDefaultProse = false,
-  ) {
+  async function expectLegacySectionFallback(postCompactionSections: string[]) {
     const content = `## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n`;
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
     const cfg = {
@@ -42,9 +39,7 @@ describe("readPostCompactionContext", () => {
     const result = await readPostCompactionContext(tmpDir, { cfg });
     expect(result).toContain("Do startup things");
     expect(result).toContain("Be safe");
-    if (expectDefaultProse) {
-      expect(result).toContain("Run your Session Startup sequence");
-    }
+    expect(result).toContain("Run your Session Startup sequence");
   }
 
   async function readDefaultPostCompactionContext(options?: {
@@ -142,45 +137,6 @@ describe("readPostCompactionContext", () => {
     expect(result).toContain("Do startup things");
   });
 
-  it("extracts Session Startup section", async () => {
-    const content = `# Agent Rules
-
-## Session Startup
-
-Read these files:
-1. WORKFLOW_AUTO.md
-2. memory/today.md
-
-## Other Section
-
-Not relevant.
-`;
-    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readDefaultPostCompactionContext();
-    expect(result).toContain("Session Startup");
-    expect(result).toContain("WORKFLOW_AUTO.md");
-    expect(result).toContain("Post-compaction context refresh");
-    expect(result).not.toContain("Other Section");
-  });
-
-  it("extracts Red Lines section", async () => {
-    const content = `# Rules
-
-## Red Lines
-
-Never do X.
-Never do Y.
-
-## Other
-
-Stuff.
-`;
-    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readDefaultPostCompactionContext();
-    expect(result).toContain("Red Lines");
-    expect(result).toContain("Never do X");
-  });
-
   it("extracts both sections", async () => {
     const content = `# Rules
 
@@ -200,6 +156,10 @@ Ignore this.
     const result = await readDefaultPostCompactionContext();
     expect(result).toContain("Session Startup");
     expect(result).toContain("Red Lines");
+    expect(result).toContain("Do startup things");
+    expect(result).toContain("Never break things");
+    expect(result).toContain("Post-compaction context refresh");
+    expect(result).toContain("Run your Session Startup sequence");
     expect(result).not.toContain("Other");
   });
 
@@ -252,20 +212,6 @@ Ignore this.
     const result = await readDefaultPostCompactionContext({ cfg, agentId: "writer" });
     expect(result).toContain("[truncated]");
     expect(result?.length).toBeLessThan(1_200);
-  });
-
-  it("matches section names case-insensitively", async () => {
-    const content = `# Rules
-
-## session startup
-
-Read WORKFLOW_AUTO.md
-
-## Other
-`;
-    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-    const result = await readDefaultPostCompactionContext();
-    expect(result).toContain("WORKFLOW_AUTO.md");
   });
 
   it("matches H3 headings", async () => {
@@ -388,15 +334,6 @@ Read WORKFLOW.md on startup.
       expect(result).toBeNull();
     });
 
-    it("uses default sections when explicitly configured", async () => {
-      const content = `## Session Startup\n\nDo startup.\n\n## Red Lines\n\nDo not break.\n\n## Other\n\nIgnore.\n`;
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-      const result = await readDefaultPostCompactionContext();
-      expect(result).toContain("Session Startup");
-      expect(result).toContain("Red Lines");
-      expect(result).not.toContain("Other");
-    });
-
     it("uses custom section names from config instead of defaults", async () => {
       const content = `## Session Startup\n\nDo startup.\n\n## Critical Rules\n\nMy custom rules.\n\n## Red Lines\n\nDefault section.\n`;
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
@@ -413,6 +350,7 @@ Read WORKFLOW.md on startup.
       // Default sections must not be included when overridden
       expect(result).not.toContain("Do startup");
       expect(result).not.toContain("Default section");
+      expect(result).not.toContain("Session Startup");
     });
 
     it("supports multiple custom section names", async () => {
@@ -459,42 +397,8 @@ Read WORKFLOW.md on startup.
       expect(result).toBeNull();
     });
 
-    it("does NOT reference 'Session Startup' in prose when custom sections are configured", async () => {
-      // Greptile review finding: hardcoded prose mentioned "Execute your Session Startup
-      // sequence now" even when custom section names were configured, causing agents to
-      // look for a non-existent section. Prose must adapt to the configured section names.
-      const content = `## Boot Sequence\n\nDo custom boot things.\n`;
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-      const cfg = {
-        agents: {
-          defaults: {
-            compaction: { postCompactionSections: ["Boot Sequence"] },
-          },
-        },
-      } as OpenClawConfig;
-      const result = await readPostCompactionContext(tmpDir, { cfg });
-      // Must not reference the hardcoded default section name
-      expect(result).not.toContain("Session Startup");
-      // Must reference the actual configured section names
-      expect(result).toContain("Boot Sequence");
-    });
-
-    it("uses default 'Session Startup' prose when default sections are active", async () => {
-      const content = `## Session Startup\n\nDo startup.\n`;
-      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
-      const result = await readDefaultPostCompactionContext();
-      expect(result).toContain("Run your Session Startup sequence");
-    });
-
-    it("falls back to legacy sections when defaults are explicitly configured", async () => {
-      // Older AGENTS.md templates use "Every Session" / "Safety" instead of
-      // "Session Startup" / "Red Lines". Explicitly setting the defaults still
-      // triggers the legacy fallback.
-      await expectLegacySectionFallback(["Session Startup", "Red Lines"]);
-    });
-
     it("falls back to legacy sections when default sections are configured in a different order", async () => {
-      await expectLegacySectionFallback(["Red Lines", "Session Startup"], true);
+      await expectLegacySectionFallback(["Red Lines", "Session Startup"]);
     });
 
     it("custom section names are matched case-insensitively", async () => {

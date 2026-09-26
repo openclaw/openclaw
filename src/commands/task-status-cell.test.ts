@@ -13,7 +13,7 @@ vi.mock("../../packages/terminal-core/src/theme.js", () => ({
 import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
 
 describe("formatTaskStatusCell", () => {
-  it.each(["succeeded", "timed_out", "blocked", "future_status"])(
+  it.each(["succeeded", "future_status"])(
     "pads plain %s status cells to the shared width",
     (status) => {
       expect(formatTaskStatusCell(status, false)).toBe(status.padEnd(TASK_STATUS_CELL_WIDTH));

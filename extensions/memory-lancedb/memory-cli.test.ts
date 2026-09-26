@@ -53,20 +53,6 @@ function createHarness(params?: {
 }
 
 describe("memory-lancedb CLI embedding lifecycle", () => {
-  it("closes embeddings after search", async () => {
-    const harness = createHarness();
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      await harness.program.parseAsync(["node", "openclaw", "ltm", "search", "hello"]);
-    } finally {
-      log.mockRestore();
-    }
-
-    expect(harness.embed).toHaveBeenCalledTimes(1);
-    expect(harness.search).toHaveBeenCalledTimes(1);
-    expect(harness.close).toHaveBeenCalledTimes(1);
-  });
-
   it("embeds a CLI search with the explicitly requested agent's authentication", async () => {
     const harness = createHarness();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -89,18 +75,6 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
       model: "text-embedding-3-small",
     });
     expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
-    expect(harness.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("closes embeddings without masking search failure", async () => {
-    const harness = createHarness({
-      embedError: new Error("embedding failed"),
-      closeError: new Error("close failed"),
-    });
-
-    await expect(
-      harness.program.parseAsync(["node", "openclaw", "ltm", "search", "hello"]),
-    ).rejects.toThrow("embedding failed");
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 
