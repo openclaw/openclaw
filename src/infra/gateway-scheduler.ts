@@ -84,6 +84,8 @@ export class GatewayScheduler {
     params: {
       id: string;
       everyMs?: number;
+      /** Keep both pending clock deadlines when a stale read would postpone the wake. */
+      mode?: "replace" | "earliest";
       run: () => void | Promise<unknown>;
     } & ({ atMs: number } | { delayMs: number }),
   ): GatewayScheduledJob {
@@ -113,6 +115,15 @@ export class GatewayScheduler {
       pending: new Set(),
       cancelled: this.closed,
     };
+    if (params.mode === "earliest" && previous && previous.pending.size === 0) {
+      job.atMs = Math.min(job.atMs, previous.atMs);
+      if (previous.elapsedAtMs !== undefined) {
+        job.elapsedAtMs =
+          job.elapsedAtMs === undefined
+            ? previous.elapsedAtMs
+            : Math.min(job.elapsedAtMs, previous.elapsedAtMs);
+      }
+    }
     const cancel = () => {
       job.cancelled = true;
       if (this.jobs.get(job.id) === job) {
