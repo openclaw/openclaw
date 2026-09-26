@@ -199,7 +199,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
       config: context.config,
       port,
       attempts: 1,
-      deadlineAt: Date.now() + Math.min(timeoutMs ?? 3_000, 3_000),
+      deadlineAt: performance.now() + Math.min(timeoutMs ?? 3_000, 3_000),
       delayMs: 0,
     }),
     readPackageVersion(root),
