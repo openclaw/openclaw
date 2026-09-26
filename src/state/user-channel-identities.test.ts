@@ -1,11 +1,9 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -15,8 +13,6 @@ import {
 } from "./openclaw-state-db.js";
 import {
   linkUserChannelIdentity,
-  configuredCommandOwnerPolicyFingerprint,
-  publishUserChannelPolicyInDatabase,
   resolveUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "./user-channel-identities.js";
@@ -24,7 +20,6 @@ import {
   changeCanonicalUserChannelIdentity,
   listCanonicalUserChannelIdentities,
   prepareUserChannelIdentityAuthority,
-  prepareConfiguredCommandOwnerAuthority,
   prepareUserProfileRoleAuthority,
   prepareUserProfileSelectionAuthority,
 } from "./user-channel-identity-operations.js";
@@ -66,220 +61,60 @@ function stateOptions() {
   return { path: join(tempDirs.make("openclaw-channel-identities-"), "state.sqlite") };
 }
 
-it("revokes prepared profile authorities after a foreign alias commit", async () => {
+it("keeps revoked authority retired after worker email bindings return to their original owner", async () => {
   const options = stateOptions();
   const source = ensureProfileForEmail("source@example.test", options);
   const target = ensureProfileForEmail("target@example.test", options);
+  await linkCanonicalUserProfileEmail("retained@example.test", source.id, options);
+  await changeCanonicalUserChannelIdentity("link", source.id, identity, options);
   const selection = await prepareUserProfileSelectionAuthority(source.id, options);
-  const role = await prepareUserProfileRoleAuthority(source.id, options);
+  const admin = await prepareUserProfileRoleAuthority(source.id, options);
+  const channel = await prepareUserChannelIdentityAuthority(identity, options);
   expect(selection?.isCurrent()).toBe(true);
-  expect(role?.isCurrent()).toBe(true);
+  expect(admin?.isCurrent()).toBe(true);
+  expect(channel?.isCurrent()).toBe(true);
 
-  // An independent SQLite writer has no access to this process's revision maps.
-  const foreign = new DatabaseSync(options.path);
-  try {
-    foreign
-      .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
-      .run(target.id, source.id);
-  } finally {
-    foreign.close();
-  }
+  await linkCanonicalUserProfileEmail("source@example.test", target.id, options);
+  await linkCanonicalUserProfileEmail("source@example.test", source.id, options);
 
-  expect(resolveUserProfileId(source.id, options)).toBe(target.id);
-  expect.soft(selection?.isCurrent()).toBe(false);
-  expect.soft(role?.isCurrent()).toBe(false);
+  expect(resolveUserProfileId(source.id, options)).toBe(source.id);
+  expect(selection?.isCurrent()).toBe(true);
+  expect(admin?.isCurrent()).toBe(false);
+  expect(channel?.isCurrent()).toBe(false);
+  expect((await prepareUserProfileRoleAuthority(source.id, options))?.isCurrent()).toBe(true);
+  expect((await prepareUserChannelIdentityAuthority(identity, options))?.isCurrent()).toBe(true);
 });
 
-it.each(["role", "email", "channel", "delete", "unmerge"] as const)(
-  "rechecks prepared channel and administrative authority after a foreign %s commit",
-  async (change) => {
-    const options = stateOptions();
-    const source = ensureProfileForEmail("source@example.test", options);
-    const target = ensureProfileForEmail("target@example.test", options);
-    setUserProfileRole(source.id, "admin", options);
-    linkUserChannelIdentity(source.id, identity, options);
-    if (change === "unmerge") {
-      linkEmail("source@example.test", target.id, options);
-    }
-    const selection = await prepareUserProfileSelectionAuthority(source.id, options);
-    const admin = await prepareUserProfileRoleAuthority(source.id, options);
-    const channel = await prepareUserChannelIdentityAuthority(identity, options);
-    expect(selection?.isCurrent()).toBe(true);
-    expect(admin?.isCurrent()).toBe(true);
-    expect(channel?.isCurrent()).toBe(true);
-    const foreign = new DatabaseSync(options.path);
-    try {
-      foreign
-        .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
-        .run("Cosmetic change", source.id);
-      expect(selection?.isCurrent()).toBe(true);
-      expect(admin?.isCurrent()).toBe(true);
-      expect(channel?.isCurrent()).toBe(true);
-      switch (change) {
-        case "role":
-          foreign.prepare("UPDATE user_profiles SET role = 'member' WHERE id = ?").run(source.id);
-          break;
-        case "email":
-          foreign
-            .prepare("UPDATE user_profile_emails SET profile_id = ? WHERE email = ?")
-            .run(target.id, "source@example.test");
-          break;
-        case "channel":
-          foreign
-            .prepare("DELETE FROM user_profile_identities WHERE provider = 'channel.identity'")
-            .run();
-          break;
-        case "delete":
-          foreign.prepare("DELETE FROM user_profiles WHERE id = ?").run(source.id);
-          break;
-        case "unmerge":
-          foreign
-            .prepare("UPDATE user_profiles SET merged_into = NULL WHERE id = ?")
-            .run(source.id);
-          break;
-      }
-      expect(selection?.isCurrent()).toBe(change !== "delete" && change !== "unmerge");
-      expect(admin?.isCurrent()).toBe(change === "channel");
-      // Unmerging the retired source preserves the channel's surviving target.
-      expect(channel?.isCurrent()).toBe(change === "unmerge");
-      if (change === "role") {
-        foreign.prepare("UPDATE user_profiles SET role = 'admin' WHERE id = ?").run(source.id);
-        expect(admin?.isCurrent()).toBe(false);
-        expect(channel?.isCurrent()).toBe(false);
-      }
-    } finally {
-      foreign.close();
-    }
-  },
-);
-
-it("revokes configured command-owner authority on a foreign policy commit", async () => {
+it("rejects a stale worker role reply after writer commits restore the original role", async () => {
   const options = stateOptions();
-  ensureProfileForEmail("source@example.test", options);
-  const owners = ["discord:100000000000000001"];
-  runOpenClawStateWriteTransaction(({ db }) => {
-    publishUserChannelPolicyInDatabase(
-      db,
-      { roles: null, identityScopes: null },
-      configuredCommandOwnerPolicyFingerprint(owners),
-    );
-  }, options);
-  const prepared = await prepareConfiguredCommandOwnerAuthority(owners, options);
-  expect(prepared?.isCurrent()).toBe(true);
-  const foreign = new DatabaseSync(options.path);
-  try {
-    foreign
-      .prepare("UPDATE config_machine_state SET value_json = '{}' WHERE state_key = ?")
-      .run("operator.channelPolicy");
-    expect(prepared?.isCurrent()).toBe(false);
-  } finally {
-    foreign.close();
-  }
-});
-
-it("does not bind worker facts superseded by a foreign commit during preparation", async () => {
-  const options = stateOptions();
-  const source = ensureProfileForEmail("source@example.test", options);
-  const target = ensureProfileForEmail("target@example.test", options);
+  const profile = ensureProfileForEmail("source@example.test", options);
+  await setCanonicalUserProfileRole(profile.id, "admin", options);
+  await changeCanonicalUserChannelIdentity("link", profile.id, identity, options);
+  const original = await prepareUserProfileRoleAuthority(profile.id, options);
+  const channel = await prepareUserChannelIdentityAuthority(identity, options);
+  const selection = await prepareUserProfileSelectionAuthority(profile.id, options);
   const execute = stateReads.executeExistingOpenClawStateRead;
-  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
-    async (...args) => {
+  const read = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      await setCanonicalUserProfileRole(profile.id, "member", options);
       const reply = await execute(...args);
-      const foreign = new DatabaseSync(options.path);
-      try {
-        foreign
-          .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
-          .run(target.id, source.id);
-      } finally {
-        foreign.close();
-      }
+      expect(reply).toMatchObject({
+        type: "userProfiles.authority.resolve",
+        profile: { profileId: profile.id, role: "member" },
+      });
+      await setCanonicalUserProfileRole(profile.id, "admin", options);
       return reply;
-    },
-  );
-  const prepared = await prepareUserProfileSelectionAuthority(source.id, options);
-  expect(prepared?.profileId).toBe(target.id);
-  expect(prepared?.isCurrent()).toBe(true);
-});
-
-it("compares the worker reply when foreign commits restore the original identity", async () => {
-  const options = stateOptions();
-  const source = ensureProfileForEmail("source@example.test", options);
-  const target = ensureProfileForEmail("target@example.test", options);
-  const execute = stateReads.executeExistingOpenClawStateRead;
-  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
-    async (...args) => {
-      const foreign = new DatabaseSync(options.path);
-      try {
-        foreign
-          .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
-          .run(target.id, source.id);
-        const reply = await execute(...args);
-        foreign.prepare("UPDATE user_profiles SET merged_into = NULL WHERE id = ?").run(source.id);
-        return reply;
-      } finally {
-        foreign.close();
-      }
-    },
-  );
-  const prepared = await prepareUserProfileSelectionAuthority(source.id, options);
-  expect(prepared?.profileId).toBe(source.id);
-  expect(prepared?.isCurrent()).toBe(true);
-});
-
-it("retains shared authority observers beyond a temporary maintenance owner", async () => {
-  const options = stateOptions();
-  const source = ensureProfileForEmail("source@example.test", options);
-  const scope = createOpenClawDatabaseMaintenanceScope();
-  await scope.run(() => prepareUserProfileSelectionAuthority(source.id, options));
-  const independent = await prepareUserProfileSelectionAuthority(source.id, options);
-  await scope.close();
-  expect(independent?.isCurrent()).toBe(true);
-
-  const originalScope = createOpenClawDatabaseMaintenanceScope();
-  await closeOpenClawStateDatabaseAsync();
-  await originalScope.run(() => prepareUserProfileSelectionAuthority(source.id, options));
-  await closeOpenClawStateDatabaseAsync();
-  const replacement = await prepareUserProfileSelectionAuthority(source.id, options);
-  await originalScope.close();
-  expect(replacement?.isCurrent()).toBe(true);
-});
-
-it("refuses a foreign incompatible schema even when identity rows are unchanged", async () => {
-  const options = stateOptions();
-  const source = ensureProfileForEmail("source@example.test", options);
-  const prepared = await prepareUserProfileSelectionAuthority(source.id, options);
-  const foreign = new DatabaseSync(options.path);
+    });
   try {
-    foreign.exec("PRAGMA user_version = 999999");
-    expect(prepared?.isCurrent()).toBe(false);
-    await expect(prepareUserProfileSelectionAuthority(source.id, options)).rejects.toThrow();
+    const prepared = await prepareUserProfileRoleAuthority(profile.id, options);
+    expect(prepared?.role).toBe("admin");
+    expect(prepared?.isCurrent()).toBe(true);
+    expect(original?.isCurrent()).toBe(false);
+    expect(channel?.isCurrent()).toBe(false);
+    expect(selection?.isCurrent()).toBe(true);
   } finally {
-    foreign.close();
-  }
-});
-
-it("checks live authority independently of a caller's pinned SQLite snapshot", async () => {
-  const options = stateOptions();
-  const source = ensureProfileForEmail("source@example.test", options);
-  const target = ensureProfileForEmail("target@example.test", options);
-  const prepared = await prepareUserProfileSelectionAuthority(source.id, options);
-  const { db } = openOpenClawStateDatabase(options);
-  const foreign = new DatabaseSync(options.path);
-  db.exec("BEGIN");
-  try {
-    expect(
-      db.prepare("SELECT merged_into FROM user_profiles WHERE id = ?").get(source.id)?.merged_into,
-    ).toBeNull();
-    foreign
-      .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
-      .run(target.id, source.id);
-    expect(
-      db.prepare("SELECT merged_into FROM user_profiles WHERE id = ?").get(source.id)?.merged_into,
-    ).toBeNull();
-    expect(prepared?.isCurrent()).toBe(false);
-  } finally {
-    db.exec("ROLLBACK");
-    foreign.close();
+    read.mockRestore();
   }
 });
 
@@ -481,6 +316,9 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     }
     const latest = await prepareUserChannelIdentityAuthority(identity, options);
     await closeOpenClawStateDatabaseAsync();
+    expect(latest?.isCurrent()).toBe(false);
+    const reopened = await prepareUserChannelIdentityAuthority(identity, options);
+    expect(reopened?.isCurrent()).toBe(true);
     expect(latest?.isCurrent()).toBe(false);
   } finally {
     queries.mockRestore();

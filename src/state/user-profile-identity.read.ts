@@ -165,41 +165,6 @@ export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: 
   });
 }
 
-/** Selection depends only on the one-hop canonical identity; role guards also bind aliases. */
-export function readUserProfileAuthorityFingerprint(
-  db: DatabaseSync,
-  profileId: string,
-  dependency: "authority" | "identity",
-):
-  | { profileId: string }
-  | (NonNullable<ReturnType<typeof selectUserProfileIdentityInDatabase>> & {
-      emails: UserProfileEmailBinding[];
-    })
-  | undefined {
-  if (!tableExists(db, "user_profiles")) {
-    return undefined;
-  }
-  if (dependency === "identity") {
-    return executeSqliteQueryTakeFirstSync(
-      db,
-      userProfilesDb(db)
-        .selectFrom("user_profiles as source")
-        .leftJoin("user_profiles as target", "target.id", "source.merged_into")
-        .select((eb) => eb.fn.coalesce("target.id", "source.id").as("profileId"))
-        .where("source.id", "=", profileId),
-    );
-  }
-  return runSqliteDeferredTransactionSync(db, () => {
-    const identity = selectUserProfileIdentityInDatabase(db, profileId);
-    return (
-      identity && {
-        ...identity,
-        emails: readUserProfileEmailBindings(db, identity.profileId),
-      }
-    );
-  });
-}
-
 /** Disclosure scopes need current aliases, never the resident display catalog. */
 export function readCurrentUserProfileAliases(
   profileId: string,

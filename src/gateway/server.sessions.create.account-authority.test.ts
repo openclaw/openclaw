@@ -27,7 +27,7 @@ import {
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const model = "openai/gpt-4.1";
 
-test("prepared model-account authority bounds repeated checks to freshness probes", async () => {
+test("prepared model-account authority rechecks without main-thread SQL", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
     const fixture = await createFixture("operator.write", false);
     const sql = observeMainThreadSql();
@@ -37,7 +37,7 @@ test("prepared model-account authority bounds repeated checks to freshness probe
       for (let index = 0; index < 100; index++) {
         action.assertCurrent();
       }
-      expect(sql.count()).toBeLessThanOrEqual(200);
+      sql.expectIdle();
     } finally {
       sql.restore();
     }
