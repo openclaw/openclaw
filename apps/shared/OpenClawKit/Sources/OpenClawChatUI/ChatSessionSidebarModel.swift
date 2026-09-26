@@ -505,6 +505,12 @@ public enum ChatSessionSidebarModel {
         if change.activeRunIdsPresent {
             session.activeRunIds = change.activeRunIds
         }
+        // The event's nested session row is the Gateway's canonical echo of the
+        // `/reasoning` directive (`reasoningLevel`); only copy it when present so
+        // older rows cannot clobber a known value with an absent key.
+        if let reasoningLevel = change.session?.reasoningLevel {
+            session.reasoningLevel = reasoningLevel
+        }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt
         }

@@ -38,6 +38,17 @@ struct ChatProTab: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
+    /// Reasoning visibility follows the Gateway session's `reasoningLevel`
+    /// (`/reasoning` directive), matching the Control UI; the device-local flag is
+    /// a secondary local filter. Tool activity stays a purely local preference.
+    private var chatTraceDisplayOptions: OpenClawChatDisplayOptions {
+        var options: OpenClawChatDisplayOptions = self.showsAssistantTrace ? .assistantTrace : []
+        if let viewModel, !viewModel.currentSessionReasoningVisible {
+            options.remove(.reasoning)
+        }
+        return options
+    }
+
     private var viewModel: OpenClawChatViewModel? {
         self.appModel.chatPresentation.viewModel
     }
@@ -170,7 +181,7 @@ struct ChatProTab: View {
                 drawsBackground: true,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
+                displayOptions: self.chatTraceDisplayOptions,
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,

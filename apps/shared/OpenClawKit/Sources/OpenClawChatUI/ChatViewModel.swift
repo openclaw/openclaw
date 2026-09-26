@@ -1122,6 +1122,7 @@ extension OpenClawChatViewModel {
                         agentID: session.agentId),
                     unread: session.unread)
             }
+            self.retainActiveSessionReasoningLevel(beforeReplacingWith: organized)
             self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             self.sessionDefaults = res.defaults
             self.restoreOverlappingSettingsPatch(
@@ -1276,6 +1277,7 @@ extension OpenClawChatViewModel {
         replaceMessages([])
         self.isShowingCachedTranscript = false
         self.hasAppliedLiveHistory = false
+        self.retainedActiveSessionReasoningLevel = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()

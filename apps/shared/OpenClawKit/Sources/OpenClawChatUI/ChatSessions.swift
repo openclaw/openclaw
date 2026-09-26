@@ -660,6 +660,10 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var systemSent: Bool?
     public var abortedLastRun: Bool?
     public var thinkingLevel: String?
+    /// The Gateway's authoritative reasoning visibility (`/reasoning` directive).
+    /// Session rows already carry it on the wire; hosts render reasoning only when
+    /// it is `"on"`, matching the Control UI.
+    public var reasoningLevel: String?
     public var verboseLevel: String?
     public var fastMode: OpenClawChatFastMode?
     public var effectiveFastMode: OpenClawChatFastMode?
@@ -699,6 +703,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         abortedLastRun: Bool?,
         thinkingLevel: String?,
         verboseLevel: String?,
+        reasoningLevel: String? = nil,
         inputTokens: Int?,
         outputTokens: Int?,
         totalTokens: Int?,
@@ -801,6 +806,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun
         self.thinkingLevel = thinkingLevel
+        self.reasoningLevel = reasoningLevel
         self.verboseLevel = verboseLevel
         self.fastMode = fastMode
         self.effectiveFastMode = effectiveFastMode
