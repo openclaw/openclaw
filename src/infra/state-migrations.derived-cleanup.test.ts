@@ -71,11 +71,11 @@ describe("Doctor derived artifact cleanup", () => {
     const removalError = new Error("synthetic cleanup permission denied");
     if (fixture.pluginId === "memory-core") {
       const remove = fs.rmdir;
-      vi.spyOn(fs, "rmdir").mockImplementation(async (target, options) => {
+      vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
         if (target === qmdHome) {
           throw removalError;
         }
-        await remove(target, options);
+        await remove(target);
       });
     } else {
       const openRoot = fsSafe.root;

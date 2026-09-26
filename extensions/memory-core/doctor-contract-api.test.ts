@@ -2866,11 +2866,11 @@ describe("memory-core doctor dreaming migration", () => {
     const configPath = path.join(qmdHome, "index.yml");
     await fs.mkdir(qmdHome, { recursive: true });
     const remove = fs.rmdir;
-    vi.spyOn(fs, "rmdir").mockImplementation(async (target, options) => {
+    vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
       if (target === qmdHome) {
         await fs.writeFile(configPath, "standalone QMD configuration\n");
       }
-      return remove(target, options);
+      return remove(target);
     });
 
     const result = await qmdWorkspaceMigration().migrateLegacyState(migrationParams());
