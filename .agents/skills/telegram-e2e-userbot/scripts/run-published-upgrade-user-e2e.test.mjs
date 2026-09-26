@@ -167,6 +167,12 @@ test("public failure evidence keeps typed outcomes while dropping credentials, i
       remoteMessage: secret,
     },
   });
+  write("routing-before.json.diagnostic.json", {
+    status: "failed",
+    stage: "phase-conditions",
+    code: "FOLLOWUP_ROUTED_TO_CHILD",
+    earlyPhase: secret,
+  });
   write("cleanup.json", { ok: false, retainedLease: true, error: secret, groupId: secret });
   const report = publicUpgradeFailure(root, "live-scenario");
   assert.equal(report.updater.exitCode, 17);
@@ -176,6 +182,10 @@ test("public failure evidence keeps typed outcomes while dropping credentials, i
   assert.equal(report.checkpoints[0].code, "CHECKPOINT_RPC_FAILED");
   assert.equal(report.checkpoints[0].rpc.remoteCode, "UNAVAILABLE");
   assert.deepEqual(report.checkpoints[0].missing, ["PARENT_NATIVE_ACK"]);
+  assert.deepEqual(
+    { phase: report.checkpoints[1].phase, code: report.checkpoints[1].code },
+    { phase: "before", code: "FOLLOWUP_ROUTED_TO_CHILD" },
+  );
   assert.deepEqual(report.cleanup, {
     confirmed: false,
     fixtureConfirmed: false,
@@ -225,7 +235,7 @@ test("public success retains actual shutdown and updater receipts without privat
   }
   const result = {
     ok: true,
-    sameChildAcrossRestart: true,
+    topicReturnedToParentAcrossRestart: true,
     verifiedRestarts: 2,
     nativePhases: ["PARENT", "CHILD", "BEFORE", "AFTER"],
     providerRequests: 5,
@@ -243,7 +253,7 @@ test("public success retains actual shutdown and updater receipts without privat
     },
     root,
   );
-  assert.equal(report.sameChildAcrossUpgradeAndRestart, true);
+  assert.equal(report.topicReturnedToParentAcrossUpgradeAndRestart, true);
   assert.equal(report.orderlyGatewayStops, 3);
   assert.equal(report.updater.durationMs, 12345);
   assert.deepEqual(

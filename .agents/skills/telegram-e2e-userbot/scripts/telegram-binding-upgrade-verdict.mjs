@@ -94,6 +94,7 @@ function readPublicUpgradeEvidence(proof, stage) {
     "PARENT_HISTORY_SHAPE_INVALID",
     "CHILD_HISTORY_SHAPE_INVALID",
     "FOLLOWUP_PRECEDED_CHECKPOINT",
+    "FOLLOWUP_ROUTED_TO_CHILD",
     "INSTALLED_RUNTIME_CHANGED_DURING_CHECKPOINT",
   ]);
   const checkpoints = ["spawn", "before", "after"].flatMap((phase) => {
@@ -219,7 +220,8 @@ export function publicUpgradeReport(result, upgrade, proof) {
       commit: upgrade.candidate.buildInfo.commit,
       sha256: upgrade.candidate.sha256,
     },
-    sameChildAcrossUpgradeAndRestart: result.sameChildAcrossRestart === true,
+    topicReturnedToParentAcrossUpgradeAndRestart:
+      result.topicReturnedToParentAcrossRestart === true,
     orderlyGatewayStops: evidence.gatewayStops.length,
     verifiedRestarts: result.verifiedRestarts,
     nativePhases: result.nativePhases,
@@ -324,6 +326,7 @@ export function judgeBindingUpgrade({
       value.phase !== name ||
       value.runId !== runId ||
       diagnostic.status !== "completed" ||
+      value.parentKey !== spawned.parentKey ||
       value.childKey !== spawned.childKey ||
       value.sessionId !== spawned.sessionId ||
       value.toolCallId !== spawned.toolCallId ||
@@ -332,11 +335,19 @@ export function judgeBindingUpgrade({
       value.runtime?.installedCommit !==
         (name === "spawn" ? upgrade.baseline.buildInfo.commit : upgrade.candidate.buildInfo.commit)
     ) {
-      throw new Error("SAME_CHILD_CHECKPOINTS_MISSING");
+      throw new Error("CHILD_IDENTITY_CHECKPOINTS_MISSING");
     }
   }
-  if (!spawned.phases?.CHILD || !before.phases?.BEFORE || !after.phases?.AFTER) {
-    throw new Error("PHASE_CHECKPOINT_ACKS_MISSING");
+  // The baseline's spawn takes over the topic; the candidate must route later
+  // turns back to the parent while the child's own transcript stays intact.
+  if (
+    spawned.phases?.CHILD?.session !== "child" ||
+    after.phases?.CHILD?.session !== "child" ||
+    before.phases?.BEFORE?.session !== "parent" ||
+    after.phases?.BEFORE?.session !== "parent" ||
+    after.phases?.AFTER?.session !== "parent"
+  ) {
+    throw new Error("PARENT_ROUTING_CHECKPOINTS_MISSING");
   }
   const requestPath = join(proof, "mock-openai-requests.ndjson");
   if (statSync(requestPath).size > 128 * 1024 * 1024) {
@@ -442,7 +453,7 @@ export function judgeBindingUpgrade({
   return {
     ok: true,
     candidateCommit: upgrade.candidate.buildInfo.commit,
-    sameChildAcrossRestart: true,
+    topicReturnedToParentAcrossRestart: true,
     verifiedRestarts: 2,
     publishedDriverUpgrade: true,
     beforeBuild: updateReceipt.beforeBuild,
