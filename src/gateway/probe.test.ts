@@ -233,6 +233,7 @@ function nextProbeUrl(label: string): string {
 
 function setDeviceRequiredProbeMode(): void {
   deviceIdentityState.cachedToken = null;
+  deviceIdentityState.cachedOriginToken = null;
   gatewayClientState.startMode = "connect-error-close";
   gatewayClientState.close = { code: 1008, reason: "device identity required" };
   gatewayClientState.connectError = "gateway closed (1008): device identity required";
@@ -440,13 +441,15 @@ describe("probeGateway", () => {
     await runTokenProbe({ env });
 
     expect(deviceIdentityState.identityPaths).toEqual([{ env }]);
-    expect(deviceIdentityState.tokenParams).toEqual([
+    expect(deviceIdentityState.originTokenParams).toEqual([
       {
+        gatewayScope: "ws://127.0.0.1:18789",
         deviceId: "test-device-identity",
         role: "operator",
         env,
       },
     ]);
+    expect(deviceIdentityState.tokenParams).toEqual([]);
     expect(gatewayClientState.options?.env).toBe(env);
   });
 
@@ -742,8 +745,8 @@ describe("probeGateway", () => {
 
     await primeDeviceRequiredProbeFailures(url);
 
-    deviceIdentityState.cachedToken = {
-      token: "cached-operator-token",
+    deviceIdentityState.cachedOriginToken = {
+      token: "cached-origin-operator-token",
       role: "operator",
       scopes: ["operator.read"],
       updatedAtMs: 1,
