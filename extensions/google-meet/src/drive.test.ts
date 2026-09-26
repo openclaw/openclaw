@@ -35,10 +35,11 @@ describe("exportGoogleDriveDocumentText bound", () => {
   it("returns document text when response is within the 16 MiB cap", async () => {
     const UNDER_CAP = 256;
     const response = makeStreamResponse(UNDER_CAP);
+    const release = vi.fn(async () => undefined);
     mockFetch.mockResolvedValueOnce({
       response,
       finalUrl: "https://www.googleapis.com/drive/v3/files/doc-id/export?mimeType=text%2Fplain",
-      release: vi.fn(async () => undefined),
+      release,
     });
 
     const result = await exportGoogleDriveDocumentText({
@@ -46,8 +47,8 @@ describe("exportGoogleDriveDocumentText bound", () => {
       documentId: "doc-id",
     });
 
-    expect(typeof result).toBe("string");
-    expect(result.length).toBeGreaterThan(0);
+    expect(result).toBe("x".repeat(256));
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("rejects with a size error when response exceeds 16 MiB cap (fail-closed)", async () => {
@@ -65,13 +66,5 @@ describe("exportGoogleDriveDocumentText bound", () => {
     ).rejects.toThrow(/exceeds/i);
 
     expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("negative-control: bare response.text() buffers the full oversized body (no protection)", async () => {
-    const OVER_CAP = 17 * 1024 * 1024; // 17 MiB
-    const response = makeStreamResponse(OVER_CAP);
-    // Calling response.text() directly buffers everything without throwing.
-    const text = await response.text();
-    expect(text.length).toBeGreaterThan(16 * 1024 * 1024);
   });
 });
