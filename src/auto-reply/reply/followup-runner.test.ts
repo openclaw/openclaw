@@ -586,6 +586,7 @@ describe("createFollowupRunner", () => {
       order.push("completion");
     });
     const presentationGate = createDeferred();
+    const presentationStarted = createDeferred();
     let presentation: Promise<void> | undefined;
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
     const decision = {
@@ -621,6 +622,7 @@ describe("createFollowupRunner", () => {
         onQueuedFollowupSettled: () => {
           presentation = (async () => {
             order.push("presentation-settling");
+            presentationStarted.resolve();
             await presentationGate.promise;
             order.push("presentation-settled");
           })();
@@ -631,9 +633,8 @@ describe("createFollowupRunner", () => {
 
     const settledRun = Promise.allSettled([run]);
     try {
-      await vi.waitFor(() => {
-        expect(order).toContain("presentation-settling");
-      });
+      await Promise.race([presentationStarted.promise, run]);
+      expect(order).toContain("presentation-settling");
       expect(state.completeLifecycle).not.toHaveBeenCalled();
       expect(turn.operation.complete).not.toHaveBeenCalled();
     } finally {
