@@ -248,20 +248,21 @@ describe("exa web search provider", () => {
       expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
         "x-api-key": "exa-config-key",
       });
-      const bodyAt = (index: number) => {
+      const rawBodyAt = (index: number) => {
         const body = fetchMock.mock.calls[index]?.[1]?.body;
         if (typeof body !== "string") {
           throw new Error("Expected Exa JSON request body");
         }
-        return JSON.parse(body);
+        return body;
       };
+      const bodyAt = (index: number) => JSON.parse(rawBodyAt(index));
       expect(bodyAt(0)).toMatchObject({
         query: "Exa boundary",
         numResults: 100,
         contents: args.contents,
       });
       expect(
-        String(fetchMock.mock.calls[0]?.[1]?.body).replace(
+        rawBodyAt(0).replace(
           /"startPublishedDate":"[^"]*"/,
           '"startPublishedDate":"<dynamic-date>"',
         ),
