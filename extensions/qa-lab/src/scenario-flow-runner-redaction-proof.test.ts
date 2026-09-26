@@ -202,10 +202,10 @@ async function runSecretRedactionScenario(
 }
 
 describe("secret redaction scenario proof", () => {
-  it.each(redactionScenarioIds)(
-    "requires %s to successfully read the fake secret before proving safe delivery",
-    async (scenarioId) => {
-      const proof = await runSecretRedactionScenario(scenarioId);
+  it.each(redactionScenarioCases)(
+    "requires $scenarioId to verify the correlated fixture read from $providerMode chat history",
+    async ({ scenarioId, providerMode }) => {
+      const proof = await runSecretRedactionScenario(scenarioId, { providerMode });
 
       expect(proof.result.status).toBe("pass");
       expect(proof.harnessReadPaths).toEqual([proof.fixturePath]);
@@ -214,18 +214,6 @@ describe("secret redaction scenario proof", () => {
         requireSuccessfulTranscriptToolResult: true,
       });
       expect(proof.agentPrompt?.message).toContain(proof.fileName);
-      expect(proof.agentToolReads).toEqual([
-        { path: proof.fixturePath, contents: expect.stringContaining(proof.fakeSecret) },
-      ]);
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "requires $scenarioId to verify the correlated fixture read from $providerMode chat history",
-    async ({ scenarioId, providerMode }) => {
-      const proof = await runSecretRedactionScenario(scenarioId, { providerMode });
-
-      expect(proof.result.status).toBe("pass");
       expect(proof.gatewayHistoryRequests).toEqual([
         {
           method: "chat.history",
@@ -236,9 +224,9 @@ describe("secret redaction scenario proof", () => {
           },
         },
       ]);
-      expect(proof.agentToolReads).toHaveLength(1);
-      expect(proof.agentToolReads[0]?.path).toBe(proof.fixturePath);
-      expect(proof.agentToolReads[0]?.contents.includes(proof.fakeSecret)).toBe(true);
+      expect(proof.agentToolReads).toEqual([
+        { path: proof.fixturePath, contents: expect.stringContaining(proof.fakeSecret) },
+      ]);
       expect(JSON.stringify(proof.result)).not.toContain(proof.fakeSecret);
       expect(
         proof.state

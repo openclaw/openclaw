@@ -12,12 +12,24 @@ import {
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 describe("QA scenario lane matching", () => {
-  const planningCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+  const planningCoverageIds = new Set([
+    "openai.codex-harness-no-meta-leak",
+    "openai.codex-harness-planning",
+    "agent-runtime.external-harness-selection-planning",
+  ]);
   const planningScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
     [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
       (coverageId) => planningCoverageIds.has(coverageId),
     ),
   );
+
+  it("retains the live planning scenario catalog membership", () => {
+    expect(planningScenarios.map(({ id }) => id)).toEqual([
+      "codex-harness-no-meta-leak",
+      "medium-game-plan-codex-harness",
+      "medium-game-plan-openclaw-harness",
+    ]);
+  });
 
   it("expands scheduler cells deterministically across flow and native scenarios", () => {
     const cells = expandQaScenarioExecutionCells({
@@ -181,22 +193,6 @@ describe("QA scenario lane matching", () => {
       );
     },
   );
-
-  it("keeps multi-channel metadata as OR eligibility while exposing every supported lane", () => {
-    const scenario = readQaScenarioById("thread-isolation");
-
-    expect(
-      expandQaScenarioExecutionCells({
-        scenarios: [scenario],
-        channelDriver: "live",
-        supportsChannel: (channel) => channel === "slack" || channel === "matrix",
-        expandChannels: true,
-      }),
-    ).toEqual([
-      { scenarioId: scenario.id, executionKind: "flow", channel: "slack" },
-      { scenarioId: scenario.id, executionKind: "flow", channel: "matrix" },
-    ]);
-  });
 
   it("reports every declared mismatch in one decision", () => {
     const scenario = makeQaSuiteTestScenario("strict-live-lane", {

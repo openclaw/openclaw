@@ -1,25 +1,23 @@
 // Qa Lab tests cover generic QA evidence gallery behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildQaEvidenceGalleryModel,
   resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceProducerFile,
 } from "./evidence-gallery.js";
-import {
-  createTempRepo,
-  vitestArtifactEvidence,
-  writeJson,
-} from "./evidence-gallery.test-support.js";
+import { vitestArtifactEvidence, writeJson } from "./evidence-gallery.test-support.js";
 import {
   QA_EVIDENCE_FILENAME,
   buildVitestEvidenceSummary,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function producerRootLeakSegments(repoRoot: string) {
   if (process.platform !== "win32") {
@@ -40,7 +38,7 @@ function repoRelativePath(repoRoot: string, filePath: string) {
 
 describe("evidence gallery", () => {
   it("builds a generic gallery model for non-UX QA Lab evidence", async () => {
-    const repoRoot = await createTempRepo();
+    const repoRoot = tempDirs.make("qa-evidence-gallery-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
     await fs.mkdir(path.join(outputDir, "runner"), { recursive: true });
     await fs.writeFile(path.join(outputDir, "runner", "result.json"), '{"ok":true}\n', "utf8");
@@ -145,33 +143,29 @@ describe("evidence gallery", () => {
     ["artifact.data", "video-screenshot", "image", "image", null],
     ["artifact.data", "attachment", "opaque", "file", null],
   ])("classifies $0 with $1 metadata", async (file, kind, content, mediaKind, preview) => {
-    const repoRoot = await createTempRepo();
-    try {
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-      await fs.mkdir(outputDir, { recursive: true });
-      await fs.writeFile(path.join(outputDir, file), content, "utf8");
-      await writeJson(
-        path.join(outputDir, QA_EVIDENCE_FILENAME),
-        vitestArtifactEvidence({
-          id: "qa-lab.artifact-classification",
-          title: "Artifact classification",
-          artifact: { kind, path: file },
-        }),
-      );
-      const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
-      expect(model.entries[0]?.artifacts[0]).toMatchObject({
-        exists: true,
-        kind,
-        mediaKind,
-        preview,
-      });
-    } finally {
-      await fs.rm(repoRoot, { recursive: true, force: true });
-    }
+    const repoRoot = tempDirs.make("qa-evidence-gallery-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(path.join(outputDir, file), content, "utf8");
+    await writeJson(
+      path.join(outputDir, QA_EVIDENCE_FILENAME),
+      vitestArtifactEvidence({
+        id: "qa-lab.artifact-classification",
+        title: "Artifact classification",
+        artifact: { kind, path: file },
+      }),
+    );
+    const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
+    expect(model.entries[0]?.artifacts[0]).toMatchObject({
+      exists: true,
+      kind,
+      mediaKind,
+      preview,
+    });
   });
 
   it("sanitizes local roots from gallery failure reasons", async () => {
-    const repoRoot = await createTempRepo();
+    const repoRoot = tempDirs.make("qa-evidence-gallery-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
     await fs.mkdir(outputDir, { recursive: true });
     const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
@@ -207,7 +201,7 @@ describe("evidence gallery", () => {
   it("classifies a path-like artifact kind by its final segment", async () => {
     // The repo root deliberately contains "gif". A path-valued kind must not let
     // an unrelated directory name decide the media type and drop the preview.
-    const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
+    const repoRoot = tempDirs.make("qa-evidence-gallery-gif-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
     // No file extension, so classification has to fall back to the kind label.
     const artifactPath = path.join(outputDir, "absolute");
@@ -231,7 +225,7 @@ describe("evidence gallery", () => {
   });
 
   it("normalizes absolute source and declared artifact paths for gallery links", async () => {
-    const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
+    const repoRoot = tempDirs.make("qa-evidence-gallery-gif-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
     const artifactPath = path.join(outputDir, "absolute.log");
     await fs.mkdir(outputDir, { recursive: true });
@@ -337,7 +331,7 @@ describe("evidence gallery", () => {
   });
 
   it("detects UX Matrix producer context from suite-level evidence artifacts", async () => {
-    const repoRoot = await createTempRepo();
+    const repoRoot = tempDirs.make("qa-evidence-gallery-");
     const suiteDir = path.join(repoRoot, ".artifacts", "qa-e2e", "suite");
     const runDir = path.join(
       suiteDir,
@@ -637,7 +631,7 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).resolves.toBe(await fs.realpath(path.join(runDir, "scorecard.md")));
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-outside-"));
+    const outsideDir = tempDirs.make("qa-evidence-outside-");
     const outsideCommands = path.join(outsideDir, "commands.txt");
     await fs.writeFile(outsideCommands, "outside secret\n", "utf8");
     await fs.unlink(path.join(runDir, "commands.txt"));
@@ -658,7 +652,7 @@ describe("evidence gallery", () => {
   });
 
   it("resolves evidence and declared artifacts inside the repo root only", async () => {
-    const repoRoot = await createTempRepo();
+    const repoRoot = tempDirs.make("qa-evidence-gallery-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "suite");
     const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(path.join(repoRoot, "package.json"), '{"private":true}\n', "utf8");
@@ -730,7 +724,7 @@ describe("evidence gallery", () => {
         repoRoot,
       }),
     ).rejects.toThrow("Evidence artifact is not declared by this evidence summary.");
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-outside-artifact-"));
+    const outsideDir = tempDirs.make("qa-evidence-outside-artifact-");
     const outsideArtifact = path.join(outsideDir, "artifact.log");
     await fs.writeFile(outsideArtifact, "outside secret\n", "utf8");
     await fs.symlink(outsideArtifact, path.join(outputDir, "escape.log"));

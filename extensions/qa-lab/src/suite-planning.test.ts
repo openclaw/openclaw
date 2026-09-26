@@ -427,6 +427,11 @@ describe("qa suite planning helpers", () => {
       makeQaSuiteTestScenario("active-memory", {
         plugins: ["active-memory"],
         gatewayConfigPatch: {
+          agents: {
+            defaults: {
+              thinkingDefault: "minimal",
+            },
+          },
           plugins: {
             entries: {
               "active-memory": {
@@ -443,7 +448,7 @@ describe("qa suite planning helpers", () => {
         gatewayConfigPatch: {
           agents: {
             defaults: {
-              thinkingDefault: "minimal",
+              thinkingDefault: "medium",
             },
           },
           plugins: {
@@ -459,12 +464,13 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
+    expect(collectQaSuiteGatewayConfigPatches(scenarios)).toHaveLength(2);
     expect(
       applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
     ).toEqual({
       agents: {
         defaults: {
-          thinkingDefault: "minimal",
+          thinkingDefault: "medium",
         },
       },
       plugins: {
@@ -515,22 +521,6 @@ describe("qa suite planning helpers", () => {
     expect(
       applyQaSuiteGatewayConfigPatches(baseline, collectQaSuiteGatewayConfigPatches(scenarios)),
     ).toEqual({ tools: { web: { search: { enabled: true } } } });
-  });
-
-  it("applies scenario startup patches in scenario order", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("first", {
-        gatewayConfigPatch: { agents: { defaults: { thinkingDefault: "minimal" } } },
-      }),
-      makeQaSuiteTestScenario("second", {
-        gatewayConfigPatch: { agents: { defaults: { thinkingDefault: "medium" } } },
-      }),
-    ];
-
-    expect(collectQaSuiteGatewayConfigPatches(scenarios)).toHaveLength(2);
-    expect(
-      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
-    ).toEqual({ agents: { defaults: { thinkingDefault: "medium" } } });
   });
 
   it("targets the selected adapter account in scenario startup config patches", () => {

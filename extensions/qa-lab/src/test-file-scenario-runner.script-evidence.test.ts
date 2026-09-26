@@ -552,97 +552,72 @@ describe("qa test file scenario runner", () => {
       result: { status: "fail" },
     });
   });
-  it("fails script scenario results when imported producer evidence is blocked by default", async () => {
-    const repoRoot = await makeTempRepo("qa-script-producer-blocked-");
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "scenario-script-producer-blocked",
-    );
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          outputDir: attemptOutputDir,
-          status: "blocked",
-          failureReason: "Playwright browser is missing.",
-        });
-        return {
-          exitCode: 0,
-          stdout: "script blocked\n",
-          stderr: "",
-        };
-      },
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-      } as NodeJS.ProcessEnv,
-    });
+  for (const { name, repoPrefix, outputName, allowBlockedEvidence } of [
+    {
+      name: "fails script scenario results when imported producer evidence is blocked by default",
+      repoPrefix: "qa-script-producer-blocked-",
+      outputName: "scenario-script-producer-blocked",
+      allowBlockedEvidence: undefined,
+    },
+    {
+      name: "keeps all-blocked producer evidence blocked for opt-in script scenarios",
+      repoPrefix: "qa-script-producer-blocked-allowed-",
+      outputName: "scenario-script-producer-blocked-allowed",
+      allowBlockedEvidence: true,
+    },
+  ]) {
+    it(name, async () => {
+      const repoRoot = await makeTempRepo(repoPrefix);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", outputName);
+      const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+      if (scenario.execution.kind !== "script") {
+        throw new Error("expected script scenario");
+      }
+      if (allowBlockedEvidence !== undefined) {
+        scenario.execution.allowBlockedEvidence = allowBlockedEvidence;
+      }
 
-    expect(result.results[0]).toMatchObject({
-      status: "blocked",
-      failureMessage: "Playwright browser is missing.",
-    });
-  });
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        ...QA_TEST_RUNNER_DEFAULTS,
+        scenarios: [scenario],
+        runCommand: async (command) => {
+          const attemptOutputDir = resolveScriptAttemptOutputDir(command);
+          await writeScriptProducerEvidence({
+            outputDir: attemptOutputDir,
+            status: "blocked",
+            failureReason: "Playwright browser is missing.",
+          });
+          return {
+            exitCode: 0,
+            stdout: "script blocked\n",
+            stderr: "",
+          };
+        },
+        env: {
+          OPENCLAW_QA_REF: "scenario-ref",
+        } as NodeJS.ProcessEnv,
+      });
 
-  it("keeps all-blocked producer evidence blocked for opt-in script scenarios", async () => {
-    const repoRoot = await makeTempRepo("qa-script-producer-blocked-allowed-");
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "scenario-script-producer-blocked-allowed",
-    );
-    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
-    if (scenario.execution.kind !== "script") {
-      throw new Error("expected script scenario");
-    }
-    scenario.execution.allowBlockedEvidence = true;
-
-    const result = await runQaTestFileScenarios({
-      repoRoot,
-      outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
-      scenarios: [scenario],
-      runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        await writeScriptProducerEvidence({
-          outputDir: attemptOutputDir,
-          status: "blocked",
-          failureReason: "Playwright browser is missing.",
-        });
-        return {
-          exitCode: 0,
-          stdout: "script blocked\n",
-          stderr: "",
-        };
-      },
-      env: {
-        OPENCLAW_QA_REF: "scenario-ref",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(result.results[0]).toMatchObject({
-      status: "blocked",
-      failureMessage: "Playwright browser is missing.",
-      producerEvidence: {
-        entries: [
-          {
-            test: {
-              id: "script-producer.web-ui.smoke",
+      expect(result.results[0]).toMatchObject({
+        status: "blocked",
+        failureMessage: "Playwright browser is missing.",
+        producerEvidence: {
+          entries: [
+            {
+              test: {
+                id: "script-producer.web-ui.smoke",
+              },
+              result: {
+                status: "blocked",
+              },
             },
-            result: {
-              status: "blocked",
-            },
-          },
-        ],
-      },
+          ],
+        },
+      });
     });
-  });
+  }
 
   it("allows blocked producer checks when another check genuinely passes", async () => {
     const repoRoot = await makeTempRepo("qa-script-producer-blocked-mixed-");

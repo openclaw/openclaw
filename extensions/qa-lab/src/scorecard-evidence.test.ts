@@ -71,8 +71,8 @@ async function buildQaProfileScorecardEvidence(params: {
 }) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-scorecard-evidence-"));
   const evidencePath = path.join(tempRoot, "qa-evidence-summary.json");
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence)}\n`, "utf8");
   try {
+    await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence)}\n`, "utf8");
     const scorecard = await attachQaProfileScorecardEvidenceToFile({
       evidencePath,
       profile: "release",

@@ -1,11 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
-
-export async function createTempRepo(prefix = "qa-evidence-gallery-") {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 export async function writeJson(filePath: string, value: unknown) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
