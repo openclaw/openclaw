@@ -96,15 +96,19 @@ it("creates with prepared label facts, header and atomic owner without host data
         { agentId: "main", storePath, sessionKey: key, env },
         async (snapshot) => {
           expect(snapshot.existingEntry).toBeUndefined();
-          expect(snapshot.isLabelInUse("taken")).toBe(true);
+          expect(snapshot.labelInUse).toBe(false);
           env.OPENCLAW_STATE_DIR = state.statePath("changed-during-preparation");
           assertCreation();
           await Promise.resolve();
           assertCreation();
-          expect(snapshot.isLabelInUse("taken")).toBe(true);
-          return { ok: true, entry: { sessionId: "created", updatedAt: 2, category: "Created" } };
+          expect(snapshot.labelInUse).toBe(false);
+          return {
+            ok: true,
+            entry: { sessionId: "created", updatedAt: 2, category: "Created", label: "available" },
+          };
         },
         {
+          label: "available",
           bindCreation: (operation) => {
             prepared.bindCreation(operation);
             assertCreation = () =>
@@ -136,7 +140,10 @@ it("creates with prepared label facts, header and atomic owner without host data
           },
         },
       );
-      expect(result).toMatchObject({ ok: true, entry: { sessionId: "created" } });
+      expect(result).toMatchObject({
+        ok: true,
+        entry: { sessionId: "created", label: "available" },
+      });
       const writes = post.mock.calls.flatMap(([request]) => {
         if (
           !isRecord(request) ||

@@ -1,4 +1,3 @@
-// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -213,10 +212,6 @@ export class DiffArtifactStore {
     await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
   }
 
-  scheduleCleanup(): void {
-    this.maybeCleanupExpired();
-  }
-
   startCleanup(): void {
     this.cleanupStopped = false;
   }
@@ -332,7 +327,7 @@ export class DiffArtifactStore {
     await fs.rm(this.artifactDir(entry.key), { recursive: true, force: true }).catch(() => {});
   }
 
-  private maybeCleanupExpired(): void {
+  scheduleCleanup(): void {
     const now = Date.now();
     if (this.cleanupStopped || this.cleanupInFlight || now < this.nextCleanupAt) {
       return;

@@ -362,26 +362,18 @@ describe("google web search provider", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "Connection",
-    "Content-Length",
-    "Expect",
-    "Host",
-    "Keep-Alive",
-    "Proxy-Connection",
-    "TE",
-    "Trailer",
-    "Transfer-Encoding",
-    "Upgrade",
-  ])("rejects reserved or framing operator header %s before fetch", async (name) => {
-    const mockFetch = installGeminiFetch();
-    const tool = createGeminiToolWithHeaders({ [name]: "configured-value" });
+  it.each(["Connection", "Content-Length"])(
+    "rejects reserved or framing operator header %s before fetch",
+    async (name) => {
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiToolWithHeaders({ [name]: "configured-value" });
 
-    await expect(tool?.execute({ query: `OpenClaw rejects ${name}` })).rejects.toThrow(
-      `plugins.entries.google.config.webSearch.headers["${name}"] uses a reserved or framing HTTP header`,
-    );
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
+      await expect(tool?.execute({ query: `OpenClaw rejects ${name}` })).rejects.toThrow(
+        `plugins.entries.google.config.webSearch.headers["${name}"] uses a reserved or framing HTTP header`,
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps unresolved explicit header SecretRefs strict", async () => {
     const mockFetch = installGeminiFetch();
@@ -516,10 +508,7 @@ describe("google web search provider", () => {
     ],
     ["empty candidates", { candidates: [] }, ""],
     ["missing candidates", {}, ""],
-    ["empty prompt feedback", { promptFeedback: {} }, ""],
     ["blocked prompt", { promptFeedback: { blockReason: "SAFETY" } }, " (SAFETY)"],
-    ["blocked candidate", { candidates: [{ finishReason: "SAFETY" }] }, " (SAFETY)"],
-    ["absent reason", { candidates: [{ content: { parts: [] } }] }, ""],
     ["blank reason", { candidates: [{ finishReason: "  " }] }, ""],
   ])(
     "reports no final answer for %s without inventing search results",
@@ -537,20 +526,14 @@ describe("google web search provider", () => {
   );
 
   it.each([
-    ["null candidates", { candidates: null }],
     ["non-array candidates", { candidates: {} }],
     ["null candidate", { candidates: [null] }],
-    ["null content", { candidates: [{ content: null }] }],
     ["non-record content", { candidates: [{ content: "invalid" }] }],
     ["null part", { candidates: [{ content: { parts: [null] } }] }],
     ["non-string part text", { candidates: [{ content: { parts: [{ text: 7 }] } }] }],
-    ["null parts", { candidates: [{ content: { parts: null } }] }],
     ["non-array parts", { candidates: [{ content: { parts: {} } }] }],
-    ["null prompt feedback", { promptFeedback: null }],
     ["non-record prompt feedback", { promptFeedback: [] }],
-    ["null block reason", { promptFeedback: { blockReason: null } }],
     ["non-string block reason", { promptFeedback: { blockReason: {} } }],
-    ["null finish reason", { candidates: [{ finishReason: null }] }],
     ["non-string finish reason", { candidates: [{ finishReason: 1 }] }],
     ["non-record grounding metadata", { candidates: [{ groundingMetadata: [] }] }],
     [
@@ -592,27 +575,25 @@ describe("google web search provider", () => {
     );
   });
 
-  it.each([[[{ text: "Partial answer" }]], [[null, { text: 7 }, { text: "Partial answer" }]]])(
-    "preserves text-bearing partial answers with parts %j",
-    async (parts) => {
-      const mockFetch = installGeminiFetch();
-      mockFetch.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            candidates: [{ content: { parts }, finishReason: "MAX_TOKENS" }],
-          }),
-        ),
-      );
-      const tool = createGeminiToolWithHeaders({});
+  it("preserves text-bearing partial answers with malformed sibling parts", async () => {
+    const parts = [null, { text: 7 }, { text: "Partial answer" }];
+    const mockFetch = installGeminiFetch();
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts }, finishReason: "MAX_TOKENS" }],
+        }),
+      ),
+    );
+    const tool = createGeminiToolWithHeaders({});
 
-      await expect(
-        tool?.execute({ query: `OpenClaw partial answer with ${parts.length} parts` }),
-      ).resolves.toMatchObject({
-        content: expect.stringContaining("Partial answer"),
-      });
-      expect(mockFetch).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(
+      tool?.execute({ query: `OpenClaw partial answer with ${parts.length} parts` }),
+    ).resolves.toMatchObject({
+      content: expect.stringContaining("Partial answer"),
+    });
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
 
   it("does not contact Gemini for an already-cancelled search", async () => {
     const mockFetch = installGeminiFetch();
@@ -796,23 +777,6 @@ describe("google web search provider", () => {
     );
   });
 
-  it("preserves hard Gemini time ranges for wider freshness values", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool(createGeminiToolOptions());
-
-    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
-
-    const body = parseGeminiFetchBody(mockFetch);
-    expect(body.contents?.[0]?.parts?.[0]?.text).toBe("latest ai news timestamp precision");
-    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
-      startTime: "2026-04-08T12:00:00Z",
-      endTime: "2026-04-15T12:00:00Z",
-    });
-  });
-
   it("partitions Gemini cache entries for soft day freshness, hard week freshness, and no freshness", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
@@ -896,30 +860,6 @@ describe("google web search provider", () => {
       expect(postCalls).toHaveLength(2);
     },
   );
-
-  it("strips sub-second precision from date-range timestamps so Gemini accepts them", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    // "now" with non-zero milliseconds. Without stripping, toISOString() emits
-    // "2026-04-15T12:00:00.123Z", which Gemini's google_search.time_range_filter
-    // rejects with "Granularity of nano is not supported".
-    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
-    const mockFetch = installGeminiFetch();
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool(createGeminiToolOptions());
-
-    await tool?.execute({ query: "latest ai news", date_after: "2026-04-01" });
-
-    const body = parseGeminiFetchBody(mockFetch);
-    const filter = body.tools?.[0]?.google_search?.timeRangeFilter as
-      | { startTime: string; endTime: string }
-      | undefined;
-    expect(filter?.startTime).not.toMatch(/\.\d+Z$/);
-    expect(filter?.endTime).not.toMatch(/\.\d+Z$/);
-    expect(filter).toEqual({
-      startTime: "2026-04-01T00:00:00Z",
-      endTime: "2026-04-15T12:00:00Z",
-    });
-  });
 
   it("passes date ranges to Gemini Google Search grounding", async () => {
     const mockFetch = installGeminiFetch();

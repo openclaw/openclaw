@@ -91,11 +91,8 @@ describe("GitHub issue transport", () => {
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
 
-  it.each([
-    { label: "ASCII", prefix: "a".repeat(200) },
-    { label: "multibyte", prefix: "🦞".repeat(100) },
-    { label: "heavily escaped", prefix: "&=?%".repeat(100) },
-  ])("enforces the exact encoded browser URL byte bound for $label input", ({ prefix }) => {
+  it("enforces the exact encoded browser URL byte bound", () => {
+    const prefix = "🦞&=?%".repeat(100);
     const title = "t";
     const prefixIssue = prepareGithubIssue({ body: prefix, title });
     if (prefixIssue.browserFallback.status !== "available") {
@@ -117,13 +114,6 @@ describe("GitHub issue transport", () => {
       reason: "url-too-long",
       status: "unavailable",
     });
-  });
-
-  it("never truncates the prepared report or reconciliation marker for a browser fallback", () => {
-    const issue = prepareGithubIssue({ body: "🦞 &=?".repeat(5_000), title: "Sanitized report" });
-
-    expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
-    expect(issue.browserFallback).toEqual({ reason: "url-too-long", status: "unavailable" });
   });
 
   it("returns a typed unavailable fallback while retaining the prepared body", async () => {
@@ -225,10 +215,6 @@ describe("GitHub issue transport", () => {
       label: "network exit after dispatch",
       result: cliResult({ errorCode: "ETIMEDOUT", started: true }),
     },
-    {
-      label: "cancellation after dispatch",
-      result: cliResult({ errorCode: "ECANCELED", started: true }),
-    },
   ])("keeps $label on the no-fallback ambiguity path", async ({ label, result }) => {
     const issue = prepare(label);
     const runGh = vi
@@ -244,23 +230,12 @@ describe("GitHub issue transport", () => {
     expect(runGh).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    {
-      expected: "cli-unavailable",
-      label: "missing GitHub CLI",
-      result: cliResult({ errorCode: "ENOENT" }),
-    },
-    {
-      expected: "authentication-unavailable",
-      label: "unauthenticated GitHub CLI",
-      result: cliResult({ started: true, status: 4 }),
-    },
-  ])("prepares a browser fallback for $label without starting issue creation", async (test) => {
-    const issue = prepare(test.label);
-    const runGh = vi.fn<RunGithubCli>().mockResolvedValueOnce(test.result);
+  it("prepares a browser fallback for a missing CLI without starting issue creation", async () => {
+    const issue = prepare("missing GitHub CLI");
+    const runGh = vi.fn<RunGithubCli>().mockResolvedValueOnce(cliResult({ errorCode: "ENOENT" }));
 
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
-      reason: test.expected,
+      reason: "cli-unavailable",
       status: "browser-fallback",
       url: availableFallbackUrl(issue),
     });

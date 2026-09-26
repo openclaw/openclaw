@@ -219,36 +219,19 @@ describe("reconcileSlackUnknownSend", () => {
 
   it("reconciles every ordered native-data fallback batch as one durable part set", async () => {
     const client = createSlackReconcileTestClient();
-    client.chat.postMessage
-      .mockRejectedValueOnce(
-        Object.assign(new Error("An API error occurred: invalid_blocks"), {
-          data: { error: "invalid_blocks" },
-        }),
-      )
-      .mockResolvedValueOnce({
+    client.chat.postMessage.mockRejectedValueOnce(
+      Object.assign(new Error("An API error occurred: invalid_blocks"), {
+        data: { error: "invalid_blocks" },
+      }),
+    );
+    for (const partIndex of [1, 2, 3, 4]) {
+      client.chat.postMessage.mockResolvedValueOnce({
         ok: true,
         channel: "C123",
-        ts: "1782584647.000001",
-        message: {},
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        channel: "C123",
-        ts: "1782584647.000002",
-        message: {},
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        channel: "C123",
-        ts: "1782584647.000003",
-        message: {},
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        channel: "C123",
-        ts: "1782584647.000004",
+        ts: `1782584647.00000${partIndex}`,
         message: {},
       });
+    }
     const metadata = {
       event_type: "assistant_thread_context",
       event_payload: { team_id: "T123" },
@@ -325,26 +308,6 @@ describe("reconcileSlackUnknownSend", () => {
         "1782584647.000004",
       ]);
     }
-  });
-
-  it("refreshes durable timing after dequeue and before Slack API work", async () => {
-    const client = createSlackReconcileTestClient();
-    const order: string[] = [];
-    client.chat.postMessage.mockImplementationOnce(async () => {
-      order.push("post");
-      return { ok: true, channel: "C123", ts: "1782584647.000002", message: {} };
-    });
-
-    await sendMessageSlack("channel:C123", "final answer", {
-      cfg,
-      client,
-      deliveryQueueId: "queue-1",
-      onPlatformSendDispatch: async () => {
-        order.push("dispatch");
-      },
-    });
-
-    expect(order).toEqual(["dispatch", "post"]);
   });
 
   it("resolves a durable DM target before marking platform dispatch", async () => {

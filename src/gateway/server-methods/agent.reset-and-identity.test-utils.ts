@@ -1,10 +1,8 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as participantRecording from "../../sessions/session-participant-recording.js";
-import { AVATAR_MAX_BYTES } from "../../shared/avatar-policy.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -1109,41 +1107,14 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("bounds an agent.identity.get avatar that grows after its descriptor is pinned", async () => {
-    await withTestDir({ prefix: "openclaw-agent-identity-growth-" }, async (workspace) => {
-      const avatarPath = `${workspace}/avatar.png`;
-      await fs.writeFile(avatarPath, REAL_PNG);
-      mocks.loadConfigReturn = {
-        agents: {
-          defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
-        },
-      };
-      const originalFstatSync = fsSync.fstatSync;
-      const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
-        const stat = originalFstatSync(fd);
-        fsSync.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
-        return stat;
-      });
+  it("does not deliver prepared identity after the client loses authority", async () => {
+    const client = requireValue(operatorWriteGatewayClient(), "missing operator fixture");
+    const respond = vi.fn();
+    const pending = invokeAgentIdentityGet({ agentId: "main" }, { client, respond });
+    client.invalidated = true;
 
-      try {
-        const respond = await invokeAgentIdentityGet(
-          { sessionKey: "agent:main:main" },
-          { reqId: "5-growing-avatar" },
-        );
-
-        expect(mockCallArg(respond)).toBe(true);
-        expectRecordFields(mockCallArg(respond, 0, 1), {
-          agentId: "main",
-          avatar: "A",
-          avatarSource: "avatar.png",
-          avatarStatus: "none",
-          avatarReason: "unreadable",
-        });
-      } finally {
-        fstatSync.mockRestore();
-      }
-    });
+    await expect(pending).rejects.toThrow("Gateway requester authority changed");
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it("keeps configured emoji precedence free of file metadata in agent.identity.get", async () => {

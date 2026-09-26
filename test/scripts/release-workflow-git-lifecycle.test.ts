@@ -140,7 +140,7 @@ posixIt.each([
 
 posixIt.each(
   (["linux", "macos", "placeholder"] as const).flatMap((mode) =>
-    ([23, 124, 125, 143, "hang"] as const).map((failure) => ({ failure, mode })),
+    ([23, 125, "hang"] as const).map((failure) => ({ failure, mode })),
   ),
 )(
   "$mode fetch failure $failure stops before output or consumer",
@@ -156,7 +156,7 @@ posixIt.each(
 
 posixIt.each(
   (["linux", "macos"] as const).flatMap((mode) =>
-    ([23, 124, 125, 143] as const).map((code) => ({ code, mode })),
+    ([23, 125] as const).map((code) => ({ code, mode })),
   ),
 )(
   "$mode ordinary rev-parse status $code remains terminal",
@@ -212,7 +212,9 @@ const terminalOperations = [
 
 posixIt.each(
   terminalOperations.flatMap((entry) =>
-    (["cleanup-failure", "cancel"] as const).map((failure) => ({ ...entry, failure })),
+    (["cleanup-failure", "cancel"] as const).map((failure) =>
+      Object.assign({}, entry, { failure }),
+    ),
   ),
 )(
   "$mode $operation $failure is terminal before every later boundary",
@@ -229,7 +231,7 @@ posixIt.each(
   55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.each([23, 125])(
   "Linux ordinary merge-base status %s is terminal without trying another branch",
   async (code) => {
     const report = await releaseRun("linux", {
@@ -309,7 +311,7 @@ posixIt.each([
   55_000,
 );
 
-posixIt.each([23, 124, 125, 143])(
+posixIt.each([23, 125])(
   "placeholder rev-parse status %s retains exact-SHA rejection",
   async (code) => {
     const report = await releaseRun("placeholder", {

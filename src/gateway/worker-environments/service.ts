@@ -240,6 +240,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     ...options,
     store,
+    getCleanupError: (record) => sessionAttachments.getCleanupError(record),
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
@@ -300,6 +301,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await store.ready();
       const current = store.get(environmentId);
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
+        return;
+      }
+      // Conversation cleanup has one retry owner, including its backoff and parked budget.
+      if (
+        current.destroyRequestedAtMs !== null &&
+        (await store.hasSessionAttachment(environmentId))
+      ) {
         return;
       }
       await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);

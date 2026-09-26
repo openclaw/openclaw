@@ -7,64 +7,56 @@ const isFixtureAccountConfigured = (account: unknown) =>
   Boolean((account as { configured?: boolean }).configured);
 const isFixtureAccountEnabled = (account: unknown) =>
   Boolean((account as { enabled?: boolean }).enabled);
-const summaryPluginActions = {
-  describeMessageTool: () => ({ actions: ["send"] as const }),
-};
-
-function makeSlackHttpSummaryPlugin(): ChannelPlugin {
+function makeSummaryPlugin(
+  id: string,
+  label: string,
+  config: ChannelPlugin["config"],
+  status?: ChannelPlugin["status"],
+): ChannelPlugin {
   return {
-    id: "slack",
+    id,
     meta: {
-      id: "slack",
-      label: "Slack",
-      selectionLabel: "Slack",
-      docsPath: "/channels/slack",
+      id,
+      label,
+      selectionLabel: label,
+      docsPath: `/channels/${label.toLowerCase()}`,
       blurb: "test",
     },
     capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["primary"],
-      defaultAccountId: () => "primary",
-      inspectAccount: (cfg) =>
-        (cfg as { marker?: string }).marker === "source"
-          ? {
-              accountId: "primary",
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              mode: "http",
-              botToken: "xoxb-http",
-              signingSecret: "",
-              botTokenSource: "config",
-              signingSecretSource: "config", // pragma: allowlist secret
-              botTokenStatus: "available",
-              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-            }
-          : {
-              accountId: "primary",
-              name: "Primary",
-              enabled: true,
-              configured: false,
-              mode: "http",
-              botToken: "xoxb-http",
-              botTokenSource: "config",
-              botTokenStatus: "available",
-            },
-      resolveAccount: () => ({
-        accountId: "primary",
-        name: "Primary",
-        enabled: true,
-        configured: false,
-        mode: "http",
-        botToken: "xoxb-http",
-        botTokenSource: "config",
-        botTokenStatus: "available",
-      }),
-      isConfigured: isFixtureAccountConfigured,
-      isEnabled: () => true,
-    },
-    actions: summaryPluginActions,
+    config,
+    status,
+    actions: { describeMessageTool: () => ({ actions: ["send"] as const }) },
   };
+}
+
+function makeSlackHttpSummaryPlugin(): ChannelPlugin {
+  const getResolvedAccount = () => ({
+    accountId: "primary",
+    name: "Primary",
+    enabled: true,
+    configured: false,
+    mode: "http",
+    botToken: "xoxb-http",
+    botTokenSource: "config",
+    botTokenStatus: "available",
+  });
+  return makeSummaryPlugin("slack", "Slack", {
+    listAccountIds: () => ["primary"],
+    defaultAccountId: () => "primary",
+    inspectAccount: (cfg) =>
+      (cfg as { marker?: string }).marker === "source"
+        ? {
+            ...getResolvedAccount(),
+            configured: true,
+            signingSecret: "",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+          }
+        : getResolvedAccount(),
+    resolveAccount: getResolvedAccount,
+    isConfigured: isFixtureAccountConfigured,
+    isEnabled: () => true,
+  });
 }
 
 function makeTelegramSummaryPlugin(params: {
@@ -86,17 +78,10 @@ function makeTelegramSummaryPlugin(params: {
     tokenSource: "env",
   });
 
-  return {
-    id: "linked-summary-fixture",
-    meta: {
-      id: "linked-summary-fixture",
-      label: "Telegram",
-      selectionLabel: "Telegram",
-      docsPath: "/channels/telegram",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
+  return makeSummaryPlugin(
+    "linked-summary-fixture",
+    "Telegram",
+    {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
       resolveAccount: getAccount,
@@ -104,7 +89,7 @@ function makeTelegramSummaryPlugin(params: {
       isEnabled: isFixtureAccountEnabled,
       formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
     },
-    status: {
+    {
       buildChannelSummary: async () => ({
         statusState: params.statusState,
         linked: params.linked,
@@ -113,8 +98,7 @@ function makeTelegramSummaryPlugin(params: {
         self: { e164: "+15551234567" },
       }),
     },
-    actions: summaryPluginActions,
-  };
+  );
 }
 
 function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean }): ChannelPlugin {
@@ -130,26 +114,14 @@ function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean
     dbPath: "/tmp/signal.db",
   });
 
-  return {
-    id: "signal",
-    meta: {
-      id: "signal",
-      label: "Signal",
-      selectionLabel: "Signal",
-      docsPath: "/channels/signal",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["desktop"],
-      defaultAccountId: () => "desktop",
-      inspectAccount: getAccount,
-      resolveAccount: getAccount,
-      isConfigured: isFixtureAccountConfigured,
-      isEnabled: isFixtureAccountEnabled,
-    },
-    actions: summaryPluginActions,
-  };
+  return makeSummaryPlugin("signal", "Signal", {
+    listAccountIds: () => ["desktop"],
+    defaultAccountId: () => "desktop",
+    inspectAccount: getAccount,
+    resolveAccount: getAccount,
+    isConfigured: isFixtureAccountConfigured,
+    isEnabled: isFixtureAccountEnabled,
+  });
 }
 
 function makeFallbackSummaryPlugin(params: {
@@ -164,26 +136,14 @@ function makeFallbackSummaryPlugin(params: {
     configured: params.configured,
   });
 
-  return {
-    id: "fallback-plugin",
-    meta: {
-      id: "fallback-plugin",
-      label: "Fallback",
-      selectionLabel: "Fallback",
-      docsPath: "/channels/fallback",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => params.accountIds ?? [],
-      defaultAccountId: () => params.defaultAccountId ?? "default",
-      inspectAccount: getAccount,
-      resolveAccount: getAccount,
-      isConfigured: isFixtureAccountConfigured,
-      isEnabled: isFixtureAccountEnabled,
-    },
-    actions: summaryPluginActions,
-  };
+  return makeSummaryPlugin("fallback-plugin", "Fallback", {
+    listAccountIds: () => params.accountIds ?? [],
+    defaultAccountId: () => params.defaultAccountId ?? "default",
+    inspectAccount: getAccount,
+    resolveAccount: getAccount,
+    isConfigured: isFixtureAccountConfigured,
+    isEnabled: isFixtureAccountEnabled,
+  });
 }
 
 describe("buildChannelSummary", () => {

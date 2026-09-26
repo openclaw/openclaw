@@ -30,6 +30,7 @@ export async function settleTaskRecordTransitionAsync(
     {
       type:
         | "tasks.bindRunOwner"
+        | "tasks.maintainCron"
         | "tasks.transitionRunRow"
         | "tasks.settleUnstarted"
         | "tasks.finalizeActive"
@@ -128,7 +129,9 @@ export async function settleTaskRecordTransitionAsync(
           });
         });
       };
-      observePublication(maybeDeliverTaskStateChangeUpdate(settled.task, settled.nextEvent));
+      if (command.type !== "tasks.maintainCron") {
+        observePublication(maybeDeliverTaskStateChangeUpdate(settled.task, settled.nextEvent));
+      }
       observePublication(maybeDeliverTaskTerminalUpdate(taskId));
     } catch (error) {
       log.warn("Committed task transition could not admit delivery publication", { taskId, error });

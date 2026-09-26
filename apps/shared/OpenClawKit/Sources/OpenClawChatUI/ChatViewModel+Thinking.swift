@@ -81,28 +81,18 @@ extension OpenClawChatViewModel {
                     isExplicit: !clearsOverride))
                 self.reconcileThinkingPreferenceRequests()
                 guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else { return }
-                let targetIsCurrent = target == self.currentModelPatchTarget()
-                let stateKey: String
-                let exactMatchOnly: Bool
-                if targetIsCurrent {
-                    stateKey = sessionKey
-                    exactMatchOnly = false
-                } else {
-                    guard let inactiveStateKey = self.inactiveSettingsStateKey(for: target) else { return }
-                    stateKey = inactiveStateKey
-                    exactMatchOnly = true
-                }
+                guard let state = self.modelControlState(for: target, originalSessionKey: sessionKey) else { return }
                 self.updateCurrentSessionThinkingLevel(
                     clearsOverride ? nil : acceptedLevel,
-                    sessionKey: stateKey,
-                    exactMatchOnly: exactMatchOnly)
+                    sessionKey: state.key,
+                    exactMatchOnly: state.exactMatchOnly)
                 if let thinkingLevels = acceptedResult.thinkingLevels {
                     self.updateCurrentSessionThinkingLevels(
                         thinkingLevels,
-                        sessionKey: stateKey,
-                        exactMatchOnly: exactMatchOnly)
+                        sessionKey: state.key,
+                        exactMatchOnly: state.exactMatchOnly)
                 }
-                guard targetIsCurrent else { return }
+                guard !state.exactMatchOnly else { return }
                 self.preferredThinkingLevel = acceptedLevel
                 self.thinkingLevel = acceptedLevel
                 self.prefersExplicitThinkingLevel = !clearsOverride
@@ -118,28 +108,18 @@ extension OpenClawChatViewModel {
                 let rollbackPreferredLevel = self.acceptedPreferredThinkingLevelsByTarget[target]
                     ?? rollbackLevel
                 let rollbackIsExplicit = self.acceptedExplicitThinkingPreferencesByTarget[target] ?? false
-                let targetIsCurrent = target == self.currentModelPatchTarget()
-                let stateKey: String
-                let exactMatchOnly: Bool
-                if targetIsCurrent {
-                    stateKey = sessionKey
-                    exactMatchOnly = false
-                } else {
-                    guard let inactiveStateKey = self.inactiveSettingsStateKey(for: target) else { return }
-                    stateKey = inactiveStateKey
-                    exactMatchOnly = true
-                }
+                guard let state = self.modelControlState(for: target, originalSessionKey: sessionKey) else { return }
                 self.updateCurrentSessionThinkingLevel(
                     self.acceptedThinkingOverrideClearedByTarget[target] == true ? nil : rollbackLevel,
-                    sessionKey: stateKey,
-                    exactMatchOnly: exactMatchOnly)
+                    sessionKey: state.key,
+                    exactMatchOnly: state.exactMatchOnly)
                 if let thinkingLevels = rollbackResult?.thinkingLevels {
                     self.updateCurrentSessionThinkingLevels(
                         thinkingLevels,
-                        sessionKey: stateKey,
-                        exactMatchOnly: exactMatchOnly)
+                        sessionKey: state.key,
+                        exactMatchOnly: state.exactMatchOnly)
                 }
-                guard targetIsCurrent else { return }
+                guard !state.exactMatchOnly else { return }
                 self.prefersExplicitThinkingLevel = rollbackIsExplicit
                 self.preferredThinkingLevel = rollbackPreferredLevel
                 self.thinkingLevel = rollbackLevel
@@ -385,14 +365,14 @@ extension OpenClawChatViewModel {
     private func sessionModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
-        if Self.normalizedModelID(currentSession?.model) != nil {
+        if Self.normalizedModelIdentityComponent(currentSession?.model) != nil {
             return self.modelChoice(modelID: currentSession?.model, provider: currentSession?.modelProvider)
         }
         return self.modelChoice(modelID: sessionDefaults?.model, provider: sessionDefaults?.modelProvider)
     }
 
     private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
-        guard let modelID = Self.normalizedModelID(modelID) else { return nil }
+        guard let modelID = Self.normalizedModelIdentityComponent(modelID) else { return nil }
         let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let provider, !provider.isEmpty {
             let prefix = "\(provider)/"
@@ -405,12 +385,6 @@ extension OpenClawChatViewModel {
 
         let matches = modelChoices.filter { $0.selectionID == modelID || $0.modelID == modelID }
         return matches.count == 1 ? matches[0] : nil
-    }
-
-    private static func normalizedModelID(_ modelID: String?) -> String? {
-        let trimmed = modelID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
     }
 
     static func normalizedThinkingLevel(_ level: String?) -> String? {

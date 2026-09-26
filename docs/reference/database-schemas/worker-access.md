@@ -33,6 +33,14 @@ policy read obtains current rows; it does not retain migration exclusions across
 later operations. The updater and plugin source-cleanup synchronous effect guards
 retain their existing fresh-read contracts in their CLI or child-process owners.
 
+Plugin requirement batches prepare their final installed index through the existing
+metadata worker after installation and compensation settle. Preparation seals
+collection, reads an uncached row from the captured database, and retains the
+original lifecycle lease until the read settles. It rechecks lease ownership and
+batch closure before publishing runtime targets. Synchronous lease primitives and
+repeated source-cleanup reads remain unchanged migration work; this one-shot
+preparation does not replace their fresh authority checks.
+
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and
@@ -40,6 +48,17 @@ transaction callback remain synchronous **inside the worker**. Complete
 asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, coordinator custody, transaction/commit grants,
 and settlement of accepted write-capable work.
+
+Published agent and shared-state database timers dispatch periodic WAL checkpoints
+and bounded page reclamation through those same writers. The existing timer keeps
+its cadence and page budget, releases writer custody between units, and installs
+the worker's checkpoint health only while its original database owner is current.
+Native checkpoint work and file-size diagnostics run in the worker. Linux
+sidecar containment retains its synchronous scan at timer entry, before identity
+admission can refuse dispatch or close can clean up the original handle. Host
+admission and physical-identity checks remain on the host.
+Existing worker-local maintenance and synchronous offline/close checkpoints retain
+their owners; durability, schemas, retention, and update behavior are unchanged.
 
 Worker authority requests wait for the retained host owner's grant or refusal;
 host scheduling delays do not expire that authority. The host still checks current
@@ -57,6 +76,19 @@ reserve a 32 MiB transport window; they never wait in the input queue. These are
 internal resource bounds, not configuration settings. These scheduling and budget
 changes preserve database ownership, transaction authority, schemas, and update
 behavior.
+
+Agent publication adapters use `openOpenClawAgentSqliteWorkerStore().execute`
+for a single command. It captures the command before waiting and keeps binding,
+preparation, execution, and cleanup in one broker request. The factory receives
+synchronous admission; asynchronous preparation does not retain that authority.
+Transaction and commit grants still check the live source. A settled result
+survives cleanup failure while the failed native owner retires. Use `run` when
+dependent commands share a binding or host publication must stay inside the
+same FIFO interval.
+
+The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
+contract for existing adapters. The factory's inferred return type additionally
+provides the typed single-command `execute` method.
 
 ## Carry facts, publish after commit
 
@@ -335,6 +367,14 @@ Synchronous operator inspection uses the same selected-row reader. An unavailabl
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
 
+Cron task reconciliation reads durable outcomes and applies recovery or loss in
+the shared-state worker. The final recovery check and lost-task write share one
+transaction, including after a recovery hook yields. The host rechecks the
+selected task and live cron job at transaction and commit admission; committed
+rows use the existing task and linked-flow publication owners. Synchronous
+operator inspection and the deprecated external task SDK retain their existing
+contracts. This changes no schema, retention policy, or update step.
+
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
 keep their own queue while full-store validation runs. Both lanes retain the same
@@ -479,8 +519,12 @@ Secret-store expiry runs in that worker for scheduled Gateway cleanup and
 post-mutation cleanup. The caller captures the database and expiry cutoffs before
 yielding; the worker retains the existing SQL and expiry rules and returns only
 the deleted count. Scheduled sweeps coalesce while one is active, and Gateway
-shutdown stops scheduling and joins accepted cleanup. Ordinary secret-store
-set/delete operations remain separate synchronous migration debt.
+shutdown stops scheduling and joins accepted cleanup. An OpenClaw chat that saves
+a key for a config path writes its store entry in the same worker: one
+transaction mints a random entry name, inserts a new row without touching
+existing ones, and admits the write through the requester's live
+authority at transaction and commit. Other secret-store set/delete operations
+remain separate synchronous migration debt.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

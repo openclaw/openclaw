@@ -13,6 +13,8 @@ import {
 } from "../infra/sqlite-wal-checkpoint.js";
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
+  SQLITE_WORKER_OPERATION_CLEANUP,
+  SQLITE_WORKER_PREPARE_ADMITTED,
   type SqliteWorkerCloseReceipt,
   type SqliteWorkerCommand,
   type SqliteWorkerPreparedBackend,
@@ -158,6 +160,18 @@ function openAgentDatabaseBackend(
   let identity: AgentDatabaseExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
   let startupJournalRequested = false;
+  let publicationStartupJournal: boolean | undefined;
+  const readRequestPreparation = () => {
+    const attachment = takeSqliteWorkerOperationAdmissionAttachment();
+    if (
+      !isRecord(attachment) ||
+      attachment.kind !== "agent-execution" ||
+      typeof attachment.startupJournal !== "boolean"
+    ) {
+      throw new Error("Agent execution requires its request-local preparation facts");
+    }
+    return attachment.startupJournal;
+  };
   // This request-local flag is installed only for the synchronous native command below.
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
@@ -327,6 +341,18 @@ function openAgentDatabaseBackend(
       assertFileIdentity();
       return current.db;
     },
+    assertCleanupCurrent() {
+      if (
+        !database ||
+        !identity ||
+        !database.db.isOpen ||
+        database.db.location() !== identity.nativeLocation ||
+        getOpenClawAgentDatabaseIfOpen(options) !== database
+      ) {
+        throw new Error("Agent cleanup lost its retained native database");
+      }
+      assertFileIdentity();
+    },
     admit,
   });
   let closed = false;
@@ -339,6 +365,7 @@ function openAgentDatabaseBackend(
   const executeCommand = (command: SqliteWorkerCommand<AgentDatabaseOperations>) => {
     if (
       command.type === "database.domain.bind" ||
+      command.type === "database.domain.publish" ||
       command.type === "database.domain.execute" ||
       command.type === "database.domain.close"
     ) {
@@ -347,6 +374,13 @@ function openAgentDatabaseBackend(
     if (command.type === "database.prepareWrite") {
       openWriter();
       return undefined;
+    }
+    if (command.type === "database.walMaintenance") {
+      return (
+        openWriter().walMaintenance.maintainPeriodic?.(command.input, admit) ?? {
+          reclaimedPages: 0,
+        }
+      );
     }
     if (command.type === "session.entry.read" && entryReader) {
       return entryReader.readSessionEntryRow(openWriter(), command.input.sessionKey)?.entry;
@@ -570,12 +604,36 @@ function openAgentDatabaseBackend(
       }
       if (
         command.type === "database.domain.bind" ||
+        command.type === "database.domain.publish" ||
         command.type === "database.domain.execute" ||
         command.type === "database.domain.close"
       ) {
         return domain.prepare(command);
       }
       return undefined;
+    },
+    [SQLITE_WORKER_PREPARE_ADMITTED](command) {
+      if (command.type !== "database.domain.publish") {
+        return undefined;
+      }
+      publicationStartupJournal = readRequestPreparation();
+      startupJournalRequested = publicationStartupJournal;
+      try {
+        return domain.preparePublication(command.input);
+      } finally {
+        startupJournalRequested = false;
+      }
+    },
+    [SQLITE_WORKER_OPERATION_CLEANUP](command) {
+      if (command.type === "database.domain.publish") {
+        startupJournalRequested = publicationStartupJournal ?? false;
+        try {
+          domain.cleanupPublication(command.input.id);
+        } finally {
+          startupJournalRequested = false;
+          publicationStartupJournal = undefined;
+        }
+      }
     },
     assertSettled() {
       if (openingFailure) {
@@ -592,15 +650,14 @@ function openAgentDatabaseBackend(
     },
     execute(command) {
       assertOpen();
-      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
-      if (
-        !isRecord(attachment) ||
-        attachment.kind !== "agent-execution" ||
-        typeof attachment.startupJournal !== "boolean"
-      ) {
-        throw new Error("Agent execution requires its request-local preparation facts");
+      if (command.type === "database.domain.publish") {
+        if (publicationStartupJournal === undefined) {
+          throw new Error("Agent publication lost its request-local preparation facts");
+        }
+        startupJournalRequested = publicationStartupJournal;
+      } else {
+        startupJournalRequested = readRequestPreparation();
       }
-      startupJournalRequested = attachment.startupJournal;
       try {
         return executeCommand(command);
       } finally {
