@@ -1,7 +1,7 @@
 {
   "id": "agentsapi",
   "name": "OpenAI Agents API",
-  "description": "OpenAI Agents API harness and hosted sessions.",
+  "description": "OpenAI Agents API harness with hosted or self-hosted sessions.",
   "categories": ["agent-runtimes"],
   "activation": {
     "onStartup": false,
@@ -10,6 +10,13 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "environment": {
+        "type": "string",
+        "enum": ["openai_hosted", "self_hosted"],
+        "default": "openai_hosted",
+        "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
+      }
+    }
   }
 }

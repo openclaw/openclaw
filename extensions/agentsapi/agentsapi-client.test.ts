@@ -16,6 +16,78 @@ afterEach(() => {
   releaseMock.mockClear();
 });
 
+describe("Agents API self-hosted session connection", () => {
+  it("retains self-hosted metadata while waiting for the matching external executor", async () => {
+    const environment = {
+      type: "self_hosted",
+      id: "environment-fixture",
+      workspace_directory: "/fixture/workspace",
+      remote_url: "wss://executor.invalid/session-fixture",
+    };
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: Response.json({
+        id: "session-fixture",
+        status: "requires_action",
+        error: null,
+        environment,
+        required_actions: [
+          { type: "environment_connection", environment_id: "environment-fixture" },
+          {
+            type: "function_call",
+            turn_id: "turn-fixture",
+            call_id: "call-fixture",
+            name: "fixture_tool",
+            arguments: {},
+          },
+        ],
+      }),
+      finalUrl: "https://api.openai.com/v1/agents/sessions/session-fixture",
+      release: releaseMock,
+    }));
+    const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
+    const signal = new AbortController().signal;
+    expect((await client.session("session-fixture", signal)).environment).toEqual(environment);
+    expect(await client.pendingFunctionCalls("session-fixture", signal)).toEqual([
+      {
+        type: "function_call",
+        turn_id: "turn-fixture",
+        call_id: "call-fixture",
+        name: "fixture_tool",
+        arguments: {},
+      },
+    ]);
+  });
+
+  it.each([
+    { type: "openai_hosted", requestedId: "environment-fixture" },
+    { type: "self_hosted", requestedId: "foreign-environment" },
+  ])(
+    "rejects unsupported connection actions for $type/$requestedId",
+    async ({ type, requestedId }) => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: Response.json({
+          id: "session-fixture",
+          status: "requires_action",
+          error: null,
+          environment: {
+            type,
+            id: "environment-fixture",
+            workspace_directory: "/fixture/workspace",
+            remote_url: "wss://executor.invalid/session-fixture",
+          },
+          required_actions: [{ type: "environment_connection", environment_id: requestedId }],
+        }),
+        finalUrl: "https://api.openai.com/v1/agents/sessions/session-fixture",
+        release: releaseMock,
+      });
+      const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
+      await expect(
+        client.pendingFunctionCalls("session-fixture", new AbortController().signal),
+      ).rejects.toThrow("cannot reconnect an environment_connection");
+    },
+  );
+});
+
 describe("Agents API session creation", () => {
   it.each(["gpt-6-astra", "future-model"])(
     "sends the selected model %s to the backend",

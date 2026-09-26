@@ -10,6 +10,7 @@ import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
+import type { AgentsApiEnvironment } from "./config.js";
 
 const usageSchema = z.looseObject({
   input_tokens: z.number(),
@@ -36,7 +37,15 @@ const sessionSchema = z.looseObject({
   status: z.enum(["idle", "in_progress", "requires_action", "failed"]),
   error: z.string().nullable(),
   usage: usageSchema.nullable().optional(),
-  environment: z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+  environment: z.discriminatedUnion("type", [
+    z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+    z.looseObject({
+      type: z.literal("self_hosted"),
+      id: z.string().min(1),
+      workspace_directory: z.string(),
+      remote_url: z.string().min(1),
+    }),
+  ]),
   required_actions: z.array(
     z.union([
       functionCallSchema,
@@ -191,8 +200,10 @@ export class AgentsApiClient {
       functions?: AgentsApiFunctionDeclaration[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
+      environment?: AgentsApiEnvironment;
     },
   ): Promise<string> {
+    const environment: AgentsApiEnvironment = options?.environment ?? { type: "openai_hosted" };
     const session = await this.sessions.create(
       {
         agent: {
@@ -202,7 +213,10 @@ export class AgentsApiClient {
           multi_agent: { enabled: false },
           tools: [{ type: "web_search", mode: "live" }, ...(options?.functions ?? [])],
         },
-        environment: { type: "openai_hosted", files: options?.files ?? [] },
+        environment:
+          environment.type === "openai_hosted"
+            ? { ...environment, files: options?.files ?? [] }
+            : environment,
       },
       { signal, headers: { "Idempotency-Key": randomUUID() } },
     );
@@ -265,6 +279,14 @@ export class AgentsApiClient {
     }
     const calls: AgentsApiFunctionCall[] = [];
     for (const action of session.required_actions) {
+      if (
+        action.type === "environment_connection" &&
+        session.environment.type === "self_hosted" &&
+        action.environment_id === session.environment.id
+      ) {
+        // The operator's executor connects independently; keep the event stream open.
+        continue;
+      }
       if (action.type !== "function_call") {
         throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
       }

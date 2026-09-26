@@ -435,6 +435,7 @@ async function createFixture(overrides: Partial<AgentHarnessAttemptParamsV2> = {
         () => {},
         () => {},
         target,
+        () => ({}),
       );
       if (result.terminal.kind === "failed") {
         throw result.terminal.error;

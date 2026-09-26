@@ -15,11 +15,26 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { AgentsApiFunctionDeclaration } from "./agentsapi-client.js";
+import type { AgentsApiEnvironment } from "./config.js";
+
+const OPENAI_HOSTED_ENVIRONMENT_INSTRUCTIONS = [
+  "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
+  "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
+  "Input attachments are mapped to hosted VM paths in each user message. Write deliverable files under /workspace/outputs; OpenClaw transfers them and attaches them to your final reply after your turn completes.",
+  "Gateway messaging functions cannot open hosted VM paths. Finish your assistant turn to deliver hosted output attachments.",
+].join("\n\n");
+
+const SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS = [
+  "You are the OpenClaw assistant. Use your connected self-hosted executor for commands and workspace files.",
+  "OpenClaw functions run in the Gateway and use its workspace. Native shell commands and file operations run in your connected executor's workspace.",
+  "OpenClaw does not transfer input attachments or output files to or from this executor.",
+].join("\n\n");
 
 /** The native session owns this snapshot until OpenClaw resets its binding. */
 export async function buildAgentsApiInstructions(
   params: AgentHarnessAttemptParamsV2,
   tools: readonly AgentsApiFunctionDeclaration[],
+  environment: AgentsApiEnvironment,
 ): Promise<string> {
   const toolNames = new Set(tools.map((tool) => tool.name));
   const workspaceDir = params.bootstrapWorkspaceDir ?? params.workspaceDir;
@@ -56,11 +71,12 @@ export async function buildAgentsApiInstructions(
     params.delegationCapability !== "report_only" &&
     params.sourceReplyDeliveryMode !== "message_tool_only";
   return joinSections([
-    "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
-    "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
-    "Uploaded attachments are mapped to hosted VM paths in each user message. Files you finish writing under /workspace/outputs are transferred and attached to your final reply after your turn completes.",
-    "Gateway messaging functions cannot open VM paths. Complete your assistant turn to deliver VM output attachments. Image generation is unavailable.",
-    "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your hosted VM. Do not try to reread or edit those paths with hosted shell or file tools.",
+    environment.type === "openai_hosted"
+      ? OPENAI_HOSTED_ENVIRONMENT_INSTRUCTIONS
+      : `${SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS}\n\nYour executor workspace directory is ${JSON.stringify(environment.workspace_directory)}.`,
+    environment.type === "openai_hosted"
+      ? "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your hosted VM. Do not try to reread or edit those paths with hosted shell or file tools."
+      : "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your connected executor. Do not try to reread or edit those paths with executor shell or file tools.",
     workspace.instructionSnapshot.instructions,
     workspace.personaInstructions,
     workspace.promptContextFiles.length

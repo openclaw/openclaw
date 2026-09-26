@@ -116,6 +116,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
                 assertLeaseCurrent();
               },
               target,
+              () => runtime.config.current().plugins?.entries?.agentsapi?.config,
             );
           },
         );
@@ -173,7 +174,7 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
     AGENTS_API_NATIVE_TOOL_REQUIREMENTS.some((name) => !runtimeToolAllowed(name))
   ) {
     throw new AgentHarnessPreflightError(
-      "Agents API cannot enforce this run's restrictions on hosted shell, file, or web-search tools.",
+      "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
       { scope: "harness" },
     );
   }
@@ -194,7 +195,7 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   }
   if (params.images?.length || params.sandbox) {
     throw new Error(
-      "Agents API MVP supports text and its hosted VM only; images and Gateway sandbox placement are unsupported",
+      "Agents API MVP supports text in its selected execution environment only; images and Gateway sandbox placement are unsupported",
     );
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
