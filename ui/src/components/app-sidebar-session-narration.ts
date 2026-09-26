@@ -185,7 +185,12 @@ export class SidebarSessionNarrationController {
     let backgroundSubscriptions = 0;
     for (const row of input.rows
       .filter((candidate) => candidate.hasActiveRun)
-      .toSorted((left, right) => rowRecency(right) - rowRecency(left))) {
+      .toSorted(
+        (left, right) =>
+          Number(this.subscriptions.has(right.key) || this.pendingSubscriptions.has(right.key)) -
+            Number(this.subscriptions.has(left.key) || this.pendingSubscriptions.has(left.key)) ||
+          rowRecency(right) - rowRecency(left),
+      )) {
       const open = areUiSessionKeysEquivalent(row.key, openSessionKey);
       if (!open && backgroundSubscriptions >= SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT) {
         continue;

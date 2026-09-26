@@ -1,4 +1,3 @@
-// Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,

@@ -1,6 +1,9 @@
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 // Twitch durable ingress tests cover raw admission, recovery, and tombstones.
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelIngressMonitor,
+  type ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTwitchIngress } from "./twitch-ingress.js";
 import {
@@ -9,6 +12,19 @@ import {
   withTwitchIngressTestQueue,
   type TwitchIngressTestPayload,
 } from "./twitch-ingress.test-support.js";
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
+  return { ...actual, createChannelIngressMonitor: vi.fn(actual.createChannelIngressMonitor) };
+});
+
+function latestMonitor() {
+  const result = vi.mocked(createChannelIngressMonitor).mock.results.at(-1);
+  if (result?.type !== "return") {
+    throw new Error("Expected the Twitch ingress monitor");
+  }
+  return result.value;
+}
 
 function runtime() {
   return { error: vi.fn() };
@@ -219,13 +235,13 @@ describe("Twitch durable ingress", () => {
 
   it("waits for an adopted active delivery before stop returns", async () => {
     await withTwitchIngressTestQueue(async (queue) => {
-      let releaseDelivery = () => {};
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      vi.useFakeTimers();
+      const adopted = Promise.withResolvers<void>();
+      const deliveryGate = Promise.withResolvers<void>();
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
-        await deliveryGate;
+        adopted.resolve();
+        await deliveryGate.promise;
       });
       const ingress = createTwitchIngress({
         accountId: "default",
@@ -234,31 +250,43 @@ describe("Twitch durable ingress", () => {
         deliver,
         pollIntervalMs: 5,
       });
-      ingress.start();
-      await ingress.accept(createTwitchIngressTestMessage({ id: "active-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+      try {
+        ingress.start();
+        await ingress.accept(createTwitchIngressTestMessage({ id: "active-stop" }));
+        await adopted.promise;
+        expect(deliver).toHaveBeenCalledOnce();
 
-      let stopped = false;
-      const stopping = ingress.stop().then(() => {
-        stopped = true;
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
-      expect(stopped).toBe(false);
-      releaseDelivery();
-      await stopping;
-      expect(stopped).toBe(true);
+        let stopped = false;
+        const stopping = ingress.stop().then(() => {
+          stopped = true;
+        });
+        await latestMonitor().waitForPumpIdle();
+        await vi.advanceTimersByTimeAsync(30);
+        expect(stopped).toBe(false);
+        deliveryGate.resolve();
+        await stopping;
+        expect(stopped).toBe(true);
+      } finally {
+        deliveryGate.resolve();
+        try {
+          await ingress.stop();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     });
   });
 
   it("waits for a deferred reply-lane claim before stop returns", async () => {
     await withTwitchIngressTestQueue(async (queue) => {
-      let adoptDeferred = async () => {};
+      vi.useFakeTimers();
+      const deferred = Promise.withResolvers<void>();
+      let adoptDeferred: (() => void | Promise<void>) | undefined;
       const deliver = vi.fn(async (message, lifecycle) => {
         if (message.id === "deferred-stop") {
           lifecycle.onDeferred();
           adoptDeferred = lifecycle.onAdopted;
+          deferred.resolve();
           return;
         }
         await lifecycle.onAdopted();
@@ -270,33 +298,51 @@ describe("Twitch durable ingress", () => {
         deliver,
         pollIntervalMs: 5,
       });
-      ingress.start();
-      await ingress.accept(createTwitchIngressTestMessage({ id: "deferred-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
-      await ingress.accept(createTwitchIngressTestMessage({ id: "queued-during-stop" }));
+      try {
+        ingress.start();
+        await ingress.accept(createTwitchIngressTestMessage({ id: "deferred-stop" }));
+        await deferred.promise;
+        expect(deliver).toHaveBeenCalledOnce();
+        await ingress.accept(createTwitchIngressTestMessage({ id: "queued-during-stop" }));
 
-      let stopped = false;
-      const stopping = ingress.stop().then(() => {
-        stopped = true;
-      });
-      ingress.start();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
-      expect(stopped).toBe(false);
-      await adoptDeferred();
-      await stopping;
-      expect(stopped).toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
+        let stopped = false;
+        const stopping = ingress.stop().then(() => {
+          stopped = true;
+        });
+        ingress.start();
+        await latestMonitor().waitForPumpIdle();
+        await vi.advanceTimersByTimeAsync(30);
+        expect(stopped).toBe(false);
+        if (!adoptDeferred) {
+          throw new Error("Expected the deferred Twitch adoption callback");
+        }
+        await adoptDeferred();
+        adoptDeferred = undefined;
+        await stopping;
+        expect(stopped).toBe(true);
+        expect(deliver).toHaveBeenCalledOnce();
+      } finally {
+        try {
+          try {
+            await adoptDeferred?.();
+          } finally {
+            await ingress.stop();
+          }
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     });
   });
 
   it("aborts an active pre-adoption delivery before waiting for idle", async () => {
     await withTwitchIngressTestQueue(async (queue) => {
+      const listeningForAbort = Promise.withResolvers<void>();
       const deliver = vi.fn(
         async (_message, lifecycle) =>
           await new Promise<void>((resolve) => {
             lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            listeningForAbort.resolve();
           }),
       );
       const ingress = createTwitchIngress({
@@ -306,27 +352,31 @@ describe("Twitch durable ingress", () => {
         deliver,
         pollIntervalMs: 5,
       });
-      ingress.start();
-      await ingress.accept(createTwitchIngressTestMessage({ id: "abort-on-stop" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+      try {
+        ingress.start();
+        await ingress.accept(createTwitchIngressTestMessage({ id: "abort-on-stop" }));
+        await listeningForAbort.promise;
+        expect(deliver).toHaveBeenCalledOnce();
 
-      await ingress.stop();
+        await ingress.stop();
 
-      expect(await queue.listClaims()).toHaveLength(0);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({ id: "abort-on-stop", lastError: expect.any(String) }),
-      ]);
+        expect(await queue.listClaims()).toHaveLength(0);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "abort-on-stop", lastError: expect.any(String) }),
+        ]);
+      } finally {
+        await ingress.stop();
+      }
     });
   });
 
   it("releases a pre-adoption delivery for retry during shutdown", async () => {
     await withTwitchIngressTestQueue(async (queue) => {
-      let releaseDelivery = () => {};
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      const deliveryStarted = Promise.withResolvers<void>();
+      const deliveryGate = Promise.withResolvers<void>();
       const deliver = vi.fn(async () => {
-        await deliveryGate;
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
       });
       const ingress = createTwitchIngress({
         accountId: "default",
@@ -335,18 +385,24 @@ describe("Twitch durable ingress", () => {
         deliver,
         pollIntervalMs: 5,
       });
-      ingress.start();
-      await ingress.accept(createTwitchIngressTestMessage({ id: "shutdown-retry" }));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+      try {
+        ingress.start();
+        await ingress.accept(createTwitchIngressTestMessage({ id: "shutdown-retry" }));
+        await deliveryStarted.promise;
+        expect(deliver).toHaveBeenCalledOnce();
 
-      const stopping = ingress.stop();
-      releaseDelivery();
-      await stopping;
+        const stopping = ingress.stop();
+        deliveryGate.resolve();
+        await stopping;
 
-      expect(await queue.listClaims()).toHaveLength(0);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({ id: "shutdown-retry", lastError: expect.any(String) }),
-      ]);
+        expect(await queue.listClaims()).toHaveLength(0);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "shutdown-retry", lastError: expect.any(String) }),
+        ]);
+      } finally {
+        deliveryGate.resolve();
+        await ingress.stop();
+      }
     });
   });
 });

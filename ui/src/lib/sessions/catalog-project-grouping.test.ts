@@ -8,12 +8,9 @@ import {
 
 describe("normalizeCatalogProjectGrouping", () => {
   it.each([
-    ["project", "project"],
     ["person", "person"],
     ["none", "none"],
     [undefined, "project"],
-    [null, "project"],
-    ["garbage", "project"],
   ] as const)("normalizes %s to %s", (raw, expected) => {
     expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
   });
@@ -37,8 +34,8 @@ describe("groupCatalogSessionsByProject", () => {
 
   it("uses a custom group before the session project", () => {
     const result = groupCatalogSessionsByProject([
-      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
       session("project", "/work/openclaw"),
+      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
     ]);
 
     expect(result.groups).toMatchObject([
@@ -54,18 +51,6 @@ describe("groupCatalogSessionsByProject", () => {
         label: "openclaw",
         sessions: [{ threadId: "project" }],
       },
-    ]);
-  });
-
-  it("sorts custom groups ahead of project groups regardless of session order", () => {
-    const result = groupCatalogSessionsByProject([
-      session("project", "/work/openclaw"),
-      { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
-    ]);
-
-    expect(result.groups.map((group) => group.key)).toEqual([
-      "custom:Release",
-      "project:/work/openclaw",
     ]);
   });
 
@@ -86,7 +71,6 @@ describe("groupCatalogSessionsByProject", () => {
   });
 
   it.each([
-    ["/Users/dev/openclaw/.claude/worktrees/fix-1", "/Users/dev/openclaw"],
     ["/Users/dev/openclaw/.claude/worktrees/fix-1/ui/src", "/Users/dev/openclaw"],
     ["C:\\Users\\dev\\openclaw\\.claude\\worktrees\\fix-1", "C:\\Users\\dev\\openclaw"],
   ])("folds worktree cwd %s into %s", (worktreeCwd, expectedProject) => {

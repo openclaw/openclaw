@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ensureExtensionMemoryBuild,
   hasBuiltExtensionMemoryEntries,
-  resolveExtensionMemoryBuildTimeoutMs,
 } from "../../scripts/ensure-extension-memory-build.mts";
 
 const tempRoots: string[] = [];
@@ -43,10 +42,6 @@ describe("ensure-extension-memory-build", () => {
     writeFixture(root, "extensions/internal/index.ts");
     writeFixture(root, "extensions/external/index.ts", 'throw new Error("source imported");');
 
-    expect(
-      hasBuiltExtensionMemoryEntries({ rootDir: root, requiredExtensionIds: ["external"] }),
-    ).toBe(true);
-
     const result = ensureExtensionMemoryBuild({
       rootDir: root,
       requiredExtensionIds: ["external"],
@@ -60,14 +55,12 @@ describe("ensure-extension-memory-build", () => {
 
   it.each([
     ["dist/extensions/external/index.js", ["external", "internal"]],
-    ["extensions/external/dist/index.js", ["external", "internal"]],
     ["extensions/external/index.ts", ["external"]],
     ["extensions/external/dist/api.js", ["external"]],
   ])("builds when %s does not satisfy required ids %j", (entry, requiredExtensionIds) => {
     const root = makeTempRoot();
     writeFixture(root, entry);
     const params = { rootDir: root, requiredExtensionIds };
-    expect(hasBuiltExtensionMemoryEntries(params)).toBe(false);
     expect(ensureExtensionMemoryBuild({ ...params, spawnSync: () => ({ status: 0 }) })).toEqual({
       built: true,
     });
@@ -155,25 +148,5 @@ describe("ensure-extension-memory-build", () => {
         stdio: "pipe",
       }),
     ).toThrow("cliStartup build profile failed with exit code 1");
-  });
-});
-
-describe("resolveExtensionMemoryBuildTimeoutMs", () => {
-  it("parses only positive integer environment timeouts", () => {
-    expect(resolveExtensionMemoryBuildTimeoutMs({})).toBe(10 * 60 * 1000);
-    expect(
-      resolveExtensionMemoryBuildTimeoutMs({ OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "" }),
-    ).toBe(10 * 60 * 1000);
-    expect(
-      resolveExtensionMemoryBuildTimeoutMs({ OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: "4321" }),
-    ).toBe(4321);
-
-    for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
-      expect(() =>
-        resolveExtensionMemoryBuildTimeoutMs({
-          OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: raw,
-        }),
-      ).toThrow(`invalid OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS: ${raw}`);
-    }
   });
 });

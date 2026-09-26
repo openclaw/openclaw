@@ -6,51 +6,56 @@ import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 
+async function runModuleEvidence(moduleResult: Record<string, unknown>) {
+  const moduleSource = [
+    "export async function runScenario() {",
+    `  return ${JSON.stringify({ details: "reply matched", ...moduleResult })};`,
+    "}",
+  ].join("\n");
+  const moduleFlow = qaScenarioModuleFlow.moduleSchema.parse({
+    module: `data:text/javascript,${encodeURIComponent(moduleSource)}`,
+    call: "runScenario",
+  });
+  const flow = qaScenarioModuleFlow.resolveFlow(moduleFlow, "Discord canary") as QaScenarioFlow;
+  const scenario = {
+    id: "discord-canary",
+    title: "Discord canary",
+    sourcePath: "qa/scenarios/discord-canary.yaml",
+    surface: "discord",
+    objective: "measure Discord reply latency",
+    successCriteria: ["matched reply records RTT"],
+    execution: { kind: "flow", flow, flowKind: "module" },
+  } satisfies QaSeedScenarioWithSource;
+
+  const result = await runScenarioFlow({
+    api: {
+      state: createQaBusState(),
+      scenario,
+      config: {},
+      runScenario: runQaSuiteScenarioSteps,
+    },
+    flow,
+    scenarioTitle: scenario.title,
+  });
+  const evidence = buildQaSuiteEvidenceSummary({
+    artifactPaths: [],
+    channelId: "discord",
+    generatedAt: "2026-09-03T00:00:00.000Z",
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    providerMode: "mock-openai",
+    scenarioDefinitions: [scenario],
+    scenarioResults: [result],
+  });
+  return { result, evidence };
+}
+
 describe("QA scenario module flow", () => {
   it.each([
     ["canonical timing", { timing: { rttMs: 1750 } }],
     ["incomplete structured measurement", { rttMeasurement: { finalMatchedReplyRttMs: 1750 } }],
     ["top-level RTT", { rttMs: 1750 }],
   ])("carries %s from a module result into final QA evidence", async (_label, timingResult) => {
-    const moduleSource = [
-      "export async function runScenario() {",
-      `  return ${JSON.stringify({ details: "reply matched", ...timingResult })};`,
-      "}",
-    ].join("\n");
-    const moduleFlow = qaScenarioModuleFlow.moduleSchema.parse({
-      module: `data:text/javascript,${encodeURIComponent(moduleSource)}`,
-      call: "runScenario",
-    });
-    const flow = qaScenarioModuleFlow.resolveFlow(moduleFlow, "Discord canary") as QaScenarioFlow;
-    const scenario = {
-      id: "discord-canary",
-      title: "Discord canary",
-      sourcePath: "qa/scenarios/discord-canary.yaml",
-      surface: "discord",
-      objective: "measure Discord reply latency",
-      successCriteria: ["matched reply records RTT"],
-      execution: { kind: "flow", flow, flowKind: "module" },
-    } satisfies QaSeedScenarioWithSource;
-
-    const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario,
-        config: {},
-        runScenario: runQaSuiteScenarioSteps,
-      },
-      flow,
-      scenarioTitle: scenario.title,
-    });
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [],
-      channelId: "discord",
-      generatedAt: "2026-09-03T00:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      scenarioDefinitions: [scenario],
-      scenarioResults: [result],
-    });
+    const { result, evidence } = await runModuleEvidence(timingResult);
 
     expect(result.timing).toEqual({ rttMs: 1750 });
     expect(result.rttMeasurement).toBeUndefined();
@@ -65,48 +70,9 @@ describe("QA scenario module flow", () => {
       responseObservedAt: "2026-09-03T00:00:01.750Z",
       source: "request-to-observed-message",
     };
-    const moduleSource = [
-      "export async function runScenario() {",
-      `  return ${JSON.stringify({
-        details: "reply matched",
-        timing: { rttMs: 999 },
-        rttMeasurement,
-      })};`,
-      "}",
-    ].join("\n");
-    const moduleFlow = qaScenarioModuleFlow.moduleSchema.parse({
-      module: `data:text/javascript,${encodeURIComponent(moduleSource)}`,
-      call: "runScenario",
-    });
-    const flow = qaScenarioModuleFlow.resolveFlow(moduleFlow, "Discord canary") as QaScenarioFlow;
-    const scenario = {
-      id: "discord-canary",
-      title: "Discord canary",
-      sourcePath: "qa/scenarios/discord-canary.yaml",
-      surface: "discord",
-      objective: "measure Discord reply latency",
-      successCriteria: ["matched reply records RTT"],
-      execution: { kind: "flow", flow, flowKind: "module" },
-    } satisfies QaSeedScenarioWithSource;
-
-    const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario,
-        config: {},
-        runScenario: runQaSuiteScenarioSteps,
-      },
-      flow,
-      scenarioTitle: scenario.title,
-    });
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [],
-      channelId: "discord",
-      generatedAt: "2026-09-03T00:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      scenarioDefinitions: [scenario],
-      scenarioResults: [result],
+    const { result, evidence } = await runModuleEvidence({
+      timing: { rttMs: 999 },
+      rttMeasurement,
     });
 
     expect(result).toMatchObject({

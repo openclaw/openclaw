@@ -27,9 +27,19 @@ export const PLUGIN_COMPAT_RECORDS = [
     replacement:
       "Use legacyWebhook for canonical listener config. Doctor migrates stored webhookPort/webhookHost inputs; deprecated optional TypeScript properties preserve config producer source compatibility until an approved SDK major removal.",
     docsPath: "/gateway/doctor/config-migrations#channel-webhook-listeners",
-    surfaces: ["TelegramAccountConfig.webhookPort", "TelegramAccountConfig.webhookHost"],
+    surfaces: [
+      "TelegramAccountConfig.webhookPort",
+      "TelegramAccountConfig.webhookHost",
+      "FeishuConfig.webhookPort",
+      "FeishuConfig.webhookHost",
+      "FeishuAccountConfig.webhookPort",
+      "FeishuAccountConfig.webhookHost",
+    ],
     diagnostics: ["TypeScript @deprecated annotations and plugin-owned Doctor migration"],
-    tests: ["extensions/telegram/src/doctor.test.ts"],
+    tests: [
+      "extensions/telegram/src/doctor.test.ts",
+      "extensions/feishu/src/doctor-contract.test.ts",
+    ],
   },
   {
     code: "conversation-binding-sync-mutations",

@@ -117,21 +117,18 @@ function shouldPreservePromptSkillPath(
   tildeRoots: readonly string[],
 ): boolean {
   const resolvedFilePath = path.resolve(filePath);
-  const isManagedPromptSkillPath = roots.some(
-    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
-  );
+  const isManagedPromptSkillPath = roots.some((root) => isPathInside(root, resolvedFilePath));
   if (!isManagedPromptSkillPath) {
     return false;
   }
-  return !tildeRoots.some(
-    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
-  );
+  return !tildeRoots.some((root) => isPathInside(root, resolvedFilePath));
 }
 
 function compactHomePath(filePath: string, prefixes: readonly string[]): string {
   for (const prefix of prefixes) {
     if (filePath.startsWith(prefix)) {
-      return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
+      const relative = filePath.slice(prefix.length);
+      return "~/" + (prefix.includes("\\") ? relative.replace(/\\/g, "/") : relative);
     }
   }
   return filePath;
@@ -143,10 +140,6 @@ function compactHomePrefixesForHome(home: string): string[] {
     prefixes.push(home + "\\");
   }
   return prefixes;
-}
-
-function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string): string {
-  return matchedHomePrefix.includes("\\") ? filePath.replace(/\\/g, "/") : filePath;
 }
 
 /** Compact a skill path for console diagnostics. */

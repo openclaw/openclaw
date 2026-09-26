@@ -2,7 +2,7 @@ import type { webhook } from "@line/bot-sdk";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLineRuntime } from "./runtime.js";
 import type { LineAccountConfig } from "./types.js";
 import { createTestMessageEvent } from "./webhook-spool.test-support.js";
@@ -194,10 +194,11 @@ vi.mock("./bot-message-context.js", async (importOriginal) => ({
   }),
 }));
 
-let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
+// Cold module transforms belong to collection, not a timed lifecycle hook.
+const { handleLineWebhookEvents } = await import("./bot-handlers.js");
 // Loaded through the same registry epoch as the module under test so both share
 // one instance of the sent-id record.
-let recordLineSentMessages: typeof import("./outbound-message-log.js").recordLineSentMessages;
+const { recordLineSentMessages } = await import("./outbound-message-log.js");
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -317,11 +318,6 @@ async function expectGroupMessageBlocked(params: {
 }
 
 describe("handleLineWebhookEvents", () => {
-  beforeAll(async () => {
-    ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
-    ({ recordLineSentMessages } = await import("./outbound-message-log.js"));
-  });
-
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
     vi.doUnmock("openclaw/plugin-sdk/channel-pairing");

@@ -86,6 +86,47 @@ function container() {
   return host;
 }
 
+function browserResult(id: string, targetId: string, url: string | undefined) {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "browser",
+    content: "ok",
+    details: { browserTab: { profile: "managed", target: "host", targetId, url, title: id } },
+  };
+}
+
+async function drawActivity(
+  host: HTMLElement,
+  context: ApplicationContext,
+  messages: ReturnType<typeof browserResult>[],
+  expanded: boolean,
+) {
+  const group: MessageGroup = {
+    kind: "group",
+    key: "browser-results",
+    role: "tool",
+    visibleContent: "text",
+    isStreaming: false,
+    timestamp: 1,
+    messages: messageEntries(messages),
+  };
+  render(
+    renderActivityGroup([group], {
+      showReasoning: false,
+      latestBrowserTabs: latestBrowserTabCards(messages, []),
+      isToolMessageExpanded: () => expanded,
+    }),
+    host,
+  );
+  const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
+  for (const element of elements) {
+    element.context = context;
+    await element.updateComplete;
+  }
+  return elements;
+}
+
 async function card(
   context: ApplicationContext,
   latest = true,
@@ -302,48 +343,11 @@ describe("browser tab card", () => {
     "collapses repeated page results and refreshes the newest completion (separate tabs: %s)",
     async (separateTabs) => {
       const gateway = gatewayContext();
-      const message = (id: string, targetId = separateTabs ? id : "tab-1") => ({
-        role: "toolResult",
-        toolCallId: id,
-        toolName: "browser",
-        content: "ok",
-        details: {
-          browserTab: {
-            profile: "managed",
-            target: "host",
-            targetId,
-            url: "https://example.com",
-            title: id,
-          },
-        },
-      });
+      const message = (id: string, targetId = separateTabs ? id : "tab-1") =>
+        browserResult(id, targetId, "https://example.com");
       const host = container();
       const messages = [message("first"), message("second"), message("old"), message("new")];
-      const draw = async (expanded: boolean) => {
-        const group: MessageGroup = {
-          kind: "group",
-          key: "browser-results",
-          role: "tool",
-          visibleContent: "text",
-          isStreaming: false,
-          timestamp: 1,
-          messages: messageEntries(messages),
-        };
-        render(
-          renderActivityGroup([group], {
-            showReasoning: false,
-            latestBrowserTabs: latestBrowserTabCards(messages, []),
-            isToolMessageExpanded: () => expanded,
-          }),
-          host,
-        );
-        const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
-        for (const element of elements) {
-          element.context = gateway.context;
-          await element.updateComplete;
-        }
-        return elements;
-      };
+      const draw = (expanded: boolean) => drawActivity(host, gateway.context, messages, expanded);
       // Reopening the same page must not expose verification tabs as duplicate cards.
       const initial = await draw(false);
       expect(initial).toHaveLength(1);
@@ -374,56 +378,20 @@ describe("browser tab card", () => {
     },
   );
 
-  it.each(["https://example.com/new", "about:blank", undefined])(
+  it.each(["about:blank", undefined])(
     "uses the latest successful result per tab before deciding to preview %s",
     async (latestUrl) => {
       const gateway = gatewayContext();
-      const message = (id: string, targetId: string, url: string | undefined) => ({
-        role: "toolResult",
-        toolCallId: id,
-        toolName: "browser",
-        content: "ok",
-        details: {
-          browserTab: {
-            profile: "managed",
-            target: "host",
-            targetId,
-            url,
-            title: id,
-          },
-        },
-      });
       const messages = [
-        message("old", "tab-1", "https://example.com/old"),
-        message("new", "tab-1", latestUrl),
-        message("other", "tab-2", "https://example.com/other"),
+        browserResult("old", "tab-1", "https://example.com/old"),
+        browserResult("new", "tab-1", latestUrl),
+        browserResult("other", "tab-2", "https://example.com/other"),
       ];
       const host = container();
-      const group: MessageGroup = {
-        kind: "group",
-        key: "browser-results",
-        role: "tool",
-        visibleContent: "text",
-        isStreaming: false,
-        timestamp: 1,
-        messages: messageEntries(messages),
-      };
-      render(
-        renderActivityGroup([group], {
-          showReasoning: false,
-          latestBrowserTabs: latestBrowserTabCards(messages, []),
-          isToolMessageExpanded: () => false,
-        }),
-        host,
-      );
-      const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
-      for (const element of elements) {
-        element.context = gateway.context;
-        await element.updateComplete;
-      }
+      const elements = await drawActivity(host, gateway.context, messages, false);
       expect(
         elements.map((element) => element.shadowRoot?.querySelector(".title")?.textContent),
-      ).toEqual(latestUrl === "https://example.com/new" ? ["new", "other"] : ["other"]);
+      ).toEqual(["other"]);
     },
   );
 

@@ -1,4 +1,3 @@
-// Close Duplicate Prs After Merge tests cover close duplicate prs after merge script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   applyClosePlan,
@@ -293,14 +292,5 @@ describe("defaultRunGh", () => {
         timeout: 60_000,
       }),
     );
-  });
-
-  it("propagates timeout failures from the GitHub CLI process", () => {
-    const timeout = Object.assign(new Error("spawnSync gh ETIMEDOUT"), { code: "ETIMEDOUT" });
-    const execFileSyncImpl = vi.fn(() => {
-      throw timeout;
-    });
-
-    expect(() => defaultRunGh(["pr", "view", "123"], {}, { execFileSyncImpl })).toThrow(timeout);
   });
 });

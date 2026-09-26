@@ -113,6 +113,64 @@ describe("SidebarSessionNarrationController", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retains pending interests while switching foreground and resets the window on reconnect", async () => {
+    const ready = createDeferred();
+    const source = {
+      subscribeMessages: vi.fn(async (key: string) => {
+        await ready.promise;
+        return { key, agentId: null };
+      }),
+      unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    };
+    const rows = Array.from({ length: 8 }, (_, index) => ({
+      ...runningRow(`agent:main:run-${index}`),
+      startedAt: undefined,
+      updatedAt: index,
+    }));
+    const input: SidebarNarrationSyncInput = {
+      enabled: true,
+      connected: true,
+      connectionIdentity: {},
+      source,
+      rows,
+      openSessionKey: "",
+      agentId: "main",
+    };
+    const controller = new SidebarSessionNarrationController(() => undefined);
+    controller.sync(input);
+    rows[0]!.updatedAt = 100;
+    controller.sync({ ...input, rows: rows.toReversed() });
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(6);
+
+    controller.sync({ ...input, openSessionKey: rows[0]!.key });
+    ready.resolve();
+    await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
+    expect(source.unsubscribeMessages).not.toHaveBeenCalled();
+
+    input.openSessionKey = rows[1]!.key;
+    controller.sync(input);
+    await source.subscribeMessages.mock.results.at(-1)?.value;
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
+    expect(source.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith({
+      key: rows[2]!.key,
+      agentId: null,
+    });
+
+    rows[2]!.updatedAt = 200;
+    controller.sync(input);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
+    controller.sync({ ...input, connectionIdentity: {} });
+    await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(15);
+    expect(source.subscribeMessages.mock.calls.slice(8).map(([key]) => key)).toContain(
+      rows[2]!.key,
+    );
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(8);
+    controller.disconnect();
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(15);
+  });
+
   it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
     const visibility = browserVisibility();
     const subscribed = createDeferred();

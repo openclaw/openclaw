@@ -1,8 +1,3 @@
-/**
- * sessions_list built-in tool.
- *
- * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
- */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
@@ -131,7 +126,6 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
   return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
 }
 
-/** Creates the sessions-list tool with Gateway-owned listing and bounded enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   requesterAgentIdOverride?: string;

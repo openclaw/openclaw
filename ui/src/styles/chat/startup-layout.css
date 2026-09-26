@@ -307,10 +307,8 @@
   align-items: center;
   gap: 8px;
   container-type: inline-size;
-  /* 48px centers the 28px actions on the app's shared 24px chrome
-     centerline (sidebar brand row, floating toggles), so split headers
-     line up with the sidebar across the top of the shell. */
-  min-height: 48px;
+  /* Sidebar, pane actions, and floating controls share the rail centerline. */
+  min-height: var(--rail-header-height);
   padding: 0 6px 0 12px;
   background: var(--chat-surface);
   /* Chrome row, not content: a selectable title would fight the native

@@ -1,8 +1,3 @@
-/**
- * sessions_yield built-in tool.
- *
- * Ends the current turn after subagent spawning so completion events can resume the session later.
- */
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
@@ -69,7 +64,6 @@ const SessionsYieldToolSchema = Type.Object({
   ),
 });
 
-/** Creates the sessions_yield tool for runtimes that support yield callbacks. */
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
   claimYield?: (

@@ -531,35 +531,26 @@ export class AcpTranslatorPromptStream {
       return false;
     }
 
-    const fullThought = content
-      ?.filter((block) => block?.type === "thinking")
-      .map((block) => block.thinking ?? "")
-      .join("\n")
-      .trimEnd();
-    const sentThoughtSoFar = pending.sentThought?.length ?? 0;
-    if (fullThought && fullThought.length > sentThoughtSoFar) {
-      const newThought = fullThought.slice(sentThoughtSoFar);
-      pending.sentThought = fullThought;
-      await this.emitPromptChunk(pending, "agent_thought_chunk", newThought);
+    for (const [blockType, field, sentField, kind] of [
+      ["thinking", "thinking", "sentThought", "agent_thought_chunk"],
+      ["text", "text", "sentText", "agent_message_chunk"],
+    ] as const) {
+      const fullText = content
+        ?.filter((block) => block?.type === blockType)
+        .map((block) => block[field] ?? "")
+        .join("\n")
+        .trimEnd();
+      const sentSoFar = pending[sentField]?.length ?? 0;
+      if (!fullText || fullText.length <= sentSoFar) {
+        continue;
+      }
+      pending[sentField] = fullText;
+      await this.emitPromptChunk(pending, kind, fullText.slice(sentSoFar));
       if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
         return false;
       }
     }
-
-    const fullText = content
-      ?.filter((block) => block?.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n")
-      .trimEnd();
-    const sentSoFar = pending.sentText?.length ?? 0;
-    if (!fullText || fullText.length <= sentSoFar) {
-      return true;
-    }
-
-    const newText = fullText.slice(sentSoFar);
-    pending.sentText = fullText;
-    await this.emitPromptChunk(pending, "agent_message_chunk", newText);
-    return this.getPendingPrompt(sessionId, pending.idempotencyKey) === pending;
+    return true;
   }
 
   private async finishPrompt(

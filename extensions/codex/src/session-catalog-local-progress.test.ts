@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observe } from "./session-catalog-list-operation.test-support.js";
 import {
   commandRpcMocks,
@@ -11,6 +11,11 @@ import {
   idleThread,
   registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
+
+beforeAll(async () => {
+  // Keep paired-node module loading outside the local-page fake-timer measurement.
+  await import("./session-catalog-node-continue.js");
+});
 
 afterEach(() => vi.useRealTimers());
 

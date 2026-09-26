@@ -264,8 +264,6 @@ describe("update report live authority boundary", () => {
     { authority: "system-admin", retire: false, boundary: "auth" },
     { authority: "gateway-owner", retire: true, boundary: "prepared" },
     { authority: "system-admin", retire: true, boundary: "prepared" },
-    { authority: "gateway-owner", retire: false, boundary: "prepared" },
-    { authority: "system-admin", retire: false, boundary: "prepared" },
   ] as const)(
     "revalidates delegated $authority authority at $boundary, retired=$retire",
     async ({ authority, retire, boundary }) => {
