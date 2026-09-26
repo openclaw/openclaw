@@ -1,5 +1,5 @@
 #!/bin/bash
-# Proof-only driver: unchanged native executable, external XCTest, loopback Gateway.
+# Proof-only driver: exact baseline or grouped native executable, external XCTest, loopback Gateway.
 set -euo pipefail
 [[ "${CI:-}" == true && "${GITHUB_ACTIONS:-}" == true && "${RUNNER_OS:-}" == macOS ]]
 source_repo="$(cd "$1" && pwd)"
@@ -8,6 +8,10 @@ output="$3"
 stage="$4"
 [[ "$stage" == before || "$stage" == after ]]
 [[ "$BASELINE_SHA" =~ ^[0-9a-f]{40}$ && "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$BASELINE_SHA" == "$CANDIDATE_SHA" ]]
+[[ "${GROUPING_PATCH_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
+grouping_patch="$proof_repo/scripts/ios-agent-grouping.patch"
+test "$(shasum -a 256 "$grouping_patch" | awk '{print $1}')" = "$GROUPING_PATCH_SHA256"
 mkdir -p "$output"
 scratch="$(mktemp -d "$RUNNER_TEMP/mac-narration.XXXXXX")"
 fixture_pid=""
@@ -25,8 +29,14 @@ test "$(git -C "$source_repo" rev-parse HEAD)" = "$CANDIDATE_SHA"
 git -C "$source_repo" cat-file -e "$revision^{commit}"
 checkout="$scratch/product"
 git -C "$source_repo" worktree add --detach "$checkout" "$revision"
+if [[ "$stage" == after ]]; then
+  git -C "$checkout" apply --index "$grouping_patch"
+fi
+# Freeze all product bytes, including new files. Helpers cannot mutate native sources.
+expected_tree="$(git -C "$checkout" write-tree)"
 {
   printf 'Product revision: %s\nStage: %s\nProof revision: %s\n' "$revision" "$stage" "$(git -C "$proof_repo" rev-parse HEAD)"
+  printf 'Grouping patch SHA256: %s\nSource tree: %s\n' "$GROUPING_PATCH_SHA256" "$expected_tree"
   sw_vers
   xcodebuild -version
   swift --version
@@ -68,7 +78,7 @@ compat="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2
 codesign --force --deep --sign - "$app" > "$output/signing.log" 2>&1
 otool -L "$app/Contents/MacOS/OpenClaw" > "$output/linked-libraries.txt"
 shasum -a 256 "$products/OpenClaw" "$app/Contents/MacOS/OpenClaw" > "$output/executable-hashes.txt"
-git -C "$checkout" diff --exit-code -- apps/macos/Sources apps/shared/OpenClawKit/Sources
+git -C "$checkout" diff --exit-code -- apps/macos/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests
 
 fixture="$scratch/fixture"
 mkdir -p "$fixture"
@@ -76,7 +86,7 @@ cp "$proof_repo/scripts/test-ios-shell-gateway.mjs" "$fixture/gateway.mjs"
 node -e 'const fs=require("node:fs");const p=require(process.argv[1]);fs.writeFileSync(process.argv[2],JSON.stringify({private:true,dependencies:{ws:p.dependencies.ws},packageManager:p.packageManager}))' \
   "$checkout/package.json" "$fixture/package.json"
 pnpm --dir "$fixture" install --ignore-scripts > "$output/fixture-install.log" 2>&1
-node "$fixture/gateway.mjs" --narration > "$output/gateway.log" 2>&1 &
+node "$fixture/gateway.mjs" --narration --narration-pending-tool > "$output/gateway.log" 2>&1 &
 fixture_pid=$!
 for attempt in {1..30}; do
   if curl --fail --silent http://127.0.0.1:19876/narration > "$output/initial.json"; then break; fi
@@ -131,13 +141,9 @@ curl --fail --silent http://127.0.0.1:19876/ > "$output/requests.json"
 xcrun xcresulttool get test-results summary --path "$output/$stage.xcresult" --compact > "$output/summary.json"
 xcrun xcresulttool export attachments --path "$output/$stage.xcresult" --output-path "$output/images"
 tail -n 100 "$output/ui-test.log"
-git -C "$checkout" diff --exit-code -- apps/macos/Sources apps/shared/OpenClawKit/Sources
-if [[ "$stage" == before ]]; then
-  [[ "$status" -ne 0 ]]
-  grep -q NARRATION_MISSING_WHILE_RUNNING "$output/ui-test.log"
-  node -e 'const r=require(process.argv[1]);if(r.result!=="Failed"||r.failedTests!==1||r.passedTests!==0)process.exit(1)' "$output/summary.json"
-else
-  [[ "$status" -eq 0 ]]
-  node -e 'const r=require(process.argv[1]);if(r.result!=="Passed"||r.failedTests!==0||r.passedTests!==1)process.exit(1)' "$output/summary.json"
-fi
+git -C "$checkout" diff --exit-code -- apps/macos/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests
+test "$(git -C "$checkout" write-tree)" = "$expected_tree"
+test -z "$(git -C "$checkout" ls-files --others --exclude-standard -- apps/macos/Sources apps/shared/OpenClawKit/Sources apps/shared/OpenClawKit/Tests)"
+[[ "$status" -eq 0 ]]
+node -e 'const r=require(process.argv[1]);if(r.result!=="Passed"||r.failedTests!==0||r.passedTests!==1)process.exit(1)' "$output/summary.json"
 node -e 'const r=require(process.argv[1]);if(r.requests.filter(x=>x.method==="chat.send").length!==1)throw new Error("Expected exactly one UI chat.send")' "$output/requests.json"

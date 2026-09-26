@@ -961,6 +961,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let stage = environment["OPENCLAW_IOS_NARRATION_STAGE"] ??
             (environment["OPENCLAW_IOS_NARRATION_BASELINE"] == "1" ? "before" : "after")
         let groupingComparison = environment["OPENCLAW_IOS_GROUPING_COMPARISON"] == "1"
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCUIDevice.shared.orientation = .landscapeLeft
+        }
+        defer { XCUIDevice.shared.orientation = .portrait }
 
         func assertRunPresentation(in app: XCUIApplication, expanded: Bool = true) {
             guard groupingComparison else { return }
@@ -1021,7 +1025,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertLessThan(first.frame.minY, second.frame.minY)
             XCTAssertLessThan(second.frame.minY, current.frame.minY)
         }
-        if groupingComparison && stage == "after" {
+        if groupingComparison, stage == "after" {
             // The fixture publishes first narration at +1, Read at +2, and
             // second narration at +4. The visible run must preserve that order.
             let read = app.descendants(matching: .any).matching(NSPredicate(
@@ -1040,8 +1044,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
             _ = try await control("persist-tool", method: "POST")
             let read = app.buttons["chat-tool-activity-layout-read"]
             XCTAssertTrue(read.waitForExistence(timeout: 5))
-            XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-layout-read").count, 1,
-                           "Persisting the live tool must not duplicate it")
+            XCTAssertEqual(
+                app.buttons.matching(identifier: "chat-tool-activity-layout-read").count,
+                1,
+                "Persisting the live tool must not duplicate it")
             if stage == "after" {
                 XCTAssertLessThan(first.frame.minY, read.frame.minY)
                 XCTAssertLessThan(read.frame.minY, second.frame.minY)
@@ -1053,8 +1059,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let reloaded = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
         _ = try await control("await-reconnect")
-        XCTAssertTrue(narration("Preparing the layout summary.", in: reloaded).waitForExistence(timeout: 10),
-                      "Narration fixture in-flight history did not load")
+        XCTAssertTrue(
+            narration("Preparing the layout summary.", in: reloaded).waitForExistence(timeout: 10),
+            "Narration fixture in-flight history did not load")
         let recoveredFirst = narration("Reading the mobile layout.", in: reloaded)
         let recoveredSecond = narration("Checking spacing and contrast.", in: reloaded)
         let recoveredVisible = recoveredFirst.waitForExistence(timeout: 2) &&
@@ -1099,7 +1106,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         assertRunPresentation(in: reloaded)
         self.attachScreenshot(named: "narration-\(stage)-expanded")
         _ = try await control("capture/\(stage)-expanded", method: "POST")
-        for _ in 0..<3 where !work.isHittable { reloaded.swipeDown() }
+        for _ in 0..<3 where !work.isHittable {
+            reloaded.swipeDown()
+        }
         XCTAssertTrue(work.isHittable)
         work.tap()
         XCTAssertTrue(recoveredFirst.waitForNonExistence(timeout: 5))

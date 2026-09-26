@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
 
-/// Opt-in desktop boundary proof: an unmodified app bundle and the existing loopback Gateway fixture.
+/// Opt-in desktop proof: exact baseline/grouped app bytes with the same loopback Gateway scenario.
 /// iOS coverage cannot exercise AppKit accessibility, Mac transport, or desktop process recovery.
 final class NativeNarrationUITests: XCTestCase {
     private let fixtureURL = URL(string: "http://127.0.0.1:19876")!
 
     @MainActor
-    func testNativeNarrationAndProcessRecovery() async throws {
+    func testNativeRunGroupingAndProcessRecovery() async throws {
         self.continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
         let stage = try XCTUnwrap(environment["OPENCLAW_MAC_PROOF_STAGE"])
@@ -69,7 +69,31 @@ final class NativeNarrationUITests: XCTestCase {
             XCTAssertLessThan(first.frame.minY, second.frame.minY)
             XCTAssertLessThan(second.frame.minY, current.frame.minY)
         }
+        XCTAssertTrue(activeVisible, "Both narration segments must remain visible while working")
+        let liveRead = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value CONTAINS %@", "Read", "Layout.swift")).firstMatch
+        XCTAssertTrue(liveRead.waitForExistence(timeout: 5), "Pending tool must be visible")
+        XCTAssertTrue((liveRead.value as? String)?.contains("Working") == true)
+        if stage == "after" {
+            XCTAssertLessThan(first.frame.minY, liveRead.frame.minY)
+            XCTAssertLessThan(liveRead.frame.minY, second.frame.minY)
+        }
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
         try await self.capture(app, stage: stage, state: "active")
+
+        _ = try await self.control("persist-tool", method: "POST")
+        let read = app.buttons["chat-tool-activity-layout-read"]
+        XCTAssertTrue(read.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            app.buttons.matching(identifier: "chat-tool-activity-layout-read").count,
+            1,
+            "Persisting the tool must not duplicate it")
+        if stage == "after" {
+            XCTAssertLessThan(first.frame.minY, read.frame.minY)
+            XCTAssertLessThan(read.frame.minY, second.frame.minY)
+        }
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
+        try await self.capture(app, stage: stage, state: "tool-persisted")
 
         let activePanel = try await self.openQuickChat(app)
         let quickCurrent = self.narration("Preparing the layout summary.", in: activePanel)
@@ -82,6 +106,7 @@ final class NativeNarrationUITests: XCTestCase {
             XCTAssertTrue(activePanel.frame.intersects(quickFirst.frame))
             XCTAssertTrue(activePanel.frame.intersects(quickSecond.frame))
         }
+        self.assertRunPresentation(in: activePanel, stage: stage)
         self.attachScreenshot(activePanel, name: "mac-quick-chat-\(stage)-active")
         self.closeQuickChat(app)
 
@@ -95,7 +120,18 @@ final class NativeNarrationUITests: XCTestCase {
             XCTAssertLessThan(first.frame.minY, second.frame.minY)
             XCTAssertLessThan(second.frame.minY, current.frame.minY)
         }
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
         try await self.capture(app, stage: stage, state: "reconnected")
+
+        XCTAssertTrue(read.waitForExistence(timeout: 5), "Recovered tool result must remain interactive")
+        XCTAssertTrue(read.isHittable)
+        read.click()
+        let toolResult = self.narration("Layout checked.", in: app)
+        XCTAssertTrue(toolResult.waitForExistence(timeout: 5))
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
+        try await self.capture(app, stage: stage, state: "tool-expanded")
+        read.click()
+        XCTAssertTrue(toolResult.waitForNonExistence(timeout: 5))
 
         _ = try await self.control("complete", method: "POST")
         let finalReply = self.narration("The mobile layout is ready.", in: app)
@@ -106,6 +142,7 @@ final class NativeNarrationUITests: XCTestCase {
         XCTAssertTrue(work.waitForExistence(timeout: 8), "Native completed-work disclosure is missing")
         XCTAssertTrue(first.waitForNonExistence(timeout: 5))
         XCTAssertTrue(second.waitForNonExistence(timeout: 5))
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
         try await self.capture(app, stage: stage, state: "completed")
 
         XCTAssertTrue(work.isHittable)
@@ -114,6 +151,7 @@ final class NativeNarrationUITests: XCTestCase {
         XCTAssertTrue(second.waitForExistence(timeout: 5))
         XCTAssertLessThan(first.frame.minY, second.frame.minY)
         XCTAssertTrue(finalReply.exists, "Expanding work must preserve the final reply")
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
         try await self.capture(app, stage: stage, state: "expanded")
 
         XCTAssertTrue(work.isHittable)
@@ -121,6 +159,7 @@ final class NativeNarrationUITests: XCTestCase {
         XCTAssertTrue(first.waitForNonExistence(timeout: 5))
         XCTAssertTrue(second.waitForNonExistence(timeout: 5))
         XCTAssertTrue(finalReply.exists, "Collapsing work must preserve the final reply")
+        self.assertRunPresentation(in: app.windows.firstMatch, stage: stage)
         try await self.capture(app, stage: stage, state: "collapsed")
 
         let completedPanel = try await self.openQuickChat(app)
@@ -134,21 +173,31 @@ final class NativeNarrationUITests: XCTestCase {
         let completedSecond = self.narration("Checking spacing and contrast.", in: completedPanel)
         XCTAssertFalse(completedFirst.exists)
         XCTAssertFalse(completedSecond.exists)
+        self.assertRunPresentation(in: completedPanel, stage: stage)
         self.attachScreenshot(completedPanel, name: "mac-quick-chat-\(stage)-completed")
         self.clickDisclosureChevron(quickWork)
         XCTAssertTrue(completedFirst.waitForExistence(timeout: 5))
         XCTAssertTrue(completedSecond.waitForExistence(timeout: 5))
         XCTAssertLessThan(completedFirst.frame.minY, completedSecond.frame.minY)
         XCTAssertTrue(quickFinal.exists)
+        self.assertRunPresentation(in: completedPanel, stage: stage)
         self.attachScreenshot(completedPanel, name: "mac-quick-chat-\(stage)-expanded")
         self.clickDisclosureChevron(quickWork)
         XCTAssertTrue(completedFirst.waitForNonExistence(timeout: 5))
         XCTAssertTrue(quickFinal.exists)
         self.closeQuickChat(app)
 
-        // Both revisions traverse the complete real flow. Only missing active
-        // or replayed narration is the expected negative-control failure.
+        // Both product variants must preserve the existing narration/recovery contract.
         XCTAssertTrue(activeVisible && recoveredVisible && quickVisible, "NARRATION_MISSING_WHILE_RUNNING")
+    }
+
+    @MainActor
+    private func assertRunPresentation(in root: XCUIElement, stage: String) {
+        let frames = root.descendants(matching: .any).matching(identifier: "chat-assistant-run")
+        XCTAssertEqual(
+            frames.count,
+            stage == "after" ? 1 : 0,
+            "Grouped candidate must expose exactly one run container in each native chat surface")
     }
 
     @MainActor
@@ -221,7 +270,7 @@ final class NativeNarrationUITests: XCTestCase {
 
     @MainActor
     private func capture(_ app: XCUIApplication, stage: String, state: String) async throws {
-        self.attachScreenshot(app, name: "mac-narration-\(stage)-\(state)")
+        self.attachScreenshot(app, name: "mac-grouping-\(stage)-\(state)")
         _ = try await self.control("capture/\(stage)-\(state)", method: "POST")
     }
 

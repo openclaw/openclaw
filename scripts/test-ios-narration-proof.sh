@@ -79,6 +79,12 @@ for stage in "${stages[@]}"; do
   if [[ "$stage" == after && -n "$grouping_patch" ]]; then
     git -C "$checkout" apply --index "$grouping_patch"
   fi
+  if [[ "$stage" == after && -n "$grouping_patch" ]]; then
+    # Fail on source formatting before the expensive native dependency/build pass.
+    swiftformat --lint "$checkout/apps/shared/OpenClawKit/Sources/OpenClawChatUI" \
+      --config "$checkout/config/swiftformat" \
+      --unexclude "$checkout/apps/shared/OpenClawKit/Sources/OpenClawChatUI"
+  fi
   # The index freezes the reviewed product bytes, including newly added files.
   # Build helpers may change generated files, never the pinned native sources.
   expected_tree="$(git -C "$checkout" write-tree)"

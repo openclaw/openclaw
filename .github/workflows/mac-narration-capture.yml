@@ -1,4 +1,4 @@
-name: macOS native narration before-after capture
+name: macOS native agent grouping before-after capture
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
     paths:
       - .github/workflows/mac-narration-capture.yml
       - scripts/mac-narration-proof/**
+      - scripts/ios-agent-grouping.patch
+      - scripts/test-ios-shell-gateway.mjs
 
 permissions:
   contents: read
@@ -22,7 +24,8 @@ jobs:
     timeout-minutes: 90
     env:
       CANDIDATE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
-      BASELINE_SHA: 8c870f669e3528864881333d04875512ef81cfdc
+      BASELINE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
+      GROUPING_PATCH_SHA256: 05ee31314b0ab9e5314bca5b7cfad2ddbf9ee5c03c24ae07af2ed80ad56c9ec0
     steps:
       - name: Checkout exact product candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -58,7 +61,7 @@ jobs:
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
-      - name: Capture unchanged native Mac app
+      - name: Capture native Mac grouping comparison
         env:
           CAPTURE_STAGE: ${{ matrix.stage }}
         run: |
@@ -69,7 +72,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: mac-narration-${{ matrix.stage }}
+          name: mac-agent-grouping-${{ matrix.stage }}
           path: ${{ runner.temp }}/mac-narration-capture
           if-no-files-found: error
           retention-days: 14

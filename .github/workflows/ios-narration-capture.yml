@@ -1,4 +1,4 @@
-name: iPhone grouped assistant before-after capture
+name: Apple mobile grouped assistant capture
 
 on:
   push:
@@ -15,19 +15,22 @@ permissions:
 
 jobs:
   capture:
-    name: iPhone grouping capture (${{ matrix.stage }})
+    name: ${{ matrix.device }} grouping capture (${{ matrix.stage }})
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        stage: [before, after]
+        include:
+          - { device: iPhone, stage: after }
+          - { device: iPad, stage: before }
+          - { device: iPad, stage: after }
     runs-on: xcode-27
     timeout-minutes: 120
     env:
       CANDIDATE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
       BASELINE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
-      GROUPING_PATCH_SHA256: 6f73fd398e487eb727b8b0f8150d82aa6f1142d38886c2661602918a5ac28992
-      DEVICE_FAMILY: iPhone
+      GROUPING_PATCH_SHA256: 05ee31314b0ab9e5314bca5b7cfad2ddbf9ee5c03c24ae07af2ed80ad56c9ec0
+      DEVICE_FAMILY: ${{ matrix.device }}
     steps:
       - name: Checkout exact product candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -79,7 +82,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ios-agent-grouping-iphone-${{ matrix.stage }}
+          name: ios-agent-grouping-${{ matrix.device }}-${{ matrix.stage }}
           path: ${{ runner.temp }}/ios-narration-capture
           if-no-files-found: error
           retention-days: 7
