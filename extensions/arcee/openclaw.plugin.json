@@ -1,6 +1,9 @@
 {
   "id": "arcee",
   "categories": ["models"],
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
