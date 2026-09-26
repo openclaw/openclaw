@@ -10172,6 +10172,7 @@ internal suspend fun requestProviderModelConfig(
     request(
       buildJsonObject {
         put("view", JsonPrimitive("provider-config"))
+        put("includeDefaultModels", JsonPrimitive(true))
         if (agentId != null) put("agentId", JsonPrimitive(agentId))
         if (refresh) put("refresh", JsonPrimitive(true))
       }.toString(),

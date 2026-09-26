@@ -141,7 +141,7 @@ class ProviderModelCatalogRequestTest {
 
       assertTrue(actual is ProviderModelConfigUnsupported)
       assertEquals(
-        listOf(Json.parseToJsonElement("""{"view":"provider-config","agentId":"beta","refresh":true}""")),
+        listOf(Json.parseToJsonElement("""{"view":"provider-config","includeDefaultModels":true,"agentId":"beta","refresh":true}""")),
         requests.map(Json::parseToJsonElement),
       )
     }
