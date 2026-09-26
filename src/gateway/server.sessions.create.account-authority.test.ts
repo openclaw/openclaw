@@ -3,14 +3,20 @@ import { expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as profileAuthority from "../state/user-channel-identity-operations.js";
 import { connectUserModelAccount, listUserProfileAuthLinks } from "../state/user-model-accounts.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createModelAccountConnectService } from "./model-account-connect.js";
+import {
+  createModelAccountConnectService,
+  ModelAccountConnectAuthorityError,
+} from "./model-account-connect.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
+import { prepareUserModelAccountAction } from "./server-methods/users-model-account-access.js";
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -20,6 +26,52 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const model = "openai/gpt-4.1";
+
+test("prepared model-account authority rechecks without main-thread SQL", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async () => {
+    const fixture = await createFixture("operator.write", false);
+    const action = await prepareUserModelAccountAction(fixture);
+    const sql = observeMainThreadSql();
+    try {
+      for (let index = 0; index < 100; index++) {
+        action.assertCurrent();
+      }
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+});
+
+test.each(["during preparation", "after preparation"] as const)(
+  "legacy model-account authority rejects an email relink %s",
+  async (phase) => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const fixture = await createFixture("operator.write", false);
+      linkEmail("retained@example.test", fixture.owner.id);
+      const replacement = ensureProfileForEmail("replacement@example.test");
+      fixture.client.authenticatedUserId = "session-creator@example.test";
+      delete fixture.client.authenticatedUserProfile;
+      const relink = () => linkEmail("session-creator@example.test", replacement.id);
+      if (phase === "during preparation") {
+        const prepare = profileAuthority.prepareUserProfileRoleAuthority;
+        vi.spyOn(profileAuthority, "prepareUserProfileRoleAuthority").mockImplementationOnce(
+          async (...args) => {
+            relink();
+            return prepare(...args);
+          },
+        );
+        await expect(prepareUserModelAccountAction(fixture)).rejects.toBeInstanceOf(
+          ModelAccountConnectAuthorityError,
+        );
+      } else {
+        const action = await prepareUserModelAccountAction(fixture);
+        relink();
+        expect(action.assertCurrent).toThrow(ModelAccountConnectAuthorityError);
+      }
+    });
+  },
+);
 
 async function createFixture(
   scope: "operator.sessions.write" | "operator.write",

@@ -8,6 +8,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
@@ -29,6 +30,7 @@ import { assertValidParams } from "./validation.js";
 export function resolveChatMetadataReadParams(
   options: Pick<GatewayRequestHandlerOptions, "respond" | "context" | "client" | "signal">,
   params: ChatMetadataParams,
+  draftAccountSelection?: UserModelAccountSelection,
 ): ChatMetadataReadParams | undefined {
   const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
@@ -116,13 +118,7 @@ export function resolveChatMetadataReadParams(
     return undefined;
   }
   assertRequestCurrent();
-  const draftAccountSelection = params.authProfileId
-    ? preparePersonalModelAccountSelection(
-        { client, context, signal },
-        params.authProfileId,
-        SESSION_READ_SCOPE,
-      )
-    : undefined;
+  draftAccountSelection?.assertCurrent();
   return {
     agentId: resolved.agentId,
     requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
@@ -141,7 +137,15 @@ export async function handleChatMetadataRequest(
   }
   let scope: ChatMetadataReadParams | undefined;
   try {
-    scope = resolveChatMetadataReadParams(options, params);
+    const draftAccountSelection =
+      !params.sessionKey && params.authProfileId
+        ? await preparePersonalModelAccountSelection(
+            options,
+            params.authProfileId,
+            SESSION_READ_SCOPE,
+          )
+        : undefined;
+    scope = resolveChatMetadataReadParams(options, params, draftAccountSelection);
     if (!scope) {
       return;
     }
