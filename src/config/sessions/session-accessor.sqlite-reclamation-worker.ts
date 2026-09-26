@@ -39,6 +39,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type {
+  SqliteArchiveReclamationPlan,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -71,7 +72,7 @@ export type SqliteReclamationWorkerRequest = {
   type: "reclaim";
   operationId: number;
   commitGate: SharedArrayBuffer;
-  plan: SqliteSessionReclamationPlan;
+  plan: SqliteArchiveReclamationPlan;
   coordination: SqliteMutationWorkerCoordination;
 };
 export type SqliteReclamationWorkerCloseRequest = {
@@ -344,7 +345,7 @@ export class SqliteReclamationWorker {
 
   run(
     params: MutationRunParams<SqliteSessionReclamationResult> & {
-      plan: SqliteSessionReclamationPlan;
+      plan: SqliteArchiveReclamationPlan;
       transferList: ArrayBuffer[];
     },
   ): Promise<SqliteSessionReclamationResult> {

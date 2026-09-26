@@ -12,7 +12,6 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   createQueuedTaskRun,
-  createRunningTaskRun,
   finalizeTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../../tasks/detached-task-runtime.js";
@@ -33,6 +32,7 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
+import { registerRunningSubagent } from "./subagent-registry-running-registration.js";
 import { captureQueuedSubagentTaskOwner } from "./subagent-registry-task-owner.js";
 import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
 import { nextSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -85,22 +85,23 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           cfg,
         );
     const queued = registerParams.queued === true;
-    const queuedContext =
-      queued && registerParams.taskRowOwnership === "required"
+    const registrationContext =
+      !queued || registerParams.taskRowOwnership === "required"
         ? captureOpenClawStateWorkerContext()
         : undefined;
-    const registrationOwnership = subagentRuns.captureRegistrationOwnership(childSessionKey);
+    const registrationOwnership = subagentRuns.captureRegistrationOwnership(childSessionKey, runId);
     const register = (
       completionAuthority?: Awaited<
         ReturnType<typeof captureOperatorToolGatewayContinuationContext>
       >,
     ): void | Promise<void> => {
       let custodyTransferred = false;
+      let pending = false;
       try {
         completionAuthority?.assertCurrent();
         options.assertCurrent?.();
         completionAuthority?.signal.throwIfAborted();
-        queuedContext?.admission.assertCurrent();
+        registrationContext?.admission.assertCurrent();
         if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
           throw new Error("Subagent registration lifecycle changed during preparation");
         }
@@ -132,33 +133,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         });
         entry.requesterStorePath = requesterStorePath;
         entry.controllerStorePath = controllerStorePath;
-        if (completionAuthority?.operatorAuthority) {
-          subagentRuns.bindCompletionAuthority(entry, completionAuthority);
-          custodyTransferred = true;
-        } else {
-          completionAuthority?.release();
-        }
-        this.options.runs.set(runId, entry);
-        bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
-        const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
-        const registeredKillReconciliationSnapshots = new Map(
-          [...killReconciliationSnapshots.keys()].map((candidate) => [
-            candidate,
-            structuredClone(candidate.killReconciliation),
-          ]),
-        );
-        const registeredRunIds = [
-          runId,
-          ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
-        ];
-        const rollbackRegistration = () => {
-          this.options.runs.delete(runId);
-          this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
-        };
-        const restoreDurableRegistration = () => {
-          this.options.runs.set(runId, entry);
-          this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
-        };
         const bindRegistrationReservation = () => {
           bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
             if (this.options.runs.get(entry.runId) === entry) {
@@ -170,9 +144,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             }
           });
         };
-        const activateRegistrationLifecycle = () => {
+        const activateRegistrationLifecycle = (publishOwnership = true) => {
           bindRegistrationReservation();
-          subagentRuns.commitOwnership(entry);
+          if (publishOwnership) {
+            subagentRuns.commitOwnership(entry);
+          }
           this.options.ensureListener();
           // Session-mode and persistence-recovery runs also need TTL cleanup.
           this.options.startSweeper();
@@ -198,9 +174,58 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
           detail: createSubagentTaskBackingDetail(generation),
         } as const;
-        if (queuedContext) {
-          return registerRequiredQueuedSubagent({
-            context: queuedContext,
+        bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
+        if (!queued && registrationContext) {
+          pending = true;
+          return registerRunningSubagent({
+            entry,
+            previous,
+            context: registrationContext,
+            manager: this.options,
+            ownership: registrationOwnership,
+            taskParams: { ...taskParams, startedAt: now, lastEventAt: now },
+            taskRowOwnership: registerParams.taskRowOwnership,
+            publishAuthority: () => {
+              if (completionAuthority?.operatorAuthority) {
+                subagentRuns.bindCompletionAuthority(entry, completionAuthority);
+                custodyTransferred = true;
+              }
+            },
+            activate: activateRegistrationLifecycle,
+            options: {
+              ...options,
+              assertCurrent: () => {
+                completionAuthority?.assertCurrent();
+                completionAuthority?.signal.throwIfAborted();
+                options.assertCurrent?.();
+              },
+            },
+          }).finally(() => {
+            if (!custodyTransferred) {
+              completionAuthority?.release();
+            }
+            registrationOwnership.release();
+          });
+        }
+        if (completionAuthority?.operatorAuthority) {
+          subagentRuns.bindCompletionAuthority(entry, completionAuthority);
+          custodyTransferred = true;
+        } else {
+          completionAuthority?.release();
+        }
+        this.options.runs.set(runId, entry);
+        const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
+        const registeredRunIds = [
+          runId,
+          ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
+        ];
+        const rollbackRegistration = () => {
+          this.options.runs.delete(runId);
+          this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+        };
+        if (registrationContext) {
+          const registration = registerRequiredQueuedSubagent({
+            context: registrationContext,
             entry,
             manager: this.options,
             originals: killReconciliationSnapshots,
@@ -210,6 +235,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             activate: activateRegistrationLifecycle,
             ...options,
           });
+          pending = true;
+          return registration.finally(registrationOwnership.release);
         }
         try {
           this.options.persistOrThrow(...registeredRunIds);
@@ -220,38 +247,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
         if (registerParams.taskRowOwnership !== "gateway_best_effort") {
           try {
-            const task = queued
-              ? createQueuedTaskRun(taskParams)
-              : createRunningTaskRun({
-                  ...taskParams,
-                  startedAt: now,
-                  lastEventAt: now,
-                });
-            if (!task) {
-              if (registerParams.taskRowOwnership === "required") {
-                throw new Error(`detached task runtime created no task row for run ${runId}`);
-              }
+            if (!createQueuedTaskRun(taskParams)) {
               log.warn("Failed to persist background task for subagent run", { runId });
             }
           } catch (error) {
-            if (registerParams.taskRowOwnership !== "required") {
-              log.warn("Failed to create background task for subagent run", { runId, error });
-            } else {
-              // Direct dispatch suppressed Gateway's CLI fallback. Persist the rollback before
-              // asking the caller to abort; if that write fails, memory must match durable state.
-              rollbackRegistration();
-              try {
-                this.options.persistOrThrow(...registeredRunIds);
-              } catch (rollbackError) {
-                restoreDurableRegistration();
-                // Durable state still owns this registration. Keep reconciliation active so
-                // caller cleanup can terminalize it instead of leaving a phantom run.
-                activateRegistrationLifecycle();
-                throw rollbackError;
-              }
-              subagentRuns.releaseCompletionAuthority(entry);
-              throw error;
-            }
+            log.warn("Failed to create background task for subagent run", { runId, error });
           }
         }
         // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.
@@ -262,7 +262,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
         throw error;
       } finally {
-        registrationOwnership.release();
+        if (!pending) {
+          registrationOwnership.release();
+        }
       }
     };
     try {

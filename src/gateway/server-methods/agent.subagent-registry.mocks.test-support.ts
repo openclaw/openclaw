@@ -3,6 +3,7 @@ import type { runSubagentAnnounceFlow } from "../../agents/subagents/announce/su
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import type {
   persistSubagentRunsToDisk,
+  persistSubagentRunsToDiskAsyncOrThrow,
   persistSubagentRunsToDiskOrThrow,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { callGateway } from "../call.js";
@@ -12,6 +13,7 @@ const subagentRegistryMocks = vi.hoisted(() => ({
   registryAnnounce: vi.fn<typeof runSubagentAnnounceFlow>(),
   registryWake: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(),
   registryPersist: vi.fn<typeof persistSubagentRunsToDisk>(),
+  registryPersistAsyncOrThrow: vi.fn<typeof persistSubagentRunsToDiskAsyncOrThrow>(),
   registryPersistOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
 }));
 
@@ -33,6 +35,12 @@ vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (imp
       subagentRegistryMocks.registryPersist.getMockImplementation()
         ? subagentRegistryMocks.registryPersist(...args)
         : actual.persistSubagentRunsToDisk(...args),
+    persistSubagentRunsToDiskAsyncOrThrow: (
+      ...args: Parameters<typeof actual.persistSubagentRunsToDiskAsyncOrThrow>
+    ) =>
+      subagentRegistryMocks.registryPersistAsyncOrThrow.getMockImplementation()
+        ? subagentRegistryMocks.registryPersistAsyncOrThrow(...args)
+        : actual.persistSubagentRunsToDiskAsyncOrThrow(...args),
     persistSubagentRunsToDiskOrThrow: (
       ...args: Parameters<typeof actual.persistSubagentRunsToDiskOrThrow>
     ) =>
@@ -87,5 +95,6 @@ export function resetSubagentRegistryMocks() {
   subagentRegistryMocks.registryAnnounce.mockReset();
   subagentRegistryMocks.registryWake.mockReset();
   subagentRegistryMocks.registryPersist.mockReset();
+  subagentRegistryMocks.registryPersistAsyncOrThrow.mockReset();
   subagentRegistryMocks.registryPersistOrThrow.mockReset();
 }

@@ -153,9 +153,6 @@ vi.mock("./subagent-registry-state.js", async () => ({
   ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentPersistenceMock(
     mocks,
   ),
-  persistSubagentRunsToDiskAsyncOrThrow: async () => {
-    throw new Error("Unexpected required queued registration");
-  },
 }));
 
 vi.mock("./subagent-registry-replacement-store.js", () => ({

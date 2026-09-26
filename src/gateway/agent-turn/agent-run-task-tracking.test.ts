@@ -315,6 +315,7 @@ function followupFixture() {
   };
   const receipt: CreatedDetachedTaskRun = {
     task,
+    release: vi.fn(),
     bindRunOwner: vi.fn(async (cancel, assertCurrent) => {
       bindingStarted.resolve();
       await bindingGate.promise;

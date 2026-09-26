@@ -350,18 +350,18 @@ export function registerSubagentRegistrationPersistenceTests({
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
 }) {
-  it("throws and removes the entry when the initial durable registry write fails", () => {
+  it("throws and removes the entry when the initial durable registry write fails", async () => {
     const mod = getRegistry();
     mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
       throw new Error("disk full");
     });
 
-    expect(() =>
+    await expect(
       mod.registerSubagentRun({
         runId: "run-durability-required",
         task: "must fail closed",
       }),
-    ).toThrowError("disk full");
+    ).rejects.toMatchObject({ outcome: "not-committed", cause: new Error("disk full") });
 
     expect(
       mod
@@ -531,14 +531,22 @@ export function registerSubagentRegistrationPersistenceTests({
       return { status: "pending" };
     });
 
-    expect(() =>
+    await expect(
       mod.registerSubagentRun({
         runId: "run-task-row-rollback-new",
         childSessionKey,
         task: "retain the last durable snapshot",
         taskRowOwnership: "required",
       }),
-    ).toThrowError("rollback disk full");
+    ).rejects.toMatchObject({
+      errors: [
+        expect.any(Error),
+        expect.objectContaining({
+          outcome: "not-committed",
+          cause: new Error("rollback disk full"),
+        }),
+      ],
+    });
 
     expect(findRequesterRun("run-task-row-rollback-new")).toMatchObject({
       runId: "run-task-row-rollback-new",
@@ -590,7 +598,7 @@ export function registerSubagentRegistrationPersistenceTests({
     expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
   });
 
-  it("rolls back an older kill ownership boundary when registration persistence fails", () => {
+  it("rolls back an older kill ownership boundary when registration persistence fails", async () => {
     const mod = getRegistry();
     const childSessionKey = "agent:main:subagent:registration-rollback";
     mod.addSubagentRunForTests({
@@ -607,13 +615,13 @@ export function registerSubagentRegistrationPersistenceTests({
       throw new Error("disk full");
     });
 
-    expect(() =>
+    await expect(
       mod.registerSubagentRun({
         runId: "run-registration-rollback-new",
         childSessionKey,
         task: "new generation",
       }),
-    ).toThrowError("disk full");
+    ).rejects.toMatchObject({ outcome: "not-committed", cause: new Error("disk full") });
 
     const oldRun = findRequesterRun("run-registration-rollback-old");
     expect(oldRun?.killReconciliation).toEqual({ killedAt: Date.now() - 500 });

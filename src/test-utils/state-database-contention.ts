@@ -16,6 +16,19 @@ export function holdStateDatabaseCoordinator(
     runtimeDirectory: runtime.directory,
     uid: process.getuid?.(),
   });
+  return holdSqliteTransaction(coordinatorPath, "BEGIN EXCLUSIVE", releaseAfterMs);
+}
+
+/** Block fixture writes while existing readers and lifecycle owners keep their custody. */
+export function holdStateDatabaseWrite(databasePath: string, releaseAfterMs: number) {
+  return holdSqliteTransaction(databasePath, "BEGIN IMMEDIATE", releaseAfterMs);
+}
+
+function holdSqliteTransaction(
+  databasePath: string,
+  begin: "BEGIN EXCLUSIVE" | "BEGIN IMMEDIATE",
+  releaseAfterMs: number,
+) {
   const released = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const ready = createDeferred();
   const holder = new Worker(
@@ -23,8 +36,11 @@ export function holdStateDatabaseCoordinator(
     const { parentPort, workerData } = require("node:worker_threads");
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(workerData.path);
-    try { db.exec("BEGIN EXCLUSIVE"); }
-    catch (error) { throw new Error("Contention holder exclusive acquisition failed", { cause: error }); }
+    try { db.exec(workerData.begin); }
+    catch (error) {
+      const mode = workerData.begin === "BEGIN EXCLUSIVE" ? "exclusive" : "write";
+      throw new Error("Contention holder " + mode + " acquisition failed", { cause: error });
+    }
     let done = false;
     const release = () => {
       if (done) return;
@@ -43,7 +59,7 @@ export function holdStateDatabaseCoordinator(
       eval: true,
       execArgv: [],
       env: {},
-      workerData: { path: coordinatorPath, released: released.buffer, releaseAfterMs },
+      workerData: { path: databasePath, begin, released: released.buffer, releaseAfterMs },
     },
   );
   let readyObserved = false;

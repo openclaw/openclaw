@@ -47,8 +47,10 @@ import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
 import {
   persistSubagentRunsToDisk,
+  persistSubagentRunsToDiskAsyncOrThrow,
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
 } from "../registry/subagent-registry-state.js";
@@ -60,6 +62,7 @@ import { buildSubagentExecutionSessionSpawnContext } from "./subagent-spawn-exec
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
+import { registerRequiredTaskAbortTests } from "./subagent-spawn.task-abort.test-support.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("../../runtime-plugins.js", () => ({
@@ -200,6 +203,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     vi.mocked(persistSubagentRunsToDisk).mockReset();
     vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
+    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockReset();
     vi.mocked(restoreSubagentRunsFromDisk).mockReset();
     subagentSpawnTesting.setDepsForTest();
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -743,9 +747,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
     // The registry never takes ownership, which is exactly when the suppressed
     // gateway CLI row would have been the only record of the accepted run.
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
-      throw new Error("state db unavailable");
-    });
+    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockRejectedValueOnce(
+      new SubagentRegistryWriteError("not-committed", new Error("state db unavailable")),
+    );
 
     const result = await withPluginRuntimeGatewayRequestScope(
       {
@@ -771,71 +775,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     ).toBe(true);
   });
 
-  // The registry entry only counts as ownership once the canonical `subagent` task row
-  // exists. A task runtime is plugin-replaceable and may legally create no row, so both
-  // fault shapes have to fail registration and abort — otherwise the accepted child keeps
-  // running with the gateway CLI row suppressed and nothing in the tasks rail.
-  const taskRowFaults: Array<[label: string, createTaskRun: () => null]> = [
-    ["creates no task row", () => null],
-    [
-      "throws while creating the task row",
-      () => {
-        throw new Error("task store unavailable");
-      },
-    ],
-  ];
-  it.each(taskRowFaults)(
-    "aborts the accepted child run when the task runtime %s",
-    async (_label, createTaskRun) => {
-      const gatewayContext = makeGatewayContext();
-      const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-      subagentSpawnTesting.setDepsForTest({
-        dispatchGatewayMethodInProcess: async <T>(
-          method: string,
-          params: Record<string, unknown>,
-        ) => {
-          requests.push({ method, params });
-          if (method === "agent") {
-            return { runId: "gateway-accepted-run", status: "accepted" } as T;
-          }
-          if (method === "chat.abort") {
-            return { aborted: true, runIds: [params.runId] } as T;
-          }
-          return {} as T;
-        },
-      });
-      // Registry persistence succeeds here; only the task row is missing.
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        createQueuedTaskRun: createTaskRun,
-        createRunningTaskRun: createTaskRun,
-      });
-
-      const result = await withPluginRuntimeGatewayRequestScope(
-        {
-          context: gatewayContext,
-          client: externalCliClient(),
-          isWebchatConnect: () => false,
-        },
-        () =>
-          spawnSubagentDirect(
-            { task: "orphan me", context: "isolated", lightContext: true },
-            { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-          ),
-      );
-
-      expect(result.status).toBe("error");
-      expect(
-        requests.some(
-          (request) =>
-            request.method === "chat.abort" && request.params.runId === "gateway-accepted-run",
-        ),
-      ).toBe(true);
-      // Rolled back rather than half-registered: a retained entry would report a live run
-      // that owns no task row.
-      expect(subagentRuns.size).toBe(0);
-    },
-  );
+  registerRequiredTaskAbortTests(externalCliClient);
 
   it("keeps the Gateway-owned task row on an out-of-process fallback", async () => {
     const gatewayContext = makeGatewayContext();
@@ -956,9 +896,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         } as T;
       },
     });
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
-      throw new Error("state db unavailable");
-    });
+    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockRejectedValueOnce(
+      new SubagentRegistryWriteError("not-committed", new Error("state db unavailable")),
+    );
 
     const result = await withPluginRuntimeGatewayRequestScope(
       {

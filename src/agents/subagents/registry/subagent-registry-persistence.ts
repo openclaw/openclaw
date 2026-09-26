@@ -34,7 +34,7 @@ export class SubagentRegistryWriteError extends Error {
 export type SubagentRegistryWriteOptions = {
   context: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
-  onCommitted?: () => void;
+  onCommitted?: (runIds: readonly string[]) => void;
 };
 
 /** Retains captured rows, original database admission, and publication through actor settlement. */

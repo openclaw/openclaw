@@ -105,7 +105,7 @@ export function useSubagentControlFixture() {
         options.assertCurrent?.();
         persist(snapshot, ids);
         committed = true;
-        options.onCommitted?.();
+        options.onCommitted?.(ids);
       } catch (error) {
         throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
       }

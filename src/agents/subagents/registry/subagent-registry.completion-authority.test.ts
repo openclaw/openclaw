@@ -18,7 +18,11 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import {
+  persistSubagentRunsToDiskAsyncOrThrow,
+  persistSubagentRunsToDiskOrThrow,
+} from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
@@ -30,6 +34,7 @@ vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
+vi.mock("./subagent-registry-state.js", { spy: true });
 vi.mock("./subagent-registry.store.sqlite.js", { spy: true });
 
 beforeEach(() => {
@@ -43,6 +48,7 @@ afterEach(() => {
   vi.mocked(callGateway).mockReset();
   vi.mocked(bindGatewayLifecycleRequest).mockReset();
   vi.mocked(onAgentEvent).mockReset();
+  vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockReset();
   vi.mocked(saveSubagentRegistryChangesToSqlite).mockReset();
 });
 
@@ -161,10 +167,16 @@ describe("registered completion source custody", () => {
               });
             };
             if (changed === "failed child replacement") {
-              vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
-                throw new Error("replacement write refused");
+              vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockRejectedValueOnce(
+                new SubagentRegistryWriteError(
+                  "not-committed",
+                  new Error("replacement write refused"),
+                ),
+              );
+              await expect(registerNewChild()).rejects.toMatchObject({
+                outcome: "not-committed",
+                cause: new Error("replacement write refused"),
               });
-              await expect(registerNewChild()).rejects.toThrow("replacement write refused");
               expect(subagentRuns.has("newer-child")).toBe(false);
             } else {
               await registerNewChild();
@@ -266,10 +278,13 @@ describe("registered completion source custody", () => {
               }),
           );
         if (ending === "registration-rejected") {
-          vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
-            throw new Error("write refused");
+          vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockRejectedValueOnce(
+            new SubagentRegistryWriteError("not-committed", new Error("write refused")),
+          );
+          await expect(register()).rejects.toMatchObject({
+            outcome: "not-committed",
+            cause: new Error("write refused"),
           });
-          await expect(register()).rejects.toThrow("write refused");
           source.release();
           expect(source.authority.assertCurrent).toThrow();
           expect(subagentRuns.has("child")).toBe(false);

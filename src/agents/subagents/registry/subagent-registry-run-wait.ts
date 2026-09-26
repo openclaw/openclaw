@@ -136,7 +136,11 @@ export type SubagentManagerOptions = {
   persistOrThrow(...runIds: string[]): void;
   persistAsyncOrThrow(
     context: OpenClawStateWorkerContext,
-    callbacks: { assertCurrent: () => void; onCommitted?: () => void },
+    callbacks: {
+      assertCurrent: () => void;
+      onCommitted?: (runIds: readonly string[]) => void;
+      snapshot?: Map<string, SubagentRunRecord>;
+    },
     ...runIds: string[]
   ): Promise<void>;
   callGateway: typeof callGateway;

@@ -5,6 +5,7 @@ import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.l
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { SubagentRegistryWriteError } from "./subagents/registry/subagent-registry-persistence.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryPersistence from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -65,6 +66,18 @@ export function createSubagentPersistenceMock(
     onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
     persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
     persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
+    persistSubagentRunsToDiskAsyncOrThrow: (async (runs, ids, options) => {
+      let committed = false;
+      try {
+        options.assertCurrent?.();
+        methods.persistSubagentRunsToDiskOrThrow(runs, ids);
+        committed = true;
+        options.onCommitted?.(ids);
+        notifyListeners(listeners, undefined);
+      } catch (error) {
+        throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
+      }
+    }) satisfies typeof RegistryPersistence.persistSubagentRunsToDiskAsyncOrThrow,
     restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
   };
 }

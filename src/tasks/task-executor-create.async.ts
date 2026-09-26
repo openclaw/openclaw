@@ -86,6 +86,7 @@ export async function createRunningTaskRunCoreWithReceiptAsync(
     let settlement: Promise<boolean> | undefined;
     return {
       task: receipt.task,
+      release: () => lineage.close(),
       bindRunOwner: receipt.bindRunOwner,
       finalizeActive: receipt.finalizeActive,
       settleUnstarted(terminal, canSettle) {

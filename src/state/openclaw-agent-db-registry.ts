@@ -10,7 +10,7 @@ import {
 } from "./agent-deletion-journal.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  type OpenClawAgentDatabaseRegistrationCommit,
+  type OpenClawAgentDatabaseRegistrationObserver,
 } from "./openclaw-agent-db-contract.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
 import {
@@ -69,7 +69,7 @@ export function registerOpenClawAgentDatabase(
     env?: NodeJS.ProcessEnv;
     schemaVersion?: number;
   },
-  onCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+  observer?: OpenClawAgentDatabaseRegistrationObserver,
 ): void {
   if (!isPersistentOpenClawAgentDatabasePath(params.path, params.env)) {
     return;
@@ -85,6 +85,7 @@ export function registerOpenClawAgentDatabase(
     sizeBytes = null;
   }
   const lastSeenAt = Date.now();
+  observer?.starting?.();
   runOpenClawStateWriteTransaction(
     (database) => {
       assertAgentDeletionPathFence(database, deletionFence);
@@ -110,6 +111,7 @@ export function registerOpenClawAgentDatabase(
           ),
       );
       invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+      const onCommitted = observer?.committed;
       if (onCommitted) {
         const receipt = Object.freeze({
           agentId: params.agentId,

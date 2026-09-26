@@ -237,9 +237,14 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     }),
   });
   const persistence = await import("./subagents/registry/subagent-registry-state.js");
+  const { createSubagentPersistenceMock } =
+    await import("./subagent-test-fixtures.test-helpers.js");
   vi.mocked(persistence.persistSubagentRunsToDisk).mockImplementation(hoisted.notifyEventWaiters);
   vi.mocked(persistence.persistSubagentRunsToDiskOrThrow).mockImplementation(
     hoisted.notifyEventWaiters,
+  );
+  vi.mocked(persistence.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
+    createSubagentPersistenceMock(persistence).persistSubagentRunsToDiskAsyncOrThrow,
   );
   vi.mocked(persistence.restoreSubagentRunsFromDisk).mockReturnValue(0);
   // Prepare the async announcement mock before lifecycle assertions start waiting.

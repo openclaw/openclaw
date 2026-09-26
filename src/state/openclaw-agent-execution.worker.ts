@@ -49,6 +49,7 @@ import type {
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseDomainOwner } from "./openclaw-agent-execution-domain.js";
+import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
   requireOpenClawStateDatabaseIdentity,
   retainOpenClawStateDatabase,
@@ -215,8 +216,15 @@ function openAgentDatabaseBackend(
       let registration: OpenClawAgentDatabaseRegistrationCommit | undefined;
       let openingResult: Result<OpenClawAgentDatabase, unknown>;
       try {
-        const opened = openOpenClawAgentDatabase(options, lease, (receipt) => {
-          registration = receipt;
+        const opened = openOpenClawAgentDatabase(options, lease, {
+          starting: () =>
+            requestSqliteWorkerOperationAdmission({
+              stage: "prepare",
+              facts: { kind: "agent-registration-start", lease: lease.receipt },
+            }),
+          committed(receipt) {
+            registration = receipt;
+          },
         });
         database = opened;
         releaseBorrow = retainAgentDatabase(opened.db);
@@ -326,6 +334,12 @@ function openAgentDatabaseBackend(
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
+  const maintenance = createAgentDatabaseMaintenanceOwner({
+    databaseOptions: options,
+    assertFileIdentity,
+    openWriter,
+    admit,
+  });
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -424,10 +438,8 @@ function openAgentDatabaseBackend(
       );
     }
     if (command.type === "session.transcript.initialize" && transcript) {
-      const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-        transcript.assertIdentity;
-      assertIdentity(command.input);
-      const initialize = transcript.initialize;
+      const kernel: NonNullable<typeof transcript> = transcript;
+      kernel.assertIdentity(command.input);
       const opened = openWriter();
       return runOpenClawAgentWriteTransaction(
         (current) => {
@@ -439,7 +451,7 @@ function openAgentDatabaseBackend(
             kind: "session-transcript-initialized",
             sessionKey: command.input.sessionKey,
           };
-          initialize(
+          kernel.initialize(
             current,
             { agentId: input.agentId, path: input.databasePath, ...command.input },
             command.input.cwd,
@@ -476,9 +488,7 @@ function openAgentDatabaseBackend(
               if (!transcript) {
                 throw new Error("Session transcript initialization was not prepared");
               }
-              const assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity =
-                transcript.assertIdentity;
-              assertIdentity(initialization);
+              transcript.assertIdentity(initialization);
               transcript.initialize(
                 current,
                 { agentId: input.agentId, path: input.databasePath, ...initialization },
@@ -498,6 +508,13 @@ function openAgentDatabaseBackend(
         options,
         { operationLabel: "session.entry-replacements" },
       );
+    }
+    if (
+      command.type === "session.maintenance.release" ||
+      command.type === "session.maintenance.prepare" ||
+      command.type === "session.maintenance.metadata"
+    ) {
+      return maintenance.execute(command);
     }
     if (command.type === "session.providerReview.compare" && providerReview) {
       return providerReview.compareSessionProviderReviewInWorker(
@@ -590,6 +607,12 @@ function openAgentDatabaseBackend(
           },
         );
       }
+      if (
+        command.type === "session.maintenance.metadata" ||
+        command.type === "session.maintenance.prepare"
+      ) {
+        return maintenance.prepare();
+      }
       if (command.type === "session.providerReview.compare") {
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {
           providerReview = module;
@@ -618,6 +641,7 @@ function openAgentDatabaseBackend(
       }
     },
     [SQLITE_WORKER_OPERATION_CLEANUP](command) {
+      maintenance.cleanup(command);
       if (command.type === "database.domain.publish") {
         startupJournalRequested = publicationStartupJournal ?? false;
         try {
@@ -666,6 +690,7 @@ function openAgentDatabaseBackend(
       closeReceipt = closeAgentDatabaseExecution({
         database,
         identity,
+        releasePreparations: maintenance.getPreparationReleases(),
         closeDomain: () => domain.close(),
         releaseBorrow,
         releaseSharedBorrow: () => sharedBorrow?.release(),

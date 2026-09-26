@@ -127,6 +127,7 @@ function createPreparedRunningTask(...args: Parameters<typeof prepareRunningTask
 function createFakeTaskReceipt(task: TaskRecord): CreatedDetachedTaskRun {
   return {
     task,
+    release() {},
     bindRunOwner: async () => {
       throw new Error("This fixture does not bind task owners");
     },

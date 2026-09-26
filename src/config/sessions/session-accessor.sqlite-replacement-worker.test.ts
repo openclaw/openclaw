@@ -470,6 +470,7 @@ it.each([
   "lost delivery after native completion",
   "lost result and commit receipt after final grant",
   "unknown native settlement after commit",
+  "post-commit observer failure",
 ] as const)("settles canonical replacement with %s", async (fault) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -505,7 +506,12 @@ it.each([
     const deliveryFailure = new Error("Replacement committed but its reply was lost");
     const missingReceipt = fault === "lost result and commit receipt after final grant";
     const nativeUnknown = fault === "unknown native settlement after commit";
-    const committedLifecycle = vi.fn();
+    const observerFailure = fault === "post-commit observer failure";
+    const committedLifecycle = vi.fn(() => {
+      if (observerFailure) {
+        throw deliveryFailure;
+      }
+    });
     const followup = vi.fn();
     let verifiedCommits = 0;
     const restoreFaults: Array<() => void> = [];
@@ -570,7 +576,7 @@ it.each([
                   }
                   verifiedCommits++;
                   injected = true;
-                  if (!nativeUnknown) {
+                  if (!nativeUnknown && !observerFailure) {
                     throw deliveryFailure;
                   }
                   return result;

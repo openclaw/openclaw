@@ -9,6 +9,7 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
@@ -479,20 +480,47 @@ function createAgentDatabaseExecution(
           await result;
         },
         async runExisting(source, operation, runOptions) {
-          assertBorrowed();
-          assertCreationReference(false);
-          const result = run(
-            source,
-            operation,
-            (nativeIdentity) => {
-              assertReferenceCurrent(nativeIdentity);
+          const capturedGeneration = generation;
+          const completion = createDeferredCore();
+          pending.add(completion.promise);
+          const result = (async () => {
+            try {
+              assertBorrowed();
               assertCreationReference(false);
-            },
-            expectedIdentity,
-            runOptions?.retireNativeOnFailure,
-          );
-          pending.add(result);
-          void result.finally(() => pending.delete(result)).catch(() => undefined);
+              return await run(
+                source,
+                operation,
+                (nativeIdentity) => {
+                  assertReferenceCurrent(nativeIdentity);
+                  assertCreationReference(false);
+                },
+                expectedIdentity,
+                runOptions?.retireNativeOnFailure,
+              );
+            } catch (error) {
+              if (runOptions?.retireNativeOnFailure && capturedGeneration) {
+                try {
+                  await closeNative(capturedGeneration);
+                } catch (cleanupError) {
+                  throw retainSqliteWorkerErrorCode(
+                    new AggregateError(
+                      [error, cleanupError],
+                      "Agent execution refusal and native cleanup failed",
+                      { cause: error },
+                    ),
+                    error,
+                  );
+                }
+              }
+              throw error;
+            }
+          })();
+          void result
+            .finally(() => {
+              pending.delete(completion.promise);
+              completion.resolve();
+            })
+            .catch(() => undefined);
           return result;
         },
         release() {

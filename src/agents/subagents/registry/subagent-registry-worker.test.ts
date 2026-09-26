@@ -320,6 +320,27 @@ describe("queued registry worker publication", () => {
     },
   );
 
+  it("acknowledges only the rows that survived a newer publication", async () => {
+    const entry = run();
+    const sibling = { ...run(), runId: "sibling" };
+    const entries = new Map([entry, sibling].map((record) => [record.runId, record]));
+    const publish = vi.fn();
+    const pending = persistSubagentRunsToDiskAsyncOrThrow(entries, [entry.runId, sibling.runId], {
+      context: original,
+      onCommitted: publish,
+    });
+    expect(await request("transaction")).toBe(true);
+    expect(await request("commit")).toBe(true);
+    sibling.execution = { status: "terminal", endedAt: 2 };
+    persistSubagentRunsToDiskOrThrow(entries, [sibling.runId]);
+    reply.resolve({ writeId: command.writeId });
+    await pending;
+    expect(publish).toHaveBeenCalledExactlyOnceWith([entry.runId]);
+    expect(getSubagentRunsSnapshotForRead(new Map()).get(sibling.runId)?.execution.status).toBe(
+      "terminal",
+    );
+  });
+
   it.each([false, true])(
     "publishes nothing on missing acknowledgement (commit granted=%s)",
     async (granted) => {

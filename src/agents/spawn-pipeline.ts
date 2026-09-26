@@ -73,14 +73,12 @@ export async function runSpawnPipeline<TState>(
       phase = "register";
       params.assertActive?.();
       registration = params.buildRegistration(state, runId);
-      const completion = registration.queued
-        ? registerSubagentRun(registration, {
-            assertCurrent: params.assertActive,
-            retainOwnership: (scope) => {
-              registrationScope = scope;
-            },
-          })
-        : registerSubagentRun(registration, { assertCurrent: params.assertActive });
+      const completion = registerSubagentRun(registration, {
+        assertCurrent: params.assertActive,
+        retainOwnership: (scope) => {
+          registrationScope = scope;
+        },
+      });
       if (completion) {
         await completion;
       }

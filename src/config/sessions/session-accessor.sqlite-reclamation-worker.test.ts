@@ -25,6 +25,7 @@ import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import {
@@ -33,7 +34,7 @@ import {
 } from "./session-accessor.sqlite-reclamation.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
-test("retains one Worker across twenty admission refusals and interleaved reclamation operations", async () => {
+test("retains one archive Worker across refused and interleaved reclamation operations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
@@ -104,8 +105,10 @@ test("retains one Worker across twenty admission refusals and interleaved reclam
         for (const operation of plans) {
           const refusals =
             operation.kind === "maintenance-statistics"
-              ? (["admission-request", "commit-request"] as const)
-              : (["admission-request"] as const);
+              ? []
+              : operation.kind === "entry"
+                ? (["admission-request", "commit-request"] as const)
+                : (["admission-request"] as const);
           for (const point of refusals) {
             refusalPoint = point;
             await expect(
@@ -421,29 +424,28 @@ test("commits maintenance despite an unrelated write during Worker planning", as
         firstRun.resolve();
         return operation;
       });
-      const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let raced = false;
-      const constructions = vi
-        .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
-        .mockImplementation((data) => {
-          const worker = spawn(data);
-          worker.prependListener("message", (message: { type: string }) => {
-            if (message.type !== "admission-request" || raced) {
-              return;
-            }
-            // The protected active row is outside the plan's destructive candidates.
-            raced = true;
-            runOpenClawAgentWriteTransaction((owner) => {
-              writeSessionEntry(owner, sessionKey, {
-                sessionId: scope.sessionId,
-                updatedAt: Date.now(),
-                label: "concurrent-write",
-              });
-            }, scope);
-            kickSessionEntryMaintenanceAfterWrite(request);
-          });
-          return worker;
-        });
+      const workerThreadIds: number[] = [];
+      observeSessionMaintenancePlanningWorker({
+        beforeAdmission(nativeRequest) {
+          if (nativeRequest.stage !== "prepare" || raced) {
+            return;
+          }
+          // Native preparation precedes BEGIN; the competing write can still commit.
+          raced = true;
+          runOpenClawAgentWriteTransaction((owner) => {
+            writeSessionEntry(owner, sessionKey, {
+              sessionId: scope.sessionId,
+              updatedAt: Date.now(),
+              label: "concurrent-write",
+            });
+          }, scope);
+          kickSessionEntryMaintenanceAfterWrite(request);
+        },
+        afterExecute(result) {
+          workerThreadIds.push(result.workerThreadId);
+        },
+      });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         kickSessionEntryMaintenanceAfterWrite(request);
@@ -451,7 +453,8 @@ test("commits maintenance despite an unrelated write during Worker planning", as
         await expect(runs[0]).resolves.toMatchObject({ kind: "maintenance-plan" });
         expect(raced).toBe(true);
         expect(loadSessionEntry(scope)?.label).toBe("concurrent-write");
-        expect(constructions).toHaveBeenCalledTimes(1);
+        expect(workerThreadIds).toHaveLength(1);
+        expect(workerThreadIds[0]).toBeGreaterThan(0);
         await flushLogger();
         const records: unknown[] = (await fs.readFile(file, "utf8"))
           .split("\n")

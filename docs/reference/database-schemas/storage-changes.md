@@ -464,9 +464,23 @@ and suppresses delivery. This also covers launch failure after registration is a
 while the original collector is still queued; selecting another runtime cannot retarget
 its failure callback. Registered external synchronous task runtimes retain their captured
 compatibility methods. Accepted-run lifecycle changes, receiptless restored-launch cleanup,
-ordinary subagent registration, full registry replacement, and cross-owner atomic
+optional queued registration, full registry replacement, and cross-owner atomic
 transactions retain their synchronous owners. The stored representation, recovery entry point, schema version,
 and retention are unchanged.
+
+Ordinary running-subagent registration stages its selected rows privately and uses
+the same shared-state writer. Only acknowledged rows that retain their original
+owners enter the live registry; their publication precedes cache updates and wakes.
+The launch manager retains registration custody through task creation, including a
+successor that commits and retires while the task worker is pending. Core task
+creation uses the existing creation receipt; activation releases its temporary
+event lineage to the existing task lifecycle, and failed activation settles through
+that exact receipt. The shipped synchronous task-runtime adapter and best-effort
+no-task behavior remain supported. A required task creation without a receipt
+retains recovery state, because an exception alone cannot prove absence. Required
+no-task rollback is acknowledged before session cleanup becomes eligible. Registry
+and task writes are never replayed after an unknown outcome. Stored bytes, schema,
+retention, and update behavior are unchanged.
 
 Explicit promotion notice and claim annotations execute in the shared-state
 worker. The CLI awaits their best-effort completion before reporting results;

@@ -107,7 +107,7 @@ function createRegistrationFixture() {
       }
       persist(...runIds);
       await Promise.resolve();
-      publication.onCommitted?.();
+      publication.onCommitted?.(runIds);
     },
     callGateway: async () => {
       throw new Error("Unexpected registration Gateway call");
@@ -179,7 +179,7 @@ it("supersedes retired cancellation ownership after a known refused no-task roll
     }
     persist(...runIds);
     await Promise.resolve();
-    publication.onCommitted?.();
+    publication.onCommitted?.(runIds);
   };
   const createTask = vi.fn(() => {
     expect(stored.get(successorId)).toMatchObject({ execution: { status: "queued" } });
@@ -504,7 +504,7 @@ it.each([false, true])(
         ).taskId;
       }
       await Promise.resolve();
-      callbacks.onCommitted?.();
+      callbacks.onCommitted?.(runIds);
     };
     const sql = observeMainThreadSql();
     try {
@@ -654,7 +654,7 @@ it("settles an acknowledged queued launch failure through its original core task
     publication.assertCurrent();
     persist(...runIds);
     await Promise.resolve();
-    publication.onCommitted?.();
+    publication.onCommitted?.(runIds);
   };
   const runId = "acknowledged-launch-failure";
   const childSessionKey = "agent:main:subagent:acknowledged-launch-failure";

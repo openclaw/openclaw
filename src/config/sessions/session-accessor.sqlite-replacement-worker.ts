@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
+  retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -9,12 +13,14 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { getChildLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseOperations,
   AgentDatabaseRequestExecutionSource,
 } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-native.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   type OpenClawAgentDatabaseExecution,
@@ -31,6 +37,14 @@ import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
+
+type SessionEntryWorkerPreparation = (
+  execution: OpenClawAgentDatabaseExecution,
+  source: AgentDatabaseRequestExecutionSource,
+) => {
+  prepare: () => Promise<void>;
+  release: () => Promise<void>;
+};
 
 function rejectUnknownSessionEntryOutcome(message: string, cause: unknown): never {
   if (hasSqliteWorkerOutcomeUnknown(cause)) {
@@ -56,6 +70,8 @@ export async function withSessionEntryWorker<T>(
     facts: unknown,
   ) => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
+  signal?: AbortSignal,
+  prepare?: SessionEntryWorkerPreparation,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -127,13 +143,68 @@ export async function withSessionEntryWorker<T>(
       };
     },
   };
+  let preparation: ReturnType<SessionEntryWorkerPreparation> | undefined;
+  let outcome: Result<T, unknown>;
   try {
-    return await runOpenClawAgentWorkerWrite(options, () => run(execution, source, context));
-  } finally {
-    if (!retainedExecution) {
-      await execution.release();
+    preparation = prepare?.(execution, source);
+    if (preparation) {
+      // Cold native admission still owns the writer; snapshot planning releases it.
+      const opened = await runOpenClawAgentWorkerWrite(
+        options,
+        () => execution.runExisting(source, async () => true),
+        undefined,
+        signal,
+      );
+      if (!opened) {
+        throw new Error("Session database disappeared before preparation");
+      }
+      await preparation.prepare();
+    }
+    const value = await runOpenClawAgentWorkerWrite(
+      options,
+      () => run(execution, source, context),
+      undefined,
+      signal,
+    );
+    outcome = { ok: true, value };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  const cleanupErrors: unknown[] = [];
+  for (const cleanup of [
+    () => preparation?.release(),
+    () => (retainedExecution ? undefined : execution.release()),
+  ]) {
+    try {
+      await cleanup();
+    } catch (error) {
+      cleanupErrors.push(error);
     }
   }
+  if (cleanupErrors.length) {
+    if (!outcome.ok) {
+      throw retainSqliteWorkerErrorCode(
+        createSqliteLifecycleAggregateError(
+          [outcome.error, ...cleanupErrors],
+          "Session mutation and executor cleanup failed",
+          outcome.error,
+        ),
+        outcome.error,
+      );
+    }
+    try {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "Session mutation completed before executor cleanup failed",
+        { errors: cleanupErrors.map((error) => formatErrorMessage(error)) },
+      );
+    } catch {
+      // Diagnostics cannot make an acknowledged mutation appear replayable.
+    }
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 
 export function prepareSessionEntryReplacementDatabase(
@@ -237,30 +308,45 @@ export async function initializeSessionTranscriptInWorker(
   );
 }
 
-export async function commitSessionEntryReplacementsInWorker(
+export type SessionEntryWorkerMutationResult<T> =
+  | { kind: "committed"; value: T; publication: SessionEntryReplacementPublication }
+  | { kind: "not-committed"; value: T };
+
+export async function runSessionEntryWorkerMutation<T>(
   options: ReplacementDatabaseOptions,
   databaseIdentity: string,
-  input: AgentDatabaseOperations["session.entries.replace"]["input"],
   assertCurrent: () => void,
+  run: (worker: AgentDatabaseExecutionScope) => Promise<SessionEntryWorkerMutationResult<T>>,
   lifecycle: {
     identityAgentId: string;
+    onResult?: (value: T | undefined) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
-  retainedExecution?: OpenClawAgentDatabaseExecution,
-) {
+  executionOptions: {
+    retainedExecution?: OpenClawAgentDatabaseExecution;
+    signal?: AbortSignal;
+    prepare?: SessionEntryWorkerPreparation;
+  } = {},
+): Promise<T> {
   const publication = retainSessionEntryWorkerPublication({
     agentId: options.agentId,
     storePath: options.path,
     databaseIdentity,
   });
-  let committed: SessionEntryReplacementCommitted | undefined;
+  let completed: SessionEntryWorkerMutationResult<T> | undefined;
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
   const settle = async () => {
     if (!admitted) {
-      return committed !== undefined;
+      if (completed?.kind === "committed") {
+        return true;
+      }
+      if (completed) {
+        lifecycle.onResult?.(completed.value);
+      }
+      return false;
     }
     await admitted.retained.settled;
     const facts = admitted.admission.committed?.facts;
@@ -268,21 +354,29 @@ export async function commitSessionEntryReplacementsInWorker(
     if (isRecord(facts) && facts.kind === "session-entry-replacements") {
       // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
       receipt = facts as SessionEntryReplacementPublication;
-    } else if (committed) {
-      receipt = prepareSessionEntryReplacementPublication(committed);
+    } else if (completed?.kind === "committed") {
+      receipt = completed.publication;
     }
-    if (receipt) {
-      lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
-    }
-    const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
-    const published = publication.settle(receipt, unknown);
-    if (published) {
-      publishCommittedSessionIdentity(
-        lifecycle.identityAgentId,
-        databaseIdentity,
-        published.previous,
-        published.current,
-      );
+    const unknown =
+      admitted.admission.settlement?.kind !== "completed" ||
+      !receipt ||
+      completed?.kind === "not-committed";
+    try {
+      if (receipt) {
+        lifecycle.onResult?.(completed?.value);
+        lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
+      }
+    } finally {
+      // Result adoption precedes observers, but its failure cannot retain publication custody.
+      const published = publication.settle(receipt, unknown);
+      if (published) {
+        publishCommittedSessionIdentity(
+          lifecycle.identityAgentId,
+          databaseIdentity,
+          published.previous,
+          published.current,
+        );
+      }
     }
     return unknown;
   };
@@ -293,32 +387,34 @@ export async function commitSessionEntryReplacementsInWorker(
     (execution, source, context) =>
       execution
         .runExisting(source, async (worker) => {
-          const outcome = await worker.execute({ type: "session.entries.replace", input }).then(
+          const outcome = await run(worker).then(
             (value) => ({ ok: true as const, value }),
             (error: unknown) => ({ ok: false as const, error }),
           );
           if (outcome.ok) {
-            committed = outcome.value;
+            completed = outcome.value;
           }
           // Keep the executing scope and FIFO writer through native publication settlement.
           // Close joins this callback; a delayed result cannot borrow a successor owner.
           if (await settle()) {
             rejectUnknownSessionEntryOutcome(
-              "Session replacement has no confirmed native completion and commit receipt",
+              "Session entry mutation has no confirmed native completion and commit receipt",
               outcome.ok ? undefined : outcome.error,
             );
           }
           if (!outcome.ok) {
             throw outcome.error;
           }
-          await lifecycle.afterCommitted?.(context);
-          return outcome.value;
+          if (outcome.value.kind === "committed") {
+            await lifecycle.afterCommitted?.(context);
+          }
+          return { value: outcome.value.value };
         })
         .then((result) => {
           if (!result) {
-            throw new Error("Session database disappeared before replacement");
+            throw new Error("Session database disappeared before mutation");
           }
-          return result;
+          return result.value;
         }),
     (admission, retained, facts) => {
       if (
@@ -332,11 +428,42 @@ export async function commitSessionEntryReplacementsInWorker(
           (key): key is string => typeof key === "string",
         )
       ) {
-        throw new Error("Session replacement commit omitted its publication keys");
+        throw new Error("Session entry mutation commit omitted its publication keys");
       }
       admitted = { admission, retained };
       publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
     },
-    retainedExecution,
+    executionOptions.retainedExecution,
+    executionOptions.signal,
+    executionOptions.prepare,
+  );
+}
+
+export function commitSessionEntryReplacementsInWorker(
+  options: ReplacementDatabaseOptions,
+  databaseIdentity: string,
+  input: AgentDatabaseOperations["session.entries.replace"]["input"],
+  assertCurrent: () => void,
+  lifecycle: {
+    identityAgentId: string;
+    afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+    onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  },
+  retainedExecution?: OpenClawAgentDatabaseExecution,
+): Promise<SessionEntryReplacementCommitted> {
+  return runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
+    options,
+    databaseIdentity,
+    assertCurrent,
+    async (worker) => {
+      const value = await worker.execute({ type: "session.entries.replace", input });
+      return {
+        kind: "committed",
+        value,
+        publication: prepareSessionEntryReplacementPublication(value),
+      };
+    },
+    lifecycle,
+    { retainedExecution },
   );
 }

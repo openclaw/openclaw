@@ -108,6 +108,8 @@ export type DetachedTaskTerminalState = Omit<
 
 export type CreatedDetachedTaskRun = {
   task: TaskRecord;
+  /** Release receipt-only event lineage when an existing lifecycle owner takes over. */
+  release: () => void;
   bindRunOwner: (
     cancel: TaskRunOwner["cancel"],
     assertCurrent: () => void,
@@ -120,7 +122,10 @@ export type CreatedDetachedTaskRun = {
     canSettle: (task: TaskRecord) => boolean,
   ) => Promise<void>;
   settleUnstarted: (
-    terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
+    terminal: Pick<
+      DetachedTaskTerminalState,
+      "status" | "endedAt" | "error" | "terminalSummary" | "suppressDelivery"
+    >,
     canSettle: (task: TaskRecord) => boolean,
   ) => Promise<boolean>;
 };

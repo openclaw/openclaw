@@ -4,6 +4,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -27,7 +28,6 @@ import {
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -591,17 +591,17 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
       .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
-  const authorize = reclamationCommit.withSqliteReclamationAuthorization;
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const authorization = vi
-    .spyOn(reclamationCommit, "withSqliteReclamationAuthorization")
-    .mockImplementation((buffer, owner, assertCurrent, run) =>
-      authorize(buffer, owner, assertCurrent, (commit) =>
-        run(() => {
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((callback, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
           reachedCommit = true;
           current = false;
-          return commit();
-        }),
-      ),
+        }
+        return callback(request, grant);
+      }, attachment),
     );
 
   await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
