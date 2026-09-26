@@ -273,7 +273,8 @@ export function createSessionRowProvenance() {
     let next = base.key === current.key ? base : { ...base, key: current.key };
     let values: Record<string, unknown> = next;
     let copied = next !== base;
-    const fields = new Map<string, FieldObservation>();
+    // Older donors often leave every receipt intact; copy only changed field metadata.
+    let fields: Map<string, FieldObservation> | undefined;
     const keys = new Set([
       ...Object.keys(current),
       ...Object.keys(offered),
@@ -289,7 +290,13 @@ export function createSessionRowProvenance() {
       const merged = mergeSessionFieldObservations(currentField, offeredField);
       const source = merged.useOffered ? offeredValues : currentValues;
       const provenance = merged.observation;
-      if (provenance !== baseMetadata.read) {
+      if (provenance === baseMetadata.read) {
+        if (baseMetadata.fields.has(field)) {
+          fields ??= new Map(baseMetadata.fields);
+          fields.delete(field);
+        }
+      } else if (provenance !== baseMetadata.fields.get(field)) {
+        fields ??= new Map(baseMetadata.fields);
         fields.set(field, provenance);
       }
       if (
@@ -309,7 +316,7 @@ export function createSessionRowProvenance() {
         delete values[field];
       }
     }
-    const nextMetadata = { ...baseMetadata, fields };
+    const nextMetadata = fields ? { ...baseMetadata, fields } : baseMetadata;
     if (isShallowEqualSessionRow(next, current)) {
       observationsByRow.set(current, nextMetadata);
       return current;
