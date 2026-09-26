@@ -45,6 +45,7 @@ import {
   resolveSupportedThinkingLevelFromProfile,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
+import { assertRequiredWorkerSelection } from "../config/required-worker-profile.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import {
   buildSessionCreationStamp,
@@ -175,6 +176,11 @@ function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
+  try {
+    assertRequiredWorkerSelection(cfg, patch);
+  } catch (error) {
+    return invalid(error instanceof Error ? error.message : String(error));
+  }
   if ("execSecurity" in patch || "execAsk" in patch) {
     return invalid(
       "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",

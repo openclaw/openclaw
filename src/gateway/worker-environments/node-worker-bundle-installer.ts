@@ -3,10 +3,27 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
 import { parseNodeWorkerBundleInstallResult } from "../../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
-import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { NodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
+
+function sameNodeAuthority(
+  left: NodeWorkerSupervisorNodeProof,
+  right: NodeWorkerSupervisorNodeProof,
+): boolean {
+  return (
+    left.nodeId === right.nodeId &&
+    left.pairingIdentity === right.pairingIdentity &&
+    left.pairingGeneration === right.pairingGeneration &&
+    left.clientId === right.clientId &&
+    left.clientMode === right.clientMode &&
+    left.protocolFeature === right.protocolFeature
+  );
+}
 
 export function createGatewayNodeWorkerBundleInstaller(options: {
   gatewayNamespace: string;
@@ -66,7 +83,27 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         ...(params.signal ? { signal: params.signal } : {}),
       });
       if (!isAuthorized()) {
-        throw new Error("Device worker installation connection is no longer current");
+        if (params.signal?.aborted) {
+          throw new Error("Device worker installation connection is no longer current");
+        }
+        params.assertCurrent?.();
+        const replacement =
+          options.getTransport() === transport
+            ? await racePromiseWithAbortSignal(
+                transport.getCurrentNode(params.deviceId),
+                params.signal,
+              )
+            : undefined;
+        params.signal?.throwIfAborted();
+        params.assertCurrent?.();
+        if (
+          options.getTransport() !== transport ||
+          replacement === undefined ||
+          !sameNodeAuthority(node, replacement) ||
+          !transport.isCurrent(replacement)
+        ) {
+          throw new Error("Device worker installation connection is no longer current");
+        }
       }
       if (!result.ok) {
         throw new Error(

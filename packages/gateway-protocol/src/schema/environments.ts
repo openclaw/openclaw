@@ -228,6 +228,7 @@ export const WorkerExecutionModeSchema = Type.Union([
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
+  inference: Type.Optional(Type.Literal("worker")),
   readyWorkers: Type.Optional(Type.Integer({ minimum: 0 })),
   providerDisplayId: Type.Optional(
     Type.String({ pattern: "^[a-z][a-z0-9-]{0,63}(?![\\s\\S])", maxLength: 64 }),
@@ -248,6 +249,7 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
 
 /** Profile-only requests leave environments empty without reading inventory. */
 export const EnvironmentsListResultSchema = closedObject({
+  requiredProfile: Type.Optional(NonEmptyString),
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
   preparedPool: Type.Optional(

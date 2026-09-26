@@ -2209,6 +2209,10 @@ describe("worker runtime", () => {
   it.skipIf(process.platform === "win32")(
     "keeps exec unbound and creates no GitHub profile without a turn identity",
     async () => {
+      // Direct in-process fixtures bypass the node supervisor's sanitized child environment.
+      vi.stubEnv("GH_CONFIG_DIR", undefined);
+      vi.stubEnv("GH_TOKEN", undefined);
+      vi.stubEnv("GITHUB_TOKEN", undefined);
       const { gateway, launch } = await setup({
         inferencePlans: ["tool", "text"],
         execCommand: 'printf "profile=%s\\n" "${GH_CONFIG_DIR-unset}"',

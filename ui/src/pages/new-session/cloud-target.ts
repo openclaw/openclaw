@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import type {
   DraftCloudProfile,
   DraftEnvironment,
@@ -21,16 +22,22 @@ import {
 } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
+registerSessionPlacementEnglish();
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   runtimeId?: string,
-): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
+): Promise<{
+  profiles: DraftCloudProfile[];
+  environments: DraftEnvironment[];
+  requiredProfile?: string;
+}> {
   const result = await client.request<EnvironmentsListResult>(
     "environments.list",
     runtimeId ? { runtimeId } : {},
   );
   return {
+    ...(result.requiredProfile ? { requiredProfile: result.requiredProfile } : {}),
     profiles: readDraftCloudProfiles(result?.profiles),
     environments: readDraftEnvironments(result?.environments),
   };
@@ -294,8 +301,15 @@ export function renderCloudProfileMenuItems(params: {
         hasSubmenu,
         selectedSummary:
           params.compact && selected
-            ? [os?.label, machine?.label].filter(Boolean).join(" · ")
+            ? [
+                os?.label,
+                machine?.label,
+                profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ")
             : undefined,
+        description: profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
         icon: presentation.icon,
         accessibleProvider: presentation.label,
         compact: params.compact,

@@ -1,0 +1,304 @@
+---
+summary: "Worker inference on an externally managed paired worker host"
+title: "Worker-local inference"
+read_when:
+  - Hosting a dedicated native worker on an externally managed machine
+  - Keeping model credentials on a paired node instead of the Gateway
+---
+
+# Worker-local inference
+
+Worker turns normally proxy model requests through the Gateway. A configured
+paired-device profile can instead select **worker inference**, using the
+same admission, turn claims, local coding tools, transcript commits, live events,
+and node supervisor. There is no separate runtime server or network protocol.
+
+Your platform owns the host, container, or Pod and its revision. The built-in
+`device` provider adopts a paired node and releases logical leases; it does not
+create, replace, or delete the platform workload. The supervisor still owns its
+worker children and managed workspaces. Use a dedicated node account per trust
+boundary. Workspace grants are not an operating-system sandbox: code running as
+that account has its normal filesystem and process access.
+
+## Provision the node
+
+Windows worker-local inference is deferred. A Windows node rejects
+`nodeHost.workerRuns.nativeInferenceConfig` before reading the registry or
+credentials. Leave that setting unset and use Gateway inference on Windows;
+existing Gateway-proxied workers retain their current behavior. Windows support
+needs a separate, opt-in credential-transport implementation and native validation.
+
+Install matching Gateway and node builds and pair the node normally. Keep provider
+credentials in the node service's externally provisioned startup environment, not
+Gateway configuration or profile settings. In the **node's** configuration:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      capacity: 1,
+      isolation: "none",
+      nativeInferenceConfig: "/etc/openclaw/worker-inference.json",
+    },
+  },
+}
+```
+
+The external platform may run the node inside a container. OpenClaw's additional
+nested-container worker mode is not supported for local inference. Make the
+registry file readable only by the service account. For example, with node state
+rooted at `/srv/worker-state`:
+
+```json validate=false
+{
+  "models": [
+    {
+      "provider": "openai",
+      "id": "worker-model",
+      "api": "openai-completions",
+      "baseUrl": "https://model.example.test/v1",
+      "contextWindow": 32768,
+      "maxTokens": 4096,
+      "reasoning": true,
+      "thinkingLevelMap": { "low": "low", "high": "high" },
+      "cost": { "input": 2, "output": 8, "cacheRead": 1, "cacheWrite": 2 },
+      "apiKeyEnv": "NATIVE_MODEL_API_KEY"
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "assistant",
+      "path": "/srv/worker-state/node-host",
+      "scope": "subdirectories",
+      "models": ["openai/worker-model"]
+    }
+  ]
+}
+```
+
+Replace the endpoint and model metadata with your provider's supported adapter and
+values. Prices are per million tokens. `apiKeyEnv` names a variable already
+provisioned into the node service; it never contains the credential itself.
+Optional `headers` are node-local startup values too. Known credential-bearing
+header names are protected automatically. List nonstandard authentication header
+names in the model's `sensitiveHeaderNames` array (case-insensitive); other headers
+remain ordinary metadata. For example, `"sensitiveHeaderNames": ["X-Session"]`
+classifies a configured `X-Session` value without classifying a routing header.
+No model configuration is
+loaded from the workspace, a turn request, Gateway auth profiles, or dotenv files.
+
+A workspace grant's `id` is the exact agent ID. Omitted `scope` means an exact
+workspace path. Explicit `subdirectories` allows normal dispatch to create
+generated workspaces below a stable operator-selected root; you do not predict
+environment/session directory names. Both node and worker check canonical
+containment, and the runtime pins directory identity during the turn. Use a
+narrower existing root when possible. Optional `sessionId` restricts a grant to
+one known session incarnation. List `models` explicitly: each child receives only
+its agent's grant and permitted model credentials.
+
+The supervisor snapshots the file and named credentials at startup. Rotation
+requires controlled node/worker replacement through your platform lifecycle; it
+does not mutate a running registry. The private startup carrier is removed before
+tools execute. Workspace preparation, repository setup, and unrelated proxied
+workers do not inherit it.
+
+## Select the placement on the Gateway
+
+Configure an explicit device profile with the paired device ID:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openai/worker-model" },
+      models: { "openai/worker-model": { agentRuntime: { id: "openclaw" } } },
+    },
+    entries: { assistant: {} },
+  },
+  cloudWorkers: {
+    profiles: {
+      "dedicated-native": {
+        provider: "device",
+        settings: {
+          device: "PAIRED_DEVICE_ID",
+          inference: "worker",
+        },
+      },
+    },
+  },
+}
+```
+
+### Make the dedicated worker mandatory
+
+For a Gateway dedicated to remote OpenClaw execution, add
+`requiredProfile: "dedicated-native"` alongside `cloudWorkers.profiles` in the
+example above. Control UI then presents the dedicated destination as read-only: a
+user opens a session and sends a message without selecting a cloud worker. The
+Gateway also enforces the same requirement for API and channel turns.
+
+The configured agent model remains the default. A new session without a
+repository gets an owned empty workspace automatically; users do not need to
+create a repository or hold `operator.admin` to use the mandatory destination.
+The existing create → dispatch → send lifecycle still owns initial-message
+recovery. No message runs on the Gateway while its required worker is missing,
+unavailable, or still preparing. Retry and Stop operate on the retained session
+and placement rather than creating a second session.
+
+Provision the paired node and native registry before admitting chats. It is
+valid to start the Gateway with the required profile not yet configured during
+enrollment, but chats remain blocked until the profile is usable. Do not copy
+provider credentials to the Gateway to work around a placement error. See
+[Required worker profile](/gateway/config-cloud-workers#required-worker-profile)
+for policy scope and existing-session behavior.
+
+Leave `requiredProfile` unset for the optional, administrator-selected flow below.
+
+### Create and dispatch with node-only credentials
+
+Use an authenticated operator CLI/API connection and the configured default
+model with the OpenClaw runtime. Profile dispatch requires `operator.admin`.
+Create the session without an initial message or explicit `model`/`agentRuntime`
+selection, dispatch it to the configured profile, then submit its first turn:
+
+```bash
+openclaw gateway call sessions.create --json \
+  --params '{"agentId":"assistant","label":"native-work","worktree":true,"worktreeSource":"empty"}'
+
+# Replace SESSION_KEY with the key returned by sessions.create.
+openclaw gateway call sessions.dispatch --json --timeout 240000 \
+  --params '{"key":"SESSION_KEY","agentId":"assistant","profileId":"dedicated-native"}'
+
+# Wait for placement.state to be active before sending.
+# Use a fresh idempotencyKey for each new turn.
+openclaw gateway call agent --json --timeout 180000 \
+  --params '{"agentId":"assistant","sessionKey":"SESSION_KEY","message":"Say hello from the worker.","deliver":false,"idempotencyKey":"native-work-turn-1","timeout":120}'
+
+# Replace RUN_ID with the runId returned by agent; acceptance is not completion.
+openclaw gateway call agent.wait --json --timeout 195000 \
+  --params '{"runId":"RUN_ID","timeoutMs":180000}'
+```
+
+The empty workspace is session-owned. For a repository-backed session, use the
+[repository create/dispatch flow](/gateway/cloud-workers/placement-and-machine-selection#codex-or-openclaw-on-a-cloud-profile)
+instead, still omitting an initial message and explicit model/runtime selection.
+Select `profileId`, not the ordinary paired-device target: ordinary device
+placement remains proxied.
+
+In the Control UI, choose the named worker-inference profile and keep the agent's
+configured model and OpenClaw runtime defaults. The profile and active placement
+identify worker inference without exposing provider settings or credentials.
+Existing sessions use their bound environment's recorded choice, not later edits
+to the profile. Stopped, reclaimed, and inexact placements do not establish a
+current worker-inference binding.
+
+**Current limitation:** explicit model/runtime selection still uses Gateway
+model availability and auth checks; node-local credentials do not satisfy those
+checks. An explicit `agentRuntime` requires an explicit canonical `model` and an
+available Gateway runtime choice. The model picker is not a catalog of the node's
+local registry. Use the configured-default flow above; do not copy node
+credentials to the Gateway or disable auth checks to make an explicit selection pass.
+Gateway authentication, agent/model authorization, tool permissions, session and
+placement access, and current-run authority still apply.
+
+The launch carries a feature-gated inference choice and the existing model
+reference, not model endpoints, headers, or provider credentials. Missing local
+configuration, denied grants, incompatible workers, and provider errors fail
+closed. The worker and Gateway both reject proxy fallback for local turns.
+Omitting `settings.inference`, or setting it to `gateway`, preserves the default.
+
+## Upgrade and downgrade
+
+The canonical profile values are `gateway` and `worker`; omission means `gateway`.
+`openclaw doctor --fix` renames the earlier device-profile spelling `runtime-local`
+to `worker`. Gateway startup uses that same shared migration when eligible;
+[config migration safeguards](/gateway/doctor/config-migrations) still apply.
+Already allocated environments retain their original snapshots. Both recorded
+spellings mean worker inference until those environments retire; neither silently
+selects Gateway inference. No database rewrite or schema-version change is needed.
+The internal worker launch spelling and capability remain unchanged.
+
+Upgrade the Gateway and node service to compatible builds that support
+worker-local inference before enabling the profile. The Gateway installs its
+pinned worker bundle on the paired node and validates its build receipt; a new
+worker bundle alone does not upgrade the node supervisor or give an older node
+the native startup configuration. Local turns require the
+`worker-local-inference-v1` capability and never fall back to Gateway inference
+on an incompatible worker. Follow the normal
+[worker update and recovery lifecycle](/gateway/cloud-workers/session-lifecycle)
+and your platform's node-service replacement procedure.
+
+Before downgrading either service to a build without this feature:
+
+1. Stop new submissions, finish or stop active turns, and reclaim every native
+   placement while the compatible Gateway and node are still running. Use
+   **Stop cloud worker…** or the existing RPC:
+
+   ```bash
+   openclaw gateway call sessions.reclaim --json --timeout 600000 \
+     --params '{"key":"SESSION_KEY","agentId":"assistant"}'
+   ```
+
+   Wait for successful reconciliation and a `reclaimed` or `local` placement.
+   An offline device or pending teardown is not confirmed release; reconnect and
+   resolve cleanup before continuing. Do not force-destroy merely to downgrade.
+
+2. Remove the native profiles from `cloudWorkers.profiles` and any defaults that
+   reference them, then remove `nodeHost.workerRuns.nativeInferenceConfig` from
+   the node configuration. Removing a profile does not change an active
+   environment's recorded inference choice; reclaim it first. Retire the
+   node-local registry and credential environment through your platform lifecycle.
+3. Downgrade only after that cleanup. Older node schemas reject
+   `nativeInferenceConfig`, and older Gateways do not interpret
+   `settings.inference` as a local-inference requirement. Do not leave native
+   placements or profiles for an older Gateway to recover. Any later Gateway or
+   proxied turn needs its own configured provider credentials.
+
+## Behavior and limits
+
+- Coding tools execute in the worker. Existing grants and permission modes apply.
+  Interactive exec approvals and worker LLM-review approval transport remain
+  unsupported; approval-required execution is denied, not auto-approved.
+- The local registry owns real model API, input capabilities, context window,
+  output-token limit, prices, and thinking support. Unsupported thinking and
+  conflicting token-budget overrides are rejected. The existing worker replay
+  projection preserves supported provider replay in canonical Gateway transcripts.
+- Automatic compaction and retry remain disabled by the existing worker runtime.
+  Local inference does not add an alternative compaction path.
+- Azure adapters requiring ambient endpoint configuration and ambient Vertex ADC
+  marker credentials are rejected. Provider plugin loading is not added.
+- Cancellation and replacement use existing worker fencing and terminate local
+  model requests. After the first successful admission, losing the Gateway
+  connection also stops the current local turn. Reconnection can settle that
+  interrupted turn but does not resume its provider request; a fresh turn needs
+  fresh admission. Initial connection/admission retries remain supported. The
+  Gateway retains transcripts, acknowledgments, and terminal settlement.
+- The runtime guards literal credential reflection, including stream fragments
+  and normalized values. This is not general data-loss prevention or an isolation
+  boundary against code running as the node's operating-system user.
+
+## Verification
+
+Focused compiled-process proof uses an isolated real Gateway service, SQLite
+transcripts, a spawned worker, and a loopback HTTP model fixture:
+
+```bash
+node scripts/run-vitest.mjs run src/worker/native-worker.integration.test.ts
+```
+
+It covers local provider calls and tools, transcript persistence, denial,
+cancellation, replacement, and the proxied sibling. This is not a paid-provider
+or live platform deployment test. The test runner compiles the source fixture
+through its owned runtime graph; it does not use an ad hoc TS loader in the child.
+To verify the actual deploy bundle, installer, and node supervisor:
+
+```bash
+pnpm build
+OPENCLAW_TEST_NATIVE_WORKER_BUNDLE=1 node scripts/run-vitest.mjs run src/worker/native-worker.bundle.integration.test.ts
+```
+
+The opt-in lane uses the supported prepackaged, SHA-addressed archive path and
+checks the real installer, prewarm, supervisor, and worker; it does not exercise
+archive acquisition over HTTP. It fails if matching build artifacts are missing. Follow normal [node and worker setup](/gateway/cloud-workers/setup-and-bundle-installation)
+for installation; this feature does not deploy or restart services automatically.

@@ -130,6 +130,7 @@ export async function startNodeWorkerTurn({
   cancel,
   stopChild,
   isCurrent,
+  additionalSecrets = [],
 }: {
   active: NodeWorkerRunningChild;
   descriptor: WorkerLaunchDescriptor;
@@ -139,6 +140,8 @@ export async function startNodeWorkerTurn({
   cancel: (expected: NodeWorkerSupervisorIdentity) => Promise<NodeWorkerLaunchReceipt | undefined>;
   stopChild: (active: NodeWorkerRunningChild, state: NodeWorkerStopState) => Promise<void>;
   isCurrent: () => boolean;
+  /** Process-lifetime secrets retained by the supervisor across journal admission. */
+  additionalSecrets?: readonly string[];
 }): Promise<NodeWorkerLaunchReceipt> {
   signal.throwIfAborted();
   const assertCurrent = () => {
@@ -170,7 +173,10 @@ export async function startNodeWorkerTurn({
     registerSecretValueForRedaction(value);
   }
   // The IPC diagnostic handler shares this object, so rotate its contents rather than its owner.
-  Object.assign(active.scrubber, createNodeWorkerCredentialScrubber(secrets));
+  Object.assign(
+    active.scrubber,
+    createNodeWorkerCredentialScrubber([...secrets, ...additionalSecrets]),
+  );
   active.connectionFailure.errorText = undefined;
   const onAbort = () => {
     void cancel(claim).catch(() => undefined);

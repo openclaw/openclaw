@@ -1,3 +1,4 @@
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
@@ -40,7 +41,11 @@ import type {
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
-import { resolveSessionPlacementRuntimeOverride } from "../session-placement-admission.js";
+import {
+  prepareRequiredSessionPlacement,
+  resolveSessionPlacementRuntimeOverride,
+  sessionPlacementUsesWorkerInference,
+} from "../session-placement-admission.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -178,9 +183,24 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   const operatorAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
+  assertRequiredWorkerSelection(params.selection.cfg, {
+    agentRuntime: params.harness.resolveRuntimeOverride(
+      params.selection.provider,
+      params.selection.model,
+    ),
+  });
+  await prepareRequiredSessionPlacement(params.identity, {
+    config: params.selection.cfg,
+    assertCurrent: () => params.preparedRunAdmission?.assertSourceCurrent(),
+    signal: params.abortSignal,
+  });
   const placementRuntime = resolveSessionPlacementRuntimeOverride(params.identity);
   const resolveRuntimeOverride = (provider: string, model: string) => {
     const requestedRuntime = params.harness.resolveRuntimeOverride(provider, model);
+    assertRequiredWorkerSelection(params.selection.cfg, { agentRuntime: requestedRuntime });
+    if (params.selection.cfg.cloudWorkers?.requiredProfile) {
+      return "openclaw";
+    }
     if (requestedRuntime || !placementRuntime) {
       return requestedRuntime;
     }
@@ -282,6 +302,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ...selection,
         ...params.identity,
         operatorAuthority,
+        skipAuthProfileRuntime: sessionPlacementUsesWorkerInference(params.identity),
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {

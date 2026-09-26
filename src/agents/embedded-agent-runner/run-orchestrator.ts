@@ -8,6 +8,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -64,6 +65,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
+import { prepareRequiredSessionPlacement } from "../session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import {
   resolveSessionSuspensionTarget,
@@ -158,10 +160,20 @@ async function runEmbeddedAgentInternal(
     ...paramsBase,
     sessionKey: effectiveSessionKey,
   });
+  assertRequiredWorkerSelection(paramsBase.config ?? {}, {
+    agentRuntime: paramsBase.agentHarnessId ?? paramsBase.agentHarnessRuntimeOverride,
+  });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
     missingSessionKey: "create",
     sessionKey: effectiveSessionKey,
+  });
+  // Canonicalize existing identity first; this resolver does not create a session
+  // row. Mandatory placement still requires an admitted, persisted real session.
+  await prepareRequiredSessionPlacement(runSessionTarget, {
+    config: paramsBase.config,
+    assertCurrent: () => paramsBase.preparedRunAdmission?.assertSourceCurrent(),
+    signal: paramsBase.abortSignal,
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,

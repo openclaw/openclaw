@@ -45,6 +45,7 @@ export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
     workspaceDir: assignment.workspaceDir,
     containmentRoot: assignment.workerContainmentRoot,
     permissionMode: assignment.permissionMode,
+    inference: assignment.inference,
   };
 }
 
@@ -167,6 +168,8 @@ export type NodeWorkerSupervisorOptions = {
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
+  /** Node-local trusted configuration, captured synchronously at construction. */
+  nativeInferenceConfig?: string;
 };
 
 /** Match both process bookkeeping and exact authoritative container identity. */

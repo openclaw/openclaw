@@ -51,6 +51,7 @@ export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   profileId: string;
+  inference?: "worker";
   leaseId: string | null;
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;
@@ -186,6 +187,8 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  /** Initial mandatory admission cannot cancel the input it is preparing. Never exposed over RPC. */
+  requiredProfile?: string;
   /** Current dispatch caller's setup authority; never inherited by a new caller. */
   runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;
@@ -253,6 +256,14 @@ export type WorkerPlacementReclaimSourceCheck = (
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
+  /** Server-owned placement under existing session creation/run authority, not manual dispatch. */
+  prepareRequiredSession?(
+    this: void,
+    identity: { sessionId: string; sessionKey?: string; agentId?: string },
+    assertCurrent?: () => void,
+    signal?: AbortSignal,
+    options?: { waitForReady: false },
+  ): Promise<void>;
   getPendingDeviceDispatchCount?(deviceId: string, excludeSessionId?: string): number;
   getAdmittedDeviceSessionCounts?(excludeSessionId?: string): ReadonlyMap<string, number>;
   dispatch(

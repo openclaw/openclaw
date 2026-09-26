@@ -478,6 +478,17 @@ describe("worker environment protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("exposes only canonical inference metadata on configured profiles", () => {
+    const result = (inference: string) => ({
+      environments: [],
+      profiles: [{ id: "named-device", providerId: "device", inference }],
+    });
+    expect(Value.Check(EnvironmentsListResultSchema, result("worker"))).toBe(true);
+    for (const inference of ["gateway", "runtime-local", "unknown"]) {
+      expect(Value.Check(EnvironmentsListResultSchema, result(inference))).toBe(false);
+    }
+  });
+
   it("lists configured worker profiles without provider settings", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {

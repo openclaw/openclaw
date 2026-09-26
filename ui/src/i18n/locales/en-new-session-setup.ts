@@ -4,6 +4,13 @@ import { en } from "./en.ts";
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    openClawWorker: "OpenClaw worker",
+    requiredWorkerHint: "Say what you’d like to work on.",
+    requiredWorker: "Worker",
+    requiredWorkerUnavailable:
+      "The required worker is unavailable. Ask an administrator to check the worker profile, then retry.",
+    requiredWorkerChanged:
+      "The required worker policy changed. Start a new session; this saved message has not been sent.",
     title: en.newSession.title,
     hint: en.newSession.hint,
     environments: "Environments",

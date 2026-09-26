@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
@@ -37,6 +38,9 @@ export function createReclaimedPlacementRedispatch(params: {
       {
         ...identity,
         profileId,
+        ...(getRuntimeConfig().cloudWorkers?.requiredProfile
+          ? { requiredProfile: getRuntimeConfig().cloudWorkers?.requiredProfile }
+          : {}),
         ...(devicePlacement ? { devicePlacement } : {}),
         ...(providerId === DEVICE_WORKER_PROVIDER_ID && nodeDeviceId
           ? { deviceId: nodeDeviceId }

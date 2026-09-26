@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
+import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import {
   loadManifestModelCatalog,
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -29,6 +31,7 @@ import {
   StaleWorkerBuildError,
   supportsCurrentWorkerLaunch,
 } from "./admission.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
@@ -87,6 +90,25 @@ export async function executeWorkerTurn(
     throw new Error(
       "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
     );
+  }
+  const inferencePlacement = workerInferencePlacement(environment);
+  if (inferencePlacement === "worker") {
+    const policy = createModelVisibilityPolicy({
+      cfg: turn.config ?? {},
+      catalog: [],
+      defaultProvider: modelRef.provider,
+      agentId: placement.agentId,
+    });
+    if (!policy.allows(modelRef)) {
+      throw new Error("Model is not approved for this worker agent");
+    }
+  }
+  if (
+    inferencePlacement === "worker" &&
+    (!environment.nodeDeviceId ||
+      !bootstrapReceipt.protocolFeatures.includes(WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE))
+  ) {
+    throw new Error("Worker inference requires a matching capable paired-node worker build");
   }
   await recoverWorkspaceBeforeTurn(params);
   const github = await prepareWorkerGitHubBinding({
@@ -430,6 +452,7 @@ export async function executeWorkerTurn(
                 }
               : {}),
             modelRef,
+            ...(inferencePlacement === "worker" ? { inference: "runtime-local" } : {}),
             inferenceOptions: reasoning ? { reasoning } : {},
             systemPrompt,
             initialMessages: windowedMessages,

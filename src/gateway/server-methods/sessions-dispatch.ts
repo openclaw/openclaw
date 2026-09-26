@@ -8,6 +8,7 @@ import {
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -59,6 +60,7 @@ function resolveWorkerSessionTarget(params: {
   deviceId?: string;
   machineClass?: string;
   os?: string;
+  resolveDestination?: boolean;
   context: GatewayRequestContext;
   respond: RespondFn;
 }) {
@@ -68,13 +70,15 @@ function resolveWorkerSessionTarget(params: {
     params.respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  const destination = resolveWorkerPlacementDestination({
-    cfg,
-    profileId: params.profileId,
-    deviceId: params.deviceId,
-    machineClass: params.machineClass,
-    os: params.os,
-  });
+  const destination = params.resolveDestination
+    ? resolveWorkerPlacementDestination({
+        cfg,
+        profileId: params.profileId,
+        deviceId: params.deviceId,
+        machineClass: params.machineClass,
+        os: params.os,
+      })
+    : { ok: true as const, value: undefined };
   if (!destination.ok) {
     respondInvalidWorkerSession(params.respond, destination.error);
     return undefined;
@@ -248,6 +252,12 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsDispatchParams, "sessions.dispatch", respond)) {
       return;
     }
+    try {
+      assertRequiredWorkerSelection(context.getRuntimeConfig(), params);
+    } catch (error) {
+      respondWorkerDispatchError(error, respond);
+      return;
+    }
     const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
@@ -265,6 +275,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       deviceId: params.deviceId,
       machineClass: params.machineClass,
       os: params.os,
+      resolveDestination: true,
       context,
       respond,
     });

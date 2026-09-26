@@ -243,6 +243,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
   accountSelected: boolean;
   accountReady: boolean;
   metadataPending: boolean;
+  inference?: "worker";
 }): string | undefined {
   const { metadata, model, agentRuntime } = params;
   if (
@@ -274,7 +275,11 @@ export function resolveDraftModelSelectionBlockedReason(params: {
   ) {
     return t("chat.modelControls.modelsUnavailable");
   }
-  const unavailable = chatModelUnavailableMessage(resolveDraftModelUnavailableReason(params));
+  // Explicit model/runtime and personal-account choices retain Gateway availability checks.
+  const unavailable = chatModelUnavailableMessage(
+    resolveDraftModelUnavailableReason(params),
+    !model && !agentRuntime && !params.accountSelected ? params.inference : undefined,
+  );
   if (params.accountSelected) {
     if (metadata.status === "error") {
       return t("chat.modelControls.modelsUnavailable");

@@ -243,7 +243,11 @@ export function hasChatModelCatalogSelection(
 
 export function chatModelUnavailableMessage(
   reason: ModelRuntimeEntry["unavailableReason"],
+  inference?: "worker",
 ): string | undefined {
+  if (inference === "worker" && (reason === "missing-auth" || reason === "auth-failed")) {
+    return undefined;
+  }
   if (reason === "missing-auth") {
     return t("modelSetup.missingAuth");
   }

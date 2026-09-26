@@ -6,12 +6,20 @@ import {
   ErrorCodes,
   type EnvironmentsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import * as rfbProbe from "../desktop/rfb-probe.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { createDeviceWorkerRuntime } from "../worker-environments/device-provider.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { createWorkerEnvironmentService } from "../worker-environments/service.js";
+import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
 import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
@@ -36,6 +44,7 @@ vi.mock("../node-registry-private.js", () => ({
   })),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const NOW = 10_000;
 let runtimeState: ReturnType<typeof collectNodeCatalogRuntimeState>;
 
@@ -64,6 +73,43 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it("projects only validated device inference without leaking settings or hiding other profiles", async () => {
+    const profiles = {
+      canonical: { provider: "device", settings: { device: "paired-node", inference: "worker" } },
+      legacy: {
+        provider: "device",
+        settings: { device: "paired-node", inference: "runtime-local" },
+      },
+      default: { provider: "device", settings: { device: "paired-node" } },
+      gateway: { provider: "device", settings: { device: "paired-node", inference: "gateway" } },
+      invalid: { provider: "device", settings: { device: "paired-node", inference: "unknown" } },
+      "missing-device": { provider: "device", settings: { inference: "worker" } },
+      foreign: { provider: "static-ssh", settings: { inference: "worker" } },
+    };
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: { projection: "profiles" },
+      respond,
+      context: {
+        ...mockContext(workerService()),
+        getRuntimeConfig: () => ({ cloudWorkers: { profiles } }),
+      },
+    } as never);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toEqual({
+      environments: [],
+      profiles: [
+        { id: "canonical", providerId: "device", inference: "worker" },
+        { id: "default", providerId: "device" },
+        { id: "foreign", providerId: "static-ssh" },
+        { id: "gateway", providerId: "device" },
+        { id: "invalid", providerId: "device" },
+        { id: "legacy", providerId: "device", inference: "worker" },
+        { id: "missing-device", providerId: "device" },
+      ],
+    });
+  });
+
   it("probes disabled host setup only when requested without advertising or granting desktop access", async () => {
     const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({
       kind: "rfb",
@@ -116,6 +162,66 @@ describe("environment gateway methods", () => {
     expect(respond.mock.calls[0]?.[1]).toHaveProperty("environments.0.desktop", true);
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("environments.0.desktopSetup");
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("advertises a named worker-inference device profile using the core provider without allocating", async () => {
+    const root = tempDirs.make("openclaw-environments-named-device-");
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const store = await createWorkerEnvironmentStore({ database });
+    const config = {
+      cloudWorkers: {
+        profiles: {
+          "dedicated-native": {
+            provider: "device",
+            settings: { device: "paired-node", inference: "worker" },
+          },
+        },
+      },
+    };
+    const runtime = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    const provision = vi.spyOn(runtime.provider, "provision");
+    const prepareInstallation = vi.fn();
+    const bootstrapWorker = vi.fn();
+    const service = createWorkerEnvironmentService({
+      store,
+      getConfig: () => config,
+      resolveProvider: (id) => (id === "device" ? runtime.provider : undefined),
+      prepareInstallation,
+      bootstrapWorker,
+      executeInference: vi.fn(),
+    });
+    try {
+      const context = { ...mockContext(service), getRuntimeConfig: () => config };
+      const respond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params: { projection: "profiles" },
+        respond,
+        context,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          environments: [],
+          profiles: [
+            {
+              id: "dedicated-native",
+              providerId: "device",
+              inference: "worker",
+              executionMode: "worker-turn",
+              executionModes: ["worker-turn", "remote-exec"],
+            },
+          ],
+        },
+        undefined,
+      );
+      expect(provision).not.toHaveBeenCalled();
+      expect(prepareInstallation).not.toHaveBeenCalled();
+      expect(bootstrapWorker).not.toHaveBeenCalled();
+      expect(store.list()).toEqual([]);
+    } finally {
+      await service.stop();
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it.each(["locked", "unlocked", "unknown"])(

@@ -119,6 +119,15 @@ export function renderChatPanePlacement(props: {
                         <dd>…${environmentId.slice(-6)}</dd>`
                     : nothing
                 }
+                ${
+                  placement?.state === "active" &&
+                  (placement.inference === "worker" || session.agentRuntime?.id === "openclaw")
+                    ? html`<dt>${t("sessionsView.placementFactInference")}</dt>
+                        <dd>
+                          ${t(placement.inference === "worker" ? "sessionsView.inferenceWorker" : "sessionsView.inferenceGateway")}
+                        </dd>`
+                    : nothing
+                }
                 <dt>${t("sessionsView.placementFactState")}</dt>
                 <dd>${placementState}${age ? ` · ${age}` : ""}</dd>
                 ${
