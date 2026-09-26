@@ -135,7 +135,7 @@ describe("monitorTelegramProvider", () => {
         botToken: "111111:token-a",
         updateId: 1,
       });
-      const purge = queue.purge;
+      const purge = queue.purge?.bind(queue);
       queue.purge = undefined;
       await expect(startMonitor({ token: "222222:token-b" }).task).rejects.toThrow(
         /account "default".*restart.*host/,
