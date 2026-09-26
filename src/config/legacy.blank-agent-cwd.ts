@@ -92,9 +92,12 @@ function migrateBlankAgentCwdRaw(
 
   if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
-      const cwdPath = `agents.list[${index}].cwd`;
+      // The write owner records explicit paths by joining segments with dots
+      // (`agents.list.0.cwd`); match that representation so an explicitly
+      // written blank in a retained legacy list is preserved for validation.
+      const cwdPath = `agents.list.${index}.cwd`;
       if (!isPreservedCwdPath(preservedCwdPaths, cwdPath)) {
-        removeBlankCwdFromAgent(entry as Record<string, unknown>, `list[${index}]`, changes);
+        removeBlankCwdFromAgent(entry as Record<string, unknown>, `list.${index}`, changes);
       }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateBlankAgentCwd } from "./legacy.blank-agent-cwd.js";
+import { migrateBlankAgentCwd, migrateBlankAgentCwdForWrite } from "./legacy.blank-agent-cwd.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("legacy blank agent cwd migration", () => {
@@ -58,5 +58,30 @@ describe("legacy blank agent cwd migration", () => {
     const raw = { agents: { defaults: { cwd: 42 } } };
     const migrated = migrateBlankAgentCwd(raw);
     expect(migrated.changed).toBe(false);
+  });
+
+  it("reports list entry removals with the writer's dot-notation path", () => {
+    // The write owner records explicit paths by joining segments with dots
+    // (`agents.list.0.cwd`), so the migration must report (and preserve) that
+    // representation, not the bracket form `agents.list[0].cwd`.
+    const raw = {
+      agents: { defaults: { cwd: "/tmp/default" }, list: [{ id: "alpha", cwd: " " }] },
+    };
+    const migrated = migrateBlankAgentCwdForWrite(raw);
+    expect(migrated.changed).toBe(true);
+    expect(migrated.changes.some((c) => c.path === "list.0")).toBe(true);
+    expect(migrated.changes.some((c) => c.message.includes("agents.list.0.cwd"))).toBe(true);
+  });
+
+  it("preserves a blank agents.list entry that the current write explicitly sets", () => {
+    // An explicit `agents.list.0.cwd` write is preserved (not migrated away) so
+    // strict validation still reports the field-level error for new authoring.
+    const raw = {
+      agents: { defaults: { cwd: "/tmp/default" }, list: [{ id: "alpha", cwd: " " }] },
+    };
+    const migrated = migrateBlankAgentCwdForWrite(raw, new Set(["agents.list.0.cwd"]));
+    expect(migrated.changed).toBe(false);
+    const list = (migrated.config as OpenClawConfig).agents?.list;
+    expect(list?.[0]).toMatchObject({ id: "alpha", cwd: " " });
   });
 });
