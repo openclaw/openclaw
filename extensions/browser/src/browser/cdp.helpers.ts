@@ -396,7 +396,9 @@ export async function closeTrackedCdpTarget(
       resolved.browserWebSocketUrl,
       async (send) => {
         params.signal?.throwIfAborted();
-        const response = await send("Target.getTargets");
+        const response = await send("Target.getTargets", undefined, undefined, {
+          signal: params.signal,
+        });
         params.signal?.throwIfAborted();
         const targetInfos =
           response && typeof response === "object"
@@ -445,6 +447,7 @@ export async function closeTrackedCdpTarget(
         handshakeTimeoutMs: params.timeoutMs,
         handshakeRetries: 0,
         lookup: resolved.browserWebSocketLookup,
+        signal: params.signal,
       },
     );
   } catch (error) {
