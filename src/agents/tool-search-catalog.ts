@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
@@ -14,6 +13,7 @@ import { disposeCodeModeResults } from "./code-mode-results.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { catalogEntriesFingerprint } from "./tool-search-catalog-fingerprint.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
@@ -34,49 +34,6 @@ const catalogMetadata = new WeakMap<
   ToolSearchCatalogSession,
   { fingerprint: string; toolExecutionAllow?: readonly string[] }
 >();
-const untrustedSchemaIdentities = new WeakMap<object, number>();
-let nextUntrustedSchemaIdentity = 1;
-
-function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
-  return entries
-    .map(
-      (entry) =>
-        sha256StableValue([
-          entry.id,
-          entry.source,
-          entry.sourceName ?? "",
-          entry.mcp,
-          entry.name,
-          entry.label ?? "",
-          entry.description,
-          entry.directVisible === true,
-          entry.source === "openclaw"
-            ? entry.parameters
-            : untrustedSchemaFingerprint(entry.parameters),
-          entry.source === "openclaw"
-            ? entry.outputSchema
-            : untrustedSchemaFingerprint(entry.outputSchema),
-        ]).digest,
-    )
-    .toSorted()
-    .join("\n");
-}
-
-function untrustedSchemaFingerprint(schema: unknown): string {
-  if (schema === null || typeof schema !== "object") {
-    return stableStringify(schema);
-  }
-  // Remote/client schemas may be attacker-sized or lazy hostile objects. Identity
-  // invalidates reuse when their owning runtime replaces them without traversing them.
-  const existing = untrustedSchemaIdentities.get(schema);
-  if (existing !== undefined) {
-    return `object:${existing}`;
-  }
-  const next = nextUntrustedSchemaIdentity++;
-  untrustedSchemaIdentities.set(schema, next);
-  return `object:${next}`;
-}
-
 function rebindCatalogExecutors(
   existingEntries: ToolSearchCatalogEntry[],
   currentEntries: readonly ToolSearchCatalogEntry[],
