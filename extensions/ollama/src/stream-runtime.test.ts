@@ -1,28 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Ollama tests cover stream runtime plugin behavior.
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-const { fetchWithSsrFGuardMock, ollamaStreamWarnMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
-  ollamaStreamWarnMock: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    createSubsystemLogger: () => ({ warn: ollamaStreamWarnMock }),
-  };
-});
-
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
+import {
+  collectStreamEvents,
+  createOllamaTestStream,
+  expectSuccessfulOllamaRequest,
+  fetchWithSsrFGuardMock,
+  getGuardedFetchCall,
+  getGuardedFetchJsonBody,
+  ollamaStreamWarnMock,
+  requireOptionalRecord,
+  requireRecord,
+  resetOllamaStreamMocks,
+  withMockNdjsonFetch,
+  withSuccessfulOllamaFetch,
+} from "./stream-runtime.test-support.js";
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
@@ -34,23 +29,8 @@ import {
   resolveOllamaBaseUrlForRun,
 } from "./stream.runtime.js";
 
-type GuardedFetchCall = {
-  url: string;
-  init?: RequestInit;
-  policy?: unknown;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  auditContext?: string;
-};
-
 function requireEntry<T>(entries: readonly T[], index: number, context: string): T {
   return expectDefined(entries[index], context);
-}
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function requireOptionalRecord(value: unknown): Record<string, unknown> | undefined {
-  return value === undefined ? undefined : requireRecord(value, "request options");
 }
 
 function requireHeaders(value: unknown): Record<string, string> {
@@ -117,10 +97,7 @@ function createToolCallResponse(
   return createAssistantResponse({ content: "", tool_calls: toolCalls }, overrides);
 }
 
-afterEach(() => {
-  fetchWithSsrFGuardMock.mockReset();
-  ollamaStreamWarnMock.mockReset();
-});
+afterEach(resetOllamaStreamMocks);
 
 describe("buildOllamaChatRequest", () => {
   it("omits tools when none are provided", () => {
@@ -321,143 +298,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     const payload = requireRecord(patchedPayload, "patched payload");
     expect(payload.options).toEqual({ num_ctx: 131072 });
   });
-
-  it.each<{
-    name: string;
-    id: string;
-    contextWindow: number;
-    provider?: string;
-    reasoning?: boolean;
-    thinkingLevel: string;
-    params?: Record<string, unknown>;
-    expectedThink: boolean | string | undefined;
-  }>([
-    {
-      name: "forwards think=false on native Ollama chat requests when thinking is off",
-      id: "qwen3:32b",
-      contextWindow: 131072,
-      thinkingLevel: "off",
-      expectedThink: false,
-    },
-    {
-      name: "does not overwrite configured native Ollama params.thinking with implicit off",
-      id: "qwen3:32b",
-      contextWindow: 131072,
-      thinkingLevel: "off",
-      params: { thinking: "medium" },
-      expectedThink: "medium",
-    },
-    {
-      name: "does not forward truthy configured native Ollama thinking for non-reasoning models",
-      id: "llama3.2:latest",
-      contextWindow: 8192,
-      reasoning: false,
-      thinkingLevel: "off",
-      params: { thinking: "medium" },
-      expectedThink: undefined,
-    },
-    {
-      name: "does not forward runtime native Ollama thinking for non-reasoning models",
-      id: "llama3.2:latest",
-      contextWindow: 8192,
-      reasoning: false,
-      thinkingLevel: "low",
-      expectedThink: undefined,
-    },
-    ...(["low", "medium", "high"] as const).map((thinkingLevel) => ({
-      name: `preserves native Ollama ${thinkingLevel} thinking on the wire`,
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel,
-      expectedThink: thinkingLevel,
-    })),
-    {
-      name: "keeps the compatible local Ollama max mapping",
-      id: "gpt-oss:20b",
-      contextWindow: 131072,
-      thinkingLevel: "max",
-      expectedThink: "high",
-    },
-    {
-      name: "does not infer native max support from a local cloud model alias",
-      id: "glm-5.2:cloud",
-      contextWindow: 131072,
-      thinkingLevel: "max",
-      expectedThink: "high",
-    },
-    {
-      name: "preserves native Ollama Cloud max thinking on the wire",
-      id: "glm-5.2",
-      provider: "ollama-cloud",
-      contextWindow: 131072,
-      thinkingLevel: "max",
-      expectedThink: "max",
-    },
-    {
-      name: "keeps the high fallback for Ollama Cloud GPT-OSS",
-      id: "gpt-oss:120b",
-      provider: "ollama-cloud",
-      contextWindow: 131072,
-      thinkingLevel: "max",
-      expectedThink: "high",
-    },
-    {
-      name: "keeps the high fallback for Cloud models without a verified max tier",
-      id: "kimi-k2.5",
-      provider: "ollama-cloud",
-      contextWindow: 131072,
-      thinkingLevel: "max",
-      expectedThink: "high",
-    },
-  ])(
-    "$name",
-    async ({
-      id,
-      provider = "ollama",
-      contextWindow,
-      reasoning,
-      thinkingLevel,
-      params,
-      expectedThink,
-    }) => {
-      await withSuccessfulOllamaFetch(async (fetchMock) => {
-        const model = {
-          api: "ollama",
-          provider,
-          id,
-          input: ["text"],
-          contextWindow,
-          ...(reasoning === undefined ? {} : { reasoning }),
-          ...(params ? { params } : {}),
-        };
-        const wrapped = expectDefined(
-          createConfiguredOllamaCompatStreamWrapper({
-            provider,
-            modelId: id,
-            model,
-            streamFn: createOllamaStreamFn("http://ollama-host:11434"),
-            thinkingLevel,
-          } as never),
-          "wrapped Ollama stream function",
-        );
-        const stream = await Promise.resolve(
-          wrapped(
-            model as never,
-            { messages: [{ role: "user", content: "hello" }] } as never,
-            {} as never,
-          ),
-        );
-        await collectStreamEvents(stream);
-
-        const requestBody = getGuardedFetchJsonBody(fetchMock);
-        expect(requestBody.think).toBe(expectedThink);
-        expect(requireOptionalRecord(requestBody.options)?.think).toBeUndefined();
-        if (reasoning !== false) {
-          expect(requireOptionalRecord(requestBody.options)?.num_ctx).toBeUndefined();
-        }
-      });
-    },
-  );
 
   it("reports the real HTTP response before consuming native Ollama output", async () => {
     await withSuccessfulOllamaFetch(async () => {
@@ -1563,35 +1403,6 @@ describe("parseNdjsonStream", () => {
   });
 });
 
-async function withMockNdjsonFetch(
-  lines: string[],
-  run: (fetchMock: typeof fetchWithSsrFGuardMock) => Promise<void>,
-): Promise<void> {
-  fetchWithSsrFGuardMock.mockImplementation(async () => {
-    const payload = lines.join("\n");
-    return {
-      response: new Response(`${payload}\n`, {
-        status: 200,
-        headers: { "Content-Type": "application/x-ndjson" },
-      }),
-      release: vi.fn(async () => undefined),
-    };
-  });
-  await run(fetchWithSsrFGuardMock);
-}
-
-async function withSuccessfulOllamaFetch(
-  run: (fetchMock: typeof fetchWithSsrFGuardMock) => Promise<void>,
-): Promise<void> {
-  await withMockNdjsonFetch(
-    [
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-    ],
-    run,
-  );
-}
-
 function createControlledNdjsonFetch(): {
   fetchImpl: () => Promise<{ response: Response; release: () => Promise<void> }>;
   pushLine: (line: string) => void;
@@ -1625,44 +1436,6 @@ function createControlledNdjsonFetch(): {
       controller.close();
     },
   };
-}
-
-function getGuardedFetchCall(fetchMock: typeof fetchWithSsrFGuardMock): GuardedFetchCall {
-  return (fetchMock.mock.calls.at(0)?.[0] as GuardedFetchCall | undefined) ?? { url: "" };
-}
-
-function getGuardedFetchJsonBody(
-  fetchMock: typeof fetchWithSsrFGuardMock,
-): Record<string, unknown> {
-  const body = getGuardedFetchCall(fetchMock).init?.body;
-  if (typeof body !== "string") {
-    throw new Error("Expected string request body");
-  }
-  return requireRecord(JSON.parse(body), "Ollama request body");
-}
-
-async function createOllamaTestStream(params: {
-  baseUrl: string;
-  defaultHeaders?: Record<string, string>;
-  model?: Record<string, unknown>;
-  context?: Record<string, unknown>;
-  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] & Record<string, unknown>;
-}) {
-  const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
-  return streamFn(
-    {
-      id: "qwen3:32b",
-      api: "ollama",
-      provider: "custom-ollama",
-      input: ["text"],
-      contextWindow: 131072,
-      ...params.model,
-    } as unknown as Parameters<typeof streamFn>[0],
-    (params.context ?? {
-      messages: [{ role: "user", content: "hello" }],
-    }) as unknown as Parameters<typeof streamFn>[1],
-    (params.options ?? {}) as unknown as Parameters<typeof streamFn>[2],
-  );
 }
 
 type OllamaLocalService = NonNullable<
@@ -1705,14 +1478,6 @@ async function createManagedOllamaTestStream(params: {
   );
 }
 
-async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
-  const events: T[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
-
 function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   return new Promise((_, reject) => {
     const rejectWithReason = () =>
@@ -1741,25 +1506,6 @@ async function collectMockedOllamaEvents(
     events = await collectStreamEvents(await createOllamaTestStream(params));
   });
   return expectDefined(events, "mocked Ollama stream events");
-}
-
-async function expectSuccessfulOllamaRequest(
-  params: Parameters<typeof createOllamaTestStream>[0],
-  verify: (observation: {
-    body: Record<string, unknown>;
-    fetchMock: typeof fetchWithSsrFGuardMock;
-    request: GuardedFetchCall;
-  }) => void | Promise<void>,
-): Promise<void> {
-  await withSuccessfulOllamaFetch(async (fetchMock) => {
-    const events = await collectStreamEvents(await createOllamaTestStream(params));
-    expect(events.at(-1)?.type).toBe("done");
-    await verify({
-      body: getGuardedFetchJsonBody(fetchMock),
-      fetchMock,
-      request: getGuardedFetchCall(fetchMock),
-    });
-  });
 }
 
 async function nextEventWithin<T>(
@@ -3334,55 +3080,6 @@ describe("createOllamaStreamFn", () => {
       },
     );
   });
-
-  it.each(["low", "medium", "high"] as const)(
-    "preserves configured native Ollama params.thinking=%s",
-    async (thinking) => {
-      await expectSuccessfulOllamaRequest(
-        { baseUrl: "http://ollama-host:11434", model: { params: { thinking } } },
-        ({ body }) => {
-          expect(body.think).toBe(thinking);
-          expect(requireOptionalRecord(body.options)?.think).toBeUndefined();
-        },
-      );
-    },
-  );
-
-  it("keeps configured local Ollama params.thinking=max compatible", async () => {
-    await expectSuccessfulOllamaRequest(
-      { baseUrl: "http://ollama-host:11434", model: { params: { thinking: "max" } } },
-      ({ body }) => {
-        expect(body.think).toBe("high");
-      },
-    );
-  });
-
-  it("preserves configured Ollama Cloud params.thinking=max", async () => {
-    await expectSuccessfulOllamaRequest(
-      {
-        baseUrl: "https://ollama.com",
-        model: { provider: "ollama-cloud", id: "glm-5.2", params: { thinking: "max" } },
-      },
-      ({ body }) => {
-        expect(body.think).toBe("max");
-      },
-    );
-  });
-
-  it.each(["gpt-oss:120b", "kimi-k2.5", "custom-thinking-model"])(
-    "keeps configured Ollama Cloud %s params.thinking=max compatible",
-    async (id) => {
-      await expectSuccessfulOllamaRequest(
-        {
-          baseUrl: "https://ollama.com",
-          model: { provider: "ollama-cloud", id, params: { thinking: "max" } },
-        },
-        ({ body }) => {
-          expect(body.think).toBe("high");
-        },
-      );
-    },
-  );
 
   it("uses the default loopback policy when baseUrl is empty", async () => {
     await expectSuccessfulOllamaRequest({ baseUrl: "" }, ({ request }) => {

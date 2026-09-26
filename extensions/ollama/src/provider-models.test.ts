@@ -738,6 +738,13 @@ describe("ollama provider models", () => {
     expect(noCapabilities.compat?.supportsJsonSchemaResponseFormat).toBe(true);
   });
 
+  it.each(["glm-5.3:cloud", "glm-5.3-flash:cloud", "kimi-k3:cloud", "deepseek-v4.1-flash:cloud"])(
+    "marks verified cloud model %s as reasoning without capability metadata",
+    (modelId) => {
+      expect(buildOllamaModelDefinition(modelId).reasoning).toBe(true);
+    },
+  );
+
   it("disables tool support when Ollama capabilities omit tools", () => {
     const model = buildOllamaModelDefinition("embeddinggemma:latest", 2048, ["embedding"]);
 
