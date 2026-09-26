@@ -11,29 +11,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sanitizeBundlerHelperDtsExports", () => {
-  it.each([
-    { name: "literal", helper: "__exportAll" },
-    { name: "escaped", helper: String.raw`\u005f_exportAll` },
-  ])("flags and removes an undeclared $name helper export", ({ helper }) => {
-    const source = [
-      "export declare const keepMe: number;",
-      `export { keepMe as km, ${helper} as ud, alsoKeep as ak };`,
-      "export declare const alsoKeep: string;",
-      "",
-    ].join("\n");
-
-    expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([
-      { name: "__exportAll", line: 2 },
-    ]);
-
-    const sanitized = sanitizeBundlerHelperDtsExports(source);
-    expect(sanitized.removed).toEqual([{ name: "__exportAll", line: 2 }]);
-    expect(sanitized.sourceText).toContain("keepMe as km");
-    expect(sanitized.sourceText).toContain("alsoKeep as ak");
-    expect(sanitized.sourceText).not.toContain(helper);
-    expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
-  });
-
   it("keeps __exportAll when the declaration file declares it", () => {
     const source = [
       "declare function __exportAll(target: object, all: object): void;",
@@ -73,12 +50,16 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(onlyHelper.sourceText).not.toContain(helper);
   });
 
-  it("clears the published 2026.8.2 undeclared __exportAll export shape", () => {
+  it.each([
+    { name: "literal", helper: "__exportAll" },
+    { name: "escaped identifier", helper: String.raw`\u005f_exportAll` },
+    { name: "escaped string", helper: String.raw`"\x5f_exportAll"` },
+  ])("clears the published 2026.8.2 shape with a $name helper name", ({ helper }) => {
     const source = readFileSync(
       new URL("../fixtures/published-2026.8.2-undeclared-exportall.d.ts", import.meta.url),
       "utf8",
-    );
-    expect(source).toContain("__exportAll as ud");
+    ).replace("__exportAll as ud", `${helper} as ud`);
+    expect(source).toContain(`${helper} as ud`);
     expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([
       { name: "__exportAll", line: 5 },
     ]);
@@ -86,7 +67,7 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(sanitized.removed).toEqual([{ name: "__exportAll", line: 5 }]);
     expect(sanitized.sourceText).toContain("SessionDiscussionProvider as uc");
     expect(sanitized.sourceText).toContain("DispatchReplyWithDispatcher as ui");
-    expect(sanitized.sourceText).not.toContain("__exportAll");
+    expect(sanitized.sourceText).not.toContain(helper);
     expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
   });
 
