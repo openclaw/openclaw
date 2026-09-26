@@ -135,7 +135,6 @@ extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
-extensions/microsoft-foundry/shared.ts
 extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.actions.test.ts
@@ -182,7 +181,6 @@ extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/web/src/app.ts
 extensions/signal/src/client-container.test.ts
-extensions/signal/src/client-container.ts
 extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
@@ -284,7 +282,6 @@ src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/command/attempt-execution.cli.test.ts
-src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
 src/agents/command/cli-compaction.test.ts
 src/agents/command/delivery.test.ts
@@ -355,7 +352,6 @@ src/agents/tool-search.test.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
-src/agents/tools/media-generate-background-shared.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
 src/agents/tools/session-status-tool.ts

@@ -275,6 +275,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       const userCodeRequest = fetchCall(fetchMock, 0);
       expect(userCodeRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
       expect(userCodeRequest[1]?.method).toBe("POST");
+      expect(userCodeRequest[1]?.body).toBe('{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann"}');
       expect(userCodeRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(userCodeRequest[1]?.headers).toEqual({
         "Content-Type": "application/json",
@@ -286,6 +287,9 @@ describe("loginOpenAICodexDeviceCode", () => {
       const deviceTokenRequest = fetchCall(fetchMock, 1);
       expect(deviceTokenRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
       expect(deviceTokenRequest[1]?.method).toBe("POST");
+      expect(deviceTokenRequest[1]?.body).toBe(
+        '{"device_auth_id":"device-auth-123","user_code":"CODE-12345"}',
+      );
       expect(deviceTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(deviceTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/json",
@@ -297,6 +301,9 @@ describe("loginOpenAICodexDeviceCode", () => {
       const oauthTokenRequest = fetchCall(fetchMock, 3);
       expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
       expect(oauthTokenRequest[1]?.method).toBe("POST");
+      expect(await new Response(oauthTokenRequest[1]?.body).text()).toBe(
+        "grant_type=authorization_code&code=authorization-code-123&redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback&client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_verifier=code-verifier-123",
+      );
       expect(oauthTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
       expect(oauthTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/x-www-form-urlencoded",

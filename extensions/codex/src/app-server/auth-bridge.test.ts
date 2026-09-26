@@ -109,24 +109,10 @@ it("keeps subscription-sharing OAuth in the host and hands native Codex only an 
 });
 
 type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCandidates>[number];
-type MockCacheResult = {
-  status: "independent" | "shared";
-  changed: boolean;
-  message: string;
-  removedStaleVersions: string[];
-  warnings: string[];
-};
-
 const computerUseServiceMocks = vi.hoisted(() => ({
   ensureCodexComputerUseSharedPluginCache: vi.fn<
-    (_params: { forceRefresh?: boolean }) => Promise<MockCacheResult>
-  >(async () => ({
-    status: "independent",
-    changed: false,
-    message: "independent",
-    removedStaleVersions: [],
-    warnings: [],
-  })),
+    (_params: { forceRefresh?: boolean }) => Promise<boolean>
+  >(async () => false),
   ensureCodexManagedBundledMarketplace: vi.fn<(_params?: unknown) => Promise<string | undefined>>(
     async () => undefined,
   ),
@@ -277,13 +263,7 @@ afterEach(() => {
   computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
   computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockClear();
   computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockReset();
-  computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue({
-    status: "independent",
-    changed: false,
-    message: "independent",
-    removedStaleVersions: [],
-    warnings: [],
-  });
+  computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(false);
   computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockReset();
   computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
     async (params) => params.candidates?.[0],
@@ -747,13 +727,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
   it("refreshes shared cache once per selected desktop source generation", async () => {
     await withTempDir("openclaw-codex-computer-use-cache-owner-", async (agentDir) => {
-      computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue({
-        status: "shared",
-        changed: true,
-        message: "shared",
-        removedStaleVersions: [],
-        warnings: [],
-      });
+      computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(true);
       const startOptions = createStartOptions({
         command: "/Applications/ChatGPT.app/Contents/Resources/codex",
       });

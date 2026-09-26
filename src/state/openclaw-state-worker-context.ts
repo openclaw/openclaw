@@ -8,6 +8,7 @@ import { captureOpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-c
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   captureOpenClawStateReadContextWithAdmission,
+  captureOpenClawStateReadWorkerContextWithAdmission,
   captureOpenClawStateWorkerContextWithAdmission,
 } from "./openclaw-state-worker-context.capture.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -23,6 +24,16 @@ export function captureOpenClawStateReadContext(
 ): OpenClawStateReadContext {
   return captureOpenClawStateReadContextWithAdmission(
     pathname,
+    captureOpenClawStateDatabaseReadAdmission,
+  );
+}
+
+/** Read-only workers need resolved runtime facts, not the initialization environment. */
+export function captureOpenClawStateReadWorkerContext(
+  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+): OpenClawStateWorkerContext {
+  return captureOpenClawStateReadWorkerContextWithAdmission(
+    options,
     captureOpenClawStateDatabaseReadAdmission,
   );
 }

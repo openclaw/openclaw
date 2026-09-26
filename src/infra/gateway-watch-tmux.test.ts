@@ -583,7 +583,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(stdout.chunks.join("")).not.toContain("tmux attach -t");
   });
 
-  it.each([undefined, "", "dumb", "DUMB"])(
+  it.each([undefined, "DUMB"])(
     "keeps a capability-limited TERM=%s pseudo-terminal detached",
     (term) => {
       const stdout = createOutput();

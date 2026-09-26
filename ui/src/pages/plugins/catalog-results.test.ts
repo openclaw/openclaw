@@ -357,6 +357,42 @@ describe("renderPluginCatalogResults", () => {
     );
   });
 
+  it("uses white tiles for official catalog images without styling placeholders or community icons", () => {
+    const imageUrl = "https://example.com/icon.png";
+    const container = mount(
+      baseProps({
+        result: {
+          items: [
+            plugin("official", {
+              catalog: { name: "Official", official: true, categories: [], imageUrl },
+            }),
+            plugin("community", {
+              catalog: { name: "Community", official: false, categories: [], imageUrl },
+            }),
+            plugin("missing"),
+          ],
+        },
+        iconUrls: { [imageUrl]: "blob:icon" },
+      }),
+    );
+
+    expect(
+      container.querySelector(
+        '.plugin-catalog-card[data-plugin-id="official"] .plugins-tile--white',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '.plugin-catalog-card[data-plugin-id="community"] .plugins-tile--white',
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '.plugin-catalog-card[data-plugin-id="missing"] .plugins-tile--white',
+      ),
+    ).toBeNull();
+  });
+
   it("caps grouped sections at two desktop rows and opens the selected category", () => {
     const onCategoryChange = vi.fn();
     const container = mount(

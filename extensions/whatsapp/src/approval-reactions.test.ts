@@ -7,7 +7,7 @@ import {
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import * as whatsappRuntime from "./runtime.js";
-import { resolveEquivalentWhatsAppDirectChatJids } from "./text-runtime.js";
+import { resolveEquivalentWhatsAppDirectChatJids } from "./targets-runtime.js";
 
 type LidLookup = NonNullable<
   NonNullable<Parameters<typeof resolveEquivalentWhatsAppDirectChatJids>[1]>["lidLookup"]

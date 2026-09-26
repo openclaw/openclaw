@@ -142,6 +142,14 @@ export function readSessionArtifacts(
   scope: SessionTranscriptReadScope,
   query: Extract<SessionArtifactReadQuery, { kind: "image" }>,
 ): Promise<Extract<SessionArtifactReadResult, { kind: "image" }>>;
+export function readSessionArtifacts(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "download-grant" }>,
+): Promise<Extract<SessionArtifactReadResult, { kind: "download-grant" }>>;
+export function readSessionArtifacts(
+  scope: SessionTranscriptReadScope,
+  query: Extract<SessionArtifactReadQuery, { kind: "download-response" }>,
+): Promise<Extract<SessionArtifactReadResult, { kind: "download-response" }>>;
 export async function readSessionArtifacts(
   scope: SessionTranscriptReadScope,
   inputQuery: SessionArtifactReadQuery,

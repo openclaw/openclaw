@@ -48,16 +48,13 @@ export function captureOpenClawStateReadContextWithAdmission(
   };
 }
 
-/** Capture host facts before asynchronous work, without opening SQLite. */
-export function captureOpenClawStateWorkerContextWithAdmission(
-  options: {
-    path?: string;
-    env?: NodeJS.ProcessEnv;
-    initializationAgentPaths?: readonly string[];
-  },
+/** Read-only workers need resolved runtime facts, not the initialization environment. */
+export function captureOpenClawStateReadWorkerContextWithAdmission(
+  options: { path?: string; env?: NodeJS.ProcessEnv },
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
 ): OpenClawStateWorkerContext {
-  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const source = options.env ?? process.env;
+  const env = process.platform === "win32" ? cloneEnvWithPlatformSemantics(source) : source;
   const environment: OpenClawStateWorkerContext["environment"] = {
     OPENCLAW_STATE_DIR: resolveStateDir(env),
     ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
@@ -68,10 +65,26 @@ export function captureOpenClawStateWorkerContextWithAdmission(
       captureAdmission,
     ),
     environment,
+    coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
+  };
+}
+
+/** Capture host facts before asynchronous work, without opening SQLite. */
+export function captureOpenClawStateWorkerContextWithAdmission(
+  options: {
+    path?: string;
+    env?: NodeJS.ProcessEnv;
+    initializationAgentPaths?: readonly string[];
+  },
+  captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
+): OpenClawStateWorkerContext {
+  const context = captureOpenClawStateReadWorkerContextWithAdmission(options, captureAdmission);
+  return {
+    ...context,
     initializationEnvironment: mergeProcessEnv([
-      env,
+      options.env ?? process.env,
       { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },
-      environment,
+      context.environment,
     ]),
     ...(options.initializationAgentPaths
       ? {
@@ -80,6 +93,5 @@ export function captureOpenClawStateWorkerContextWithAdmission(
           ),
         }
       : {}),
-    coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
   };
 }

@@ -311,23 +311,33 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(connectResolved).toBe(false);
     expect(onReady).not.toHaveBeenCalled();
     expect(parseSent(socket).map((event) => event.type)).toEqual(["session.update"]);
-    const session = requireSession(socket);
-    expectRecordFields(session, "session", {
-      type: "realtime",
-      model: "gpt-realtime-2.1",
-      output_modalities: ["audio"],
-    });
-    const inputAudio = requireNestedRecord(session, ["audio", "input"]);
-    expectRecordFields(inputAudio, "session audio input", {
-      format: { type: "audio/pcmu" },
-      noise_reduction: null,
-      transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
-    });
-    expect(requireNestedRecord(session, ["audio", "output"])).toEqual({
-      format: { type: "audio/pcmu" },
-      voice: "alloy",
-    });
-    expect(session).not.toHaveProperty("temperature");
+    expect(socket.sent[0]).toBe(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          type: "realtime",
+          model: "gpt-realtime-2.1",
+          instructions: "Be helpful.",
+          output_modalities: ["audio"],
+          audio: {
+            input: {
+              format: { type: "audio/pcmu" },
+              noise_reduction: null,
+              transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
+                interrupt_response: true,
+              },
+            },
+            output: { format: { type: "audio/pcmu" }, voice: "alloy" },
+          },
+        },
+      }),
+    );
     expect(bridge.isConnected()).toBe(false);
 
     emitSessionUpdated(socket);

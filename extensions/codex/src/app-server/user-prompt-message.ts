@@ -59,23 +59,19 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): M
   return buildFromPrepared(params, params.userTurnTranscriptRecorder?.message);
 }
 
-function buildCodexUpstreamPromptMessage(
-  params: EmbeddedRunAttemptParams,
-  identity: string,
-  upstreamUserText?: string,
-): AgentMessage {
-  const message = attachCodexMirrorIdentity(buildCodexUserPromptMessage(params), identity);
-  return upstreamUserText ? attachUpstreamUserText(message, upstreamUserText) : message;
-}
-
 export function promptSnapshot(
   params: EmbeddedRunAttemptParams,
   turnId: string,
   upstreamUserText?: string,
 ): AgentMessage[] {
-  return params.suppressNextUserMessagePersistence
-    ? []
-    : [buildCodexUpstreamPromptMessage(params, `${turnId}:prompt`, upstreamUserText)];
+  if (params.suppressNextUserMessagePersistence) {
+    return [];
+  }
+  const message = attachCodexMirrorIdentity(
+    buildCodexUserPromptMessage(params),
+    `${turnId}:prompt`,
+  );
+  return [upstreamUserText ? attachUpstreamUserText(message, upstreamUserText) : message];
 }
 
 export async function buildResolvedCodexUserPromptMessage(

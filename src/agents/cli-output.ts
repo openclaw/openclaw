@@ -14,7 +14,7 @@ import {
   collectExplicitCliErrorText,
   decodeCliRecords,
   describeClaudeTurnStop,
-  isStreamJsonDialect,
+  supportsCliJsonlToolEvents,
   parseCliJson,
 } from "./cli-output-records.js";
 import {
@@ -100,7 +100,7 @@ export function parseCliOutput(params: {
     if (parsed) {
       return parsed;
     }
-    if (isStreamJsonDialect(params)) {
+    if (supportsCliJsonlToolEvents(params)) {
       return {
         text: "",
         sessionId: params.fallbackSessionId,

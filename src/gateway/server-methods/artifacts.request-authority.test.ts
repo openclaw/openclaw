@@ -231,7 +231,13 @@ async function exercise(
         });
       }
       const outcome = Promise.allSettled([
-        invoke({ taskId: task.taskId, ...(method === "artifacts.list" ? {} : { artifactId }) }),
+        invoke({
+          taskId: task.taskId,
+          ...(method === "artifacts.list" ? {} : { artifactId }),
+          ...(method === "artifacts.download" && disclosureBoundary === "transcript"
+            ? { transport: "http" }
+            : {}),
+        }),
       ]);
       try {
         await entered.promise;
@@ -242,6 +248,13 @@ async function exercise(
         if (change === "reconnected") {
           expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(respond.mock.calls[0]?.[0]).toBe(true);
+          if (method === "artifacts.download" && disclosureBoundary === "transcript") {
+            expect(respond.mock.calls[0]?.[1]).toMatchObject({
+              encoding: "base64",
+              data: "aGVsbG8=",
+            });
+            expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("url");
+          }
         } else {
           expect(settled).toMatchObject([{ status: "rejected", reason: refusal }]);
           expect(respond).not.toHaveBeenCalled();

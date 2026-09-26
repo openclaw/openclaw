@@ -8,7 +8,8 @@ vi.mock("./group-activation.js", () => ({
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./group-gating.js";
+import { applyGroupGating } from "./group-gating.js";
+import type { GroupHistoryEntry } from "./inbound-context.js";
 
 function makeUnregisteredGroupMsg(
   conversationId: string,

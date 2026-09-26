@@ -261,6 +261,17 @@ function renderToolCardModes(
   const id = `${messageKey}:${card.id}`;
   const active = isError || outcome === "skipped" ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
+  const modes = [
+    ["diff", "chat.toolCards.diff", renderDiffBlock(diff, outcome, undefined, file)],
+    [
+      "raw",
+      "chat.toolCards.raw",
+      renderToolDataBlock({
+        ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+        text: card.outputText!,
+      }),
+    ],
+  ] as const;
   return html`
     <wa-tab-group
       class="chat-tool-card__modes"
@@ -270,43 +281,27 @@ function renderToolCardModes(
       without-scroll-controls
       ${ref((element) => syncTabGroupLabel(element, modeLabel))}
     >
-      <wa-tab
-        slot="nav"
-        id=${`${id}-diff-tab`}
-        aria-controls=${`${id}-diff-panel`}
-        panel="diff"
-        ?active=${active === "diff"}
-      >
-        ${t("chat.toolCards.diff")}
-      </wa-tab>
-      <wa-tab
-        slot="nav"
-        id=${`${id}-raw-tab`}
-        aria-controls=${`${id}-raw-panel`}
-        panel="raw"
-        ?active=${active === "raw"}
-      >
-        ${t("chat.toolCards.raw")}
-      </wa-tab>
-      <wa-tab-panel
-        id=${`${id}-diff-panel`}
-        aria-labelledby=${`${id}-diff-tab`}
-        name="diff"
-        ?active=${active === "diff"}
-      >
-        ${renderDiffBlock(diff, outcome, undefined, file)}
-      </wa-tab-panel>
-      <wa-tab-panel
-        id=${`${id}-raw-panel`}
-        aria-labelledby=${`${id}-raw-tab`}
-        name="raw"
-        ?active=${active === "raw"}
-      >
-        ${renderToolDataBlock({
-          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-          text: card.outputText!,
-        })}
-      </wa-tab-panel>
+      ${modes.map(
+        ([mode, label]) => html`<wa-tab
+          slot="nav"
+          id=${`${id}-${mode}-tab`}
+          aria-controls=${`${id}-${mode}-panel`}
+          panel=${mode}
+          ?active=${active === mode}
+        >
+          ${t(label)}
+        </wa-tab>`,
+      )}
+      ${modes.map(
+        ([mode, , content]) => html`<wa-tab-panel
+          id=${`${id}-${mode}-panel`}
+          aria-labelledby=${`${id}-${mode}-tab`}
+          name=${mode}
+          ?active=${active === mode}
+        >
+          ${content}
+        </wa-tab-panel>`,
+      )}
     </wa-tab-group>
   `;
 }

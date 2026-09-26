@@ -218,10 +218,12 @@ export async function createRequesterPublicationFixture(
   };
 }
 
-export function holdWorkerTurn(f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>) {
+export async function holdWorkerTurn(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+) {
   const owner = { environmentId: "requester-worker", ownerEpoch: 2 };
   seedAttachedPlacementEnvironment(f.database, { ...owner, sessionId: REQUEST.sessionId });
-  seedActivePlacement(f.placements, owner);
+  await seedActivePlacement(f.placements, owner);
   return f.placements.claimTurn({
     sessionId: REQUEST.sessionId,
     sessionKey: REQUEST.sessionKey,

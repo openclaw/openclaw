@@ -67,16 +67,12 @@ struct AgentProTab: View {
     }
 
     var body: some View {
-        self.directDestination(for: self.directRoute)
+        self.destination(for: self.directRoute)
+            .toolbar(
+                self.directRoute != .agents && self.headerSidebarAction != nil ? .hidden : .visible,
+                for: .navigationBar)
             .task(id: self.rosterTaskID) {
                 await self.refreshAgents()
             }
-    }
-
-    private func directDestination(for route: AgentRoute) -> some View {
-        self.destination(for: route)
-            .toolbar(
-                route != .agents && self.directHeaderSidebarAction(for: route) != nil ? .hidden : .visible,
-                for: .navigationBar)
     }
 }
