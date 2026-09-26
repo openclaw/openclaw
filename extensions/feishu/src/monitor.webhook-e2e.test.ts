@@ -237,7 +237,6 @@ describe("Feishu webhook signed-request e2e", () => {
     });
   });
 
-
   it("accepts signed plaintext url_verification challenges end-to-end", async () => {
     await withSignedWebhook("signed-challenge", async (url) => {
       const payload = { type: "url_verification", challenge: "challenge-token" };

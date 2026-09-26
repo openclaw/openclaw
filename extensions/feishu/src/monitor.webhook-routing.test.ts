@@ -165,29 +165,49 @@ describe("Feishu webhook route configuration", () => {
       replacement: { botOpenId: "ou_recovered", botName: "Recovered" },
     },
   ])("preserves identity ownership during $name", async ({ replacement }) => {
-    await getGatewayPort();
+    const port = await getGatewayPort();
     const accountId = "identity-handoff";
     const account = createFeishuWebhookTestAccount(accountId, "/hook-identity-handoff");
     const abort = new AbortController();
+    const invoked = Promise.withResolvers<void>();
+    const releaseDispatch = Promise.withResolvers<void>();
     setFeishuBotIdentityState(accountId, { botOpenId: "ou_initial", botName: "Initial" });
     const monitor = monitorWebhook({
       account,
       accountId,
       abortSignal: abort.signal,
       eventDispatcher: new Lark.EventDispatcher({ encryptKey: "encrypt_key" }),
+      invokeWebhookEvent: async () => {
+        invoked.resolve();
+        await releaseDispatch.promise;
+        return { kind: "non-durable", value: {} };
+      },
       runtime: createRuntimeSpies(),
     });
+    const request = postSignedPayload(`http://127.0.0.1:${port}/hook-identity-handoff`, {
+      schema: "2.0",
+      event: {},
+    });
     try {
+      await invoked.promise;
       setFeishuBotIdentityState(accountId, { botOpenId: "ou_recovered", botName: "Recovered" });
       abort.abort();
+      expect(botOpenIds.get(accountId)).toBe("ou_recovered");
+      expect(botNames.get(accountId)).toBe("Recovered");
       if (replacement) {
         setFeishuBotIdentityState(accountId, replacement);
       }
+      releaseDispatch.resolve();
+      const response = await request;
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({});
       await monitor;
       expect(botOpenIds.get(accountId)).toBe(replacement?.botOpenId);
       expect(botNames.get(accountId)).toBe(replacement?.botName);
     } finally {
+      releaseDispatch.resolve();
       abort.abort();
+      await request;
       await monitor;
     }
   });

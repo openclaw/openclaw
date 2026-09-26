@@ -35,6 +35,7 @@ import {
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
+  readFeishuBotIdentityRevision,
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
@@ -653,18 +654,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
       return pendingDrain;
     }
     cleanupStarted = true;
-    if (
-      ![...webhookTargets.values()].some((targets) =>
-        targets.some(
-          (target) =>
-            target !== registration.target &&
-            target.accountId === accountId &&
-            !target.abortSignal?.aborted,
-        ),
-      )
-    ) {
-      clearFeishuBotIdentityState(accountId);
-    }
+    const identityRevision = readFeishuBotIdentityRevision(accountId);
     pendingDrain = (async () => {
       const pendingResponses = registration.target.pendingResponses;
       if (pendingResponses.size > 0) {
@@ -676,6 +666,20 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
             response.destroy();
           }
         }
+      }
+      // A successor can publish identity before registering its route during the drain.
+      if (
+        readFeishuBotIdentityRevision(accountId) === identityRevision &&
+        ![...webhookTargets.values()].some((targets) =>
+          targets.some(
+            (target) =>
+              target !== registration.target &&
+              target.accountId === accountId &&
+              !target.abortSignal?.aborted,
+          ),
+        )
+      ) {
+        clearFeishuBotIdentityState(accountId);
       }
       registration.unregister();
       unregisterRoute?.();
