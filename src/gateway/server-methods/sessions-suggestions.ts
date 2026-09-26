@@ -100,6 +100,21 @@ function respondSessionSuggestionSessionChanged(respond: RespondFn, sessionKey: 
   );
 }
 
+function respondSuggestionDispatchError(respond: RespondFn, error: unknown): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.UNAVAILABLE,
+      error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
+      {
+        retryable: true,
+        retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+      },
+    ),
+  );
+}
+
 function runSessionSuggestionMutation<T>(params: {
   mutate: () => T;
   respond: RespondFn;
@@ -396,18 +411,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             resolution,
           });
         } catch (error) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
-              {
-                retryable: true,
-                retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-              },
-            ),
-          );
+          respondSuggestionDispatchError(respond, error);
           return;
         }
         if (!dispatched.ok) {
@@ -424,18 +428,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
                 }),
             });
           } catch (error) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
-                {
-                  retryable: true,
-                  retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-                },
-              ),
-            );
+            respondSuggestionDispatchError(respond, error);
             return;
           }
           if (!releaseResult.ok) {

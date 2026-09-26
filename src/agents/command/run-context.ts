@@ -23,27 +23,14 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.accountId = normalizedAccountId;
   }
 
-  const groupId = (merged.groupId ?? opts.groupId)?.toString().trim();
-  if (groupId) {
-    merged.groupId = groupId;
+  for (const key of ["groupId", "groupChannel", "groupSpace"] as const) {
+    const value = (merged[key] ?? opts[key])?.toString().trim();
+    if (value) {
+      merged[key] = value;
+    }
   }
 
-  const groupChannel = (merged.groupChannel ?? opts.groupChannel)?.toString().trim();
-  if (groupChannel) {
-    merged.groupChannel = groupChannel;
-  }
-
-  const groupSpace = (merged.groupSpace ?? opts.groupSpace)?.toString().trim();
-  if (groupSpace) {
-    merged.groupSpace = groupSpace;
-  }
-
-  if (
-    merged.currentThreadTs == null &&
-    opts.threadId != null &&
-    opts.threadId !== "" &&
-    opts.threadId !== null
-  ) {
+  if (merged.currentThreadTs == null) {
     const threadId = stringifyRouteThreadId(opts.threadId);
     if (threadId) {
       merged.currentThreadTs = threadId;

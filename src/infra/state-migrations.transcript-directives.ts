@@ -287,15 +287,22 @@ async function migrateTranscriptSessions(params: {
   while (true) {
     const sessionIds = listTranscriptSessionBatch(params.database, afterSessionId);
     if (sessionIds.length === 0) {
-      runSqliteImmediateTransactionSync(params.database, () => {
-        assertAgentDatabaseMaintenanceAuthority();
-        writeMigrationCursor(params.database, params.agentId, {
-          generation: "",
-          phase: "archives",
-          sessionId: "",
-        });
-        assertAgentDatabaseMaintenanceAuthority();
-      });
+      runSqliteImmediateTransactionSync(
+        params.database,
+        () => {
+          assertAgentDatabaseMaintenanceAuthority();
+          writeMigrationCursor(params.database, params.agentId, {
+            generation: "",
+            phase: "archives",
+            sessionId: "",
+          });
+          assertAgentDatabaseMaintenanceAuthority();
+        },
+        {
+          databaseLabel: params.pathname,
+          operationLabel: "historical-transcript-directives.cursor",
+        },
+      );
       return rewrittenSessions;
     }
     for (const sessionId of sessionIds) {

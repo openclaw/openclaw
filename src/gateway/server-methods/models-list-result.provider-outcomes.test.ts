@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
+import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
@@ -87,49 +88,53 @@ describe("models.list provider catalog outcomes", () => {
     },
   );
 
-  it("preserves an auth rejection when no usable models are visible", async () => {
-    const config = {} as OpenClawConfig;
-    const snapshot = {
-      agentId: "main",
-      agentDir: "/tmp/models-list-provider-outcomes-agent",
-      catalogComplete: true,
-      workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      authStore: emptyAuthStore,
-      metadataSnapshot,
-      authMaterializations: [],
-      entries: [],
-      routeVariants: [],
-      providerOutcomes: [
-        {
-          provider: "openai",
-          profileId: "openai:chatgpt",
-          status: "auth-rejected" as const,
-        },
-      ],
-    };
-    const context = {
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: vi.fn(() => Promise.resolve(snapshot)),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
-    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-      loadDeferred: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
-      readPrepared: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
-    });
+  it.each([false, true])(
+    "preserves auth rejection with refresh failure=%s",
+    async (unavailable) => {
+      const config = {} as OpenClawConfig;
+      const reporter = createCatalogAttemptReporter(
+        {},
+        { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+        () => true,
+        () => {},
+      );
+      const providerOutcomes = [
+        { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" as const },
+        ...(unavailable ? [{ provider: "unreachable", status: "unavailable" as const }] : []),
+      ];
+      const snapshot = {
+        agentId: "main",
+        agentDir: "/tmp/models-list-provider-outcomes-agent",
+        catalogComplete: true,
+        workspaceDir: "/tmp/models-list-provider-outcomes-workspace",
+        config,
+        observationConfig: config,
+        isCurrent: () => true,
+        authModes: {},
+        authStore: emptyAuthStore,
+        metadataSnapshot,
+        authMaterializations: [],
+        ...reporter.withRefreshStatus({ entries: [], routeVariants: [], providerOutcomes }),
+      };
+      const context = {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: vi.fn(() => Promise.resolve(snapshot)),
+        logGateway: { debug: vi.fn() },
+      } as unknown as GatewayRequestContext;
+      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+        loadDeferred: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
+        readPrepared: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
+      });
 
-    await expect(
-      buildModelsListResult({ source: { kind: "gateway", context }, params: { view: "all" } }),
-    ).resolves.toEqual({
-      models: [],
-      providerOutcomes: [
-        { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
-      ],
-    });
-  });
+      await expect(
+        buildModelsListResult({ source: { kind: "gateway", context }, params: { view: "all" } }),
+      ).resolves.toEqual({
+        models: [],
+        providerOutcomes,
+        ...(unavailable ? { refreshFailed: true } : {}),
+      });
+    },
+  );
 
   it.each([
     { name: "provider auth", rejectionScope: undefined, usageStats: undefined },

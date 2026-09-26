@@ -1,4 +1,4 @@
-// Xai plugin module implements x search behavior.
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import {
   jsonResult,
   normalizeToIsoDate,
@@ -46,18 +46,7 @@ type XSearchCacheEntry = {
   value: Record<string, unknown>;
 };
 
-function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[X_SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, XSearchCacheEntry>;
-  }
-  const next = new Map<string, XSearchCacheEntry>();
-  root[X_SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-const X_SEARCH_CACHE = getSharedXSearchCache();
+const X_SEARCH_CACHE = resolveGlobalMap<string, XSearchCacheEntry>(X_SEARCH_CACHE_KEY);
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
   if (!value) {
@@ -169,25 +158,17 @@ export function createXSearchTool(options?: {
       enableImageUnderstanding: args.enable_image_understanding === true,
       enableVideoUnderstanding: args.enable_video_understanding === true,
     };
-    const xSearchConfigRecord = xSearchConfig;
-    const model = resolveXaiXSearchModel(xSearchConfigRecord);
-    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
-    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
-    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
+    const model = resolveXaiXSearchModel(xSearchConfig);
+    const endpoint = resolveXaiXSearchEndpoint(xSearchConfig);
+    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
+    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
     const cacheKey = buildXSearchCacheKey({
       query,
       model,
       endpoint,
       inlineCitations,
       maxTurns,
-      options: {
-        allowedXHandles,
-        excludedXHandles,
-        fromDate,
-        toDate,
-        enableImageUnderstanding: xSearchOptions.enableImageUnderstanding,
-        enableVideoUnderstanding: xSearchOptions.enableVideoUnderstanding,
-      },
+      options: xSearchOptions,
     });
     const cacheTtlMs = resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15);
     const cached = readCache(X_SEARCH_CACHE, cacheKey, cacheTtlMs);

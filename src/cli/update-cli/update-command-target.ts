@@ -1,6 +1,5 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -55,6 +54,7 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -93,52 +93,47 @@ export async function resolveFreshUpdateMetadata(target: {
 }
 
 /** Describe the selected plan without changing roots, runtime, or service authority. */
-function formatManagedServicePackageUpdatePlan(params: {
+function printManagedServicePackageUpdatePlan(params: {
   rootRedirect: ManagedServiceRootRedirect | null;
   serviceRoot?: string;
   nodeRunner?: string;
-}): Array<{ level: "muted" | "warn"; message: string }> {
+}): void {
   const { rootRedirect, nodeRunner } = params;
   if (rootRedirect) {
-    return [
-      {
-        level: "muted",
-        message: `Targeting managed gateway service package root: ${rootRedirect.root}`,
-      },
-      {
-        level: "warn",
-        message: `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-      },
-      {
-        level: "muted",
-        message: `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
-      },
-      ...(nodeRunner
-        ? [{ level: "muted" as const, message: `Managed gateway service Node: ${nodeRunner}` }]
-        : []),
-    ];
+    defaultRuntime.log(
+      theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
+    );
+    defaultRuntime.log(
+      theme.warn(
+        `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
+      ),
+    );
+    defaultRuntime.log(
+      theme.muted(
+        `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
+      ),
+    );
+    if (nodeRunner) {
+      defaultRuntime.log(theme.muted(`Managed gateway service Node: ${nodeRunner}`));
+    }
+  } else if (params.serviceRoot) {
+    defaultRuntime.log(
+      theme.muted(
+        `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
+      ),
+    );
+  } else if (nodeRunner) {
+    defaultRuntime.log(
+      theme.warn(
+        `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
+      ),
+    );
+    defaultRuntime.log(
+      theme.muted(
+        "Using the managed service Node for this update so the gateway can start after the upgrade.",
+      ),
+    );
   }
-  if (params.serviceRoot) {
-    return [
-      {
-        level: "muted",
-        message: `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
-      },
-    ];
-  }
-  return nodeRunner
-    ? [
-        {
-          level: "warn",
-          message: `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
-        },
-        {
-          level: "muted",
-          message:
-            "Using the managed service Node for this update so the gateway can start after the upgrade.",
-        },
-      ]
-    : [];
 }
 
 export async function resolveUpdateCommandTarget(
@@ -187,8 +182,11 @@ export async function resolveUpdateCommandTarget(
         const report = {
           root,
           installKind: updateInstallKind,
-          // Invalid config refuses before manager probes; retain the known install kind.
-          mode: reason === "invalid-config" ? packageManager : await resolveMode(),
+          // Config failures refuse before manager probes; retain the known install kind.
+          mode:
+            reason === "invalid-config" || reason === "config-read-failed"
+              ? packageManager
+              : await resolveMode(),
           reason,
           message,
           failureFacts,
@@ -261,11 +259,8 @@ export async function resolveUpdateCommandTarget(
         !legacyConfigPlan &&
         !usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        const issues = formatConfigIssueLines(configSnapshot.issues, "-");
-        await refuseUpdate(
-          "invalid-config",
-          ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
-        );
+        const failure = createUpdateConfigFailure(configSnapshot);
+        await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
 
@@ -303,13 +298,8 @@ export async function resolveUpdateCommandTarget(
         updateInstallKind !== "package" &&
         usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        await refuseUpdate(
-          "invalid-config",
-          [
-            "Config is invalid; cannot set update channel.",
-            ...formatConfigIssueLines(configSnapshot.issues, "-"),
-          ].join("\n"),
-        );
+        const failure = createUpdateConfigFailure(configSnapshot);
+        await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
       if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate) {
@@ -368,9 +358,7 @@ export async function resolveUpdateCommandTarget(
           root = managedServiceRootRedirect.root;
         }
         if (!opts.json) {
-          for (const { level, message } of formatManagedServicePackageUpdatePlan(servicePlan)) {
-            defaultRuntime.log(theme[level](message));
-          }
+          printManagedServicePackageUpdatePlan(servicePlan);
         }
         packageUpdateNodeRunner = managedServiceRoot
           ? resolveNodeRunner()

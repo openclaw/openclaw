@@ -22,6 +22,14 @@
   font-size: 14px;
 }
 
+.connect-splash--skeleton,
+.loading-skeleton {
+  /* Several palettes share bg-muted and bg-hover, hiding the default sweep.
+     A translucent text tint stays visible in both light and dark themes. */
+  --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
+  --skeleton-duration: 2s;
+}
+
 .connect-splash--skeleton {
   position: relative;
   align-items: stretch;
@@ -406,7 +414,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   }
 }
 
-/* Shared by the login gate and the Sessions, Tasks, and Cron routes. */
+/* Shared by the login gate and the Sessions and Cron routes. */
 .session-link {
   color: var(--accent);
   font-weight: 500;

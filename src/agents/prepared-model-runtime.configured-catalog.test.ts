@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
+import { orderModelCatalogForPicker } from "./model-catalog-order.js";
+import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
@@ -9,6 +11,77 @@ import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.ty
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 describe("configured catalog registry composition", () => {
+  it.each([
+    { manifest: true, configured: false },
+    { manifest: true, configured: true },
+    { manifest: false, configured: false },
+    { manifest: false, configured: true },
+  ])(
+    "keeps startup and refresh order consistent (manifest=$manifest, configured=$configured)",
+    async ({ manifest, configured }) => {
+      const models = ["z-strong", "m-current", "a-small"].map((id) => ({
+        id,
+        name: id,
+        contextWindow: 32_000,
+        maxTokens: 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        reasoning: false,
+        input: ["text" as const],
+      }));
+      const provider = {
+        api: "openai-responses" as const,
+        baseUrl: "https://fixture.invalid/v1",
+        models,
+      };
+      const config: OpenClawConfig = configured
+        ? { models: { providers: { fixture: { ...provider, models: models.toReversed() } } } }
+        : {};
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: manifest
+          ? [
+              {
+                id: "fixture",
+                providers: ["fixture"],
+                modelCatalog: {
+                  providers: { fixture: provider },
+                  discovery: { fixture: "runtime" },
+                },
+              },
+            ]
+          : [],
+      });
+      const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+        config,
+        includePluginCatalogs: false,
+        pluginMetadataSnapshot: metadataSnapshot,
+        modelsJsonContents: JSON.stringify({
+          providers: { fixture: provider },
+        }),
+      });
+      const { modelCatalog } = prepareCapturedRuntimeFacts({
+        agentFacts: { input: { config }, configuredModelRefs: [] },
+        workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+        templateModelRegistry: registry,
+        configuredRuntimeModels: [],
+      });
+      const refreshed = await buildPreparedModelCatalogSnapshot({
+        config,
+        agentDir: "captured:agent",
+        authCredentials: {},
+        modelRegistry: registry,
+        metadataSnapshot,
+        includeProviderPluginAugmentation: false,
+      });
+      const expected = manifest
+        ? ["z-strong", "m-current", "a-small"]
+        : ["a-small", "m-current", "z-strong"];
+      expect(orderModelCatalogForPicker(modelCatalog.entries).map(({ id }) => id)).toEqual(
+        expected,
+      );
+      expect(orderModelCatalogForPicker(refreshed.entries).map(({ id }) => id)).toEqual(expected);
+    },
+  );
+
   it("bounds captured catalog policy loading by provider and refreshes it per invocation", () => {
     const loadPolicy = vi.spyOn(providerPolicy, "resolveDirectBundledProviderPolicySurface");
     try {
@@ -312,7 +385,11 @@ describe("configured catalog registry composition", () => {
             }
           : {}),
       };
-      expect(modelCatalog.entries[0]).toEqual(expectedEntry);
+      expect(modelCatalog.entries[0]).toMatchObject(expectedEntry);
+      expect(modelCatalog.entries[0]?.contextWindows).toEqual(expectedEntry.contextWindows);
+      expect(modelCatalog.entries[0]?.contextWindowDefault).toBe(
+        expectedEntry.contextWindowDefault,
+      );
       expect(modelCatalog.routeVariants).toEqual(modelCatalog.entries);
       const policy = createModelVisibilityPolicy({
         cfg: config,
@@ -321,7 +398,11 @@ describe("configured catalog registry composition", () => {
         defaultModel: configured.id,
         manifestPlugins: metadataSnapshot,
       });
-      expect(policy.configuredCatalog[0]).toEqual(expectedEntry);
+      expect(policy.configuredCatalog[0]).toMatchObject(expectedEntry);
+      expect(policy.configuredCatalog[0]?.contextWindows).toEqual(expectedEntry.contextWindows);
+      expect(policy.configuredCatalog[0]?.contextWindowDefault).toBe(
+        expectedEntry.contextWindowDefault,
+      );
     },
   );
 });

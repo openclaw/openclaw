@@ -101,7 +101,7 @@ describe("GatewayChatClient", () => {
     { remaining: ["first", "current"], expected: "current" },
     { remaining: ["first"], expected: "first" },
   ])(
-    "restores $expected after config.changed clears and refills an open picker",
+    "keeps rows through sign-in and restores $expected after policy retirement",
     async ({ remaining, expected }) => {
       const models = ["first", "current", "highlighted"].map((id) => ({
         provider: "fixture",
@@ -143,6 +143,13 @@ describe("GatewayChatClient", () => {
         selector.handleInput("\u001b[B");
         selector.handleInput("\u001b[B");
         onEvent!({ type: "event", event: "config.changed", payload: {} });
+        expect(selector.render(100).join("\n")).not.toContain("Checking models...");
+        expect(selector.render(100).join("\n")).toContain("fixture/highlighted");
+        onEvent!({
+          type: "event",
+          event: "chat.metadata.changed",
+          payload: { modelSelectionChanged: true },
+        });
         expect(selector.render(100).join("\n")).toContain("Checking models...");
         held.resolve({ models: models.filter((model) => remaining.includes(model.id)) });
         await client.listModels({ agentId: "main" });

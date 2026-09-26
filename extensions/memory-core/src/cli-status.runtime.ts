@@ -4,6 +4,16 @@ import {
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  defaultRuntime,
+  formatErrorMessage,
+  setVerbose,
+  shortenHomePath,
+  theme,
+  withProgress,
+  withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
   resolveMemoryDeepDreamingConfig,
@@ -22,16 +32,6 @@ import {
   type MemoryManager,
   type MemorySourceScan,
 } from "./cli-runtime-common.js";
-import {
-  defaultRuntime,
-  formatErrorMessage,
-  setVerbose,
-  shortenHomePath,
-  theme,
-  withProgress,
-  withProgressTotals,
-  type OpenClawConfig,
-} from "./cli.host.runtime.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
 import {
   auditDreamingArtifacts,

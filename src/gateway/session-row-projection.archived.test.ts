@@ -151,6 +151,9 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         if (!projection) {
           throw new Error("Expected a live projection");
         }
+        do {
+          await projection.prepareMembership();
+        } while (projection.needsMembershipPreparation());
         // Query the parent index first: describing the child would hide a stale cold edge.
         const selected = projection.selectEntries({
           parentSessionKey: literal ? parent : "global",

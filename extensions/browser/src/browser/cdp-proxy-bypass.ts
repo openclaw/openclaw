@@ -36,14 +36,6 @@ export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | un
   return undefined;
 }
 
-/**
- * Returns `true` when any proxy-related env var is set that could
- * interfere with loopback connections.
- */
-function hasProxyEnv(): boolean {
-  return hasProxyEnvConfigured();
-}
-
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
 
 function noProxyValueCoversLocalhost(value: string | undefined): boolean {
@@ -87,7 +79,7 @@ class NoProxyLeaseManager {
   private snapshot: NoProxySnapshot | null = null;
 
   acquire(url: string): (() => void) | null {
-    if (!isLoopbackCdpUrl(url) || !hasProxyEnv()) {
+    if (!isLoopbackCdpUrl(url) || !hasProxyEnvConfigured()) {
       return null;
     }
 

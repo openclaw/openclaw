@@ -706,6 +706,14 @@ main() {
       ;;
   esac
 
+  # Reject contradictory instructions before PR reads, locks, or preparation can
+  # retire valid evidence. prepare-push can refresh a head and rerun gates too.
+  case "$cmd" in
+    prepare-run | prepare-gates | prepare-push)
+      resolve_pr_gates_remote_mode >/dev/null || return $?
+      ;;
+  esac
+
   require_cmds
 
   case "$cmd" in

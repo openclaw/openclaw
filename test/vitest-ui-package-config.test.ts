@@ -144,10 +144,7 @@ describe("ui package vitest config", () => {
         projectOrder: { native: string[]; actual: string[] };
       };
     };
-    const nodeFiles = new Set([
-      "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
-      "ui/src/pages/usage/usage-page-details.test.ts",
-    ]);
+    const nodeFiles = new Set(["ui/src/pages/usage/usage-page-details.test.ts"]);
     expect(report.discovered.length).toBeGreaterThan(1000);
     expect(report.rows).toHaveLength(4);
     expect(report.empty).toEqual({ modules: 0, errors: 0 });

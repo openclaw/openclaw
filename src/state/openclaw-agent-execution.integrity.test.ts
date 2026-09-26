@@ -123,7 +123,7 @@ it.each(["settled", "pending"] as const)(
             if (!grant()) {
               throw new Error("Missing database fixture lost admission");
             }
-          }),
+          }, binding.attachment),
         });
       },
     };
@@ -167,7 +167,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
         if (!grant()) {
           throw new Error("External store fixture lost its admission");
         }
-      }),
+      }, binding.attachment),
     }),
   };
   const generation = createAgentDatabaseNativeGeneration(
@@ -288,7 +288,7 @@ it.each([
           if (!grant()) {
             throw new Error("Native integrity fixture lost its retained admission");
           }
-        }),
+        }, binding.attachment),
       });
     },
   };

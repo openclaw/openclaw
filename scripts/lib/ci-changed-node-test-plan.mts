@@ -25,6 +25,7 @@ import {
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isWorkflowLintConfigPath,
+  listRunnableVitestConfigTargets,
   resolveControlUiTestConsumers,
   resolveAffectedTestsFromImportGraph,
   resolveDependencyTestConsumers,
@@ -336,6 +337,32 @@ function isIndependentlyCheckedDocumentation(changedPath: string, cwd: string) {
   // Missing pages are deletions, but symlinks (including dangling ones) are not pages.
   const entry = lstatSync(path.join(cwd, changedPath), { throwIfNoEntry: false });
   return entry === undefined || entry.isFile();
+}
+
+export function resolveReleaseFastLaneScope(
+  changedPaths: readonly string[] | null,
+  options: CwdOptions = {},
+): { eligible: true } | { eligible: false; reason: string } {
+  if (!changedPaths?.length) {
+    return { eligible: false, reason: "missing changed paths" };
+  }
+  const globalInput = changedPaths.find((file) => GLOBAL_NODE_TEST_INPUT_RE.test(file));
+  if (globalInput) {
+    return { eligible: false, reason: `global execution or resolution input: ${globalInput}` };
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const outsideScope = changedPaths.find(
+    (file) =>
+      !file.startsWith(".github/workflows/") &&
+      !file.startsWith("scripts/") &&
+      !file.startsWith("test/scripts/") &&
+      !/^\.agents\/skills\/release-[^/]+\//u.test(file) &&
+      file !== "docs/reference/RELEASING.md" &&
+      !isIndependentlyCheckedDocumentation(file, cwd),
+  );
+  return outsideScope === undefined
+    ? { eligible: true }
+    : { eligible: false, reason: `outside the release tooling scope: ${outsideScope}` };
 }
 
 function resolvePreciseChangedTargets(
@@ -772,6 +799,7 @@ export function createChangedNodeTestShards(
   options: CwdOptions &
     ChangedTargetValidation & {
       runnerBackend?: string;
+      releaseFastLane?: boolean;
       includeReleaseOnlyToolingShards?: boolean;
       includeReleaseOnlyRuntimeTests?: boolean;
       dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
@@ -826,7 +854,10 @@ export function createChangedNodeTestShards(
 
   // Packing changes and their policy guard need the complete compact plan on
   // Blacksmith while preserving hosted targeting and its registration footprint.
+  // The label accepts changed-row proof for planner policy edits; hourly main CI
+  // still runs the complete plan.
   if (
+    !options.releaseFastLane &&
     options.runnerBackend !== "github" &&
     changedPaths.some(
       (file) =>
@@ -928,7 +959,16 @@ export function createChangedNodeTestShards(
     configInputs.length > 0 &&
     (!configInputs.every(isTestFileTarget) ||
       hasImportGraphConsumers(configInputs, cwd, graphOptions));
-  const configCandidates = inspectConfigConsumers ? [...resolveAutomaticNodeTestConfigs()] : [];
+  const configCandidates =
+    inspectConfigConsumers &&
+    hasImportGraphImpactOnTargets(
+      configInputs,
+      listRunnableVitestConfigTargets(),
+      cwd,
+      graphOptions,
+    )
+      ? [...resolveAutomaticNodeTestConfigs()]
+      : [];
   const affectedConfigs =
     configCandidates.length &&
     hasImportGraphImpactOnTargets(configInputs, configCandidates, cwd, graphOptions)
@@ -1213,13 +1253,13 @@ export function createChangedNodeTestShards(
     .filter(
       ({ plans }) =>
         plans.every((plan) => plan.includePatterns) &&
-        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
-          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))),
+          plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
+        plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's

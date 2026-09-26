@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -16,7 +18,11 @@ import {
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const fixture = () => releaseFixture(directories.make(".release-stable-post-test-", REPO_ROOT));
+const fixture = () => {
+  const scratch = join(REPO_ROOT, ".tmp");
+  mkdirSync(scratch, { recursive: true });
+  return releaseFixture(directories.make(".release-stable-post-test-", scratch));
+};
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const closeoutAssets = (
   names = [
@@ -356,51 +362,34 @@ describe("release:stable post-publication CLI", () => {
     expect(release.readState().phases.closeout.status).toBe("completed");
     expect(release.readState().closeout.runId).toBeUndefined();
     expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
-    expect(result.stdout).toContain("OPENCLAW_FRV_LANE_WAIVER");
+    expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
   });
 
-  it.each([true, false])(
-    "dispatches closeout with workflow-resolved waivers=%s",
-    (resolvesWaivers) => {
-      const release = fixture();
-      const state = postState("closeout");
-      if (state.capabilities) {
-        state.capabilities.closeoutResolvesWaivers = resolvesWaivers;
-      }
-      release.seed(state);
-      const result = release.run([
-        ...closeoutMain(),
-        closeoutAssets([]),
-        ...workflowDispatch(
-          "openclaw-stable-main-closeout.yml",
-          REPOSITORY,
-          502,
-          "Stable main closeout",
-        ),
-        actionRun(REPOSITORY, 502),
-        closeoutAssets(),
-      ]);
-      expect(result.status, result.output).toBe(0);
-      const dispatch = result.calls.find((call) => call.args[0] === "workflow");
-      expect(dispatch?.args.slice(7)).toEqual([
-        "-f",
-        `tag=v${RELEASE}`,
-        ...(resolvesWaivers
-          ? []
-          : [
-              "-f",
-              `stable_soak_waiver=${state.validate.stableSoakWaiver}`,
-              "-f",
-              `lane_waiver=${state.validate.laneWaiver}`,
-            ]),
-      ]);
-      expect(release.readState().phases.closeout.status).toBe("completed");
-      expect(release.readState().closeout).toMatchObject({
-        runId: "502",
-        verifiedAt: expect.any(String),
-      });
-    },
-  );
+  it("dispatches closeout using only its immutable tag", () => {
+    const release = fixture();
+    const state = postState("closeout");
+    release.seed(state);
+    const result = release.run([
+      ...closeoutMain(),
+      closeoutAssets([]),
+      ...workflowDispatch(
+        "openclaw-stable-main-closeout.yml",
+        REPOSITORY,
+        502,
+        "Stable main closeout",
+      ),
+      actionRun(REPOSITORY, 502),
+      closeoutAssets(),
+    ]);
+    expect(result.status, result.output).toBe(0);
+    const dispatch = result.calls.find((call) => call.args[0] === "workflow");
+    expect(dispatch?.args.slice(7)).toEqual(["-f", `tag=v${RELEASE}`]);
+    expect(release.readState().phases.closeout.status).toBe("completed");
+    expect(release.readState().closeout).toMatchObject({
+      runId: "502",
+      verifiedAt: expect.any(String),
+    });
+  });
 
   it.each([
     { label: "neither asset", names: [] },

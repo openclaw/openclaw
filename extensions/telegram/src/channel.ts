@@ -96,11 +96,7 @@ import { createTelegramPluginBase } from "./shared.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
-import {
-  createTelegramThreadBindingManager,
-  setTelegramThreadBindingIdleTimeoutBySessionKey,
-  setTelegramThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.js";
+import { telegramThreadBindingLifecycle } from "./thread-bindings-channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import {
@@ -160,6 +156,14 @@ async function writeStartupBotInfoCache(params: {
 
 async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
   await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
+}
+
+async function clearTelegramAccountRuntimeCache(accountId: string): Promise<void> {
+  const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
+  await Promise.all([
+    deleteTelegramUpdateOffset({ accountId }),
+    deleteStartupBotInfoCache(accountId),
+  ]);
 }
 
 function resolveTelegramAuditCollector() {
@@ -749,25 +753,7 @@ export const telegramPlugin = createChatChannelPlugin({
           : null;
       },
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
-      createManager: ({ cfg, accountId }) =>
-        createTelegramThreadBindingManager({
-          cfg,
-          accountId: accountId ?? undefined,
-          persist: false,
-          enableSweeper: false,
-        }),
-      setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
-        setTelegramThreadBindingIdleTimeoutBySessionKey({
-          targetSessionKey,
-          accountId: accountId ?? undefined,
-          idleTimeoutMs,
-        }),
-      setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
-        setTelegramThreadBindingMaxAgeBySessionKey({
-          targetSessionKey,
-          accountId: accountId ?? undefined,
-          maxAgeMs,
-        }),
+      ...telegramThreadBindingLifecycle,
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,
@@ -822,19 +808,11 @@ export const telegramPlugin = createChatChannelPlugin({
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-          await Promise.all([
-            deleteTelegramUpdateOffset({ accountId }),
-            deleteStartupBotInfoCache(accountId),
-          ]);
+          await clearTelegramAccountRuntimeCache(accountId);
         }
       },
       onAccountRemoved: async ({ accountId }) => {
-        const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-        await Promise.all([
-          deleteTelegramUpdateOffset({ accountId }),
-          deleteStartupBotInfoCache(accountId),
-        ]);
+        await clearTelegramAccountRuntimeCache(accountId);
       },
     },
     heartbeat: {

@@ -133,6 +133,7 @@ const PUBLIC_CODES = new Set<string>([
   "post-plugin-update-readiness-execution-failed",
   "post-plugin-update-readiness-failed",
   "invalid-config",
+  "config-read-failed",
   "validation",
   "cron-owner-safety",
   "include-ownership",

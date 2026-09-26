@@ -18,6 +18,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/board-store.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
+  "src/gateway/config-reload.plugin-observation.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
   "src/gateway/control-ui-session-pr-access.test.ts",
@@ -188,6 +189,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
+  "src/gateway/sessions-history-http.model-policy.test.ts",
   "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
@@ -307,6 +309,7 @@ export const gatewayDatabaseWorkerTestFiles = [
 
 export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];
 export const gatewayCoreTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/server-methods/**/*.test.ts",
   "packages/gateway-protocol/src/**/*.test.ts",

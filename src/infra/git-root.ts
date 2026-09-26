@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { isMissingPathError } from "./errors.js";
 
 function walkUpFrom<T>(
@@ -25,13 +26,8 @@ function walkUpFrom<T>(
 }
 
 function hasGitMarker(repoRoot: string): boolean {
-  const gitPath = path.join(repoRoot, ".git");
-  try {
-    const stat = fs.statSync(gitPath);
-    return stat.isDirectory() || stat.isFile();
-  } catch {
-    return false;
-  }
+  const stat = safeStatSync(path.join(repoRoot, ".git"));
+  return stat ? stat.isDirectory() || stat.isFile() : false;
 }
 
 export function findGitRoot(startDir: string, opts: { maxDepth?: number } = {}): string | null {

@@ -1,4 +1,4 @@
-// Gmail hook ops helpers run Gmail setup and watcher support commands.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   getRuntimeConfig,
@@ -31,7 +31,6 @@ import {
   DEFAULT_GMAIL_MAX_BYTES,
   DEFAULT_GMAIL_RENEW_MINUTES,
   DEFAULT_GMAIL_SERVE_BIND,
-  DEFAULT_GMAIL_SERVE_PATH,
   DEFAULT_GMAIL_SERVE_PORT,
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
@@ -120,17 +119,12 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const serveBind = opts.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePort = opts.port ?? DEFAULT_GMAIL_SERVE_PORT;
-  const configuredServePath = opts.path ?? baseConfig.hooks?.gmail?.serve?.path;
-  const configuredTailscaleTarget =
-    opts.tailscaleTarget ?? baseConfig.hooks?.gmail?.tailscale?.target;
-  const normalizedServePath =
-    typeof configuredServePath === "string" && configuredServePath.trim().length > 0
-      ? normalizeServePath(configuredServePath)
-      : DEFAULT_GMAIL_SERVE_PATH;
-  const normalizedTailscaleTarget =
-    typeof configuredTailscaleTarget === "string" && configuredTailscaleTarget.trim().length > 0
-      ? configuredTailscaleTarget.trim()
-      : undefined;
+  const normalizedServePath = normalizeServePath(
+    normalizeOptionalString(opts.path ?? baseConfig.hooks?.gmail?.serve?.path),
+  );
+  const normalizedTailscaleTarget = normalizeOptionalString(
+    opts.tailscaleTarget ?? baseConfig.hooks?.gmail?.tailscale?.target,
+  );
 
   const includeBody = opts.includeBody ?? true;
   const maxBytes = opts.maxBytes ?? DEFAULT_GMAIL_MAX_BYTES;

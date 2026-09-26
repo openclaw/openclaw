@@ -75,7 +75,6 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   buildSessionListRowMetadataContext,
   resolveTranscriptUsageFallbacks,
@@ -305,19 +304,15 @@ export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
-  agentId?: string;
+  agentId: string;
   storeAgentId?: string;
   sessionId?: string;
   sessionKey: string;
   projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel?: { provider: string; model: string };
-  modelSource?: GatewaySessionModelSource;
+  selectedModel: { provider: string; model: string };
   entry?: InternalSessionEntry;
-  storePath?: string;
+  storePath: string;
 }): { provider: string; model: string } | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
   const liveModel = resolveProjectedAgentRunModel({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -326,22 +321,10 @@ export function resolveGatewaySessionActiveModel(params: {
   if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
     return liveModel ?? undefined;
   }
-  if (!params.entry?.fallbackNotice || params.storePath === undefined) {
+  if (!params.entry?.fallbackNotice) {
     return undefined;
   }
-  const selectedModel =
-    params.selectedModel ??
-    (params.modelSource
-      ? resolveSessionSelectedModelRef({
-          cfg: params.cfg,
-          source: params.modelSource,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        })
-      : undefined);
-  if (!selectedModel) {
-    return undefined;
-  }
+  const { selectedModel } = params;
 
   const fallbackEntry =
     params.activeModel === undefined

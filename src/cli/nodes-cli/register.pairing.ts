@@ -155,53 +155,39 @@ export function registerNodesPairingCommands(nodes: Command) {
       }),
   );
 
-  nodesCallOpts(
-    nodes
-      .command("approve")
-      .description("Approve a pending pairing request")
-      .argument("<requestId>", "Pending request id")
-      .action(async (requestId: string, opts: NodesRpcOpts) => {
-        await runNodesCommand("approve", async () => {
-          const { scopes } = await resolveApproveScopesForRequest(opts, requestId);
-          let result: unknown;
-          try {
-            result = await callNodePairApprovalGatewayCli(
-              "node.pair.approve",
-              opts,
-              {
-                requestId,
-              },
-              {
-                scopes,
-              },
-            );
-          } catch (error) {
-            rethrowUnknownNodePairRequestId(error, requestId, opts);
-          }
-          defaultRuntime.writeJson(result);
-        });
-      }),
-  );
-
-  nodesCallOpts(
-    nodes
-      .command("reject")
-      .description("Reject a pending pairing request")
-      .argument("<requestId>", "Pending request id")
-      .action(async (requestId: string, opts: NodesRpcOpts) => {
-        await runNodesCommand("reject", async () => {
-          let result: unknown;
-          try {
-            result = await callNodesGatewayCli("node.pair.reject", opts, {
-              requestId,
-            });
-          } catch (error) {
-            rethrowUnknownNodePairRequestId(error, requestId, opts);
-          }
-          defaultRuntime.writeJson(result);
-        });
-      }),
-  );
+  for (const [action, description] of [
+    ["approve", "Approve a pending pairing request"],
+    ["reject", "Reject a pending pairing request"],
+  ] as const) {
+    nodesCallOpts(
+      nodes
+        .command(action)
+        .description(description)
+        .argument("<requestId>", "Pending request id")
+        .action(async (requestId: string, opts: NodesRpcOpts) => {
+          await runNodesCommand(action, async () => {
+            const approval =
+              action === "approve"
+                ? await resolveApproveScopesForRequest(opts, requestId)
+                : undefined;
+            let result: unknown;
+            try {
+              result = approval
+                ? await callNodePairApprovalGatewayCli(
+                    "node.pair.approve",
+                    opts,
+                    { requestId },
+                    approval,
+                  )
+                : await callNodesGatewayCli("node.pair.reject", opts, { requestId });
+            } catch (error) {
+              rethrowUnknownNodePairRequestId(error, requestId, opts);
+            }
+            defaultRuntime.writeJson(result);
+          });
+        }),
+    );
+  }
 
   nodesCallOpts(
     nodes

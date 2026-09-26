@@ -1,4 +1,3 @@
-// Telegram plugin module owns dispatch-time session and transcript access.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -14,6 +13,7 @@ import { getSessionEntry } from "./bot-message-dispatch.runtime.js";
 import type {
   CurrentTurnTranscriptFinal,
   FreshTelegramSessionEntryLoader,
+  TelegramDispatchTurn as Turn,
   TelegramReasoningLevel,
   TelegramScopedTranscriptSession,
   TelegramTranscriptMirrorPayload,
@@ -87,7 +87,7 @@ function resolveTelegramScopedTranscriptSession(params: {
   return sessionId ? { sessionId, storePath } : undefined;
 }
 
-export async function mirrorTelegramAssistantReplyToTranscript(params: {
+async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
   idempotencyKey: string;
   loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
@@ -120,6 +120,23 @@ export async function mirrorTelegramAssistantReplyToTranscript(params: {
   if (!appended.ok && appended.code !== "session-rebound") {
     logVerbose(`telegram transcript mirror append failed: ${appended.reason}`);
   }
+}
+
+export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn = turn) {
+  const sessionKey = turn.context.ctxPayload.SessionKey;
+  return sessionKey
+    ? async (payload: TelegramTranscriptMirrorPayload) => {
+        const idempotencyKey = `telegram-final:${sessionKey}:${turn.transcriptMirrorTurnId}:${sequenceOwner.transcriptMirrorSequence++}`;
+        await mirrorTelegramAssistantReplyToTranscript({
+          cfg: turn.cfg,
+          idempotencyKey,
+          loadFreshSessionEntry: turn.loadFreshSessionEntry,
+          route: turn.context.route,
+          sessionKey,
+          payload,
+        });
+      }
+    : undefined;
 }
 
 export function createCurrentTurnTranscriptFinalResolver(params: {

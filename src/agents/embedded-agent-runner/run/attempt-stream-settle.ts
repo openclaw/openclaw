@@ -44,7 +44,7 @@ import type { ToolResultPromptProjectionState } from "../session-prompt-state.js
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStream,
+  selectEmbeddedAgentStream,
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -539,7 +539,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedApiKey: attempt.resolvedApiKey,
     authStorage: attempt.authStorage,
   });
-  const { streamFn, strategy: streamStrategy } = resolveEmbeddedAgentStream({
+  const {
+    streamFn,
+    strategy: streamStrategy,
+    wrapApiKey,
+  } = selectEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
@@ -664,6 +668,9 @@ export async function prepareEmbeddedAttemptTransport(input: {
       return baseStreamFn(model, context, requestOptions);
     };
   }
+  // Agent turns carry no credential, and provider wrappers classify auth from
+  // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
+  session.agent.streamFn = wrapApiKey(session.agent.streamFn);
   return {
     serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {

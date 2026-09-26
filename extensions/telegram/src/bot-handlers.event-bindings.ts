@@ -6,6 +6,10 @@ import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams, TelegramEventBindings } from "./bot-handlers.types.js";
 import {
@@ -25,10 +29,7 @@ const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
 
 type TelegramEventMessageDependencies = Pick<
   TelegramMessagePipeline,
-  | "resolveCachedMessageThreadSpec"
-  | "buildSyntheticTextMessage"
-  | "buildSyntheticContext"
-  | "processMessageWithReplyChain"
+  "resolveCachedMessageThreadSpec" | "processMessageWithReplyChain"
 >;
 
 type CreateTelegramEventBindingsOptions = {
@@ -59,12 +60,7 @@ export function createTelegramEventBindings({
   const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate, telegramDeps } =
     params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
-  const {
-    buildSyntheticContext,
-    buildSyntheticTextMessage,
-    processMessageWithReplyChain,
-    resolveCachedMessageThreadSpec,
-  } = message;
+  const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
 
   const registerChatMembership = () => {
     bot.on("my_chat_member", async (ctx) => {
@@ -119,13 +115,15 @@ export function createTelegramEventBindings({
           accountId,
           conversationId: String(chatId),
           deliverTo: String(chatId),
-          route: resolveTelegramConversationRoute({
-            cfg: currentCfg,
-            accountId,
-            chatId,
-            isGroup: true,
-            threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
-          }).route,
+          route: (
+            await resolveTelegramConversationRoute({
+              cfg: currentCfg,
+              accountId,
+              chatId,
+              isGroup: true,
+              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+            })
+          ).route,
           inviterLabel,
           roomAllowed,
           resolveRoomContext: async () => {
@@ -262,7 +260,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const { route } = resolveTelegramConversationRoute({
+        const { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,

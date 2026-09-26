@@ -1,4 +1,4 @@
-import { expect, it, onTestFailed, vi } from "vitest";
+import { beforeAll, expect, it, onTestFailed, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -47,6 +47,11 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
       return timer;
     },
   };
+});
+
+beforeAll(async () => {
+  // Cold module compilation belongs to fixture preparation, before the real Gateway startup.
+  await import("../server-start.js");
 });
 
 it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
