@@ -62,10 +62,10 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   }
 
   const resolvedSha = readGitText(root, ["rev-parse", resolved]).trim();
-  const headParents = readGitText(root, ["show", "-s", "--format=%P", "HEAD"])
-    .trim()
-    .split(/\s+/u)
-    .filter(Boolean);
+  const headParents = readGitText(root, ["cat-file", "-p", "HEAD"])
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("parent "))
+    .map((line) => line.slice("parent ".length).trim());
   if (headParents.includes(resolvedSha)) {
     // CI PR checkouts verify this exact prepared base as the first merge parent.
     // Prefer the verified parent before asking merge-base to walk a shallow graph.
