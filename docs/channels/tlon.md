@@ -170,8 +170,10 @@ an unavailable or foreign root leaves the normal mention policy in place.
 
 Named accounts can override it with `accounts.<id>.requireMentionInBotThreads`. A per-channel
 `authorization.channelRules.<nest>.requireMentionInBotThreads` overrides the account default,
-including rules supplied through the Urbit settings store. Sender authorization still applies,
-and this option does not change top-level channel posts or DMs.
+including rules supplied through the Urbit settings store. For this option, a saved channel
+rule overrides the file value only when it sets a boolean value; older access-only rules
+inherit the file value. Sender authorization still applies, and this option does not change
+top-level channel posts or DMs.
 
 ## Owner and approval system
 

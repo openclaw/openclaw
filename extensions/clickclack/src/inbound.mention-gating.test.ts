@@ -9,6 +9,10 @@ import {
 import { handleClickClackInbound } from "./inbound.js";
 import {
   createInboundRuntime,
+  createInboundAgentAccount as createAgentAccount,
+  createInboundAuthor as createAuthor,
+  createInboundAccountConfig as createAccountConfig,
+  publishInboundAccountConfig as publishAccountConfig,
   createInboundMessage as createMessage,
   createInboundDiscussionBinding,
   createInboundDiscussionConfig,
@@ -17,90 +21,12 @@ import { setClickClackRuntime } from "./runtime.js";
 import type {
   ClickClackAccountConfig,
   ClickClackMessage,
-  ClickClackUser,
   CoreConfig,
   ResolvedClickClackAccount,
 } from "./types.js";
 
 function createRuntime(): PluginRuntime {
   return createInboundRuntime(false);
-}
-
-function createAgentAccount(
-  overrides: Partial<ResolvedClickClackAccount> = {},
-): ResolvedClickClackAccount {
-  const base = {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    baseUrl: "http://127.0.0.1:8080",
-    apiEndpoint: "http://127.0.0.1:8080",
-    token: "test-token-placeholder",
-    workspace: "wsp_1",
-    replyMode: "agent",
-    toolsAllow: [],
-    defaultTo: "channel:general",
-    allowFrom: ["*"],
-    botUserId: "usr_receiver",
-    botHandle: "blackbird",
-    allowBots: false,
-    reconnectMs: 1_500,
-    agentActivity: false,
-    commandMenu: true,
-    discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
-    requireMention: false,
-    mentionPatterns: [],
-    groups: {},
-    config: {
-      baseUrl: "http://127.0.0.1:8080",
-      workspace: "wsp_1",
-      allowFrom: ["*"],
-    },
-  } satisfies ResolvedClickClackAccount;
-
-  return {
-    ...base,
-    ...overrides,
-    config: {
-      ...base.config,
-      ...overrides.config,
-    },
-  };
-}
-
-function createAuthor(overrides: Partial<ClickClackUser> = {}): ClickClackUser {
-  return {
-    id: "usr_owner",
-    kind: "human",
-    display_name: "Peter",
-    handle: "steipete",
-    avatar_url: "",
-    created_at: "2026-05-09T12:00:00.000Z",
-    ...overrides,
-  };
-}
-
-function createAccountConfig(account: ResolvedClickClackAccount): CoreConfig {
-  const accountConfig: ClickClackAccountConfig = {
-    baseUrl: account.baseUrl,
-    token: "test-token-placeholder",
-    workspace: account.config.workspace ?? account.workspace,
-    botUserId: account.config.botUserId,
-    requireMention: account.requireMention,
-    requireMentionInBotThreads: account.requireMentionInBotThreads,
-    mentionPatterns: account.mentionPatterns,
-    groups: account.groups,
-    allowFrom: account.allowFrom,
-    allowBots: account.allowBots,
-  };
-  return {
-    channels: {
-      clickclack:
-        account.accountId === "default"
-          ? accountConfig
-          : { accounts: { [account.accountId]: accountConfig } },
-    },
-  };
 }
 
 describe("ClickClack inbound mention gating", () => {
@@ -158,9 +84,13 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["usr_sender"] });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["usr_sender"] }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
@@ -174,9 +104,13 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["*"] });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["*"] }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author: undefined,
       }),
@@ -191,9 +125,13 @@ describe("ClickClack inbound mention gating", () => {
       const runtime = createRuntime();
       setClickClackRuntime(runtime);
 
+      const account = createAgentAccount({ allowFrom: ["usr_sender"], allowBots: true });
+      const config = {} satisfies CoreConfig;
+      publishAccountConfig(runtime, account, config);
+
       await handleClickClackInbound({
-        account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: true }),
-        config: {} satisfies CoreConfig,
+        account,
+        config,
         message: createMessage({
           author_id: "usr_sender",
           kind,
@@ -210,11 +148,15 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["usr_sender"], allowBots: true });
+    const config = {
+      channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
+    } satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: true }),
-      config: {
-        channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
-      } satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
@@ -239,6 +181,7 @@ describe("ClickClack inbound mention gating", () => {
     setClickClackRuntime(runtime);
     const account = createAgentAccount({ allowFrom: ["usr_sender"], allowBots: true });
     const author = createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" });
+    publishAccountConfig(runtime, account);
 
     const threadA = await resolveClickClackInboundAccess({
       account,
@@ -271,9 +214,13 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["*"], allowBots: true });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["*"], allowBots: true }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
@@ -292,30 +239,27 @@ describe("ClickClack inbound mention gating", () => {
       created_at: "2026-05-09T12:00:00.000Z",
     });
 
+    const firstAccount = createAgentAccount({
+      accountId: "account-a",
+      allowFrom: ["usr_sender"],
+      allowBots: true,
+    });
+    const secondAccount = createAgentAccount({ ...firstAccount, accountId: "account-b" });
+    publishAccountConfig(runtime, firstAccount);
     const accountA = await resolveClickClackInboundAccess({
-      account: createAgentAccount({
-        accountId: "account-a",
-        allowFrom: ["usr_sender"],
-        allowBots: true,
-      }),
+      account: firstAccount,
       config: {} satisfies CoreConfig,
       message: firstMessage,
     });
+    publishAccountConfig(runtime, secondAccount);
     const accountB = await resolveClickClackInboundAccess({
-      account: createAgentAccount({
-        accountId: "account-b",
-        allowFrom: ["usr_sender"],
-        allowBots: true,
-      }),
+      account: secondAccount,
       config: {} satisfies CoreConfig,
       message: firstMessage,
     });
+    publishAccountConfig(runtime, firstAccount);
     const delayedReplay = await resolveClickClackInboundAccess({
-      account: createAgentAccount({
-        accountId: "account-a",
-        allowFrom: ["usr_sender"],
-        allowBots: true,
-      }),
+      account: firstAccount,
       config: {} satisfies CoreConfig,
       message: { ...firstMessage, created_at: "2026-05-09T12:02:00.000Z" },
     });
@@ -332,9 +276,13 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         body: "hello from another agent",
@@ -349,9 +297,13 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         body: "@blackbird please coordinate",
@@ -366,9 +318,13 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({ allowFrom: ["usr_sender"], allowBots: "mentions" }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         channel_id: undefined,
@@ -385,13 +341,17 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({
+      allowFrom: ["usr_sender"],
+      allowBots: false,
+      groups: { "*": { allowBots: "mentions" } },
+    });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({
-        allowFrom: ["usr_sender"],
-        allowBots: false,
-        groups: { "*": { allowBots: "mentions" } },
-      }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({
         author_id: "usr_sender",
         channel_id: undefined,
@@ -408,12 +368,16 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({
+      requireMention: true,
+      botHandle: "blackbird",
+    });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({
-        requireMention: true,
-        botHandle: "blackbird",
-      }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({ body: "hello everyone" }),
     });
 
@@ -426,12 +390,16 @@ describe("ClickClack inbound mention gating", () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({
+      requireMention: true,
+      botHandle: "blackbird",
+    });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({
-        requireMention: true,
-        botHandle: "blackbird",
-      }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({ body: "@blackbird please help" }),
     });
 
@@ -667,6 +635,11 @@ describe("ClickClack inbound mention gating", () => {
     patch: Partial<ClickClackAccountConfig>;
     body?: string;
     command?: boolean;
+    botSender?: boolean;
+    senderGroup?: boolean;
+    accessGroups?: CoreConfig["accessGroups"];
+    omitThreadPolicy?: boolean;
+    direct?: boolean;
     shouldDispatch: boolean;
   }>([
     { name: "bot identity changes", patch: { botUserId: "usr_other_bot" }, shouldDispatch: false },
@@ -683,6 +656,117 @@ describe("ClickClack inbound mention gating", () => {
     { name: "policy is unchanged", patch: {}, shouldDispatch: true },
     { name: "an unrelated label changes", patch: { name: "Renamed bot" }, shouldDispatch: true },
     {
+      name: "ordinary group sender access is revoked without a thread option",
+      patch: { allowFrom: ["usr_other"] },
+      omitThreadPolicy: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "ordinary group sender remains allowed without a thread option",
+      patch: { allowFrom: ["cc:dm:usr_owner"] },
+      omitThreadPolicy: true,
+      shouldDispatch: true,
+    },
+    {
+      name: "ordinary group bot access is revoked without a thread option",
+      patch: { allowBots: false },
+      botSender: true,
+      omitThreadPolicy: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "ordinary group bot remains allowed without a thread option",
+      patch: { allowFrom: ["clickclack:usr_owner"] },
+      botSender: true,
+      omitThreadPolicy: true,
+      shouldDispatch: true,
+    },
+    {
+      name: "direct sender access is revoked without a thread option",
+      patch: { allowFrom: ["usr_other"] },
+      direct: true,
+      omitThreadPolicy: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "direct sender remains allowed without a thread option",
+      patch: { allowFrom: ["cc:usr_owner"] },
+      direct: true,
+      omitThreadPolicy: true,
+      shouldDispatch: true,
+    },
+    {
+      name: "human sender access is revoked",
+      patch: { allowFrom: ["usr_other"] },
+      shouldDispatch: false,
+    },
+    {
+      name: "human sender remains allowed through a normalized identity",
+      patch: { allowFrom: ["cc:dm:usr_owner"] },
+      shouldDispatch: true,
+    },
+    {
+      name: "static sender group membership is revoked",
+      patch: {},
+      senderGroup: true,
+      accessGroups: {
+        operators: { type: "message.senders", members: { clickclack: ["usr_other"] } },
+      },
+      shouldDispatch: false,
+    },
+    {
+      name: "static sender group remains unchanged",
+      patch: { name: "Renamed bot" },
+      senderGroup: true,
+      shouldDispatch: true,
+    },
+    {
+      name: "static sender group is cloned without changing membership",
+      patch: {},
+      senderGroup: true,
+      accessGroups: {
+        operators: { type: "message.senders", members: { clickclack: ["usr_owner"] } },
+      },
+      shouldDispatch: true,
+    },
+    {
+      name: "bot sender access is disabled",
+      patch: { allowBots: false },
+      botSender: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "bot sender now requires a mention",
+      patch: { allowBots: "mentions" },
+      botSender: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "bot sender satisfies its new mention restriction",
+      patch: { allowBots: "mentions" },
+      body: "@blackbird please follow up",
+      botSender: true,
+      shouldDispatch: true,
+    },
+    {
+      name: "bot sender is removed from the allowlist",
+      patch: { allowFrom: ["usr_other"] },
+      botSender: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "bot sender is replaced by a human-only wildcard",
+      patch: { allowFrom: ["*"] },
+      botSender: true,
+      shouldDispatch: false,
+    },
+    {
+      name: "bot sender remains explicitly allowed",
+      patch: { allowFrom: ["clickclack:usr_owner"] },
+      botSender: true,
+      shouldDispatch: true,
+    },
+    {
       name: "newly required mentions are satisfied",
       patch: { requireMentionInBotThreads: true },
       body: "@blackbird please follow up",
@@ -697,7 +781,17 @@ describe("ClickClack inbound mention gating", () => {
     },
   ])(
     "rechecks admission when $name while ingress settles",
-    async ({ patch, body, command, shouldDispatch }) => {
+    async ({
+      patch,
+      body,
+      command,
+      botSender,
+      senderGroup,
+      accessGroups,
+      omitThreadPolicy,
+      direct,
+      shouldDispatch,
+    }) => {
       const runtime = createRuntime();
       if (command) {
         vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
@@ -705,10 +799,21 @@ describe("ClickClack inbound mention gating", () => {
       }
       setClickClackRuntime(runtime);
       const account = createAgentAccount({
-        requireMention: true,
-        requireMentionInBotThreads: false,
+        requireMention: !omitThreadPolicy,
+        requireMentionInBotThreads: omitThreadPolicy ? undefined : false,
+        ...(senderGroup ? { allowFrom: ["accessGroup:operators"] } : {}),
+        ...(botSender ? { allowBots: true, allowFrom: ["usr_owner"] } : {}),
       });
-      const config = createAccountConfig(account);
+      const config: CoreConfig = {
+        ...createAccountConfig(account),
+        ...(senderGroup
+          ? {
+              accessGroups: {
+                operators: { type: "message.senders", members: { clickclack: ["usr_owner"] } },
+              },
+            }
+          : {}),
+      };
       vi.mocked(runtime.config.current).mockReturnValue(config);
       vi.stubGlobal(
         "fetch",
@@ -737,13 +842,18 @@ describe("ClickClack inbound mention gating", () => {
         account,
         config,
         message: createMessage({
-          parent_message_id: "msg_root",
-          thread_root_id: "msg_root",
+          ...(omitThreadPolicy
+            ? {}
+            : { parent_message_id: "msg_root", thread_root_id: "msg_root" }),
+          ...(direct ? { channel_id: undefined, direct_conversation_id: "dm_1" } : {}),
           body: body ?? "please follow up",
+          author: createAuthor({ kind: botSender ? "bot" : "human" }),
         }),
       });
       await admitted.promise;
       vi.mocked(runtime.config.current).mockReturnValue({
+        ...config,
+        ...(accessGroups ? { accessGroups } : {}),
         channels: {
           clickclack: { ...config.channels?.clickclack, ...patch },
         },
@@ -816,12 +926,16 @@ describe("ClickClack inbound mention gating", () => {
     vi.mocked(runtime.channel.text.hasControlCommand).mockReturnValue(true);
     setClickClackRuntime(runtime);
 
+    const account = createAgentAccount({
+      requireMention: true,
+      botHandle: "blackbird",
+    });
+    const config = {} satisfies CoreConfig;
+    publishAccountConfig(runtime, account, config);
+
     await handleClickClackInbound({
-      account: createAgentAccount({
-        requireMention: true,
-        botHandle: "blackbird",
-      }),
-      config: {} satisfies CoreConfig,
+      account,
+      config,
       message: createMessage({ body: "/status @alice" }),
     });
 

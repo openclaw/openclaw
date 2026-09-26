@@ -48,6 +48,44 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       admitted: false,
     },
     {
+      name: "legacy settings access rule preserves strict file mention policy",
+      policy: false,
+      channelPolicy: true,
+      settingsRule: { mode: "open" },
+      rootAuthor: "~zod",
+      participate: true,
+      admitted: false,
+    },
+    {
+      name: "explicit mention with a legacy settings access rule",
+      policy: false,
+      channelPolicy: true,
+      settingsRule: { mode: "open" },
+      rootAuthor: "~zod",
+      mentioned: true,
+      admitted: true,
+    },
+    {
+      name: "explicit settings mention policy overrides the strict file policy",
+      policy: true,
+      channelPolicy: true,
+      settingsRule: {
+        mode: "restricted",
+        allowedShips: ["~nec"],
+        requireMentionInBotThreads: false,
+      },
+      rootAuthor: "~zod",
+      admitted: true,
+    },
+    {
+      name: "settings access rule does not inherit the file open mode",
+      policy: false,
+      channelPolicy: false,
+      settingsRule: { allowedShips: [] },
+      rootAuthor: "~zod",
+      admitted: false,
+    },
+    {
       name: "named account override with its own ship",
       policy: true,
       accountPolicy: false,
@@ -113,7 +151,9 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       },
     };
     authenticateMock.mockResolvedValueOnce("urbauth-test");
-    settingsManagerMock.load.mockResolvedValueOnce({});
+    settingsManagerMock.load.mockResolvedValueOnce(
+      row.settingsRule ? { channelRules: { [channelNest]: row.settingsRule } } : {},
+    );
     ingressMock.receive.mockResolvedValue({ kind: "ignored" });
     sseClientMock.scry.mockImplementation(async (path) => {
       if (path !== rootPath) {
@@ -171,11 +211,16 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
         delivery.onDelivered(reply, {}, result);
         inboundRuntimeMock.dispatch.mockClear();
       }
-      await subscription.event(replyEvent("follow up without a mention"));
+      await subscription.event(
+        replyEvent(row.mentioned ? `${botShip} follow up` : "follow up without a mention"),
+      );
 
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(row.admitted ? 1 : 0);
       const shouldReadRoot =
-        (row.policy !== undefined || row.accountPolicy !== undefined) &&
+        (row.policy !== undefined ||
+          row.accountPolicy !== undefined ||
+          row.channelPolicy !== undefined) &&
+        !row.mentioned &&
         !row.topLevel &&
         !row.parentId;
       const rootLookups = sseClientMock.scry.mock.calls.filter(
