@@ -7,6 +7,7 @@ import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
   FailoverError,
@@ -70,6 +71,8 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
+  /** Exact candidate auth binding. The inner run must treat this as a user lock. */
+  authProfileId?: string;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
 };
 
@@ -81,8 +84,33 @@ export function resolveFallbackAuthScope(params: {
   return params.userLockedAuthProfileId || params.profileIds?.find((id) => id.trim())?.trim();
 }
 
+export function resolveFallbackCandidateAuthProfileIds(params: {
+  authRuntime: ModelFallbackAuthRuntime;
+  cfg: OpenClawConfig | undefined;
+  store: AuthProfileStore;
+  candidate: ModelCandidate;
+  userLockedAuthProfileEligible: boolean;
+  userLockedAuthProfileId?: string;
+}): string[] {
+  const candidateLock = params.candidate.authProfileId?.trim();
+  if (candidateLock) {
+    return [candidateLock];
+  }
+  const ordered = params.authRuntime.resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: params.candidate.provider,
+    forModel: params.candidate.model,
+    includePendingOAuthRefresh: true,
+  });
+  return params.userLockedAuthProfileEligible && params.userLockedAuthProfileId
+    ? [...new Set([params.userLockedAuthProfileId, ...ordered])]
+    : ordered;
+}
+
 export type ModelFallbackRuntimeContext = {
   cfg?: OpenClawConfig;
+  requestedAuthProfileId?: string;
   agentId?: string;
   sessionKey?: string;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;

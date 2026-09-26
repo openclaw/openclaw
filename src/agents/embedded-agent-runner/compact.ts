@@ -538,20 +538,25 @@ export async function compactEmbeddedAgentSessionDirect(
           fallbacksOverride,
           classifyResult: ({ result, provider, model }) =>
             classifyCompactionFallbackResult(result, provider, model),
-          run: async (provider, model) => {
+          run: async (provider, model, options) => {
             const isPrimaryCandidate =
               provider === resolvedPrimaryCandidate?.provider &&
               model === resolvedPrimaryCandidate.model;
             const preservesPrimaryAuth =
               isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
-            const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+            const authProfileId =
+              options?.authProfileId ?? (preservesPrimaryAuth ? params.authProfileId : undefined);
             return await compactEmbeddedAgentSessionDirectOnce({
               ...params,
               provider,
               model,
               requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
               authProfileId,
-              authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+              authProfileIdSource: options?.authProfileId
+                ? "user"
+                : preservesPrimaryAuth
+                  ? params.authProfileIdSource
+                  : undefined,
               // The primary attempt retains its already prepared atomic plan. An
               // actual fallback may change route/auth class and must rebuild it.
               runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,

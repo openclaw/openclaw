@@ -74,6 +74,8 @@ type RunEntryCandidateOptions = {
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  /** Exact auth profile bound to this fallback candidate. */
+  authProfileId?: string;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
@@ -120,6 +122,7 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     provider: string;
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
+    requestedAuthProfileId?: string;
     fallbacksOverride?: string[];
     agentDir?: string;
     userLockedAuthProfileId?: string;
@@ -432,6 +435,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
               ...(runOptions.forceFallbackRetry
                 ? { authProfileFailurePolicy: "local" as const }
                 : {}),
+              ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
               classifyResult,
               allowTransientCooldownProbe: options.allowTransientCooldownProbe,
               isFinalFallbackAttempt: options.isFinalFallbackAttempt,
